@@ -6,8 +6,7 @@ import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../../inf
 import { isContainerEnvironment as defaultIsContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  type InstallSafetyOverrides,
-  scanSkillInstallSource,
+  evaluateSkillInstallPolicy,
   type SkillInstallSpecMetadata,
 } from "../../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
@@ -23,7 +22,7 @@ import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-export type SkillInstallRequest = InstallSafetyOverrides & {
+export type SkillInstallRequest = {
   workspaceDir: string;
   skillName: string;
   installId: string;
@@ -475,14 +474,25 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const warnings: string[] = [];
   const skillSource = resolveSkillSource(entry.skill);
   const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
-  const scanResult = await scanSkillInstallSource({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+  const scanResult = await evaluateSkillInstallPolicy({
+    config: params.config,
     installId: params.installId,
     ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
     logger: {
       warn: (message) => warnings.push(message),
     },
-    origin: skillSource,
+    origin: {
+      type: skillSource,
+      skillName: params.skillName,
+      installId: params.installId,
+    },
+    source:
+      skillSource === "openclaw-bundled"
+        ? { kind: "bundled", authority: "openclaw", mutable: false, network: false }
+        : skillSource === "openclaw-managed" || skillSource === "openclaw-extra"
+          ? { kind: "managed", authority: "openclaw", mutable: false, network: false }
+          : { kind: "workspace", authority: "user", mutable: true, network: false },
+    requestedSpecifier: `${params.skillName}:${params.installId}`,
     skillName: params.skillName,
     sourceDir: path.resolve(entry.skill.baseDir),
   });

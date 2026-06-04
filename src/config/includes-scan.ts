@@ -1,8 +1,10 @@
+// Scans included config files and resolves include graphs.
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "./includes.js";
 
+// Include discovery walks nested config objects because include blocks may be embedded.
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
   const visit = (value: unknown) => {
@@ -45,6 +47,7 @@ function resolveIncludePath(baseConfigPath: string, includePath: string): string
   );
 }
 
+/** Collects recursively referenced config include files without requiring a valid full config. */
 export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;

@@ -1,3 +1,4 @@
+// Builds install policy context for plugin install checks.
 import type {
   PluginHookBeforeInstallBuiltinScan,
   PluginHookBeforeInstallContext,
@@ -22,10 +23,21 @@ export type BeforeInstallHookPayloadParams = {
   sourcePath: string;
   sourcePathKind: PluginInstallSourcePathKind;
   request: PluginHookBeforeInstallRequest;
-  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  builtinScan?: PluginHookBeforeInstallBuiltinScan;
   skill?: PluginHookBeforeInstallSkill;
   plugin?: PluginHookBeforeInstallPlugin;
 };
+
+function emptyBuiltinScan(): PluginHookBeforeInstallBuiltinScan {
+  return {
+    status: "ok",
+    scannedFiles: 0,
+    critical: 0,
+    warn: 0,
+    info: 0,
+    findings: [],
+  };
+}
 
 export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadParams): {
   ctx: PluginHookBeforeInstallContext;
@@ -38,7 +50,7 @@ export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadP
     sourcePathKind: params.sourcePathKind,
     ...(params.origin ? { origin: params.origin } : {}),
     request: params.request,
-    builtinScan: params.builtinScan,
+    builtinScan: params.builtinScan ?? emptyBuiltinScan(),
     ...(params.skill ? { skill: params.skill } : {}),
     ...(params.plugin ? { plugin: params.plugin } : {}),
   };

@@ -1,3 +1,4 @@
+// Covers request header normalization before fetch calls.
 import { describe, expect, it } from "vitest";
 import {
   normalizeHeadersInitForFetch,

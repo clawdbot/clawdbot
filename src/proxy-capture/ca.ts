@@ -6,6 +6,8 @@ import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 
 const execFileAsync = promisify(execFile);
 
+// Ensure a short-lived root CA for local MITM debug proxy runs. Existing certs
+// are reused within the cert dir so repeated starts do not prompt regeneration.
 export async function ensureDebugProxyCa(certDir: string): Promise<{
   certPath: string;
   keyPath: string;

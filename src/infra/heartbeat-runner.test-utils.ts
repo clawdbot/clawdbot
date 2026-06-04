@@ -1,3 +1,4 @@
+// Shared heartbeat runner fixtures for infra tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,8 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
+// Heartbeat test utilities seed session stores and temporary heartbeat prompts
+// while keeping plugin registry and environment state isolated per test.
 type HeartbeatSessionSeed = {
   sessionId?: string;
   updatedAt?: number;
@@ -35,6 +38,7 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   return replySpy;
 }
 
+/** Write a single heartbeat session entry into a JSON session store. */
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
@@ -59,6 +63,7 @@ export async function seedSessionStore(
   );
 }
 
+/** Seed the configured main session and return its session key. */
 export async function seedMainSessionStore(
   storePath: string,
   cfg: OpenClawConfig,
@@ -69,6 +74,7 @@ export async function seedMainSessionStore(
   return sessionKey;
 }
 
+/** Run a heartbeat test inside a temporary prompt/session-store sandbox. */
 export async function withTempHeartbeatSandbox<T>(
   fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
@@ -100,6 +106,7 @@ export async function withTempHeartbeatSandbox<T>(
   }
 }
 
+/** Run a Telegram heartbeat test with Telegram credentials removed. */
 export async function withTempTelegramHeartbeatSandbox<T>(
   fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
@@ -112,6 +119,7 @@ export async function withTempTelegramHeartbeatSandbox<T>(
   });
 }
 
+/** Install only the Telegram heartbeat plugin in the active test registry. */
 export function setupTelegramHeartbeatPluginRuntimeForTests() {
   setActivePluginRegistry(
     createTestRegistry([

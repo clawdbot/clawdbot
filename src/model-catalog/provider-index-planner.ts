@@ -6,6 +6,8 @@ import type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawProviderIndex } from "./provider-index/index.js";
 
+// Provider-index planner converts ClawHub-style preview catalog entries into
+// normalized model rows for discovery before a plugin is installed.
 type ProviderIndexModelCatalogPlanEntry = {
   provider: string;
   pluginId: string;
@@ -18,6 +20,8 @@ type ProviderIndexModelCatalogPlan = {
 };
 
 function withPreviewStatusDefaults(providerCatalog: ModelCatalogProvider): ModelCatalogProvider {
+  // Provider-index rows are advisory discovery data, so unspecified model
+  // statuses default to preview instead of stable.
   return {
     ...providerCatalog,
     models: providerCatalog.models.map((model) => ({

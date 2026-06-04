@@ -1,3 +1,4 @@
+/** Resolves runtime policy session keys distinct from transcript session keys. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -83,6 +84,8 @@ function isMainSessionAlias(params: {
   );
 }
 
+/** Resolves the session key used for runtime policy checks and direct-message scoping. */
+/** Resolves the session key used for sandbox/tool/runtime policy lookups. */
 export function resolveRuntimePolicySessionKey(params: {
   cfg?: OpenClawConfig;
   ctx?: RuntimePolicyContext;
@@ -113,6 +116,7 @@ export function resolveRuntimePolicySessionKey(params: {
     return sessionKey;
   }
 
+  // Direct main-session replies use a peer-scoped key so policy does not leak across DMs.
   return buildAgentPeerSessionKey({
     agentId,
     channel,

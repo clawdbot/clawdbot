@@ -218,17 +218,6 @@ Target-side auth-required installs are reported on the affected plugin item with
 Their explicit config entries are written disabled until you reauthorize and
 enable them. Other install failures are item-scoped `error` results.
 
-The native Codex plugin config also accepts first-party `openai-bundled` and
-`openai-primary-runtime` marketplace identities, but migration does not
-auto-discover or install them from source state.
-
-OpenAI-side app/plugin availability still comes from the signed-in Codex
-account and workspace app controls. See
-[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
-for OpenAI's account and workspace-control overview, then use
-[Native Codex plugins](/plugins/codex-native-plugins#manual-first-party-marketplace-entries)
-for manual first-party marketplace entries.
-
 If Codex app-server plugin inventory is unavailable during planning, migration
 falls back to cached bundle advisory items instead of failing the whole
 migration.

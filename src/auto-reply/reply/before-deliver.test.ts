@@ -1,3 +1,4 @@
+// Tests before-deliver hook ordering and payload mutation behavior.
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";

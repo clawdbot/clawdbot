@@ -1,3 +1,4 @@
+// Covers native approval route reporting behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearApprovalNativeRouteStateForTest,

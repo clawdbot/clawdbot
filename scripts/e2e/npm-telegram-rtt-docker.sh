@@ -388,12 +388,30 @@ installed_version="$(node -p "require('/npm-global/lib/node_modules/openclaw/pac
 
 node /app/scripts/e2e/mock-openai-server.mjs >"$mock_log" 2>&1 &
 mock_pid="$!"
+mock_ready=0
 for _ in $(seq 1 60); do
-  if node -e "fetch('http://127.0.0.1:${mock_port}/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+  if node --input-type=module -e '
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1000);
+    try {
+      const response = await fetch(process.argv[1], { signal: controller.signal });
+      process.exit(response.ok ? 0 : 1);
+    } catch {
+      process.exit(1);
+    } finally {
+      clearTimeout(timer);
+    }
+  ' "http://127.0.0.1:${mock_port}/health"; then
+    mock_ready=1
     break
   fi
   sleep 1
 done
+if [ "$mock_ready" != "1" ]; then
+  echo "Mock OpenAI server did not become ready" >&2
+  cat "$mock_log" >&2 || true
+  exit 1
+fi
 
 mkdir -p "$(dirname "$config_path")" "$HOME/.openclaw/workspace" "$HOME/.openclaw/agents/main/sessions" "$HOME/workspace"
 

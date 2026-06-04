@@ -4,6 +4,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
@@ -37,11 +38,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -78,8 +79,8 @@ import java.util.Locale
 @Composable
 fun ChatScreen(
   viewModel: MainViewModel,
-  onBack: () -> Unit,
   onVoice: () -> Unit,
+  onOpenSessions: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
@@ -158,11 +159,21 @@ fun ChatScreen(
       thinkingLevel = thinkingLevel,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
-      onBack = onBack,
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
       },
+    )
+
+    ChatSessionSwitcher(
+      sessionKey = sessionKey,
+      sessions = sessions,
+      mainSessionKey = mainSessionKey,
+      onSelectSession = { key ->
+        viewModel.switchChatSession(key)
+        viewModel.refreshChatSessions(limit = 100)
+      },
+      onOpenSessions = onOpenSessions,
     )
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
@@ -215,12 +226,87 @@ fun ChatScreen(
 }
 
 @Composable
+private fun ChatSessionSwitcher(
+  sessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  onSelectSession: (String) -> Unit,
+  onOpenSessions: () -> Unit,
+) {
+  val choices =
+    remember(sessionKey, sessions, mainSessionKey) {
+      resolveCompactSessionChoices(
+        currentSessionKey = sessionKey,
+        sessions = sessions,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  if (choices.size <= 1 && sessions.size <= 1) return
+
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    choices.forEach { entry ->
+      ChatSessionChip(
+        text = chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey),
+        active = isActiveSessionChoice(entry.key, sessionKey, mainSessionKey),
+        onClick = { onSelectSession(entry.key) },
+      )
+    }
+    if (sessions.size > choices.size) {
+      Surface(
+        onClick = onOpenSessions,
+        modifier = Modifier.heightIn(min = 36.dp),
+        shape = RoundedCornerShape(ClawTheme.radii.pill),
+        color = ClawTheme.colors.canvas,
+        contentColor = ClawTheme.colors.textMuted,
+        border = BorderStroke(1.dp, ClawTheme.colors.border),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+          Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+          Text(text = "All", style = ClawTheme.type.caption, maxLines = 1)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatSessionChip(
+  text: String,
+  active: Boolean,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.heightIn(min = 36.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = if (active) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
+    contentColor = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+    border = BorderStroke(1.dp, if (active) ClawTheme.colors.primary else ClawTheme.colors.border),
+  ) {
+    Text(
+      text = text,
+      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+      style = ClawTheme.type.caption,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+@Composable
 private fun ChatHeader(
   sessionTitle: String,
   thinkingLevel: String,
   healthOk: Boolean,
   pendingRunCount: Int,
-  onBack: () -> Unit,
   onMore: () -> Unit,
 ) {
   Row(
@@ -228,7 +314,7 @@ private fun ChatHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    HeaderIcon(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+    Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget))
 
     Column(
       modifier = Modifier.weight(1f),
@@ -786,11 +872,31 @@ private fun AttachmentChip(
 
 private fun currentSessionTitle(
   sessionKey: String,
-  sessions: List<ai.openclaw.app.chat.ChatSessionEntry>,
+  sessions: List<ChatSessionEntry>,
 ): String {
   val entry = sessions.firstOrNull { it.key == sessionKey }
   val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return "New chat"
   return friendlySessionName(name)
+}
+
+private fun chatSessionChipText(
+  entry: ChatSessionEntry,
+  mainSessionKey: String,
+): String {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return "Main"
+  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: "Current"
+  return friendlySessionName(name)
+}
+
+private fun isActiveSessionChoice(
+  choiceKey: String,
+  sessionKey: String,
+  mainSessionKey: String,
+): Boolean {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val current = sessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
+  return choiceKey == current
 }
 
 @Composable

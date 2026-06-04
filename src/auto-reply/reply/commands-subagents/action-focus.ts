@@ -1,3 +1,4 @@
+// Focuses an existing subagent run for follow-up routing.
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,

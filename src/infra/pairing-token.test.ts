@@ -1,3 +1,4 @@
+// Covers pairing token generation and verification.
 import { Buffer } from "node:buffer";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

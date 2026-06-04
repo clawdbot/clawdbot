@@ -1,16 +1,21 @@
 import { postJson } from "./post-json.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
+// Fetches and validates OpenAI-compatible embedding responses.
+
+/** Narrow unknown JSON payloads to plain objects. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
 }
 
+/** Build the common malformed embedding response error. */
 function malformedEmbeddingResponse(errorPrefix: string): Error {
   return new Error(`${errorPrefix}: malformed JSON response`);
 }
 
+/** Validate and return one finite embedding vector. */
 function readEmbeddingVector(value: unknown, errorPrefix: string): number[] {
   if (!Array.isArray(value)) {
     throw malformedEmbeddingResponse(errorPrefix);
@@ -23,11 +28,13 @@ function readEmbeddingVector(value: unknown, errorPrefix: string): number[] {
   return value;
 }
 
+/** Resolve expected response count from the request body when input is an array. */
 function resolveExpectedEmbeddingCount(body: unknown): number | undefined {
   const input = asRecord(body)?.input;
   return Array.isArray(input) ? input.length : undefined;
 }
 
+/** POST an embedding request and return validated vectors in provider response order. */
 export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
   headers: Record<string, string>;

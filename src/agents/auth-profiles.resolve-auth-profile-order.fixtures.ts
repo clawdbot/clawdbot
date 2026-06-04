@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
+// Shared auth profile fixtures for resolve-auth-profile-order tests.
 export const ANTHROPIC_STORE: AuthProfileStore = {
   version: 1,
   profiles: {

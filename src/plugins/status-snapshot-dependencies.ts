@@ -1,3 +1,4 @@
+/** Builds dependency install status for plugin status snapshots without importing discovery. */
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -63,6 +64,7 @@ function buildDependencyEntries(params: {
     });
 }
 
+/** Resolves required and optional dependency status for one plugin root. */
 export function buildSnapshotPluginDependencyStatus(params: {
   rootDir?: string;
   dependencies?: PluginDependencySpecMap;

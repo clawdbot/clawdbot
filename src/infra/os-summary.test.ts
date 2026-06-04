@@ -1,3 +1,4 @@
+// Tests operating system summary collection and normalization.
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

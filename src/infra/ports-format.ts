@@ -1,7 +1,9 @@
+// Formats port probe results for diagnostics and CLI output.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
+/** Classifies a listener as OpenClaw Gateway, SSH tunnel, or unknown process. */
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
@@ -48,6 +50,8 @@ function parseListenerAddress(address: string): { host: string; port: number } |
   return Number.isFinite(port) ? { host, port } : null;
 }
 
+// Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
+// in the IPv6 family so the benign loopback-pair detection stays conservative.
 function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
   if (host === "127.0.0.1" || host === "localhost") {
     return "ipv4";
@@ -70,6 +74,7 @@ function isExpectedGatewayBindAddress(host: string): boolean {
   return classifyLoopbackAddressFamily(host) !== null || isWildcardAddress(host);
 }
 
+/** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
 export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
@@ -93,6 +98,7 @@ export function isSingleExpectedGatewayListener(listeners: PortListener[], port:
   );
 }
 
+/** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
 export function isDualStackLoopbackGatewayListeners(
   listeners: PortListener[],
   port: number,
@@ -127,6 +133,7 @@ export function isDualStackLoopbackGatewayListeners(
   return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
 }
 
+/** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   return (
     isSingleExpectedGatewayListener(listeners, port) ||
@@ -134,6 +141,7 @@ export function isExpectedGatewayListeners(listeners: PortListener[], port: numb
   );
 }
 
+/** Builds user-facing remediation hints for processes occupying a port. */
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
@@ -162,6 +170,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
+/** Formats one listener row for CLI diagnostics. */
 export function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -170,6 +179,7 @@ export function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
+/** Formats free/busy port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status !== "busy") {
     return [`Port ${diagnostics.port} is free.`];

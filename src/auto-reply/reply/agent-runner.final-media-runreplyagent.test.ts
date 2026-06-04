@@ -1,3 +1,4 @@
+// Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";

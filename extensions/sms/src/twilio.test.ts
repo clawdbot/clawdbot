@@ -176,17 +176,8 @@ describe("Twilio SMS helpers", () => {
       status: "queued",
     });
 
-    const firstFetchCall = fetchImpl.mock.calls[0];
-    expect(firstFetchCall).toBeDefined();
-    if (!firstFetchCall) {
-      throw new Error("Expected Twilio fetch call");
-    }
-    const [url, init] = firstFetchCall;
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
     expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json");
-    expect(init).toBeDefined();
-    if (!init) {
-      throw new Error("Expected Twilio request init");
-    }
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,

@@ -1,3 +1,4 @@
+// Shares web fetch provider loading helpers across provider plugins.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {

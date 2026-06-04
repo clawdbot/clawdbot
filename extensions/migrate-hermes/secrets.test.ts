@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+  saveAuthProfileStore,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +30,21 @@ async function expectMissingPath(filePath: string): Promise<void> {
     return;
   }
   throw new Error(`expected missing path: ${filePath}`);
+}
+
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
+
+function readAuthProfileStore(agentDir: string): AuthProfileStore {
+  return loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+}
+
+function writeAuthProfileStore(agentDir: string, store: AuthProfileStore): void {
+  saveAuthProfileStore(store, agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
 }
 
 function fakeJwt(payload: Record<string, unknown>): string {
@@ -77,7 +98,7 @@ describe("Hermes migration secret items", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: `${customAgentDir}/auth-profiles.json#openai:hermes-import`,
+        target: authProfileTarget(customAgentDir, "openai:hermes-import"),
         status: "planned",
         sensitive: true,
         details: {
@@ -101,14 +122,7 @@ describe("Hermes migration secret items", () => {
     );
 
     expect(result.summary.errors).toBe(0);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(customAgentDir, "auth-profiles.json"), "utf8"),
-    ) as {
-      profiles?: Record<
-        string,
-        { displayName?: string; key?: string; provider?: string; type?: string }
-      >;
-    };
+    const authStore = readAuthProfileStore(customAgentDir);
     expect(authStore.profiles?.["openai:hermes-import"]).toEqual({
       type: "api_key",
       provider: "openai",
@@ -165,9 +179,7 @@ describe("Hermes migration secret items", () => {
         }),
       }),
     );
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as { profiles?: Record<string, { key?: string; provider?: string; type?: string }> };
+    const authStore = readAuthProfileStore(agentDir);
     expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
       expect.objectContaining({
         type: "api_key",
@@ -216,23 +228,16 @@ describe("Hermes migration secret items", () => {
       reportDir,
     });
     const plan = await provider.plan(ctx);
-    await writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "openai:hermes-import": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-late",
-            },
-          },
+    writeAuthProfileStore(agentDir, {
+      version: 1,
+      profiles: {
+        "openai:hermes-import": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-late",
         },
-        null,
-        2,
-      ),
-    );
+      },
+    });
 
     const result = await provider.apply(ctx, plan);
 
@@ -242,7 +247,7 @@ describe("Hermes migration secret items", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: `${agentDir}/auth-profiles.json#openai:hermes-import`,
+        target: authProfileTarget(agentDir, "openai:hermes-import"),
         status: "conflict",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -254,10 +259,14 @@ describe("Hermes migration secret items", () => {
       },
     ]);
     expect(result.summary.conflicts).toBe(1);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as { profiles?: Record<string, { key?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-late");
+    const authStore = readAuthProfileStore(agentDir);
+    expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
+      expect.objectContaining({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-late",
+      }),
+    );
   });
 
   it("reports API key config auth profile conflicts during planning", async () => {
@@ -423,11 +432,7 @@ describe("Hermes migration secret items", () => {
     const result = await provider.apply(ctx, plan);
 
     expect(result.summary.errors).toBe(0);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as {
-      profiles?: Record<string, { key?: string; provider?: string; token?: string; type?: string }>;
-    };
+    const authStore = readAuthProfileStore(agentDir);
     expect(authStore.profiles?.["opencode:hermes-import"]).toEqual(
       expect.objectContaining({
         type: "api_key",
@@ -571,11 +576,7 @@ describe("Hermes migration secret items", () => {
     const result = await provider.apply(ctx, plan);
 
     expect(result.summary.errors).toBe(0);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as {
-      profiles?: Record<string, { key?: string; provider?: string; token?: string; type?: string }>;
-    };
+    const authStore = readAuthProfileStore(agentDir);
     expect(authStore.profiles?.["opencode:hermes-import"]).toEqual(
       expect.objectContaining({
         type: "api_key",
@@ -712,11 +713,7 @@ describe("Hermes migration secret items", () => {
       const result = await provider.apply(ctx, plan);
 
       expect(result.summary.errors).toBe(0);
-      const authStore = JSON.parse(
-        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-      ) as {
-        profiles?: Record<string, { key?: string; provider?: string; type?: string }>;
-      };
+      const authStore = readAuthProfileStore(agentDir);
       expect(authStore.profiles?.["opencode:hermes-import"]).toEqual(
         expect.objectContaining({
           type: "api_key",
@@ -799,14 +796,7 @@ describe("Hermes migration secret items", () => {
     const result = await provider.apply(ctx, plan);
 
     expect(result.summary.errors).toBe(0);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as {
-      profiles?: Record<
-        string,
-        { access?: string; accountId?: string; provider?: string; refresh?: string; type?: string }
-      >;
-    };
+    const authStore = readAuthProfileStore(agentDir);
     expect(authStore.profiles?.["openai:account-acct_opencode"]).toEqual(
       expect.objectContaining({
         type: "oauth",
@@ -980,21 +970,20 @@ describe("Hermes migration secret items", () => {
         },
       }),
     );
-    await writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({
-        profiles: {
-          "openai:account-acct_old": {
-            type: "oauth",
-            provider: "openai",
-            access: "old-access-token",
-            refresh: "old-refresh-token",
-            accountId: "acct_old",
-            email: sharedEmail,
-          },
+    writeAuthProfileStore(agentDir, {
+      version: 1,
+      profiles: {
+        "openai:account-acct_old": {
+          type: "oauth",
+          provider: "openai",
+          access: "old-access-token",
+          refresh: "old-refresh-token",
+          expires: Date.now() + 3600_000,
+          accountId: "acct_old",
+          email: sharedEmail,
         },
-      }),
-    );
+      },
+    });
 
     const provider = buildHermesMigrationProvider();
     const ctx = makeContext({
@@ -1021,11 +1010,7 @@ describe("Hermes migration secret items", () => {
     const result = await provider.apply(ctx, plan);
 
     expect(result.summary.errors).toBe(0);
-    const authStore = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as {
-      profiles?: Record<string, { access?: string; accountId?: string; email?: string }>;
-    };
+    const authStore = readAuthProfileStore(agentDir);
     expect(authStore.profiles?.["openai:account-acct_old"]).toEqual(
       expect.objectContaining({
         access: "old-access-token",

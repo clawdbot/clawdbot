@@ -1,3 +1,6 @@
+/**
+ * Test helper for constructing a channel account startup context.
+ */
 import { vi } from "vitest";
 import { createRuntimeEnv } from "../testing.js";
 import type {
@@ -7,6 +10,7 @@ import type {
   RuntimeEnv,
 } from "../testing.js";
 
+/** Creates a minimal ChannelGatewayContext with mutable status for startAccount tests. */
 export function createStartAccountContext<TAccount extends { accountId: string }>(params: {
   account: TAccount;
   abortSignal?: AbortSignal;

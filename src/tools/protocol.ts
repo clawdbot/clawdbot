@@ -1,3 +1,4 @@
+// Converts planned tool entries into protocol payloads for model runtimes.
 import type { JsonObject, ToolPlanEntry } from "./types.js";
 
 export type ToolProtocolDescriptor = {

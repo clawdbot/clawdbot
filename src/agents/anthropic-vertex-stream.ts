@@ -20,6 +20,7 @@ function loadAnthropicVertexStreamFacade(): AnthropicVertexStreamFacade {
   });
 }
 
+/** Creates an Anthropic Vertex stream function through the bundled provider facade. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

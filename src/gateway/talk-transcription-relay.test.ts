@@ -1,3 +1,6 @@
+/**
+ * Tests talk transcription relay behavior between realtime events and clients.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
@@ -110,9 +113,13 @@ describe("talk transcription gateway relay", () => {
       sttRequest?.onPartial?.("hel");
       sttRequest?.onTranscript?.("hello world");
     });
-    const { events, session } = await createStartedRelaySession(sttSession, { model: "stt-model" }, (req) => {
-      sttRequest = req;
-    });
+    const { events, session } = await createStartedRelaySession(
+      sttSession,
+      { model: "stt-model" },
+      (req) => {
+        sttRequest = req;
+      },
+    );
 
     expectRecordFields(session, "session", {
       provider: "stt-test",

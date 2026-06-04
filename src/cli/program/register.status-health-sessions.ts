@@ -1,3 +1,4 @@
+// Status, health, sessions, commitments, and task/flow command registration.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -107,6 +108,7 @@ async function runWithVerboseAndTimeout(
   });
 }
 
+/** Register status/health plus persistent session/task inspection command groups. */
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")

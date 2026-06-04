@@ -1,3 +1,4 @@
+/** Public host-hook type contracts exposed to plugin runtimes. */
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
@@ -26,6 +27,7 @@ export type {
   PluginNextTurnInjectionRecord,
 } from "./host-hook-turn-types.js";
 
+/** Reason passed to plugin cleanup callbacks when host-owned state changes. */
 export type PluginHostCleanupReason = "disable" | "reset" | "delete" | "restart";
 
 export type PluginSessionExtensionProjectionContext = {
@@ -34,6 +36,7 @@ export type PluginSessionExtensionProjectionContext = {
   state: PluginJsonValue | undefined;
 };
 
+/** Session extension registration owned by a plugin namespace. */
 export type PluginSessionExtensionRegistration = {
   namespace: string;
   description: string;

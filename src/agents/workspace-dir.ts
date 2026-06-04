@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 
+/** Normalizes a workspace directory and rejects filesystem roots. */
 export function normalizeWorkspaceDir(workspaceDir?: string): string | null {
   const trimmed = workspaceDir?.trim();
   if (!trimmed) {
@@ -15,6 +16,7 @@ export function normalizeWorkspaceDir(workspaceDir?: string): string | null {
   return resolved;
 }
 
+/** Resolves the effective workspace root, falling back to cwd. */
 export function resolveWorkspaceRoot(workspaceDir?: string): string {
   return normalizeWorkspaceDir(workspaceDir) ?? process.cwd();
 }

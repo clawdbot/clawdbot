@@ -1,3 +1,4 @@
+// Tests pairing challenge creation, validation, and reply formatting.
 import { describe, expect, it, vi } from "vitest";
 import { issuePairingChallenge } from "./pairing-challenge.js";
 

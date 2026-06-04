@@ -1,5 +1,5 @@
+// Tests slash command parsing boundaries, defaults, and invalid-action handling.
 import { describe, expect, it } from "vitest";
-
 import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 
 describe("parseSlashCommandOrNull", () => {
@@ -15,7 +15,10 @@ describe("parseSlashCommandOrNull", () => {
   });
 
   it("returns the default action on an empty body", () => {
-    const result = parseSlashCommandOrNull("/config", "/config", { ...opts, defaultAction: "show" });
+    const result = parseSlashCommandOrNull("/config", "/config", {
+      ...opts,
+      defaultAction: "show",
+    });
     expect(result).toEqual({ ok: true, action: "show", args: "" });
   });
 

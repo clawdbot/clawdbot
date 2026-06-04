@@ -1,3 +1,4 @@
+/** Tracks plugin API lifecycle callbacks registered during runtime activation. */
 import type { OpenClawPluginApi } from "./types.js";
 
 type FunctionPropertyNames<T> = Extract<
@@ -7,8 +8,10 @@ type FunctionPropertyNames<T> = Extract<
   string
 >;
 
+/** Names of plugin API methods exposed on the OpenClaw plugin API. */
 export type PluginApiMethodName = FunctionPropertyNames<OpenClawPluginApi>;
 
+/** Lifecycle policy for whether a plugin API method can be called after registration. */
 export type PluginApiLifecyclePolicy = {
   phase: "registration" | "runtime";
   lateCallable: boolean;
@@ -21,12 +24,14 @@ const PLUGIN_API_METHOD_POLICIES: Partial<Record<PluginApiMethodName, PluginApiL
   unscheduleSessionTurnsByTag: { phase: "runtime", lateCallable: true },
 };
 
+/** Returns lifecycle policy for one plugin API method name. */
 export function getPluginApiMethodLifecyclePolicy(
   methodName: string,
 ): PluginApiLifecyclePolicy | undefined {
   return PLUGIN_API_METHOD_POLICIES[methodName as PluginApiMethodName];
 }
 
+/** True when a plugin API method remains callable after registration. */
 export function isLateCallablePluginApiMethod(
   methodName: string,
 ): methodName is PluginApiMethodName {

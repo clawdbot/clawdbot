@@ -1,3 +1,4 @@
+// Covers detached task runtime spawning, events, and cancellation handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelDetachedTaskRunById,

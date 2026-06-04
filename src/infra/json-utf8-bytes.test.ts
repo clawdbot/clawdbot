@@ -1,3 +1,4 @@
+// Tests JSON UTF-8 byte counting helpers.
 import { describe, expect, it } from "vitest";
 import {
   boundedJsonUtf8Bytes,

@@ -1,3 +1,4 @@
+// Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,

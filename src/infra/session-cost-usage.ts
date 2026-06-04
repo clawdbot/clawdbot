@@ -1,3 +1,4 @@
+// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";

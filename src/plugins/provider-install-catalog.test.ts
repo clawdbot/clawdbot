@@ -1,3 +1,4 @@
+// Covers provider install catalog entries from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoadOpenClawProviderIndex =

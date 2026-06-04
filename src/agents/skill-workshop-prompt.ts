@@ -1,5 +1,8 @@
+// Prompt contribution that teaches agents to route durable skill changes
+// through the skill_workshop tool instead of direct filesystem edits.
 export const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
+/** Build the system-prompt section for Skill Workshop routing rules. */
 export function buildSkillWorkshopPromptSection(): string[] {
   return [
     "## Skill Workshop",

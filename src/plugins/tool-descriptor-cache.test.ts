@@ -1,3 +1,4 @@
+// Covers plugin tool descriptor cache lifecycle and invalidation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({

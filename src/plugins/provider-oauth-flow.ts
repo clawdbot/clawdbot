@@ -1,10 +1,13 @@
+/** Coordinates provider OAuth flows exposed by plugin-owned auth integrations. */
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Prompt payload used when OAuth flow code entry needs user input. */
 export type OAuthPrompt = { message: string; placeholder?: string };
 
 const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
 
+/** Creates OAuth callbacks that use local browser auth locally and manual code entry on VPS hosts. */
 export function createVpsAwareOAuthHandlers(params: {
   isRemote: boolean;
   prompter: WizardPrompter;
@@ -18,6 +21,7 @@ export function createVpsAwareOAuthHandlers(params: {
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
 } {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
+  // Remote hosts cannot open the user's browser, so auth starts in onAuth and finishes in onPrompt.
   let manualCodePromise: Promise<string> | undefined;
 
   return {

@@ -3,6 +3,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 const SCHTASKS_TIMEOUT_MS = 15_000;
 const SCHTASKS_NO_OUTPUT_TIMEOUT_MS = 30_000;
 
+/** Runs Windows schtasks with bounded timeouts and normalized process results. */
 export async function execSchtasks(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {

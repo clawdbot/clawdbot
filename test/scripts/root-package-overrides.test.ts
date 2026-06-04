@@ -12,6 +12,10 @@ type PnpmWorkspaceConfig = {
   overrides?: Record<string, string>;
 };
 
+type PnpmLockfileConfig = {
+  overrides?: Record<string, string>;
+};
+
 function readRootManifest(): RootPackageManifest {
   const manifestPath = path.resolve(process.cwd(), "package.json");
   return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as RootPackageManifest;
@@ -20,6 +24,11 @@ function readRootManifest(): RootPackageManifest {
 function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
   const workspacePath = path.resolve(process.cwd(), "pnpm-workspace.yaml");
   return YAML.parse(fs.readFileSync(workspacePath, "utf8")) as PnpmWorkspaceConfig;
+}
+
+function readPnpmLockfileConfig(): PnpmLockfileConfig {
+  const lockfilePath = path.resolve(process.cwd(), "pnpm-lock.yaml");
+  return YAML.parse(fs.readFileSync(lockfilePath, "utf8")) as PnpmLockfileConfig;
 }
 
 function readPackageManifest(packagePath: string): RootPackageManifest {
@@ -43,13 +52,21 @@ describe("root package override guardrails", () => {
     expect(pnpmWorkspace.overrides).not.toHaveProperty(packageName);
   });
 
-  it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
+  it("pins the node-domexception alias exactly in pnpm override metadata", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const pnpmOverride = pnpmWorkspace.overrides?.["node-domexception"];
-    const npmOverride = manifest.overrides?.["node-domexception"];
 
     expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
-    expect(npmOverride).toBe(pnpmOverride);
+    expect(manifest.overrides).toBeUndefined();
+  });
+
+  it("keeps pnpm and lockfile override metadata aligned without duplicating root package policy", () => {
+    const manifest = readRootManifest();
+    const pnpmWorkspace = readPnpmWorkspaceConfig();
+    const pnpmLockfile = readPnpmLockfileConfig();
+
+    expect(manifest.overrides).toBeUndefined();
+    expect(pnpmLockfile.overrides).toEqual(pnpmWorkspace.overrides);
   });
 });

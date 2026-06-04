@@ -32,4 +32,29 @@ class SessionFiltersTest {
     val result = resolveSessionChoices("custom", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
     assertEquals(listOf("main", "custom"), result)
   }
+
+  @Test
+  fun compactChoicesKeepMainAndCurrentWhileCappingRecentSessions() {
+    val now = 1_700_000_000_000L
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "recent-1", updatedAtMs = now - 1),
+        ChatSessionEntry(key = "recent-2", updatedAtMs = now - 2),
+        ChatSessionEntry(key = "recent-3", updatedAtMs = now - 3),
+        ChatSessionEntry(key = "recent-4", updatedAtMs = now - 4),
+        ChatSessionEntry(key = "main", updatedAtMs = now - 5),
+        ChatSessionEntry(key = "active-old", updatedAtMs = now - 30 * 60 * 60 * 1000L),
+      )
+
+    val result =
+      resolveCompactSessionChoices(
+        currentSessionKey = "active-old",
+        sessions = sessions,
+        mainSessionKey = "main",
+        nowMs = now,
+        maxOptions = 4,
+      ).map { it.key }
+
+    assertEquals(listOf("main", "active-old", "recent-1", "recent-2"), result)
+  }
 }

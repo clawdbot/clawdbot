@@ -15,6 +15,7 @@ type QrPngRenderOptions = {
   marginModules?: number;
 };
 
+/** Temp-file write options kept to filename segments so callers cannot choose parent paths. */
 type QrPngTempFileOptions = QrPngRenderOptions & {
   tmpRoot: string;
   dirPrefix: string;
@@ -54,6 +55,7 @@ function resolveQrTempPathSegment(name: string, value: string): string {
   return value;
 }
 
+/** Renders QR text as raw PNG base64 after validating bounded renderer options. */
 export async function renderQrPngBase64(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -84,10 +86,12 @@ export async function renderQrPngBase64(
   return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
 }
 
+/** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */
 export function formatQrPngDataUrl(base64: string): string {
   return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
 }
 
+/** Renders QR text as a PNG data URL. */
 export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -95,6 +99,7 @@ export async function renderQrPngDataUrl(
   return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
 }
 
+/** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
 export async function writeQrPngTempFile(
   input: string,
   opts: QrPngTempFileOptions,

@@ -1,3 +1,4 @@
+// Decides when config recovery should use snapshots, backups, or defaults.
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.openclaw.js";
 
 const PLUGIN_ENTRY_PATH_PREFIX = "plugins.entries.";
@@ -25,6 +26,7 @@ function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
   );
 }
 
+/** Return true for plugin validation issues caused by missing compiled runtime output. */
 export function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): boolean {
   const path = issue.path.trim();
   const message = issue.message.trim().toLowerCase();
@@ -57,8 +59,8 @@ function extractPluginNotFoundIssuePluginId(issue: ConfigValidationIssue): strin
 }
 
 /**
- * Returns true when an invalid config snapshot is blocked by an installed plugin
- * package that shipped TypeScript source without compiled JavaScript output.
+ * Return true when an invalid config snapshot is blocked only by plugin packaging fallout.
+ * This lets callers show plugin repair hints instead of treating user config as corrupted.
  */
 export function isPluginPackagingRuntimeOutputInvalidConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues"> &
@@ -81,6 +83,7 @@ export function isPluginPackagingRuntimeOutputInvalidConfigSnapshot(
       if (isPluginPackagingRuntimeOutputIssue(issue)) {
         return true;
       }
+      // Missing-plugin fallout must belong to the same plugin that emitted the packaging error.
       const pluginId = extractPluginNotFoundIssuePluginId(issue);
       return pluginId !== null && packagingPluginIds.has(pluginId);
     })
@@ -88,7 +91,8 @@ export function isPluginPackagingRuntimeOutputInvalidConfigSnapshot(
 }
 
 /**
- * Returns true when an invalid config snapshot is scoped entirely to stale plugin refs.
+ * Return true when an invalid config snapshot is scoped entirely to stale plugin refs.
+ * Whole-file recovery is skipped for these snapshots so plugin cleanup can preserve user config.
  */
 export function isPluginLocalInvalidConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">,
@@ -100,7 +104,8 @@ export function isPluginLocalInvalidConfigSnapshot(
 }
 
 /**
- * Decides whether whole-file last-known-good recovery is safe for a snapshot.
+ * Decide whether whole-file last-known-good recovery is appropriate for an invalid snapshot.
+ * Plugin-local failures stay on the current file so targeted plugin cleanup can run.
  */
 export function shouldAttemptLastKnownGoodRecovery(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">,

@@ -1,3 +1,9 @@
+/**
+ * Realtime bootstrap context loader.
+ *
+ * Voice/realtime sessions use this to inject selected profile files into model
+ * instructions with deterministic ordering and a hard character budget.
+ */
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
@@ -10,12 +16,14 @@ import {
   DEFAULT_USER_FILENAME,
 } from "./workspace.js";
 
+/** Default ordered profile files included in realtime bootstrap context. */
 export const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES = [
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
   DEFAULT_SOUL_FILENAME,
 ] as const;
 
+/** Profile file names allowed in realtime bootstrap context. */
 export type RealtimeBootstrapContextFileName =
   (typeof REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES)[number];
 
@@ -65,6 +73,7 @@ function normalizeRealtimeBootstrapContextFileNames(
   return normalized;
 }
 
+/** Builds bounded realtime instructions from selected profile bootstrap files. */
 export async function resolveRealtimeBootstrapContextInstructions(params: {
   agentId: string;
   config: OpenClawConfig;
@@ -96,6 +105,7 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
         requestedOrder.has(file.name),
     )
     .toSorted((left, right) => {
+      // Preserve requested profile-file order, then path-sort duplicate sources.
       const leftOrder = isRealtimeBootstrapContextFileName(left.name)
         ? (requestedOrder.get(left.name) ?? 0)
         : 0;
@@ -127,6 +137,8 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
     );
     return undefined;
   }
+  // Divide the remaining budget evenly; buildBootstrapContextFiles enforces
+  // both per-file and aggregate UTF-16-safe truncation.
   const perFileMaxChars = Math.max(1, Math.floor(contentBudget / selectedFiles.length));
   const contextFiles = buildBootstrapContextFiles(selectedFiles, {
     maxChars: perFileMaxChars,

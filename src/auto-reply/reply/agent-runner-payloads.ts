@@ -1,3 +1,4 @@
+/** Builds final reply payloads after sanitization, media normalization, and dedupe. */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
@@ -47,6 +48,7 @@ async function normalizeReplyPayloadMedia(params: {
     return copyReplyPayloadMetadata(params.payload, normalized);
   } catch (err) {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
+    // Preserve the text reply and drop unusable media so channels can still send the answer.
     return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       text: params.suppressMediaFailureWarning
@@ -155,6 +157,7 @@ function copyPayloadWithSanitizedText(
   return next;
 }
 
+/** Builds final outbound payloads from agent output and message-tool delivery evidence. */
 export async function buildReplyPayloads(params: {
   payloads: ReplyPayload[];
   isHeartbeat: boolean;

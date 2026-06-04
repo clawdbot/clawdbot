@@ -1,3 +1,6 @@
+/**
+ * Tests channel pairing helpers and pairing reply behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {

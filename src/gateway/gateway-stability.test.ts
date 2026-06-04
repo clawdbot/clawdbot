@@ -1,3 +1,6 @@
+/**
+ * Tests gateway stability helpers for cleanup and repeated startup cycles.
+ */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,

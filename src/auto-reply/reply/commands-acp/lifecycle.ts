@@ -1,3 +1,4 @@
+// Implements ACP lifecycle commands for start, stop, reset, and resume.
 import { randomUUID } from "node:crypto";
 import {
   resolveAcpSessionCwd,

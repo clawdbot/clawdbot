@@ -1,3 +1,4 @@
+// Verifies talk config validation errors and warnings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRuntimeConfig,

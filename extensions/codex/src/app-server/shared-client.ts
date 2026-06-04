@@ -18,6 +18,7 @@ type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
   promise?: Promise<CodexAppServerClient>;
   activeLeases: number;
+  pendingAcquires: number;
   closeWhenIdle: boolean;
 };
 
@@ -48,6 +49,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
     const clients = keyedState.clients as Map<string, SharedCodexAppServerClientEntry>;
     for (const entry of clients.values()) {
       entry.activeLeases ??= 0;
+      entry.pendingAcquires ??= 0;
       entry.closeWhenIdle ??= false;
     }
     const nextState: SharedCodexAppServerClientState = {
@@ -66,6 +68,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
       client: legacyState.client,
       promise: legacyState.promise,
       activeLeases: 0,
+      pendingAcquires: 0,
       closeWhenIdle: false,
     });
     legacyState.client?.addCloseHandler((closedClient) =>
@@ -102,6 +105,8 @@ type CodexAppServerClientOptions = {
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  onStartedClient?: (client: CodexAppServerClient) => void;
+  abandonSignal?: AbortSignal;
 };
 
 type ResolvedCodexAppServerClientStartContext = {
@@ -194,11 +199,27 @@ async function acquireSharedCodexAppServerClient(
   });
   const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
+  const releasePendingAcquire = retainPendingSharedClientAcquire(entry);
+  let cleanupAbandonSignal: (() => void) | undefined;
+  if (options?.abandonSignal) {
+    const abandon = () => {
+      // Release this acquire before cleanup checks ownership; only other
+      // pending callers should keep the startup client alive.
+      releasePendingAcquire();
+      closeSharedClientEntryIfUnclaimed(key, entry);
+    };
+    options.abandonSignal.addEventListener("abort", abandon, { once: true });
+    cleanupAbandonSignal = () => options.abandonSignal?.removeEventListener("abort", abandon);
+    if (options.abandonSignal.aborted) {
+      abandon();
+    }
+  }
   const sharedPromise =
     entry.promise ??
     (entry.promise = (async () => {
       const client = CodexAppServerClient.start(startOptions);
       entry.client = client;
+      options?.onStartedClient?.(client);
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       try {
@@ -233,6 +254,9 @@ async function acquireSharedCodexAppServerClient(
       clearSharedClientEntry(key, currentEntry);
     }
     throw error;
+  } finally {
+    cleanupAbandonSignal?.();
+    releasePendingAcquire();
   }
 }
 
@@ -386,7 +410,7 @@ function getOrCreateSharedClientEntry(
 ): SharedCodexAppServerClientEntry {
   let entry = state.clients.get(key);
   if (!entry) {
-    entry = { activeLeases: 0, closeWhenIdle: false };
+    entry = { activeLeases: 0, pendingAcquires: 0, closeWhenIdle: false };
     state.clients.set(key, entry);
   }
   return entry;
@@ -409,6 +433,39 @@ function clearSharedClientEntryIfCurrent(key: string, client: CodexAppServerClie
   }
 }
 
+export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
+  client: CodexAppServerClient | undefined,
+): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {
+  if (!client) {
+    return { found: false, closed: false, activeLeases: 0, pendingAcquires: 0 };
+  }
+  const state = getSharedCodexAppServerClientState();
+  for (const [key, entry] of state.clients) {
+    if (entry.client === client) {
+      return {
+        found: true,
+        closed: closeSharedClientEntryIfUnclaimed(key, entry),
+        activeLeases: entry.activeLeases,
+        pendingAcquires: entry.pendingAcquires,
+      };
+    }
+  }
+  return { found: false, closed: false, activeLeases: 0, pendingAcquires: 0 };
+}
+
+function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry): () => void {
+  let released = false;
+  entry.pendingAcquires += 1;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    entry.pendingAcquires = Math.max(0, entry.pendingAcquires - 1);
+    closeRetiredSharedClientEntryIfIdle(entry);
+  };
+}
+
 function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
   entry.activeLeases += 1;
@@ -423,7 +480,12 @@ function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => 
 }
 
 function closeRetiredSharedClientEntryIfIdle(entry: SharedCodexAppServerClientEntry): boolean {
-  if (!entry.closeWhenIdle || entry.activeLeases > 0 || !entry.client) {
+  if (
+    !entry.closeWhenIdle ||
+    entry.activeLeases > 0 ||
+    entry.pendingAcquires > 0 ||
+    !entry.client
+  ) {
     return false;
   }
   const client = entry.client;
@@ -431,6 +493,22 @@ function closeRetiredSharedClientEntryIfIdle(entry: SharedCodexAppServerClientEn
   entry.client = undefined;
   client.close();
   return true;
+}
+
+function closeSharedClientEntryIfUnclaimed(
+  key: string,
+  entry: SharedCodexAppServerClientEntry,
+): boolean {
+  if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+    return false;
+  }
+  const state = getSharedCodexAppServerClientState();
+  if (state.clients.get(key) !== entry) {
+    return false;
+  }
+  state.clients.delete(key);
+  entry.client?.close();
+  return Boolean(entry.client);
 }
 
 function collectSharedClients(state: SharedCodexAppServerClientState): CodexAppServerClient[] {

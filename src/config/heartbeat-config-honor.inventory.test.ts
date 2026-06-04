@@ -1,3 +1,4 @@
+// Audits heartbeat config coverage across inventory entries.
 import { describe, expect, it } from "vitest";
 import {
   auditConfigHonorInventory,

@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for approval handler adapters and approval view text helpers.
+ */
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
@@ -46,6 +49,7 @@ import { buildApprovalResolvedReplyPayload } from "./approval-renderers.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Builds channel-visible resolved approval text for exec and plugin approvals. */
 export function buildChannelApprovalResolvedText(params: {
   request: ApprovalRequest;
   resolved: ApprovalResolved;
@@ -65,6 +69,7 @@ export function buildChannelApprovalResolvedText(params: {
   return payload.text ?? "";
 }
 
+/** Builds channel-visible expiration text for exec and plugin approvals. */
 export function buildChannelApprovalExpiredText(params: {
   request: ApprovalRequest;
   view: ExpiredApprovalView;
@@ -75,6 +80,7 @@ export function buildChannelApprovalExpiredText(params: {
   return `⏱️ Exec approval expired. ID: ${params.request.id}`;
 }
 
+/** Resolves the account id prepared for approval routing with planned/context fallback order. */
 export function resolvePreparedApprovalAccountId(params: {
   plannedAccountId?: string | null;
   contextAccountId?: string | null;

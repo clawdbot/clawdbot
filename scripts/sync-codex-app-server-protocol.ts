@@ -10,21 +10,28 @@ const targetRoot = path.resolve(
   "extensions/codex/src/app-server/protocol-generated",
 );
 
-const source = await generateExperimentalCodexAppServerProtocolSource();
-try {
-  await fs.rm(targetRoot, { recursive: true, force: true });
-  await fs.mkdir(targetRoot, { recursive: true });
+await main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
 
-  for (const schema of selectedCodexAppServerJsonSchemas) {
-    await fs.mkdir(path.dirname(path.join(targetRoot, "json", schema)), { recursive: true });
-    const schemaSource = await fs.readFile(path.join(source.jsonRoot, schema), "utf8");
-    await fs.writeFile(
-      path.join(targetRoot, "json", schema),
-      `${JSON.stringify(JSON.parse(schemaSource), null, 2)}\n`,
-    );
+async function main(): Promise<void> {
+  const source = await generateExperimentalCodexAppServerProtocolSource();
+  try {
+    await fs.rm(targetRoot, { recursive: true, force: true });
+    await fs.mkdir(targetRoot, { recursive: true });
+
+    for (const schema of selectedCodexAppServerJsonSchemas) {
+      await fs.mkdir(path.dirname(path.join(targetRoot, "json", schema)), { recursive: true });
+      const schemaSource = await fs.readFile(path.join(source.jsonRoot, schema), "utf8");
+      await fs.writeFile(
+        path.join(targetRoot, "json", schema),
+        `${JSON.stringify(JSON.parse(schemaSource), null, 2)}\n`,
+      );
+    }
+  } finally {
+    await source.cleanup();
   }
-} finally {
-  await source.cleanup();
-}
 
-console.log(`Synced Codex app-server generated protocol from ${source.codexRepo}`);
+  console.log(`Synced Codex app-server generated protocol from ${source.codexRepo}`);
+}

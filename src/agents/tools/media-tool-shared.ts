@@ -72,6 +72,9 @@ type TaskRunDetailHandle = {
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
+/**
+ * Applies an image-editing model as the agent default without mutating the loaded config.
+ */
 export function applyImageModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageModelConfig: ImageModelConfig,
@@ -79,6 +82,9 @@ export function applyImageModelConfigDefaults(
   return applyAgentDefaultModelConfig(cfg, "imageModel", imageModelConfig);
 }
 
+/**
+ * Applies an image-generation model as the agent default for downstream tool calls.
+ */
 export function applyImageGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageGenerationModelConfig: ToolModelConfig,
@@ -86,6 +92,9 @@ export function applyImageGenerationModelConfigDefaults(
   return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
 }
 
+/**
+ * Applies a video-generation model as the agent default for downstream tool calls.
+ */
 export function applyVideoGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   videoGenerationModelConfig: ToolModelConfig,
@@ -93,6 +102,9 @@ export function applyVideoGenerationModelConfigDefaults(
   return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
 }
 
+/**
+ * Applies a music-generation model as the agent default for downstream tool calls.
+ */
 export function applyMusicGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   musicGenerationModelConfig: ToolModelConfig,
@@ -100,12 +112,18 @@ export function applyMusicGenerationModelConfigDefaults(
   return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
 }
 
+/**
+ * Reads an optional generation timeout while preserving common tool parameter validation.
+ */
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
   return readPositiveIntegerParam(args, "timeoutMs", {
     message: "timeoutMs must be a positive integer in milliseconds.",
   });
 }
 
+/**
+ * Resolves the shared remote-media SSRF policy used by media tools that fetch URLs.
+ */
 export function resolveRemoteMediaSsrfPolicy(
   cfg: OpenClawConfig | undefined,
 ): SsrFPolicy | undefined {
@@ -160,6 +178,10 @@ function parseCapabilityModelRefForProviders(params: {
   });
 }
 
+/**
+ * Checks whether a generation provider is usable from either its custom readiness hook or
+ * the generic tool auth profile/config lookup.
+ */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: T[];
   provider?: T;
@@ -202,6 +224,9 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   });
 }
 
+/**
+ * Resolves the provider implied by a model override or configured primary model.
+ */
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
   providers: T[];
   modelConfig: ToolModelConfig;
@@ -289,6 +314,10 @@ function resolveCapabilityModelCandidatesForTool(params: {
   return orderedRefs;
 }
 
+/**
+ * Builds the model config for a generation tool from explicit config first, then configured
+ * provider defaults ordered around the agent's primary provider.
+ */
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -332,6 +361,9 @@ export function resolveCapabilityModelConfigForTool(params: {
   });
 }
 
+/**
+ * Reports whether a generation tool should be offered for the current config and auth state.
+ */
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -407,6 +439,9 @@ function formatQuotedList(values: readonly string[]): string {
     .join(", ")}, or "${values[values.length - 1]}"`;
 }
 
+/**
+ * Reads a constrained generation action and raises a tool-input error for invalid values.
+ */
 export function resolveGenerateAction<TAction extends string>(params: {
   args: Record<string, unknown>;
   allowed: readonly TAction[];
@@ -423,6 +458,9 @@ export function resolveGenerateAction<TAction extends string>(params: {
   throw new ToolInputError(`action must be ${formatQuotedList(params.allowed)}`);
 }
 
+/**
+ * Reads boolean tool parameters from either canonical or snake_case keys.
+ */
 export function readBooleanToolParam(
   params: Record<string, unknown>,
   key: string,
@@ -443,6 +481,9 @@ export function readBooleanToolParam(
   return undefined;
 }
 
+/**
+ * Normalizes singular/plural media reference parameters into a deduped, bounded list.
+ */
 export function normalizeMediaReferenceInputs(params: {
   args: Record<string, unknown>;
   singularKey: string;
@@ -472,6 +513,9 @@ export function normalizeMediaReferenceInputs(params: {
   return deduped;
 }
 
+/**
+ * Builds result detail fields for one or many rewritten media references.
+ */
 export function buildMediaReferenceDetails<T extends MediaReferenceDetailEntry>(params: {
   entries: readonly T[];
   singleKey: string;
@@ -501,6 +545,9 @@ export function buildMediaReferenceDetails<T extends MediaReferenceDetailEntry>(
   return {};
 }
 
+/**
+ * Adds task/run provenance details when an async media generation handle is present.
+ */
 export function buildTaskRunDetails(
   handle: TaskRunDetailHandle | null | undefined,
 ): Record<string, unknown> {
@@ -514,6 +561,9 @@ export function buildTaskRunDetails(
     : {};
 }
 
+/**
+ * Resolves host-local read roots for tools that accept filesystem media references.
+ */
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: {
@@ -528,10 +578,15 @@ export function resolveMediaToolLocalRoots(
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
+  // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
+  // access, not broad host-local file reads.
   const roots = getDefaultLocalRoots();
   return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
 }
 
+/**
+ * Resolves channel-scoped inbound attachment roots separately from host-local roots.
+ */
 export function resolveMediaToolInboundRoots(options?: {
   workspaceOnly?: boolean;
   cfg?: OpenClawConfig;
@@ -550,6 +605,9 @@ export function resolveMediaToolInboundRoots(options?: {
   );
 }
 
+/**
+ * Resolves the effective prompt and optional model override from common media tool args.
+ */
 export function resolvePromptAndModelOverride(
   args: Record<string, unknown>,
   defaultPrompt: string,
@@ -562,6 +620,9 @@ export function resolvePromptAndModelOverride(
   return { prompt, modelOverride };
 }
 
+/**
+ * Wraps a generated text result in the common tool result shape with model attempt details.
+ */
 export function buildTextToolResult(
   result: TextToolResult,
   extraDetails: Record<string, unknown>,
@@ -579,6 +640,9 @@ export function buildTextToolResult(
   };
 }
 
+/**
+ * Resolves a catalog model while supporting registries that index model ids with provider prefixes.
+ */
 export function resolveModelFromRegistry(params: {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
@@ -600,6 +664,9 @@ export function resolveModelFromRegistry(params: {
   return model;
 }
 
+/**
+ * Loads the runtime API key for a resolved model and caches it in per-run auth storage.
+ */
 export async function resolveModelRuntimeApiKey(params: {
   model: Model;
   cfg: OpenClawConfig | undefined;

@@ -1,3 +1,4 @@
+/** Tests dynamic channel env-var discovery from plugin/channel metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockManifestRegistry = {

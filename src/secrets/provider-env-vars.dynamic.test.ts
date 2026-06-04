@@ -1,3 +1,4 @@
+/** Tests dynamic provider env-var discovery from plugin metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing,

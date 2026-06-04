@@ -1,3 +1,4 @@
+// Verifies model config schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 

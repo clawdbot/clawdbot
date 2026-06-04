@@ -1,3 +1,4 @@
+/** Tests heartbeat prompt, token, task parsing, and due-time helpers. */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,

@@ -1,3 +1,4 @@
+// Agent and agents command registration with lazy command-module loading for startup speed.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -70,6 +71,7 @@ async function runAgentsCommandAction(
   });
 }
 
+/** Register single-turn `agent` plus multi-agent management commands. */
 export function registerAgentCommands(
   program: Command,
   args: { agentChannelOptions: string },
@@ -78,6 +80,7 @@ export function registerAgentCommands(
   registerAgentsCommands(program);
 }
 
+/** Register `agents` management subcommands for config, bindings, identity, and deletion. */
 export function registerAgentsCommands(program: Command): void {
   const agents = program
     .command("agents")

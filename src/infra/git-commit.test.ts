@@ -1,3 +1,4 @@
+// Covers git commit helper behavior in fake repositories.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";

@@ -1,3 +1,4 @@
+// Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
   getTaskById,
@@ -7,6 +8,7 @@ import {
 } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+/** Returns only the session lookup fields needed by task status commands. */
 export function getTaskSessionLookupByIdForStatus(
   taskId: string,
 ): Pick<TaskRecord, "requesterSessionKey" | "runId" | "agentId"> | undefined {

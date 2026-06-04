@@ -1,3 +1,4 @@
+// Covers active runtime plugin registry state and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { testing, clearPluginLoaderCache } from "./loader.js";

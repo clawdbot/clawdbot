@@ -255,6 +255,29 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("ignores stale OK markers outside the recent agent log tail", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-tail-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          JSON.stringify({
+            payloads: [{ type: "text", text: "OK" }],
+          }),
+          "x".repeat(2_200_000),
+          JSON.stringify({
+            payloads: [{ type: "text", text: "still working" }],
+          }),
+        ].join("\n"),
+      );
+
+      expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("retries transient agent-turn failures", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
@@ -358,6 +381,33 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         shouldSkipOptionalCrossOsAgentTurnError(
           new Error("Agent output did not contain the expected OK marker."),
           join(dir, "missing.log"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not classify stale timeout logs as current optional agent-turn failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-tail-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          JSON.stringify({
+            status: "timeout",
+            result: { payloads: [{ text: "Request timed out before a response was generated." }] },
+          }),
+          "x".repeat(2_200_000),
+          JSON.stringify({ status: "error", message: "document-extract failed" }),
+        ].join("\n"),
+      );
+
+      expect(
+        shouldSkipOptionalCrossOsAgentTurnError(
+          new Error("Agent output did not contain the expected OK marker."),
+          logPath,
         ),
       ).toBe(false);
     } finally {

@@ -1,3 +1,4 @@
+// Covers gateway update runner scenarios.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";

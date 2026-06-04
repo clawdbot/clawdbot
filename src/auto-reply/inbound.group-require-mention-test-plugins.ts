@@ -1,3 +1,4 @@
+/** Test-only channel plugins that emulate per-group requireMention resolution. */
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -84,6 +85,7 @@ function resolveSlackRequireMentionForTest(params: TestChannelGroupContext): boo
   return true;
 }
 
+/** Installs channel fixtures used by group mention-routing tests. */
 export function installGroupRequireMentionTestPlugins() {
   setActivePluginRegistry(
     createTestRegistry([

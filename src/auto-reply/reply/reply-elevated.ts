@@ -1,3 +1,4 @@
+// Resolves whether a reply turn may use elevated command capabilities.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
@@ -16,6 +17,7 @@ import {
 } from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
+/** Resolves provider-specific elevated allowlist entries with fallback defaults. */
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
@@ -28,6 +30,7 @@ function resolveElevatedAllowList(
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
 
+/** Resolves the channel formatter used before matching allowFrom entries. */
 function resolveAllowFromFormatter(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -50,6 +53,7 @@ function resolveAllowFromFormatter(params: {
       .filter(Boolean);
 }
 
+/** Checks whether the inbound sender matches configured elevated allowFrom gates. */
 function isApprovedElevatedSender(params: {
   provider: string;
   ctx: MsgContext;
@@ -112,6 +116,7 @@ function isApprovedElevatedSender(params: {
     ...senderE164Tokens,
   ]);
 
+  // Identity fields use channel formatting; mutable labels use normalized text matching.
   const senderNameTokens = buildMutableTokens(params.ctx.SenderName);
   const senderUsernameTokens = buildMutableTokens(params.ctx.SenderUsername);
   const senderTagTokens = buildMutableTokens(params.ctx.SenderTag);
@@ -166,6 +171,7 @@ function isApprovedElevatedSender(params: {
   return false;
 }
 
+/** Resolves whether elevated tools are enabled and allowed for the inbound sender. */
 export function resolveElevatedPermissions(params: {
   cfg: OpenClawConfig;
   agentId: string;

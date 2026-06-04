@@ -5,6 +5,8 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+// Cleanup decisions for completed subagent registry records. Completion-message
+// flows can defer while descendants are active, then retry or give up.
 type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";
@@ -21,6 +23,7 @@ type DeferredCleanupDecision =
       resumeDelayMs?: number;
     };
 
+/** Resolve the lifecycle ended reason used when cleaning up a subagent run. */
 export function resolveCleanupCompletionReason(
   entry: SubagentRunRecord,
 ): SubagentLifecycleEndedReason {
@@ -31,6 +34,7 @@ function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
   return typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
 }
 
+/** Decide whether deferred subagent cleanup should retry, defer, or give up. */
 export function resolveDeferredCleanupDecision(params: {
   entry: SubagentRunRecord;
   now: number;

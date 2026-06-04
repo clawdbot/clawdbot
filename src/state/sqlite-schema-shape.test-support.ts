@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
+/**
+ * Test helpers for comparing SQLite schema shape.
+ *
+ * The collected shape intentionally ignores SQLite autoindex suffixes so
+ * generated schema tests assert contract-relevant table, column, and index data.
+ */
 type ColumnShape = {
   name: string;
   type: string;
@@ -16,6 +22,7 @@ type IndexShape = {
   partial: number;
 };
 
+/** Comparable SQLite schema summary used by generated-schema tests. */
 export type SqliteSchemaShape = Record<
   string,
   {
@@ -36,6 +43,7 @@ type SqliteMasterRow = {
   name: string;
 };
 
+/** Execute schema SQL in memory and return its comparable shape. */
 export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShape {
   const db = new DatabaseSync(":memory:");
   try {
@@ -46,6 +54,7 @@ export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShap
   }
 }
 
+/** Collect table columns and indexes from an open SQLite database. */
 export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
   const tableRows = db
     .prepare(
@@ -98,6 +107,7 @@ function collectIndexes(db: DatabaseSync, tableName: string): IndexShape[] {
 }
 
 function normalizeAutoIndexName(name: string): string {
+  // SQLite autoindex names include table-specific suffixes that do not affect schema behavior.
   return name.startsWith("sqlite_autoindex_") ? "sqlite_autoindex" : name;
 }
 

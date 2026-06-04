@@ -1,3 +1,4 @@
+// Covers task registry store persistence, in-memory behavior, and observer notifications.
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

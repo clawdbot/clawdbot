@@ -7,7 +7,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  isCodexPluginsMarketplaceName,
+  CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
@@ -257,8 +257,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
-      typeof entry.marketplaceName !== "string" ||
-      !isCodexPluginsMarketplaceName(entry.marketplaceName) ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       !Array.isArray(entry.mcpServerNames) ||

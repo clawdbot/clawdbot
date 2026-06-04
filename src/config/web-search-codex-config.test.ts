@@ -1,3 +1,4 @@
+// Verifies web-search config behavior for Codex provider settings.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { mergeScopedSearchConfig } from "../agents/tools/web-search-provider-config.js";

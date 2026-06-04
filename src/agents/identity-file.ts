@@ -3,6 +3,8 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
+// IDENTITY.md parsing/writing support. The parser accepts human-authored
+// markdown, while the writer only updates stable rich identity fields.
 export type AgentIdentityFile = {
   name?: string;
   emoji?: string;
@@ -30,6 +32,8 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
 ]);
 
 function normalizeIdentityValue(value: string): string {
+  // Normalize markdown decoration and punctuation so generated template
+  // placeholders do not accidentally become real identity values.
   let normalized = value.trim();
   normalized = normalized.replace(/^[*_`\s]+|[*_`\s]+$/g, "").trim();
   if (normalized.startsWith("(") && normalized.endsWith(")")) {
@@ -90,6 +94,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   return identity;
 }
 
+/** Return true when the parsed identity has any meaningful user-supplied value. */
 export function identityHasValues(identity: AgentIdentityFile): boolean {
   return Boolean(
     identity.name ||
@@ -126,6 +131,8 @@ function normalizeIdentityContent(content: string | undefined): string[] {
 }
 
 function resolveIdentityInsertIndex(lines: string[]): number {
+  // New fields stay grouped with existing rich identity fields; otherwise place
+  // them directly after the title block so legacy prose remains intact.
   let lastIdentityIndex = -1;
   for (const [index, line] of lines.entries()) {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
@@ -153,6 +160,10 @@ function resolveIdentityInsertIndex(lines: string[]): number {
   return insertIndex;
 }
 
+/**
+ * Merge writable identity fields into existing IDENTITY.md content, replacing
+ * duplicate labels and preserving unrelated markdown.
+ */
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
@@ -202,6 +213,7 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   }
 }
 
+/** Load the workspace identity file when it exists and contains real values. */
 export function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null {
   const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
   return loadIdentityFromFile(identityPath);

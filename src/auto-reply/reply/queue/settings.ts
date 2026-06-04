@@ -1,3 +1,4 @@
+// Resolves queue settings from config, directives, and fallback policy.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
 import {

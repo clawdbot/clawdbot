@@ -1,3 +1,4 @@
+// Tests poll input contracts and option defaults.
 import { describe, expect, it } from "vitest";
 import { normalizePollDurationHours, normalizePollInput } from "./polls.js";
 

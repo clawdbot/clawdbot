@@ -9,6 +9,9 @@ import type {
 type SetupTextInputParams = Parameters<NonNullable<ChannelSetupWizardTextInput["currentValue"]>>[0];
 type SetupStatusParams = Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0];
 
+/**
+ * Creates setup status resolvers for channels backed by a required local binary.
+ */
 export function createDetectedBinaryStatus(params: {
   channelLabel: string;
   binaryLabel: string;
@@ -38,6 +41,8 @@ export function createDetectedBinaryStatus(params: {
     async resolveStatusLines({ cfg, accountId, configured }: SetupStatusParams): Promise<string[]> {
       const binaryPath = params.resolveBinaryPath({ cfg, accountId });
       const detected = await detectBinary(binaryPath);
+      // Report config state and binary detection separately; users can be
+      // configured but still missing the CLI binary required for runtime use.
       return [
         `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
         `${params.binaryLabel}: ${detected ? "found" : "missing"} (${binaryPath})`,
@@ -70,6 +75,9 @@ export function createDetectedBinaryStatus(params: {
   };
 }
 
+/**
+ * Creates a setup text input that records or reuses a CLI path.
+ */
 export function createCliPathTextInput(params: {
   inputKey: ChannelSetupWizardTextInput["inputKey"];
   message: string;
@@ -91,6 +99,9 @@ export function createCliPathTextInput(params: {
   };
 }
 
+/**
+ * Creates delegated status resolvers backed by a lazily loaded setup wizard.
+ */
 export function createDelegatedSetupWizardStatusResolvers(
   loadWizard: () => Promise<ChannelSetupWizard>,
 ): Pick<
@@ -110,6 +121,9 @@ export function createDelegatedSetupWizardStatusResolvers(
   };
 }
 
+/**
+ * Delegates a text input's `shouldPrompt` check to a lazily loaded setup wizard.
+ */
 export function createDelegatedTextInputShouldPrompt(params: {
   loadWizard: () => Promise<ChannelSetupWizard>;
   inputKey: ChannelSetupWizardTextInput["inputKey"];

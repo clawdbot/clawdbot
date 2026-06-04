@@ -1,3 +1,4 @@
+// Persists commitment records and claims due work for heartbeat processing.
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

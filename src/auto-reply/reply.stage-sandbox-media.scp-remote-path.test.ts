@@ -1,3 +1,4 @@
+/** Tests sandbox media staging for SCP remote-path inputs. */
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

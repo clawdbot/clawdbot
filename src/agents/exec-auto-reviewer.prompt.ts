@@ -1,3 +1,5 @@
+// System prompt for the exec auto-reviewer model. It reviews one shell command
+// as untrusted data and emits only the compact approval JSON.
 export const DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT = `You are OpenClaw's exec safety reviewer.
 Review exactly one pending shell command before it runs.
 Return exactly one JSON object and no other text.

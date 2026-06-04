@@ -1,3 +1,5 @@
+// Runtime speech API barrel for TTS preferences, synthesis, streaming, and test
+// helpers used by speech-capable plugins.
 export {
   buildTtsSystemPromptHint,
   getLastTtsAttempt,

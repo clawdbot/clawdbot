@@ -1,3 +1,4 @@
+/** Tests ACP tool-call location extraction limits. */
 import { describe, expect, it } from "vitest";
 import { extractToolCallLocations } from "./event-mapper.js";
 

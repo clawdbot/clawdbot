@@ -1,3 +1,4 @@
+// Route-first argv parsers for commands that can skip full Commander startup.
 import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
@@ -32,6 +33,7 @@ function parseRepeatedFlagValues(argv: string[], name: string): string[] | null 
     if (arg === name) {
       const next = args[i + 1];
       if (!isValueToken(next)) {
+        // Invalid fast-path shapes fall back to Commander so its normal errors and help text win.
         return null;
       }
       values.push(next);
@@ -63,6 +65,7 @@ function parseSinglePositional(
   return positionals[0] ?? null;
 }
 
+/** Parse `openclaw health` flags for the route-first status family. */
 export function parseHealthRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
   if (timeoutMs === null) {
@@ -75,6 +78,7 @@ export function parseHealthRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw status` flags without registering the full command tree. */
 export function parseStatusRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
   if (timeoutMs === null) {
@@ -90,6 +94,7 @@ export function parseStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw gateway status` RPC-only flags accepted by the fast route. */
 export function parseGatewayStatusRouteArgs(argv: string[]) {
   const url = parseOptionalFlagValue(argv, "--url");
   if (!url.ok) {
@@ -109,6 +114,7 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   }
   const ssh = parseOptionalFlagValue(argv, "--ssh");
   if (!ssh.ok || ssh.value !== undefined) {
+    // SSH probe options need the full command because they resolve host aliases and identity files.
     return null;
   }
   const sshIdentity = parseOptionalFlagValue(argv, "--ssh-identity");
@@ -132,6 +138,7 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw sessions` filters for JSON/list route execution. */
 export function parseSessionsRouteArgs(argv: string[]) {
   const agent = parseOptionalFlagValue(argv, "--agent");
   if (!agent.ok) {
@@ -159,6 +166,7 @@ export function parseSessionsRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw agents list` display switches for route-first execution. */
 export function parseAgentsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
@@ -166,6 +174,7 @@ export function parseAgentsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw config get <path>` while preserving root option handling. */
 export function parseConfigGetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "get"],
@@ -180,6 +189,7 @@ export function parseConfigGetRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw config unset <path>` and its mutation guard flags. */
 export function parseConfigUnsetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "unset"],
@@ -198,6 +208,7 @@ export function parseConfigUnsetRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw models list` filters for the lightweight model catalog route. */
 export function parseModelsListRouteArgs(argv: string[]) {
   const provider = parseOptionalFlagValue(argv, "--provider");
   if (!provider.ok) {
@@ -212,6 +223,7 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw models status` probe controls for the route-first status path. */
 export function parseModelsStatusRouteArgs(argv: string[]) {
   const probeProvider = parseOptionalFlagValue(argv, "--probe-provider");
   if (!probeProvider.ok) {
@@ -257,6 +269,7 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw channels list` display flags for the route-first list path. */
 export function parseChannelsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
@@ -264,6 +277,7 @@ export function parseChannelsListRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse `openclaw channels status` probe flags without full CLI registration. */
 export function parseChannelsStatusRouteArgs(argv: string[]) {
   const timeout = parseOptionalFlagValue(argv, "--timeout");
   const channel = parseOptionalFlagValue(argv, "--channel");
@@ -281,6 +295,7 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse JSON-only `openclaw plugins list` flags for plugin inventory output. */
 export function parsePluginsListRouteArgs(argv: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;
@@ -326,6 +341,7 @@ function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: stri
   };
 }
 
+/** Parse both `openclaw tasks --json` and `openclaw tasks list --json` aliases. */
 export function parseTasksListRouteArgs(argv: string[]) {
   return (
     parseTasksListRouteArgsForCommandPath(argv, ["tasks"]) ??
@@ -333,6 +349,7 @@ export function parseTasksListRouteArgs(argv: string[]) {
   );
 }
 
+/** Parse JSON-only `openclaw tasks audit` filters for the route-first audit path. */
 export function parseTasksAuditRouteArgs(argv: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;

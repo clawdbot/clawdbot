@@ -14,12 +14,15 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
+// Prompt helpers for channel setup flows; keeps wizard copy and config mutation centralized.
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
 
+/** Formats account ids for channel setup prompts. */
 export function formatAccountLabel(accountId: string): string {
   return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;
 }
 
+/** Asks what to do with an already-configured channel account. */
 export async function promptConfiguredAction(params: {
   prompter: WizardPrompter;
   label: string;
@@ -60,6 +63,7 @@ export async function promptConfiguredAction(params: {
   });
 }
 
+/** Selects the account to remove/update when a channel supports multiple accounts. */
 export async function promptRemovalAccountId(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -88,6 +92,7 @@ export async function promptRemovalAccountId(params: {
   return normalizeAccountId(selected) ?? defaultAccountId;
 }
 
+/** Optionally configures DM access policies for selected channel setup adapters. */
 export async function maybeConfigureDmPolicies(params: {
   cfg: OpenClawConfig;
   selection: ChannelChoice[];
@@ -115,6 +120,7 @@ export async function maybeConfigureDmPolicies(params: {
   let cfg = params.cfg;
   for (const policy of dmPolicies) {
     const accountId = accountIdsByChannel?.get(policy.channel);
+    // Multi-account channels can remap the policy keys for the selected account.
     const { policyKey, allowFromKey } = policy.resolveConfigKeys?.(cfg, accountId) ?? {
       policyKey: policy.policyKey,
       allowFromKey: policy.allowFromKey,

@@ -26,6 +26,8 @@ import {
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
 
+// Normalizes raw provider model catalogs into stable rows for lookup and merging.
+
 const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
@@ -33,14 +35,17 @@ const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
 
+/** Narrow unknown catalog payloads to plain records. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
 }
 
+/** Normalize optional catalog strings. */
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -49,6 +54,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/** Normalize arrays of trimmed strings, dropping invalid entries. */
 function normalizeTrimmedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -638,6 +644,7 @@ function normalizeModelCatalogDiscovery(
   return Object.keys(discovery).length > 0 ? discovery : undefined;
 }
 
+/** Normalize a raw model catalog object for the set of providers owned by a plugin/manifest. */
 export function normalizeModelCatalog(
   value: unknown,
   params: { ownedProviders: ReadonlySet<string> },
@@ -661,6 +668,7 @@ export function normalizeModelCatalog(
   return Object.keys(catalog).length > 0 ? catalog : undefined;
 }
 
+/** Normalize one provider catalog into sorted runtime rows. */
 export function normalizeModelCatalogProviderRows(params: {
   provider: string;
   providerCatalog: ModelCatalogProvider;
@@ -722,6 +730,7 @@ export function normalizeModelCatalogProviderRows(params: {
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
 
+/** Normalize all provider catalogs into sorted runtime rows. */
 export function normalizeModelCatalogRows(params: {
   providers: Record<string, ModelCatalogProvider>;
   source: ModelCatalogSource;

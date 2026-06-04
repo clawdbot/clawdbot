@@ -1,3 +1,6 @@
+/**
+ * Contract suite for bundled web search provider registration and runtime behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,

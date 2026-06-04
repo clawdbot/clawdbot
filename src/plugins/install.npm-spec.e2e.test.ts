@@ -1,3 +1,4 @@
+// Exercises npm-spec plugin install behavior through the CLI path.
 import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,8 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
-import { installPluginFromNpmSpec } from "./install.js";
+import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 
 type PackedVersion = {
   archive: Buffer;
@@ -49,6 +51,43 @@ async function makeTempDir(label: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
   tempDirs.push(dir);
   return dir;
+}
+
+function configWithInstalledPackageTreeBlockPolicy(): OpenClawConfig {
+  return {
+    security: {
+      installPolicy: {
+        enabled: true,
+        exec: {
+          source: "exec",
+          command: process.execPath,
+          args: [
+            "-e",
+            `
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const request = JSON.parse(input);
+  if (request.sourcePathKind === "directory") {
+    process.stdout.write(JSON.stringify({
+      protocolVersion: 1,
+      decision: "block",
+      reason: "blocked installed package tree",
+    }));
+    return;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+});
+`,
+          ],
+          allowInsecurePath: true,
+          timeoutMs: 5000,
+          maxOutputBytes: 16 * 1024,
+        },
+      },
+    },
+  };
 }
 
 function pluginNpmProjectRoot(npmRoot: string, packageName: string): string {
@@ -816,7 +855,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("rolls back managed peer dependencies added before a failed install scan", async () => {
+  it("rolls back managed peer dependencies added before a failed installed package policy scan", async () => {
     const rootDir = await makeTempDir("npm-plugin-peer-rollback-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
     const blockedPlugin = `blocked-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -854,6 +893,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     process.env.npm_config_registry = registry;
 
     const result = await installPluginFromNpmSpec({
+      config: configWithInstalledPackageTreeBlockPolicy(),
       spec: `${blockedPlugin}@1.0.0`,
       npmDir: npmRoot,
       logger: { info: () => {}, warn: () => {} },
@@ -861,6 +901,10 @@ describe("installPluginFromNpmSpec e2e", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+    }
     const projectRoot = pluginNpmProjectRoot(npmRoot, blockedPlugin);
     try {
       const rootManifest = JSON.parse(
@@ -1013,6 +1057,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     );
 
     const result = await installPluginFromNpmSpec({
+      config: configWithInstalledPackageTreeBlockPolicy(),
       spec: `${blockedPlugin}@1.0.0`,
       npmDir: npmRoot,
       logger: { info: () => {}, warn: () => {} },
@@ -1020,6 +1065,10 @@ describe("installPluginFromNpmSpec e2e", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+    }
     const rootManifest = JSON.parse(
       await fs.readFile(path.join(blockedProjectRoot, "package.json"), "utf8"),
     ) as {

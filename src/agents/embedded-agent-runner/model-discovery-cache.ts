@@ -13,6 +13,12 @@ import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.j
 import { listPluginModelCatalogFiles } from "../plugin-model-catalog.js";
 import type { AuthStorage, ModelRegistry } from "../sessions/index.js";
 
+/**
+ * Caches auth/model discovery for embedded-agent turns that reuse a stable agent directory.
+ *
+ * Runtime auth profile stores and live plugin auth sources bypass this cache because their
+ * source of truth can change without file metadata updates in the agent directory.
+ */
 type DiscoveryStores = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -33,6 +39,7 @@ type CacheEntry = DiscoveryStores & {
 const MAX_DISCOVERY_STORE_CACHE_ENTRIES = 64;
 const DISCOVERY_STORE_CACHE = new Map<string, CacheEntry>();
 
+/** Returns the small file metadata tuple used to invalidate cached discovery snapshots. */
 function fileFingerprint(pathname: string): { mtimeMs: number; size: number } | null {
   try {
     const stat = statSync(pathname);
@@ -48,8 +55,8 @@ function normalizeCacheDir(dirname: string | undefined): string | undefined {
 
 function authFingerprint(agentDir: string): object {
   return {
-    authJson: fileFingerprint(path.join(agentDir, "auth.json")),
-    authProfilesJson: fileFingerprint(path.join(agentDir, "auth-profiles.json")),
+    authProfilesSqlite: fileFingerprint(path.join(agentDir, "openclaw-agent.sqlite")),
+    authProfilesSqliteWal: fileFingerprint(path.join(agentDir, "openclaw-agent.sqlite-wal")),
   };
 }
 
@@ -67,6 +74,8 @@ function discoveryFingerprint(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): string {
+  // Only include inherited auth when it points at a distinct store. The common same-dir case must
+  // not double-count WAL/file state or it would churn cache keys without changing discovery output.
   const inheritedAuthDir =
     params.inheritedAuthDir && params.inheritedAuthDir !== params.agentDir
       ? params.inheritedAuthDir
@@ -135,6 +144,7 @@ function discoverFreshAgentStores(
   return { authStorage, modelRegistry };
 }
 
+/** Discovers auth/model stores, reusing file-backed snapshots until their inputs change. */
 export function discoverCachedAgentStores(
   options: DiscoverCachedAgentStoresOptions,
 ): DiscoveryStores {
@@ -143,6 +153,8 @@ export function discoverCachedAgentStores(
     options.inheritedAuthDir ?? resolveDefaultAgentDir({}),
   );
   if (hasAnyRuntimeAuthProfileStoreSource(agentDir) || hasRuntimePluginAuthSources()) {
+    // Runtime profile sources are process-owned state, not file-backed metadata. Fresh discovery
+    // preserves provider/auth changes made during the same long-lived gateway process.
     return discoverFreshAgentStores(
       agentDir,
       options,
@@ -173,6 +185,7 @@ export function discoverCachedAgentStores(
   return stores;
 }
 
+/** Clears the process-local discovery cache between tests that mutate model/auth fixtures. */
 export function resetModelDiscoveryCacheForTest(): void {
   DISCOVERY_STORE_CACHE.clear();
 }

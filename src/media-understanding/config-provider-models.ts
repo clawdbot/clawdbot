@@ -14,6 +14,7 @@ function hasImageCapableModel(providerCfg: ConfigProvider): boolean {
   );
 }
 
+/** Finds configured model providers that can be auto-registered for image understanding. */
 export function resolveImageCapableConfigProviderIds(cfg?: OpenClawConfig): string[] {
   const configProviders = cfg?.models?.providers;
   if (!configProviders || typeof configProviders !== "object") {

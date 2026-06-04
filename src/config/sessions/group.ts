@@ -45,6 +45,8 @@ function resolveOriginatingGroupTargetId(params: {
     return null;
   }
 
+  // Some channels send the sender in `From` and the actual group/channel route in `To`.
+  // Prefer that route when it carries a recognized provider/kind prefix.
   const head = normalizeLowercaseStringOrEmpty(parts[0]);
   const second = normalizeOptionalLowercaseString(parts[1]);
   const secondIsKind = second === "group" || second === "channel";
@@ -71,6 +73,7 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
+/** Builds a compact display label for group sessions from channel metadata or ids. */
 export function buildGroupDisplayName(params: {
   provider?: string;
   subject?: string;
@@ -102,6 +105,12 @@ export function buildGroupDisplayName(params: {
   return token ? `${providerKey}:${token}` : providerKey;
 }
 
+/**
+ * Resolves channel/group chat context into the persisted group session key.
+ *
+ * Provider-prefixed ids use channel-owned normalization, while legacy plugin resolvers remain a
+ * fallback for older channel surfaces that cannot yet express the generic route shape.
+ */
 export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   const from = normalizeOptionalString(ctx.From) ?? "";
   const chatType = normalizeOptionalLowercaseString(ctx.ChatType);
@@ -126,6 +135,8 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
   if (!headIsSurface && !providerHint && legacyResolution) {
+    // Without a provider hint, trust the plugin-owned legacy resolver; guessing from `From`
+    // would merge unrelated channel/group keys.
     return legacyResolution;
   }
 
@@ -143,6 +154,8 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
       : "group";
   const originatingGroupTargetId =
     !secondIsKind && normalizedChatType ? resolveOriginatingGroupTargetId({ ctx, provider }) : null;
+  // Originating targets preserve provider-native group ids, including case-sensitive Signal ids
+  // that would be corrupted by normalizing the sender-shaped `From` fallback.
   const id = originatingGroupTargetId
     ? originatingGroupTargetId
     : headIsSurface

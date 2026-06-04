@@ -1,3 +1,4 @@
+/** Tests plugin lookup table indexing for manifest-owned contribution ids. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";

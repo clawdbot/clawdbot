@@ -3,6 +3,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
+// Normalized metadata passed from session-spawn tools into child run records.
+// It captures lineage, group routing, workspace inheritance, and inherited tool
+// policy without exposing the broader tool context object.
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
   groupId?: string | null;
@@ -29,6 +32,7 @@ type NormalizedSpawnedRunMetadata = {
   workspaceDir?: string;
 };
 
+/** Normalize optional spawn metadata fields from persisted or tool-provided input. */
 export function normalizeSpawnedRunMetadata(
   value?: SpawnedRunMetadata | null,
 ): NormalizedSpawnedRunMetadata {
@@ -41,6 +45,7 @@ export function normalizeSpawnedRunMetadata(
   };
 }
 
+/** Project tool runtime context down to the persisted spawned-run metadata shape. */
 export function mapToolContextToSpawnedRunMetadata(
   value?: SpawnedToolContext | null,
 ): Pick<NormalizedSpawnedRunMetadata, "groupId" | "groupChannel" | "groupSpace" | "workspaceDir"> {
@@ -52,6 +57,7 @@ export function mapToolContextToSpawnedRunMetadata(
   };
 }
 
+/** Resolve which workspace a spawned run should inherit. */
 export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   targetAgentId?: string;
@@ -71,6 +77,7 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   return agentId ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(agentId)) : undefined;
 }
 
+/** Return a spawned run's ingress workspace override only for child runs. */
 export function resolveIngressWorkspaceOverrideForSpawnedRun(
   metadata?: Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> | null,
 ): string | undefined {

@@ -27,8 +27,11 @@ export interface ApiProvider<
   TApi extends Api = Api,
   TOptions extends StreamOptions = StreamOptions,
 > {
+  /** Model API id this provider handles. */
   api: TApi;
+  /** Full streaming adapter for callers that already own structured options. */
   stream: StreamFunction<TApi, TOptions>;
+  /** Simple streaming adapter used by agent and plugin runtime defaults. */
   streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
 }
 
@@ -72,6 +75,7 @@ function wrapStreamSimple<TApi extends Api>(
 /** Registers or replaces the provider implementation for an API id. */
 export function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(
   provider: ApiProvider<TApi, TOptions>,
+  /** Optional source id used to unregister all providers owned by one plugin/runtime. */
   sourceId?: string,
 ): void {
   apiProviderRegistry.set(provider.api, {

@@ -1,3 +1,4 @@
+// Verifies tool package import boundaries and public barrel usage.
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

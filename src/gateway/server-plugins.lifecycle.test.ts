@@ -1,3 +1,6 @@
+/**
+ * Tests gateway plugin lifecycle loading, startup, and shutdown behavior.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { clearFallbackGatewayContext, createGatewaySubagentRuntime } from "./server-plugins.js";
 import { installGatewayTestHooks, startServer } from "./test-helpers.server.js";

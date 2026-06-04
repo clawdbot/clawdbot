@@ -1,3 +1,4 @@
+// Sanitizes plugin startup trace segments for diagnostic labels.
 const SAFE_STARTUP_TRACE_SEGMENT_CHAR = /^[A-Za-z0-9_-]$/u;
 
 export function encodeStartupTraceSegment(value: string): string {

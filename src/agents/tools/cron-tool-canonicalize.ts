@@ -107,6 +107,7 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
 
 function setScheduleAtMs(schedule: Record<string, unknown>, value: unknown): void {
   const atMs = typeof value === "number" ? value : Number(value);
+  // Invalid/out-of-range timestamps stay raw so cron gateway validation reports the user error.
   schedule.at = Number.isFinite(atMs) ? (timestampMsToIsoString(Math.floor(atMs)) ?? value) : value;
 }
 
@@ -236,6 +237,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+/** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -247,6 +249,7 @@ export function canonicalizeCronToolObject(
   return next;
 }
 
+/** Detects recovered update patches that contain no meaningful cron fields after normalization. */
 export function isEmptyRecoveredCronPatch(value: unknown): boolean {
   if (!isRecord(value)) {
     return true;
@@ -261,6 +264,7 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
   );
 }
 
+/** Recovers cron job or patch fields that a model flattened beside the action arguments. */
 export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
   found: boolean;
   value: Record<string, unknown>;
@@ -276,6 +280,7 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   return { found, value: canonicalizeCronToolObject(value) };
 }
 
+/** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */
 export function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   return (
     value.schedule !== undefined ||

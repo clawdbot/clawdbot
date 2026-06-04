@@ -12,6 +12,7 @@ import {
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
+/** Resolves the persisted transcript file for a BTW session handoff. */
 export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;
   sessionEntry?: StoredSessionEntry;
@@ -33,6 +34,8 @@ export function resolveBtwSessionTranscriptPath(params: {
   }
 }
 
+// Session entries can come from older transcript formats, so id fields are
+// narrowed at this boundary before branch reconstruction trusts them.
 function readSessionEntryId(entry: AgentSessionEntry): string | undefined {
   const id = (entry as { id?: unknown }).id;
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
@@ -46,10 +49,14 @@ function readSessionEntryParentId(entry: AgentSessionEntry): string | null | und
   return typeof parentId === "string" && parentId.trim().length > 0 ? parentId : undefined;
 }
 
+// Parent links mark fork-aware transcripts. Without them, the flat session
+// context builder preserves the legacy append-only transcript behavior.
 function hasParentLinkedEntries(entries: AgentSessionEntry[]): boolean {
   return entries.some((entry) => Boolean(readSessionEntryId(entry) && "parentId" in entry));
 }
 
+// Reconstructs the selected branch from leaf to root. Missing links or cycles
+// mean the snapshot cannot be trusted, so callers fall back to a safe branch.
 function buildSessionBranchEntries(
   entries: AgentSessionEntry[],
   leafId: string | undefined,
@@ -99,6 +106,13 @@ function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
   );
 }
 
+/**
+ * Reads prior messages for BTW continuation.
+ *
+ * When a transcript has fork links, this returns the selected snapshot branch
+ * instead of the full file so a resumed agent does not inherit sibling-branch
+ * messages.
+ */
 export async function readBtwTranscriptMessages(params: {
   sessionFile: string;
   sessionId: string;
@@ -124,6 +138,8 @@ export async function readBtwTranscriptMessages(params: {
     }
     branchEntries ??= buildSessionBranchEntries(sessionEntries, readDefaultLeafId(sessionEntries));
     if (!params.snapshotLeafId && isTrailingUserMessage(branchEntries?.at(-1))) {
+      // Auto-selecting the newest branch must not include the current user turn
+      // that triggered BTW handoff; the subagent should continue from its parent.
       const parentId = readSessionEntryParentId(branchEntries!.at(-1)!);
       branchEntries = parentId ? (buildSessionBranchEntries(sessionEntries, parentId) ?? []) : [];
     }

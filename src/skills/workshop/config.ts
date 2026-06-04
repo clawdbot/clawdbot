@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Runtime configuration for the skill workshop proposal flow. */
 export type SkillWorkshopConfig = {
   autonomous: {
     enabled: boolean;

@@ -26,11 +26,67 @@ describe("tool mutation helpers", () => {
     );
     expect(writeFingerprint).toBe("tool=write|path=/tmp/demo.txt|id=42");
 
-    const metaOnlyFingerprint = buildToolActionFingerprint("exec", { command: "ls -la" }, "ls -la");
-    expect(metaOnlyFingerprint).toBe("tool=exec|meta=ls -la");
+    const metaOnlyFingerprint = buildToolActionFingerprint(
+      "exec",
+      { command: "npm start" },
+      "npm start",
+    );
+    expect(metaOnlyFingerprint).toBe("tool=exec|meta=npm start");
 
     const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
     expect(readFingerprint).toBeUndefined();
+  });
+
+  it.each([
+    ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
+    ["bash", "cat package.json"],
+    ["exec", "rg -n tool-mutation src/agents"],
+    ["bash", "git status --short"],
+    ["exec", "git diff -- src/agents/tool-mutation.ts"],
+    ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
+    ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
+  ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
+    expect(isMutatingToolCall(toolName, { command })).toBe(false);
+    expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
+    expect(buildToolActionFingerprint(toolName, { command }, command)).toBeUndefined();
+  });
+
+  it.each([
+    ["exec", "sed -i 's/a/b/' file.txt"],
+    ["exec", "sed --in-place 's/a/b/' file.txt"],
+    ["exec", "sed -n '1p' -i file.txt"],
+    ["exec", "sed -n -e '1p' -e 'w /tmp/out' file.txt"],
+    ["bash", "cat package.json > /tmp/package.json"],
+    ["bash", "rg foo src | wc -l"],
+    ["bash", "rg --pre touch pattern file"],
+    ["exec", "python3 <<'PY'\nprint('hello')\nPY"],
+    ["exec", "npm start"],
+    ["exec", "git checkout feature-branch"],
+    ["exec", "git branch -D old-branch"],
+    ["exec", "git diff --output=/tmp/patch.diff"],
+    ["exec", "git diff --ext-diff"],
+    ["exec", "git grep -O pattern"],
+    ["exec", "git grep -Ovim pattern"],
+    ["exec", "git grep --open-files-in-pager=vim pattern"],
+    ["exec", "gh pr create --title fix --body body"],
+    ["exec", "gh pr view 123 --web"],
+    ["exec", "gh pr view 123 --web=true"],
+    ["exec", "gh pr view 123 --web=false"],
+    ["exec", "gh pr view 123 -w"],
+    ["exec", "gh pr view 123 -w=true"],
+    ["exec", "gh pr view 123 -w=false"],
+    ["exec", "gh issue comment 123 --body fixed"],
+    ["exec", "gh search prs bug --web"],
+    ["exec", "gh search prs bug --web=true"],
+    ["exec", "gh search prs bug -w"],
+    ["exec", "gh search prs bug -w=true"],
+    ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
+  ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
+    expect(isMutatingToolCall(toolName, { command })).toBe(true);
+    expect(buildToolMutationState(toolName, { command }, command).mutatingAction).toBe(true);
+    expect(buildToolActionFingerprint(toolName, { command }, command)).toBe(
+      `tool=${toolName}|meta=${command.toLowerCase().replace(/\s+/g, " ")}`,
+    );
   });
 
   it("treats coding-tool path aliases as the same stable target", () => {

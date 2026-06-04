@@ -1,3 +1,4 @@
+// Defines install-related Zod schema fragments for config parsing.
 import { z } from "zod";
 
 const InstallSourceSchema = z.union([
@@ -10,6 +11,7 @@ const InstallSourceSchema = z.union([
 
 const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
 
+/** Zod object shape for persisted generic install records. */
 export const InstallRecordShape = {
   source: InstallSourceSchema,
   spec: z.string().optional(),

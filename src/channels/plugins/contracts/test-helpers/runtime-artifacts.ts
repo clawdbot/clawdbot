@@ -7,6 +7,8 @@ import {
   resolvePluginRuntimeRecord,
 } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
 
+// Resolves generated bundled channel artifacts for contract tests. Prefer the
+// runtime record, with workspace source fallback for local unbuilt checkouts.
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
 function resolveBundledChannelWorkspaceArtifactPath(
@@ -50,6 +52,7 @@ export function resolveBundledChannelContractArtifactUrl(
   return pathToFileURL(modulePath).href;
 }
 
+/** Imports a generated bundled channel artifact through the contract boundary. */
 export async function importBundledChannelContractArtifact<T extends object>(
   pluginId: string,
   entryBaseName: string,

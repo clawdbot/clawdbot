@@ -69,6 +69,35 @@ const MESSAGE_MUTATING_ACTIONS = new Set([
   "unpin",
 ]);
 
+const READ_ONLY_SHELL_COMMANDS = new Set([
+  "cat",
+  "file",
+  "grep",
+  "head",
+  "ls",
+  "pwd",
+  "rg",
+  "stat",
+  "tail",
+  "wc",
+]);
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  "diff",
+  "grep",
+  "log",
+  "ls-files",
+  "rev-parse",
+  "show",
+  "status",
+]);
+
+const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
+const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
+
+const UNSAFE_RG_FLAGS = new Set(["--pre", "--pre-glob"]);
+const UNSAFE_GIT_FLAGS = new Set(["--ext-diff", "--output", "-o", "--open-files-in-pager"]);
+
 // Structured file-target identity for cross-tool same-target recovery.
 // Carried alongside `actionFingerprint` so comparison does not have to
 // re-parse the joined fingerprint string. Re-parsing was unsafe because
@@ -96,6 +125,179 @@ type ToolActionRef = {
 function normalizeActionName(value: unknown): string | undefined {
   const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
   return normalized || undefined;
+}
+
+function readShellCommand(record: Record<string, unknown> | undefined): string | undefined {
+  const command = record?.command ?? record?.cmd;
+  if (typeof command !== "string") {
+    return undefined;
+  }
+  const trimmed = command.trim();
+  return trimmed || undefined;
+}
+
+function tokenizeSimpleShellCommand(command: string): string[] | undefined {
+  if (/[;&|<>\n\r`]/.test(command) || command.includes("$(") || command.includes("\\")) {
+    return undefined;
+  }
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  for (const char of command) {
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (quote) {
+    return undefined;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens.length > 0 ? tokens : undefined;
+}
+
+function isReadOnlySedCommand(tokens: readonly string[]): boolean {
+  const args = tokens.slice(1);
+  if (args.some((token) => token === "--in-place" || token.startsWith("--in-place="))) {
+    return false;
+  }
+  if (args.some((token) => token.startsWith("-") && token !== "-" && token.includes("i"))) {
+    return false;
+  }
+  // `sed -e 'w /tmp/out'` and mixed scripts are easy to misclassify. Only
+  // allow the simple line-print shape that agents use for file inspection.
+  if (args.some((token) => token === "-e" || token === "--expression")) {
+    return false;
+  }
+  let sawSuppressAutoPrint = false;
+  let expression: string | undefined;
+  for (const token of args) {
+    if (token === "--in-place" || token.startsWith("--in-place=")) {
+      return false;
+    }
+    if (token === "--quiet" || token === "--silent") {
+      sawSuppressAutoPrint = true;
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      if (token.includes("i")) {
+        return false;
+      }
+      if (token.includes("n")) {
+        sawSuppressAutoPrint = true;
+      }
+      continue;
+    }
+    expression ??= token;
+    break;
+  }
+  return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+}
+
+function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
+  return tokens.some((token) => {
+    const normalized = normalizeLowercaseStringOrEmpty(token);
+    return (
+      UNSAFE_RG_FLAGS.has(normalized) ||
+      normalized.startsWith("--pre=") ||
+      normalized.startsWith("--pre-glob=")
+    );
+  });
+}
+
+function hasUnsafeGitFlag(tokens: readonly string[]): boolean {
+  return tokens.some((token) => {
+    const normalized = normalizeLowercaseStringOrEmpty(token);
+    return (
+      UNSAFE_GIT_FLAGS.has(normalized) ||
+      token.startsWith("-O") ||
+      normalized.startsWith("--output=") ||
+      normalized.startsWith("--open-files-in-pager=")
+    );
+  });
+}
+
+function isReadOnlyGitCommand(tokens: readonly string[]): boolean {
+  const subcommand = normalizeLowercaseStringOrEmpty(tokens[1]);
+  if (hasUnsafeGitFlag(tokens)) {
+    return false;
+  }
+  if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) {
+    return true;
+  }
+  return subcommand === "remote" && tokens.length === 3 && tokens[2] === "-v";
+}
+
+function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
+  if (
+    tokens.some((token) => {
+      const normalized = normalizeLowercaseStringOrEmpty(token);
+      return (
+        normalized === "--web" ||
+        normalized.startsWith("--web=") ||
+        /^-[a-z]*w[a-z]*(?:=.*)?$/.test(normalized)
+      );
+    })
+  ) {
+    return false;
+  }
+  const area = normalizeLowercaseStringOrEmpty(tokens[1]);
+  const action = normalizeLowercaseStringOrEmpty(tokens[2]);
+  if (area === "search") {
+    return action.length > 0;
+  }
+  if (area === "pr") {
+    return READ_ONLY_GH_PR_SUBCOMMANDS.has(action);
+  }
+  if (area === "issue") {
+    return READ_ONLY_GH_ISSUE_SUBCOMMANDS.has(action);
+  }
+  return false;
+}
+
+function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const tokens = tokenizeSimpleShellCommand(command);
+  if (!tokens) {
+    return false;
+  }
+  const executable = normalizeLowercaseStringOrEmpty(tokens[0]);
+  if (executable === "rg" && hasUnsafeRipgrepFlag(tokens)) {
+    return false;
+  }
+  if (READ_ONLY_SHELL_COMMANDS.has(executable)) {
+    return true;
+  }
+  if (executable === "sed") {
+    return isReadOnlySedCommand(tokens);
+  }
+  if (executable === "git") {
+    return isReadOnlyGitCommand(tokens);
+  }
+  if (executable === "gh") {
+    return isReadOnlyGhCommand(tokens);
+  }
+  return false;
 }
 
 function normalizeFingerprintValue(value: unknown): string | undefined {
@@ -148,12 +350,13 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
-    case "exec":
-    case "bash":
     case "sessions_send":
     case "create_goal":
     case "update_goal":
       return true;
+    case "exec":
+    case "bash":
+      return !isPlainReadOnlyShellCommand(readShellCommand(record));
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
     case "message":

@@ -1,3 +1,9 @@
+/**
+ * Filters environment variables before they cross into sandbox runtimes.
+ *
+ * The default path blocks common credential names and suspicious value shapes while allowing
+ * ordinary process environment needed for shells and Node-based tools.
+ */
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^ANTHROPIC_API_KEY$/i,
   /^OPENAI_API_KEY$/i,
@@ -42,6 +48,7 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
+/** Returns a warning or block reason for environment values that look unsafe to forward. */
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
@@ -59,6 +66,7 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
   return patterns.some((pattern) => pattern.test(value));
 }
 
+/** Sanitizes inherited environment variables for automatic sandbox propagation. */
 export function sanitizeEnvVars(
   envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
@@ -101,6 +109,7 @@ export function sanitizeEnvVars(
   return { allowed, blocked, warnings };
 }
 
+/** Sanitizes env vars explicitly requested by config, preserving names but still validating values. */
 export function sanitizeExplicitSandboxEnvVars(
   envVars: Record<string, string | undefined>,
 ): EnvVarSanitizationResult {

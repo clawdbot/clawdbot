@@ -1,3 +1,4 @@
+// Covers host hook cleanup behavior controlled by plugin config.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";

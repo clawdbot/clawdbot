@@ -1,10 +1,15 @@
+// Resolves heartbeat visibility toggles across config precedence levels.
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 
+/** Resolved heartbeat presentation toggles after defaults/channel/account precedence. */
 export type ResolvedHeartbeatVisibility = {
+  /** Whether successful heartbeat content should be sent as visible chat text. */
   showOk: boolean;
+  /** Whether warning/error heartbeat content should be sent as visible chat text. */
   showAlerts: boolean;
+  /** Whether heartbeat status should emit indicator events for UI surfaces. */
   useIndicator: boolean;
 };
 
@@ -14,11 +19,7 @@ const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
   useIndicator: true, // Emit indicator events
 };
 
-/**
- * Resolve heartbeat visibility settings for a channel.
- * Supports both deliverable channels and webchat.
- * For webchat, uses channels.defaults.heartbeat since webchat doesn't have per-channel config.
- */
+/** Resolves heartbeat visibility for a channel, applying account > channel > defaults precedence. */
 export function resolveHeartbeatVisibility(params: {
   cfg: OpenClawConfig;
   channel: GatewayMessageChannel;
@@ -26,7 +27,7 @@ export function resolveHeartbeatVisibility(params: {
 }): ResolvedHeartbeatVisibility {
   const { cfg, channel, accountId } = params;
 
-  // Webchat uses channel defaults only (no per-channel or per-account config)
+  // Webchat has no channel/account config branch, so only shared channel defaults apply.
   if (channel === "webchat") {
     const channelDefaults = cfg.channels?.defaults?.heartbeat;
     return {
@@ -52,7 +53,6 @@ export function resolveHeartbeatVisibility(params: {
   const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
   const perAccount = accountCfg?.heartbeat;
 
-  // Precedence: per-account > per-channel > channel-defaults > global defaults
   return {
     showOk:
       perAccount?.showOk ??

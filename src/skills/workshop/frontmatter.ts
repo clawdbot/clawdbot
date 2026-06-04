@@ -5,10 +5,12 @@ type ProposalFrontmatter = {
   description: string;
 };
 
+// JSON strings are valid YAML scalars and avoid ad hoc escaping.
 function yamlScalar(value: string): string {
   return JSON.stringify(value);
 }
 
+/** Renders proposal markdown while preserving allowed original frontmatter fields. */
 export function renderProposalMarkdown(params: {
   name: string;
   description: string;

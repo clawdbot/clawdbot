@@ -910,27 +910,28 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("rejects unsupported Codex auth profile credential types before OAuth refresh", async () => {
+  it("rejects non-Codex auth profiles before OAuth refresh", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
     try {
       upsertAuthProfile({
         agentDir,
-        profileId: "openai:aws",
+        profileId: "anthropic:work",
         credential: {
-          type: "aws-sdk",
-          provider: "openai",
-        } as never,
+          type: "api_key",
+          provider: "anthropic",
+          key: "anthropic-api-key",
+        },
       });
 
       await expect(
         applyCodexAppServerAuthProfile({
           client: { request } as never,
           agentDir,
-          authProfileId: "openai:aws",
+          authProfileId: "anthropic:work",
         }),
       ).rejects.toThrow(
-        'Codex app-server auth profile "openai:aws" does not contain usable credentials.',
+        'Codex app-server auth profile "anthropic:work" must be OpenAI Codex auth or an OpenAI API-key backup.',
       );
       expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalled();
@@ -1462,7 +1463,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const stateDir = path.join(root, "state");
     const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
-    const childAuthPath = path.join(childAgentDir, "auth-profiles.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
@@ -1472,6 +1472,20 @@ describe("bridgeCodexAppServerStartOptions", () => {
       accountId: "account-main-refreshed",
     });
     try {
+      await fs.mkdir(childAgentDir, { recursive: true });
+      upsertAuthProfile({
+        agentDir: childAgentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "child-stale-access-token",
+          refresh: "child-stale-refresh-token",
+          expires: Date.now() - 60_000,
+          accountId: "account-main",
+          email: "main-codex@example.test",
+        },
+      });
       upsertAuthProfile({
         profileId: "openai:work",
         credential: {
@@ -1484,24 +1498,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
           email: "main-codex@example.test",
         },
       });
-      await fs.mkdir(childAgentDir, { recursive: true });
-      await fs.writeFile(
-        childAuthPath,
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "openai:work": {
-              type: "oauth",
-              provider: "openai",
-              access: "child-stale-access-token",
-              refresh: "child-stale-refresh-token",
-              expires: Date.now() - 60_000,
-              accountId: "account-main",
-              email: "main-codex@example.test",
-            },
-          },
-        }),
+      const staleChildProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai:work"],
       );
+      expect(staleChildProfile?.access).toBe("child-stale-access-token");
+      expect(staleChildProfile?.refresh).toBe("child-stale-refresh-token");
 
       await expect(
         refreshCodexAppServerAuthTokens({
@@ -1524,6 +1525,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
       const childProfile = expectOAuthProfile(
         loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai:work"],
       );
+      // Refresh ownership writes the main profile; it does not silently mutate
+      // the stale child clone that request-time resolution intentionally bypassed.
       expect(childProfile?.access).toBe("child-stale-access-token");
       expect(childProfile?.refresh).toBe("child-stale-refresh-token");
     } finally {

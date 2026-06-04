@@ -1,3 +1,6 @@
+/**
+ * Gateway runtime state construction tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {

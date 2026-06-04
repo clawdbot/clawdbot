@@ -1,3 +1,6 @@
+/**
+ * Tests for skill proposal gateway methods and proposal lifecycle responses.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +13,7 @@ let envSnapshot: ReturnType<typeof captureEnv>;
 let stateDir = "";
 
 const mocks = vi.hoisted(() => ({
+  chatSend: vi.fn(),
   workspaceDir: "",
 }));
 
@@ -48,6 +52,12 @@ vi.mock("../../skills/security/clawhub-verdicts.js", () => ({
   fetchOpenClawSkillSecurityVerdicts: vi.fn(),
 }));
 
+vi.mock("./chat.js", () => ({
+  chatHandlers: {
+    "chat.send": mocks.chatSend,
+  },
+}));
+
 const { skillsHandlers } = await import("./skills.js");
 
 function callHandler(method: string, params: Record<string, unknown>) {
@@ -57,6 +67,10 @@ function callHandler(method: string, params: Record<string, unknown>) {
 describe("skills proposal gateway handlers", () => {
   beforeEach(async () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    mocks.chatSend.mockReset();
+    mocks.chatSend.mockImplementation(async ({ respond }) => {
+      respond(true, { runId: "run-skill-workshop-revision", status: "started" }, undefined);
+    });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-");
     stateDir = await tempDirs.make("openclaw-skills-proposals-gateway-state-");
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -188,5 +202,79 @@ describe("skills proposal gateway handlers", () => {
     expect(result.ok).toBe(false);
     expect((result.error as { code?: string }).code).toBe("INVALID_REQUEST");
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+  });
+
+  it("starts revision chat turns with visible instructions and server-built context", async () => {
+    const create = await callHandler("skills.proposals.create", {
+      name: "Support File Sampler",
+      description: "Samples support files",
+      content: "# Support File Sampler\n\nSample support files.\n",
+    });
+    expect(create.ok).toBe(true);
+    const created = create.response as { record: { id: string } };
+
+    const result = await callHandler("skills.proposals.requestRevision", {
+      proposalId: created.record.id,
+      instructions: "Make the support files 5",
+      sessionKey: "agent:main:session:skill-workshop",
+      targetAgentId: "revision-target",
+      idempotencyKey: "revision-run-1",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: { runId: "run-skill-workshop-revision", status: "started" },
+    });
+    expect(mocks.chatSend).toHaveBeenCalledTimes(1);
+    const forwarded = mocks.chatSend.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+      req?: { method?: string; params?: Record<string, unknown> };
+    };
+    expect(forwarded.req?.method).toBe("chat.send");
+    expect(forwarded.params).toMatchObject({
+      agentId: "revision-target",
+      deliver: false,
+      idempotencyKey: "revision-run-1",
+      message: "Make the support files 5",
+      sessionKey: "agent:main:session:skill-workshop",
+      suppressCommandInterpretation: true,
+    });
+    expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
+      `Revise Skill Workshop proposal \`${created.record.id}\` (support-file-sampler).`,
+    );
+    expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
+      "Use `skill_workshop` with `action=inspect` first, then `action=revise`",
+    );
+    expect(String(forwarded.params?.systemProvenanceReceipt)).not.toContain(
+      "Make the support files 5",
+    );
+  });
+
+  it("does not start revision chat turns for non-pending proposals", async () => {
+    const create = await callHandler("skills.proposals.create", {
+      name: "Applied Sampler",
+      description: "Already applied proposal",
+      content: "# Applied Sampler\n\nSample support files.\n",
+    });
+    expect(create.ok).toBe(true);
+    const created = create.response as { record: { id: string } };
+    const apply = await callHandler("skills.proposals.apply", {
+      proposalId: created.record.id,
+    });
+    expect(apply.ok).toBe(true);
+    mocks.chatSend.mockClear();
+
+    const result = await callHandler("skills.proposals.requestRevision", {
+      proposalId: created.record.id,
+      instructions: "Make the support files 5",
+      sessionKey: "agent:main:session:skill-workshop",
+      idempotencyKey: "revision-run-applied",
+    });
+
+    expect(result.ok).toBe(false);
+    expect((result.error as { message?: string }).message).toContain(
+      "Skill proposal is not pending",
+    );
+    expect(mocks.chatSend).not.toHaveBeenCalled();
   });
 });

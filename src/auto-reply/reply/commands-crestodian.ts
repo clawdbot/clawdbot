@@ -1,3 +1,4 @@
+// Implements maintenance commands for Crestodian-backed session cleanup.
 import { logVerbose } from "../../globals.js";
 import type { CommandHandler } from "./commands-types.js";
 

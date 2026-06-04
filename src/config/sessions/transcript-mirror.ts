@@ -1,5 +1,6 @@
 import path from "node:path";
 
+// Media transcript mirrors use stable filenames instead of raw URLs with tokens/query strings.
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
   return noHash.split("?")[0] ?? noHash;
@@ -31,6 +32,7 @@ function extractFileNameFromMediaUrl(value: string): string | null {
   }
 }
 
+/** Resolves compact text to mirror into session transcripts for text or media messages. */
 export function resolveMirroredTranscriptText(params: {
   text?: string;
   mediaUrls?: string[];

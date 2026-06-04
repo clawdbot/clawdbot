@@ -20,6 +20,9 @@ import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
+/**
+ * Optional gateway connection overrides accepted by agent tools.
+ */
 export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -28,6 +31,9 @@ export type GatewayCallOptions = {
 
 type GatewayOverrideTarget = "local" | "remote";
 
+/**
+ * Reads common gateway options from tool parameters while preserving explicit token whitespace.
+ */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
@@ -36,6 +42,9 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   };
 }
 
+/**
+ * Canonicalizes websocket URLs for allowlist comparisons without retaining paths or credentials.
+ */
 function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
   const input = raw.trim();
   let url: URL;
@@ -88,7 +97,8 @@ function validateGatewayUrlOverrideForAgentTools(params: {
       const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
       remoteKey = remote.key;
     } catch {
-      // ignore: misconfigured remote url; tools should fall back to default resolution.
+      // Misconfigured remote URL should not make ordinary tool calls fail; only explicit
+      // gatewayUrl overrides need strict validation.
     }
   }
 
@@ -125,6 +135,9 @@ function resolveGatewayOverrideToken(params: {
   }).token;
 }
 
+/**
+ * Resolves the gateway URL, token, and timeout for agent tool calls.
+ */
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   const cfg = getRuntimeConfig();
   const validatedOverride =
@@ -165,11 +178,16 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
     return undefined;
   }
   if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+    // Runtime approval tokens are scoped to the local approval bridge, not arbitrary
+    // caller-supplied gateway URLs.
     return undefined;
   }
   return getOperatorApprovalRuntimeToken();
 }
 
+/**
+ * Calls a gateway method as the agent-tool backend client with least-privilege scopes.
+ */
 export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,

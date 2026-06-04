@@ -1,3 +1,4 @@
+// Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   BASE_THINKING_LEVELS,
@@ -43,6 +44,7 @@ import {
 } from "../plugins/provider-thinking.js";
 import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 
+/** UI-facing thinking level option. */
 export type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
@@ -172,6 +174,7 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
+/** Resolve supported thinking levels and default for a provider/model pair. */
 export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
@@ -238,6 +241,7 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
+/** Return whether provider/model exposes only off/on thinking controls. */
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
   const profile = resolveThinkingProfile({ provider, model });
   return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
@@ -254,10 +258,12 @@ function supportsThinkingLevel(
   );
 }
 
+/** Return whether provider/model supports the xhigh thinking level. */
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
   return supportsThinkingLevel(provider, model, "xhigh");
 }
 
+/** List thinking level ids supported by provider/model. */
 export function listThinkingLevels(
   provider?: string | null,
   model?: string | null,
@@ -267,6 +273,7 @@ export function listThinkingLevels(
   return profile.levels.map((level) => level.id);
 }
 
+/** List labeled thinking level options supported by provider/model. */
 export function listThinkingLevelOptions(
   provider?: string | null,
   model?: string | null,
@@ -276,6 +283,7 @@ export function listThinkingLevelOptions(
   return profile.levels.map(({ id, label }) => ({ id, label }));
 }
 
+/** List display labels for thinking levels supported by provider/model. */
 export function listThinkingLevelLabels(
   provider?: string | null,
   model?: string | null,
@@ -284,6 +292,7 @@ export function listThinkingLevelLabels(
   return listThinkingLevelOptions(provider, model, catalog).map((level) => level.label);
 }
 
+/** Format supported thinking level labels for command/status output. */
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
@@ -294,6 +303,7 @@ export function formatThinkingLevels(
   return profile.levels.map(({ label }) => label).join(separator);
 }
 
+/** Resolve the default thinking level for a provider/model pair. */
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
@@ -314,6 +324,7 @@ export function resolveThinkingDefaultForModel(params: {
   return resolveSupportedThinkingLevelFromProfile(profile, "medium");
 }
 
+/** Resolve the highest non-off thinking level supported by provider/model. */
 export function resolveLargestSupportedThinkingLevel(
   provider?: string | null,
   model?: string | null,
@@ -331,6 +342,7 @@ export function resolveLargestSupportedThinkingLevel(
   return bestLevel?.id ?? "off";
 }
 
+/** Return whether a specific thinking level is supported by provider/model. */
 export function isThinkingLevelSupported(params: {
   provider?: string | null;
   model?: string | null;
@@ -356,6 +368,7 @@ function resolveSupportedThinkingLevelFromProfile(
   );
 }
 
+/** Clamp a requested thinking level to the closest supported provider/model level. */
 export function resolveSupportedThinkingLevel(params: {
   provider?: string | null;
   model?: string | null;

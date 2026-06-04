@@ -3,19 +3,29 @@ import {
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
 } from "../../packages/tool-call-repair/src/index.js";
 
+/** Plugin-facing plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
+  /** Parsed JSON arguments object. */
   arguments: Record<string, unknown>;
+  /** Exclusive end offset of the parsed block. */
   end: number;
+  /** Tool name parsed from the standalone block. */
   name: string;
+  /** Original text slice that produced this block. */
   raw: string;
+  /** Inclusive start offset of the parsed block. */
   start: number;
 };
 
+/** Plugin-facing parser options for standalone plain-text tool calls. */
 export type PlainTextToolCallParseOptions = {
+  /** Optional allowlist of tool names that may be accepted. */
   allowedToolNames?: Iterable<string>;
+  /** Maximum JSON payload size accepted for one parsed call. */
   maxPayloadBytes?: number;
 };
 
+/** Parses a message made only of standalone plain-text tool call blocks. */
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
@@ -23,6 +33,7 @@ export function parseStandalonePlainTextToolCallBlocks(
   return parseStandaloneRepairToolCallBlocks(text, options);
 }
 
+/** Removes full-line standalone plain-text tool call blocks from visible text. */
 export function stripPlainTextToolCallBlocks(text: string): string {
   return stripRepairToolCallBlocks(text);
 }
@@ -33,7 +44,9 @@ type ToolPayloadTextBlock = {
 };
 
 export type ToolPayloadCarrier = {
+  /** Structured payload preferred over content text when present. */
   details?: unknown;
+  /** Provider/tool content blocks or fallback payload. */
   content?: unknown;
 };
 
@@ -54,6 +67,7 @@ export function extractToolPayload(result: ToolPayloadCarrier | null | undefined
   if (!result) {
     return undefined;
   }
+  // Structured details are authoritative; content text is only a compatibility fallback.
   if (result.details !== undefined) {
     return result.details;
   }

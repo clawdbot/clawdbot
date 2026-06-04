@@ -1,3 +1,4 @@
+// Tests startup context loading and omission rules.
 import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for provider auth, catalog, discovery, runtime, and media contracts.
+ */
 export {
   describeGithubCopilotProviderAuthContract,
   describeOpenAICodexProviderAuthContract,

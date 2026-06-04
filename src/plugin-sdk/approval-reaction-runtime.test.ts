@@ -1,3 +1,6 @@
+/**
+ * Tests approval reaction runtime helper behavior.
+ */
 import { describe, expect, it } from "vitest";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";

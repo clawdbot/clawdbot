@@ -1,5 +1,7 @@
+// Resolves npm integrity metadata and detects package drift.
 import type { NpmIntegrityDrift, NpmSpecResolution } from "./install-source-utils.js";
 
+/** Payload passed to npm integrity drift handlers during archive installs. */
 export type NpmIntegrityDriftPayload = {
   spec: string;
   expectedIntegrity: string;
@@ -32,6 +34,10 @@ function normalizeIntegrity(value: string | undefined): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+/**
+ * Compares expected and resolved npm integrity values and asks the caller
+ * whether a drifted archive may still be installed.
+ */
 export async function resolveNpmIntegrityDrift<TPayload>(
   params: ResolveNpmIntegrityDriftParams<TPayload>,
 ): Promise<ResolveNpmIntegrityDriftResult<TPayload>> {
@@ -73,6 +79,10 @@ type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
   warn?: (message: string) => void;
 };
 
+/**
+ * Resolves integrity drift with OpenClaw's default warning and abort messages.
+ * Used by npm archive installers that do not need a custom payload shape.
+ */
 export async function resolveNpmIntegrityDriftWithDefaultMessage(
   params: ResolveNpmIntegrityDriftWithDefaultMessageParams,
 ): Promise<{ integrityDrift?: NpmIntegrityDrift; error?: string }> {

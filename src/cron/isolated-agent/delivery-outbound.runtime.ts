@@ -1,3 +1,4 @@
+// Runtime outbound-delivery seam for isolated cron agent delivery dispatch.
 export { createOutboundSendDeps } from "../../cli/outbound-send-deps.js";
 export { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 export { type OutboundDeliveryResult } from "../../infra/outbound/deliver.js";

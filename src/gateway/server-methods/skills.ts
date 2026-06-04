@@ -1,3 +1,4 @@
+// Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,6 +9,7 @@ import {
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
   validateSkillsProposalInspectParams,
+  validateSkillsProposalRequestRevisionParams,
   validateSkillsProposalReviseParams,
   validateSkillsProposalsListParams,
   validateSkillsProposalUpdateParams,
@@ -56,7 +58,12 @@ import {
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
 function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
@@ -110,6 +117,20 @@ function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
 }
 
+function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
+  if (!proposal) {
+    return "";
+  }
+  return [
+    `Revise Skill Workshop proposal \`${proposal.record.id}\` (${proposal.record.target.skillKey}).`,
+    "",
+    "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
+    "Do not apply, approve, reject, quarantine, or install the proposal.",
+    "",
+    "Requested changes:",
+  ].join("\n");
+}
+
 const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
 async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
@@ -141,6 +162,41 @@ async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
   }
 }
 
+async function forwardSkillWorkshopRevisionToChatSend(
+  opts: GatewayRequestHandlerOptions,
+  params: {
+    agentId: string;
+    idempotencyKey: string;
+    instructions: string;
+    proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
+    sessionId?: string;
+    sessionKey: string;
+    targetAgentId?: string;
+  },
+): Promise<void> {
+  const { chatHandlers } = await import("./chat.js");
+  const chatSend = chatHandlers["chat.send"];
+  if (!chatSend) {
+    throw new Error("chat.send handler is unavailable");
+  }
+  const chatParams = {
+    sessionKey: params.sessionKey,
+    agentId: params.targetAgentId ?? params.agentId,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    message: params.instructions,
+    deliver: false,
+    systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
+    suppressCommandInterpretation: true,
+    idempotencyKey: params.idempotencyKey,
+  };
+  await chatSend({
+    ...opts,
+    req: { ...opts.req, method: "chat.send", params: chatParams },
+    params: chatParams,
+  });
+}
+
+/** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
@@ -368,6 +424,55 @@ export const skillsHandlers: GatewayRequestHandlers = {
         }),
     });
   },
+  "skills.proposals.requestRevision": async (opts) => {
+    const { params, respond, context } = opts;
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.requestRevision",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalRequestRevisionParams,
+      run: async (parsedParams, resolved) => {
+        const proposal = await inspectSkillProposal(parsedParams.proposalId, {
+          workspaceDir: resolved.workspaceDir,
+        });
+        if (!proposal) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Skill proposal not found: ${parsedParams.proposalId}`,
+            ),
+          );
+          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+        }
+        if (proposal.record.status !== "pending") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Skill proposal is not pending: ${parsedParams.proposalId}`,
+            ),
+          );
+          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+        }
+        await forwardSkillWorkshopRevisionToChatSend(opts, {
+          agentId: resolved.agentId,
+          idempotencyKey: parsedParams.idempotencyKey,
+          instructions: parsedParams.instructions,
+          proposal,
+          sessionId: parsedParams.sessionId,
+          sessionKey: parsedParams.sessionKey,
+          targetAgentId: parsedParams.targetAgentId
+            ? normalizeAgentId(parsedParams.targetAgentId)
+            : undefined,
+        });
+        return SKILL_PROPOSAL_RESPONSE_HANDLED;
+      },
+    });
+  },
   "skills.proposals.apply": async ({ params, respond, context }) => {
     await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.apply",
@@ -433,6 +538,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+        config: cfg,
       });
       respond(
         result.ok,
@@ -492,14 +598,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params as {
       name: string;
       installId: string;
-      dangerouslyForceUnsafeInstall?: boolean;
       timeoutMs?: number;
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,
-      dangerouslyForceUnsafeInstall: p.dangerouslyForceUnsafeInstall,
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
@@ -543,6 +647,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir,
         slug: p.slug,
+        config: cfg,
       });
       const errors = results.filter((result) => !result.ok);
       respond(

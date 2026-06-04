@@ -1,3 +1,4 @@
+// Covers channel readonly setup fallback audit behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";

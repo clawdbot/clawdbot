@@ -1,5 +1,8 @@
 import type { SandboxDockerSettings } from "../../config/types.sandbox.js";
 
+/**
+ * Normalized Docker sandbox config after defaults fill required runtime fields.
+ */
 type RequiredDockerConfigKeys =
   | "image"
   | "containerPrefix"

@@ -4,6 +4,7 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 
+// Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
@@ -11,6 +12,7 @@ const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 
+/** Sanitized diagnostic event record retained in the stability ring buffer. */
 export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
@@ -91,6 +93,7 @@ export type DiagnosticStabilityEventRecord = {
   };
 };
 
+/** Point-in-time stability snapshot with records and derived summaries. */
 export type DiagnosticStabilitySnapshot = {
   generatedAt: string;
   capacity: number;
@@ -688,6 +691,7 @@ function normalizeLimit(limit: unknown, defaultLimit = DEFAULT_DIAGNOSTIC_STABIL
   return parsed;
 }
 
+/** Normalizes user-facing snapshot query options. */
 export function normalizeDiagnosticStabilityQuery(
   input: DiagnosticStabilityQueryInput = {},
   options?: { defaultLimit?: number },
@@ -699,6 +703,7 @@ export function normalizeDiagnosticStabilityQuery(
   };
 }
 
+/** Starts the process-wide diagnostic event recorder if it is not already active. */
 export function startDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   if (state.unsubscribe) {
@@ -709,12 +714,14 @@ export function startDiagnosticStabilityRecorder(): void {
   });
 }
 
+/** Stops the process-wide diagnostic event recorder. */
 export function stopDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
   state.unsubscribe = null;
 }
 
+/** Returns a sanitized stability snapshot from the process-wide ring buffer. */
 export function getDiagnosticStabilitySnapshot(options?: {
   limit?: number;
   type?: string;
@@ -734,6 +741,7 @@ export function getDiagnosticStabilitySnapshot(options?: {
   };
 }
 
+/** Applies filtering/limits to an existing snapshot without mutating its source records. */
 export function selectDiagnosticStabilitySnapshot(
   snapshot: DiagnosticStabilitySnapshot,
   options?: {
@@ -753,6 +761,7 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
+/** Resets recorder state and subscriptions for isolated tests. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();

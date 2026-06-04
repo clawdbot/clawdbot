@@ -1,3 +1,4 @@
+// Public provider usage facade for formatting, loading, and shared types.
 export {
   formatUsageReportLines,
   formatUsageSummaryLine,

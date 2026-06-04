@@ -1,3 +1,6 @@
+/**
+ * Tests tool plugin schema helpers and SDK tool registration contracts.
+ */
 import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";

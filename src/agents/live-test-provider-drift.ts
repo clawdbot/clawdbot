@@ -1,3 +1,9 @@
+/**
+ * Live-provider drift classifiers for tests and probes.
+ *
+ * Live lanes call real providers, so these helpers separate acceptable account,
+ * quota, model, or upstream drift from product regressions.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import {
@@ -17,11 +23,13 @@ export type LiveProviderDriftReason =
   | "rate-limit"
   | "timeout";
 
+/** A normalized reason for skipping or soft-failing live provider drift. */
 export type LiveProviderDriftDecision = {
   label: string;
   reason: LiveProviderDriftReason;
 };
 
+/** Classifier options that control which live-provider drift reasons are allowed. */
 export type LiveProviderDriftOptions = {
   allowAuth?: boolean;
   allowBilling?: boolean;
@@ -32,32 +40,39 @@ export type LiveProviderDriftOptions = {
   error: unknown;
 };
 
+/** Converts arbitrary thrown values into text for provider drift matchers. */
 export function liveProviderErrorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+/** Returns whether an error is expected live auth/account drift. */
 export function isLiveAuthDrift(error: unknown): boolean {
   return isAuthErrorMessage(liveProviderErrorText(error));
 }
 
+/** Returns whether an error is expected live billing/quota drift. */
 export function isLiveBillingDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isBillingErrorMessage(raw) || isAnthropicBillingError(raw);
 }
 
+/** Returns whether an error is expected live rate-limit drift. */
 export function isLiveRateLimitDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
 }
 
+/** Returns whether an error is expected live timeout drift. */
 export function isLiveTimeoutDrift(error: unknown): boolean {
   return isTimeoutErrorMessage(liveProviderErrorText(error));
 }
 
+/** Returns whether an error is expected live missing-model drift. */
 export function isLiveModelNotFoundDrift(error: unknown): boolean {
   return isModelNotFoundErrorMessage(liveProviderErrorText(error));
 }
 
+/** Returns whether an error is expected upstream/provider availability drift. */
 export function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const htmlCandidate = raw.trim().replace(/^error:\s*/i, "");
@@ -83,6 +98,7 @@ function isRawHtmlProviderErrorPage(raw: string): boolean {
   return /^(?:<!doctype\s+html\b|<html\b)/i.test(raw) && /<\/html>/i.test(raw);
 }
 
+/** Returns the allowed live drift decision for an error, or `undefined` for regressions. */
 export function shouldSkipLiveProviderDrift(
   options: LiveProviderDriftOptions,
 ): LiveProviderDriftDecision | undefined {

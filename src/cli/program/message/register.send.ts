@@ -1,6 +1,8 @@
+// Message send command registration, including media and presentation/delivery options.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register `message send` and route execution through shared message helpers. */
 export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(

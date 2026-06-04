@@ -11,7 +11,10 @@ type AllowlistConfigPaths = {
   cleanupPaths?: string[][];
 };
 
+/** Named allowlist entries attached to a route-specific override. */
 export type AllowlistGroupOverride = { label: string; entries: string[] };
+
+/** Per-entry display-name lookup results for channel allowlist UIs. */
 export type AllowlistNameResolution = Array<{
   input: string;
   resolved: boolean;
@@ -43,10 +46,12 @@ const LEGACY_DM_ALLOWLIST_CONFIG_PATHS: AllowlistConfigPaths = {
   cleanupPaths: [["dm", "allowFrom"]],
 };
 
+/** Resolve modern DM/group allowlist paths for account-scoped channel config writes. */
 export function resolveDmGroupAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? DM_ALLOWLIST_CONFIG_PATHS : GROUP_ALLOWLIST_CONFIG_PATHS;
 }
 
+/** Resolve DM-only paths that still read and clean up the old nested dm.allowFrom location. */
 export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? LEGACY_DM_ALLOWLIST_CONFIG_PATHS : null;
 }
@@ -181,6 +186,8 @@ function resolveAccountScopedWriteTarget(
       writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
     };
   }
+  // Once an accounts map exists, even the default account writes through it so scoped
+  // and unscoped config do not diverge inside the same channel stanza.
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
   const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
     ? accounts[normalizedAccountId]
@@ -316,6 +323,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     } else {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     }
+    // Legacy readers can observe multiple paths, but writes must leave one canonical path.
     for (const path of params.paths.cleanupPaths ?? []) {
       deleteNestedValue(resolvedTarget.target, path);
     }

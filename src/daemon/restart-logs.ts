@@ -12,6 +12,7 @@ export type GatewayLogPaths = {
   stderrPath: string;
 };
 
+// Restart logs capture supervisor handoff output when normal service logs are unavailable.
 function resolveGatewayLogPrefix(env: GatewayServiceEnv): string {
   return env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
 }

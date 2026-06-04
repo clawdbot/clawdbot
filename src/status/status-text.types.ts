@@ -8,6 +8,8 @@ import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 
+// Input contract for buildStatusText. Most fields are already resolved by the
+// caller so status rendering can stay presentation-focused and side-effect-light.
 export type BuildStatusTextParams = {
   cfg: OpenClawConfig;
   sessionEntry?: SessionEntry;

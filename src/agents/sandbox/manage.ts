@@ -13,6 +13,9 @@ import {
 } from "./registry.js";
 import { resolveSandboxAgentId } from "./shared.js";
 
+/**
+ * CLI-facing sandbox management helpers for listing and removing runtime/browser containers.
+ */
 export type SandboxContainerInfo = SandboxRegistryEntry & {
   running: boolean;
   imageMatch: boolean;
@@ -32,6 +35,7 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
   };
 }
 
+/** Lists registered sandbox containers with live backend status and config-label match state. */
 export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readRegistry();
@@ -65,6 +69,7 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
   return results;
 }
 
+/** Lists registered browser sandbox containers with live Docker status. */
 export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
@@ -88,6 +93,7 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   return results;
 }
 
+/** Removes one sandbox container from its backend and registry. */
 export async function removeSandboxContainer(containerName: string): Promise<void> {
   const config = getRuntimeConfig();
   const registry = await readRegistry();
@@ -103,6 +109,7 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   await removeRegistryEntry(containerName);
 }
 
+/** Removes one browser sandbox container, registry entry, and any in-process bridge server. */
 export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();

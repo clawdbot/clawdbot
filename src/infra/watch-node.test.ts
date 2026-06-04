@@ -1,3 +1,4 @@
+// Tests watched node process restart and hashing behavior.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";

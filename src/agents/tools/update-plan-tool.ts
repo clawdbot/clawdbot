@@ -6,6 +6,12 @@ import {
 } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
 
+/**
+ * Factory and validation helpers for the model-facing update_plan tool.
+ *
+ * The tool records a structured work plan in tool details; it does not mutate
+ * repo state and enforces one active in-progress step.
+ */
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 const UpdatePlanToolSchema = Type.Object({
@@ -68,11 +74,13 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
 
   const inProgressCount = steps.filter((entry) => entry.status === "in_progress").length;
   if (inProgressCount > 1) {
+    // Multiple in-progress steps make progress state ambiguous for UI and transcript consumers.
     throw new ToolInputError("plan can contain at most one in_progress step");
   }
   return steps;
 }
 
+/** Creates the update_plan tool used by agent runtimes that expose progress planning. */
 export function createUpdatePlanTool(): AnyAgentTool {
   return {
     label: "Update Plan",

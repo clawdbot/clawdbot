@@ -1,3 +1,4 @@
+// Tests agent runner helper decisions for payload and runtime preparation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";

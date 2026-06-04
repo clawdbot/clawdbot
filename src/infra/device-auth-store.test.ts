@@ -1,3 +1,4 @@
+// Covers persistent device auth token storage and clearing.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";

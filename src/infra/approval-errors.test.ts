@@ -1,3 +1,4 @@
+// Covers approval-not-found error detection.
 import { describe, expect, it } from "vitest";
 import { isApprovalNotFoundError } from "./approval-errors.js";
 

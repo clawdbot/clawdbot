@@ -1,3 +1,4 @@
+// Covers live Vitest config shape.
 import { describe, expect, it } from "vitest";
 import {
   normalizeConfigPath,

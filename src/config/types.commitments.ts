@@ -1,3 +1,4 @@
+// Defines commitment feature configuration types.
 export type CommitmentsConfig = {
   /** Enable inferred follow-up extraction, storage, and heartbeat delivery. Default: false. */
   enabled?: boolean;

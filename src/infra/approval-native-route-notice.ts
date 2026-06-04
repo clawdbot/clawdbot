@@ -1,7 +1,9 @@
+// Formats native-route approval notices shown when command approvals leave the current channel.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatHumanList } from "../shared/human-list.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 
+/** Formats the human destination label for where native approval prompts were delivered. */
 export function describeApprovalDeliveryDestination(params: {
   channelLabel: string;
   deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
@@ -12,6 +14,7 @@ export function describeApprovalDeliveryDestination(params: {
     : params.channelLabel;
 }
 
+/** Builds the notice shown in the current chat when approval was routed elsewhere. */
 export function resolveApprovalRoutedElsewhereNoticeText(
   destinations: readonly string[],
 ): string | null {
@@ -26,6 +29,7 @@ export function resolveApprovalRoutedElsewhereNoticeText(
   )}, not this chat.`;
 }
 
+/** Builds the fallback slash-command notice when native approval delivery fails. */
 export function resolveApprovalDeliveryFailedNoticeText(params: {
   approvalId: string;
   approvalKind: "exec" | "plugin";
@@ -35,6 +39,8 @@ export function resolveApprovalDeliveryFailedNoticeText(params: {
     params.approvalKind === "exec" && params.approvalId.length > 8
       ? params.approvalId.slice(0, 8)
       : params.approvalId;
+  // Exec approval ids are long command ids in chat UX; plugin ids can be short
+  // semantic ids, so only shorten exec ids and keep the full-id fallback visible.
   const decisions = (
     params.allowedDecisions?.length
       ? params.allowedDecisions

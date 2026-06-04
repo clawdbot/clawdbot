@@ -1,6 +1,15 @@
 import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
+/**
+ * Channel and Talk protocol schemas.
+ *
+ * Talk schemas are consumed by browser realtime clients, gateway relay sessions,
+ * and channel adapters, so the mode/transport/brain unions below are shared
+ * API vocabulary rather than provider-local implementation details.
+ */
+
+/** Toggles Talk mode for the gateway, with an optional rollout phase marker. */
 export const TalkModeParamsSchema = Type.Object(
   {
     enabled: Type.Boolean(),
@@ -9,6 +18,7 @@ export const TalkModeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads Talk configuration; secrets are included only for trusted callers. */
 export const TalkConfigParamsSchema = Type.Object(
   {
     includeSecrets: Type.Optional(Type.Boolean()),
@@ -16,6 +26,7 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One-shot text-to-speech request with provider-specific voice tuning knobs. */
 export const TalkSpeakParamsSchema = Type.Object(
   {
     text: NonEmptyString,
@@ -36,12 +47,14 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Supported Talk session shapes exposed to clients and providers. */
 const TalkModeSchema = Type.Union([
   Type.Literal("realtime"),
   Type.Literal("stt-tts"),
   Type.Literal("transcription"),
 ]);
 
+/** Transport families; browser clients branch on this value to choose setup flow. */
 const TalkTransportSchema = Type.Union([
   Type.Literal("webrtc"),
   Type.Literal("provider-websocket"),
@@ -49,12 +62,14 @@ const TalkTransportSchema = Type.Union([
   Type.Literal("managed-room"),
 ]);
 
+/** How a Talk session delegates reasoning/tool use to the agent runtime. */
 const TalkBrainSchema = Type.Union([
   Type.Literal("agent-consult"),
   Type.Literal("direct-tools"),
   Type.Literal("none"),
 ]);
 
+/** Agent control actions accepted from Talk clients and managed rooms. */
 const TalkAgentControlModeSchema = Type.Union([
   Type.Literal("status"),
   Type.Literal("steer"),
@@ -62,6 +77,7 @@ const TalkAgentControlModeSchema = Type.Union([
   Type.Literal("followup"),
 ]);
 
+/** Stable event names emitted by Talk sessions across providers/transports. */
 const TalkEventTypeSchema = Type.Union([
   Type.Literal("session.started"),
   Type.Literal("session.ready"),
@@ -93,6 +109,7 @@ const TalkEventTypeSchema = Type.Union([
   Type.Literal("health.changed"),
 ]);
 
+/** Event types that must carry a turn id for client-side stream correlation. */
 const TURN_SCOPED_TALK_EVENT_TYPES = [
   "turn.started",
   "turn.ended",
@@ -112,6 +129,7 @@ const TURN_SCOPED_TALK_EVENT_TYPES = [
   "tool.error",
 ];
 
+/** Capture lifecycle events must include capture id to avoid cross-turn ambiguity. */
 const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
   "capture.started",
   "capture.stopped",
@@ -119,11 +137,13 @@ const CAPTURE_SCOPED_TALK_EVENT_TYPES = [
   "capture.once",
 ];
 
+/** Builds JSON Schema conditional requirements while avoiding reserved word syntax. */
 function requireJsonSchemaProperties(properties: string[]): Record<string, { required: string[] }> {
   const conditionalRequirementKey = ["th", "en"].join("");
   return Object.fromEntries([[conditionalRequirementKey, { required: properties }]]);
 }
 
+/** Canonical Talk event envelope emitted to browser, relay, and channel consumers. */
 export const TalkEventSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -164,6 +184,7 @@ export const TalkEventSchema = Type.Object(
   },
 );
 
+/** Creates a browser-facing Talk client session. */
 export const TalkClientCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
@@ -181,6 +202,7 @@ export const TalkClientCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Tool-call request from a browser/client session back into the agent runtime. */
 export const TalkClientToolCallParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
@@ -192,6 +214,7 @@ export const TalkClientToolCallParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Agent run identity returned after accepting a Talk client tool call. */
 export const TalkClientToolCallResultSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -200,6 +223,7 @@ export const TalkClientToolCallResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Text steering request for a Talk session bound to an agent turn. */
 export const TalkClientSteerParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
@@ -209,6 +233,7 @@ export const TalkClientSteerParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result of applying agent control to an embedded or reply-backed Talk run. */
 export const TalkAgentControlResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
@@ -239,6 +264,7 @@ export const TalkAgentControlResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Joins an existing managed-room Talk session. */
 export const TalkSessionJoinParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -247,6 +273,7 @@ export const TalkSessionJoinParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates a gateway-managed Talk session for realtime, transcription, or relay use. */
 export const TalkSessionCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
@@ -266,6 +293,7 @@ export const TalkSessionCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Appends base64 audio to an active Talk session. */
 export const TalkSessionAppendAudioParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -275,6 +303,7 @@ export const TalkSessionAppendAudioParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts or advances a Talk turn within a session. */
 export const TalkSessionTurnParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -283,6 +312,7 @@ export const TalkSessionTurnParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Cancels the active or named Talk turn. */
 export const TalkSessionCancelTurnParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -292,6 +322,7 @@ export const TalkSessionCancelTurnParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Cancels currently streaming Talk output without necessarily ending the turn. */
 export const TalkSessionCancelOutputParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -301,6 +332,7 @@ export const TalkSessionCancelOutputParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Submits a tool result back to a Talk provider session. */
 export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -319,6 +351,7 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Steers a managed Talk session by session id rather than transcript key. */
 export const TalkSessionSteerParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -329,6 +362,7 @@ export const TalkSessionSteerParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Closes a gateway-managed Talk session. */
 export const TalkSessionCloseParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -336,6 +370,7 @@ export const TalkSessionCloseParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Mutable room state returned when a client joins a managed Talk room. */
 const TalkSessionManagedRoomStateSchema = Type.Object(
   {
     activeClientId: Type.Optional(Type.String()),
@@ -345,6 +380,7 @@ const TalkSessionManagedRoomStateSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Managed-room session record shared with browser clients. */
 const TalkSessionManagedRoomRecordSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -367,8 +403,10 @@ const TalkSessionManagedRoomRecordSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for reading configured Talk provider capabilities. */
 export const TalkCatalogParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** One provider entry in the Talk capability catalog. */
 const TalkCatalogProviderSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -413,6 +451,7 @@ const TalkCatalogProviderSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Active provider plus all candidates for a Talk capability family. */
 const TalkCatalogProviderGroupSchema = Type.Object(
   {
     activeProvider: Type.Optional(Type.String()),
@@ -421,6 +460,7 @@ const TalkCatalogProviderGroupSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Provider, mode, transport, and audio-format catalog returned to clients. */
 export const TalkCatalogResultSchema = Type.Object(
   {
     modes: Type.Array(TalkModeSchema),
@@ -433,6 +473,7 @@ export const TalkCatalogResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Audio format contract for realtime browser sessions. */
 const BrowserRealtimeAudioContractSchema = Type.Object(
   {
     inputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
@@ -443,6 +484,7 @@ const BrowserRealtimeAudioContractSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Session creation result with transport-specific ids and credentials. */
 export const TalkSessionCreateResultSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -464,6 +506,7 @@ export const TalkSessionCreateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result for a Talk turn request, optionally including emitted events. */
 export const TalkSessionTurnResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
@@ -473,8 +516,10 @@ export const TalkSessionTurnResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Managed-room record returned to clients after joining an existing Talk session. */
 export const TalkSessionJoinResultSchema = TalkSessionManagedRoomRecordSchema;
 
+/** Generic success result for Talk session lifecycle calls. */
 export const TalkSessionOkResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
@@ -482,6 +527,7 @@ export const TalkSessionOkResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Browser WebRTC setup payload using provider SDP exchange. */
 const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
@@ -496,6 +542,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Browser websocket setup payload with JSON/PCM audio contract. */
 const BrowserRealtimeJsonPcmWebSocketSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
@@ -512,6 +559,7 @@ const BrowserRealtimeJsonPcmWebSocketSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Browser setup payload for gateway-relayed realtime audio. */
 const BrowserRealtimeGatewayRelaySessionSchema = Type.Object(
   {
     provider: NonEmptyString,
@@ -525,6 +573,7 @@ const BrowserRealtimeGatewayRelaySessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Browser setup payload for managed-room Talk sessions. */
 const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
@@ -538,6 +587,7 @@ const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Union of all browser Talk session setup payloads. */
 export const TalkClientCreateResultSchema = Type.Union([
   BrowserRealtimeWebRtcSdpSessionSchema,
   BrowserRealtimeJsonPcmWebSocketSessionSchema,
@@ -545,14 +595,17 @@ export const TalkClientCreateResultSchema = Type.Union([
   BrowserRealtimeManagedRoomSessionSchema,
 ]);
 
+/** Secret-bearing provider fields; extra provider options remain provider-owned. */
 const talkProviderFieldSchemas = {
   apiKey: Type.Optional(SecretInputSchema),
 };
 
+/** Per-provider Talk config bag. */
 const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
   additionalProperties: true,
 });
 
+/** Realtime Talk defaults and provider selection stored in config. */
 const TalkRealtimeConfigSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
@@ -569,6 +622,7 @@ const TalkRealtimeConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Resolved active Talk provider plus its normalized provider config. */
 const ResolvedTalkConfigSchema = Type.Object(
   {
     provider: Type.String(),
@@ -577,6 +631,7 @@ const ResolvedTalkConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Talk config subtree returned through gateway config APIs. */
 const TalkConfigSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
@@ -592,6 +647,7 @@ const TalkConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full Talk config read result, including related session/UI context. */
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
@@ -620,6 +676,7 @@ export const TalkConfigResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Text-to-speech result with encoded audio and provider output metadata. */
 export const TalkSpeakResultSchema = Type.Object(
   {
     audioBase64: NonEmptyString,
@@ -632,6 +689,7 @@ export const TalkSpeakResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Channel status request, optionally probing one channel before returning. */
 export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
@@ -641,8 +699,12 @@ export const ChannelsStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-// Channel docking: channels.status is intentionally schema-light so new
-// channels can ship without protocol updates.
+/**
+ * Per-account status snapshot for channel docking.
+ *
+ * This is intentionally schema-light so new channel-specific metadata can ship
+ * without a gateway protocol update; known fields stay documented for UI use.
+ */
 export const ChannelAccountSnapshotSchema = Type.Object(
   {
     accountId: NonEmptyString,
@@ -683,6 +745,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** UI label and icon metadata for one channel. */
 export const ChannelUiMetaSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -693,6 +756,7 @@ export const ChannelUiMetaSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Event-loop health snapshot included with channel status responses. */
 export const ChannelEventLoopHealthSchema = Type.Object(
   {
     degraded: Type.Boolean(),
@@ -712,6 +776,7 @@ export const ChannelEventLoopHealthSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full channel status result for dashboard and operator diagnostics. */
 export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -730,6 +795,7 @@ export const ChannelsStatusResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Logs out one channel account. */
 export const ChannelsLogoutParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -738,6 +804,7 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Stops one channel account runtime. */
 export const ChannelsStopParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -746,6 +813,7 @@ export const ChannelsStopParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts one channel account runtime. */
 export const ChannelsStartParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -754,6 +822,7 @@ export const ChannelsStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),
@@ -769,6 +838,7 @@ const QrDataUrlSchema = Type.String({
   pattern: "^data:image/png;base64,",
 });
 
+/** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),

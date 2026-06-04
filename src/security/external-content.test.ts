@@ -1,3 +1,4 @@
+// Covers external content tokenization and source tagging.
 import { describe, expect, it } from "vitest";
 import {
   buildSafeExternalPrompt,

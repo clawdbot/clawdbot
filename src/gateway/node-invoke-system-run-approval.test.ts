@@ -1,3 +1,6 @@
+/**
+ * Node invoke system-run approval tests.
+ */
 import { describe, expect, test } from "vitest";
 import {
   buildSystemRunApprovalBinding,

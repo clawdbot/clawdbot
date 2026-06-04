@@ -15,10 +15,12 @@ const bundledPluginRoots = new Map(
     .map((plugin) => [plugin.id, plugin.rootDir] as const),
 );
 
+/** Returns bundled plugin roots loaded from the source extensions directory. */
 export function getBundledPluginRoots(): ReadonlyMap<string, string> {
   return bundledPluginRoots;
 }
 
+/** Resolves a file path inside one source bundled plugin root. */
 export function resolveBundledPluginFile(params: {
   pluginId: string;
   relativePath: string;
@@ -30,6 +32,7 @@ export function resolveBundledPluginFile(params: {
   return resolve(pluginRootDir, params.relativePath);
 }
 
+/** Resolves a bundled plugin file as a path relative to a contract test root. */
 export function bundledPluginFile(params: {
   rootDir: string;
   pluginId: string;

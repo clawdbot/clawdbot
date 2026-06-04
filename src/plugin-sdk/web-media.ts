@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for loading and optimizing local or remote web media.
+ */
 export {
   getDefaultLocalRoots,
   LocalMediaAccessError,

@@ -1,3 +1,4 @@
+// Internal task registry facade used by runtime modules without exposing public SDK surface.
 export {
   cancelTaskById,
   createTaskRecord,

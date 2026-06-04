@@ -1,3 +1,4 @@
+// Formats provider authentication choices exposed by plugin setup flows.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,

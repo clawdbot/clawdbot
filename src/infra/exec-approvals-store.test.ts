@@ -1,3 +1,4 @@
+// Covers exec approvals store socket interactions.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+/** Where a parsed command step appeared in the shell source. */
 export type CommandContext =
   | "top-level"
   | "command-substitution"

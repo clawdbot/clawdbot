@@ -1,3 +1,6 @@
+/**
+ * Presence broadcast tests for versioned gateway state updates.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
 

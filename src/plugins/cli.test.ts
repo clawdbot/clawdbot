@@ -1,3 +1,4 @@
+/** CLI integration coverage for plugin commands, setup, status, and registry flows. */
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

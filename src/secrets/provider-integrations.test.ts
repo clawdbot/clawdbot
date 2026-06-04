@@ -1,3 +1,4 @@
+/** Tests plugin-provided secret provider integration presets and resolution. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

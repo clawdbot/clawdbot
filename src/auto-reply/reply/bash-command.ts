@@ -1,3 +1,4 @@
+/** Handles /bash and ! shell command chat shortcuts. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -181,6 +182,7 @@ function buildUsageReply(): ReplyPayload {
   };
 }
 
+/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

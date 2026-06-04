@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
@@ -1320,23 +1321,19 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    await fs.writeFile(
-      path.join(tmpDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "openai:backup": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-test",
-            },
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     clearAgentHarnesses();
     registerAgentHarness({
@@ -1762,9 +1759,8 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "codex-auth-session",
       updatedAt: Date.now(),
     };
-    await fs.writeFile(
-      path.join(tmpDir, "auth-profiles.json"),
-      JSON.stringify({
+    saveAuthProfileStore(
+      {
         version: 1,
         profiles: {
           "openai:work": {
@@ -1775,7 +1771,9 @@ describe("embedded attempt harness pinning", () => {
             expires: Date.now() + 60_000,
           },
         },
-      }),
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },

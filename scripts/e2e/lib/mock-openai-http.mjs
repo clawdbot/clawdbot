@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -76,6 +77,31 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
     byteLength,
     preview: bodyText.slice(0, REQUEST_LOG_PREVIEW_CHARS),
   };
+}
+
+export function writeRequestLogEntryOrFail(
+  res,
+  { requestLog, entry, label = "mock-openai", required = false },
+) {
+  if (!requestLog) {
+    if (!required) {
+      return false;
+    }
+    const message = "MOCK_REQUEST_LOG is not configured";
+    console.error(`${label} request log write failed: ${message}`);
+    writeJson(res, 500, { error: { message: `mock OpenAI request log write failed: ${message}` } });
+    return true;
+  }
+
+  try {
+    fs.appendFileSync(requestLog, `${JSON.stringify(entry)}\n`);
+    return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`${label} request log write failed: ${message}`);
+    writeJson(res, 500, { error: { message: `mock OpenAI request log write failed: ${message}` } });
+    return true;
+  }
 }
 
 export function writeJson(res, status, body) {

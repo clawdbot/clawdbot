@@ -13,11 +13,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -88,8 +91,15 @@ internal fun SessionsScreen(
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 6.dp),
+    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+  ) {
+    LazyColumn(
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(7.dp),
+      contentPadding = PaddingValues(bottom = 4.dp),
+    ) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -133,11 +143,16 @@ internal fun SessionsScreen(
 
       if (visibleSessions.isEmpty()) {
         item {
-          ClawEmptyState(
-            title = emptySessionTitle(filter),
-            body = emptySessionBody(filter),
-            action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
-          )
+          Box(
+            modifier = Modifier.fillParentMaxHeight(0.56f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+          ) {
+            ClawEmptyState(
+              title = emptySessionTitle(filter),
+              body = emptySessionBody(filter),
+              action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
+            )
+          }
         }
       } else {
         items(visibleSessions, key = { it.key }) { session ->
@@ -154,10 +169,6 @@ internal fun SessionsScreen(
             },
           )
         }
-      }
-
-      item {
-        Spacer(modifier = Modifier.height(16.dp))
       }
     }
   }

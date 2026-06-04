@@ -1,3 +1,4 @@
+// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

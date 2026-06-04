@@ -1,3 +1,6 @@
+/**
+ * Shared contract fixtures for agent auth profile runtime behavior.
+ */
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,

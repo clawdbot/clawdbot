@@ -1,3 +1,4 @@
+/** Provider setup wizard helpers shared by provider plugins and CLI setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

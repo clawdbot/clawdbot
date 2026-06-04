@@ -1,3 +1,6 @@
+/**
+ * Public SDK facade for browser cleanup and trash operations.
+ */
 import {
   canLoadActivatedBundledPluginPublicSurface,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
@@ -36,6 +39,7 @@ function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
   return cachedBrowserMaintenanceSurface ?? null;
 }
 
+/** Closes tracked browser tabs for requested session keys when the browser plugin is active. */
 export async function closeTrackedBrowserTabsForSessions(
   params: CloseTrackedBrowserTabsParams,
 ): Promise<number> {

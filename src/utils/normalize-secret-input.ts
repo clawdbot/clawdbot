@@ -13,6 +13,10 @@
  * Intentionally does NOT remove ordinary spaces inside the string to avoid
  * silently altering "Bearer <token>" style values.
  */
+/**
+ * Normalizes a raw secret value from config, env, setup prompts, or plugin SDK callers.
+ * Returns an empty string for absent/invalid input so callers can keep boolean presence checks simple.
+ */
 export function normalizeSecretInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -28,6 +32,10 @@ export function normalizeSecretInput(value: unknown): string {
   return latin1Only.trim();
 }
 
+/**
+ * Normalizes a raw secret value and converts empty normalized output to `undefined`.
+ * Use this at optional config boundaries where "not configured" is clearer than an empty string.
+ */
 export function normalizeOptionalSecretInput(value: unknown): string | undefined {
   const normalized = normalizeSecretInput(value);
   return normalized ? normalized : undefined;

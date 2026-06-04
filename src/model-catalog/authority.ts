@@ -3,6 +3,8 @@ import type {
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 
+// Source authority decides which duplicate catalog row survives when providers,
+// manifests, config, and cache all describe the same provider/model merge key.
 const MODEL_CATALOG_SOURCE_AUTHORITY: Readonly<Record<ModelCatalogSource, number>> = {
   config: 0,
   manifest: 1,
@@ -24,6 +26,8 @@ export function mergeModelCatalogRowsByAuthority(
   const byMergeKey = new Map<string, NormalizedModelCatalogRow>();
   for (const row of rows) {
     const existing = byMergeKey.get(row.mergeKey);
+    // Lower numeric authority wins: explicit config beats manifest/runtime
+    // discovery, while provider-index preview data is the weakest source.
     if (!existing || compareModelCatalogSourceAuthority(row.source, existing.source) < 0) {
       byMergeKey.set(row.mergeKey, row);
     }

@@ -1,3 +1,4 @@
+// Normalizes Control UI CSS config values before runtime use.
 const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
 const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
 const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
@@ -24,6 +25,7 @@ function hasBalancedParentheses(value: string): boolean {
 function hasAllowedIdentifiers(value: string): boolean {
   for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
     const identifier = match[0].toLowerCase();
+    // Keep the config parser to width-only CSS tokens; reject arbitrary identifiers/properties.
     if (
       !CSS_WIDTH_FUNCTIONS.has(identifier) &&
       !CSS_WIDTH_KEYWORDS.has(identifier) &&
@@ -35,10 +37,12 @@ function hasAllowedIdentifiers(value: string): boolean {
   return true;
 }
 
+/** Normalizes operator-provided Control UI chat max-width CSS values before validation. */
 export function normalizeControlUiChatMessageMaxWidth(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+/** Validates the constrained CSS width grammar accepted by `gateway.controlUi.chatMessageMaxWidth`. */
 export function isValidControlUiChatMessageMaxWidth(value: string): boolean {
   const normalized = normalizeControlUiChatMessageMaxWidth(value);
   if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {

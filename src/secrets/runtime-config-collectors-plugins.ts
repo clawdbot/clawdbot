@@ -1,3 +1,4 @@
+/** Collects plugin config secret refs from runtime plugin metadata. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,10 +31,15 @@ function parsePluginConfigArrayIndex(segment: string): number | undefined {
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
+/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
+  /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;
+  /** Defaults from the source config, used while matching manifest-declared SecretInput paths. */
   defaults: SecretDefaults | undefined;
+  /** Resolver context that receives assignments and inactive-surface warnings. */
   context: ResolverContext;
+  /** Optional installed plugin roots; missing IDs are treated as stale inactive config. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
@@ -167,6 +173,7 @@ function createPluginConfigAssignmentApply(
   relativePath: string,
 ): (value: unknown) => void {
   return (value) => {
+    // Manifest paths use dotted/bracket notation; assignment writes need concrete object/array steps.
     const segments = normalizeStringEntries(relativePath.replace(/\[(\d+)\]/g, ".$1").split("."));
     if (segments.length === 0) {
       return;

@@ -648,9 +648,11 @@ describe("getApiKeyForModel", () => {
         },
       },
       async () => {
-        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toThrow(
-          'No API key found for provider "openai".',
-        );
+        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toMatchObject({
+          code: "missing-provider-auth",
+          message: expect.stringContaining('No API key found for provider "openai".'),
+          provider: "openai",
+        });
       },
     );
 

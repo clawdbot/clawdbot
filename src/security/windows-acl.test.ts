@@ -1,3 +1,4 @@
+// Covers Windows ACL audit and permission detection behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,

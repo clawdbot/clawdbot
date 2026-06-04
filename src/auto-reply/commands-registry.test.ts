@@ -1,3 +1,4 @@
+/** Tests command registry definitions, native specs, aliases, and argument menus. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   pinActivePluginChannelRegistry,

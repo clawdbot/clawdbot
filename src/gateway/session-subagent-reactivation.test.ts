@@ -1,3 +1,6 @@
+/**
+ * Subagent session reactivation tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();

@@ -3,10 +3,20 @@ import { isRecord } from "../../../utils.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
 export { isRecord };
 
+/**
+ * Shared helpers for channel status issue collectors.
+ */
+
+/**
+ * Normalizes optional string metadata in status issue helpers.
+ */
 export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
+/**
+ * Formats optional match metadata for status issue messages.
+ */
 export function formatMatchMetadata(params: {
   matchKey?: unknown;
   matchSource?: unknown;
@@ -25,6 +35,9 @@ export function formatMatchMetadata(params: {
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
+/**
+ * Appends formatted match metadata to a status issue message.
+ */
 export function appendMatchMetadata(
   message: string,
   params: { matchKey?: unknown; matchSource?: unknown },
@@ -33,6 +46,9 @@ export function appendMatchMetadata(
   return meta ? `${message} (${meta})` : message;
 }
 
+/**
+ * Resolves the account id for enabled, configured account snapshots.
+ */
 export function resolveEnabledConfiguredAccountId(account: {
   accountId?: unknown;
   enabled?: unknown;
@@ -44,6 +60,9 @@ export function resolveEnabledConfiguredAccountId(account: {
   return enabled && configured ? accountId : null;
 }
 
+/**
+ * Collects status issues only for enabled account snapshots.
+ */
 export function collectIssuesForEnabledAccounts<
   T extends { accountId?: unknown; enabled?: unknown },
 >(params: {
@@ -54,6 +73,8 @@ export function collectIssuesForEnabledAccounts<
   const issues: ChannelStatusIssue[] = [];
   for (const entry of params.accounts) {
     const account = params.readAccount(entry);
+    // Disabled accounts should not produce missing credential/runtime issues in
+    // status output; they are intentionally inactive.
     if (!account || account.enabled === false) {
       continue;
     }

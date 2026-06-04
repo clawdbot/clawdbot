@@ -3,6 +3,7 @@ const DEFAULT_ERROR_BODY_MAX_CHARS = 1_000;
 const DEFAULT_JSON_BODY_MAX_BYTES = 64 * 1024 * 1024;
 const TRUNCATED_SUFFIX = "... [truncated]";
 
+// Bounded response readers for provider/remote HTTP errors and JSON bodies.
 type ResponseTextSnippetOptions = {
   maxBytes?: number;
   maxChars?: number;
@@ -19,6 +20,7 @@ type ResponsePrefix = {
   truncated: boolean;
 };
 
+/** Read a small collapsed text snippet from a response body. */
 export async function readResponseTextSnippet(
   res: Response,
   options: ResponseTextSnippetOptions = {},
@@ -41,6 +43,7 @@ export async function readResponseTextSnippet(
   return collapsed;
 }
 
+/** Read and parse JSON while enforcing a hard byte limit. */
 export async function readResponseJsonWithLimit(
   res: Response,
   options: ResponseJsonOptions,
@@ -84,6 +87,8 @@ async function readResponsePrefix(res: Response, maxBytes: number): Promise<Resp
 
       const remaining = maxBytes - length;
       if (value.length >= remaining) {
+        // Keep only the configured prefix and cancel the body so callers do not
+        // accidentally buffer large provider error responses.
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
           length += remaining;

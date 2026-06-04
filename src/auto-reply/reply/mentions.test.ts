@@ -1,3 +1,4 @@
+// Tests mention detection and command trigger matching.
 import { describe, expect, it } from "vitest";
 import { stripStructuralPrefixes } from "./mentions.js";
 

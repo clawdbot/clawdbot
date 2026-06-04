@@ -37,6 +37,7 @@ type InMemoryApprovalReactionTarget<TTarget> = {
   expiresAtMs: number;
 };
 
+/** In-memory or backed store for approval targets awaiting reaction decisions. */
 export type ApprovalReactionTargetStore<TTarget> = {
   register(key: string, target: TTarget, opts?: { ttlMs?: number }): void;
   lookup(key: string): Promise<TTarget | null>;
@@ -44,17 +45,20 @@ export type ApprovalReactionTargetStore<TTarget> = {
   clearForTest(): void;
 };
 
+/** Product-ordered emoji binding for one approval decision. */
 export type ApprovalReactionDecisionBinding = {
   decision: ExecApprovalReplyDecision;
   emoji: string;
   label: string;
 };
 
+/** Normalized reaction decision resolved from a channel reaction key. */
 export type ApprovalReactionDecisionResolution = {
   decision: ExecApprovalReplyDecision;
   normalizedEmoji: string;
 };
 
+/** Stored target metadata needed to convert a reaction into an approval decision. */
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
   approvalKind?: ApprovalKind;
@@ -80,6 +84,7 @@ export type ApprovalReactionPendingContent = {
   manualFallbackPayload: ReplyPayload;
 };
 
+/** Canonical reaction controls shown for approval prompts, in product display order. */
 export const APPROVAL_REACTION_BINDINGS = [
   { decision: "allow-once", emoji: "👍", label: "Allow Once" },
   { decision: "allow-always", emoji: "♾️", label: "Allow Always" },
@@ -97,6 +102,7 @@ function normalizeDecisionList(
   return APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision));
 }
 
+/** List the canonical reaction bindings allowed for a specific approval request. */
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ApprovalReactionDecisionBinding[] {
@@ -110,6 +116,7 @@ export function listApprovalReactionBindings(params: {
   );
 }
 
+/** Build user-facing reaction instructions, or null when no reaction decisions are allowed. */
 export function buildApprovalReactionHint(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string | null {
@@ -120,17 +127,20 @@ export function buildApprovalReactionHint(params: {
   return `React with:\n\n${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join("\n")}`;
 }
 
+/** Normalize reaction emoji so skin-tone and text/presentation variants match canonical bindings. */
 export function normalizeApprovalReactionEmoji(reactionKey: string): string {
   const normalized = reactionKey
     .trim()
     .replace(VARIATION_SELECTOR_RE, "")
     .replace(FITZPATRICK_MODIFIER_RE, "");
+  // Infinity commonly arrives without the emoji variation selector; restore the canonical binding.
   if (normalized === "♾") {
     return "♾️";
   }
   return normalized;
 }
 
+/** Resolve a reaction key to an allowed approval decision. */
 export function resolveApprovalReactionDecision(params: {
   reactionKey: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -147,6 +157,7 @@ export function resolveApprovalReactionDecision(params: {
   return null;
 }
 
+/** Resolve a stored target plus reaction key into an approval decision payload. */
 export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
   target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
   reactionKey: string;

@@ -1,10 +1,13 @@
+// Rejects config files written by unsupported future versions.
 import { VERSION } from "../version.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
+/** Override env var for intentional older-binary destructive config actions. */
 export const ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV =
   "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS";
 
+/** Block payload shown when an older binary would mutate newer-written config. */
 export type FutureConfigActionBlock = {
   action: string;
   currentVersion: string;
@@ -27,6 +30,7 @@ function allowOlderBinaryDestructiveActions(env: Record<string, string | undefin
 }
 
 function resolveTouchedVersion(params: FutureConfigGuardParams): string | null {
+  // Prefer raw source config metadata so migrations/defaults cannot hide a newer writer.
   return (
     params.snapshot?.sourceConfig?.meta?.lastTouchedVersion?.trim() ||
     params.snapshot?.config?.meta?.lastTouchedVersion?.trim() ||
@@ -35,6 +39,7 @@ function resolveTouchedVersion(params: FutureConfigGuardParams): string | null {
   );
 }
 
+/** Resolves whether a destructive action should be blocked by future config metadata. */
 export function resolveFutureConfigActionBlock(
   params: FutureConfigGuardParams,
 ): FutureConfigActionBlock | null {
@@ -61,6 +66,7 @@ export function resolveFutureConfigActionBlock(
   };
 }
 
+/** Formats a future-config action block for CLI/service error output. */
 export function formatFutureConfigActionBlock(block: FutureConfigActionBlock): string {
   return [block.message, ...block.hints].join("\n");
 }

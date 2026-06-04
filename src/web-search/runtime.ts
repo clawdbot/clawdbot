@@ -38,6 +38,8 @@ import type {
   RuntimeWebSearchConfig as WebSearchConfig,
 } from "./runtime-types.js";
 
+// Runtime provider selection and execution for web_search. This keeps plugin,
+// runtime, and explicit provider selections aligned before a tool executes.
 export type {
   ListWebSearchProvidersParams,
   ResolveWebSearchDefinitionParams,
@@ -66,6 +68,7 @@ function resolveWebSearchRuntimeConfig(params?: {
   });
 }
 
+/** Resolves whether web_search is enabled for the current config/sandbox. */
 export function resolveWebSearchEnabled(params: {
   search?: WebSearchConfig;
   sandboxed?: boolean;
@@ -114,6 +117,7 @@ function hasEntryCredential(
   });
 }
 
+/** Reports whether a web_search provider has usable configured credentials. */
 export function isWebSearchProviderConfigured(params: {
   provider: Pick<
     PluginWebSearchProviderEntry,
@@ -132,6 +136,7 @@ export function isWebSearchProviderConfigured(params: {
   return hasEntryCredential(params.provider, config, resolveSearchConfig(config));
 }
 
+/** Lists runtime web_search providers after applying runtime config snapshots. */
 export function listWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
@@ -141,6 +146,7 @@ export function listWebSearchProviders(params?: {
   });
 }
 
+/** Lists plugin-configured web_search providers without runtime-only providers. */
 export function listConfiguredWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
@@ -150,6 +156,7 @@ export function listConfiguredWebSearchProviders(params?: {
   });
 }
 
+/** Resolves configured or auto-detected web_search provider id. */
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
@@ -190,6 +197,8 @@ export function resolveWebSearchProviderId(params: {
       return provider.id;
     }
     if (keylessFallbackProviderId) {
+      // Keyless providers are only used after credential-backed providers fail
+      // auto-detection, so configured API keys win when present.
       logVerbose(
         `web_search: no provider configured and no credentials found, falling back to keyless provider "${keylessFallbackProviderId}"`,
       );
@@ -309,6 +318,7 @@ function loadSortedWebSearchProviders(
   );
 }
 
+/** Resolves the executable web_search provider tool definition. */
 export function resolveWebSearchDefinition(
   options?: ResolveWebSearchDefinitionParams,
 ): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
@@ -438,6 +448,7 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
   return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
 }
 
+/** Executes web_search with fallback when selection was not explicit. */
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig({
     config: params.config,
@@ -480,6 +491,8 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       }
       const executed = await definition.execute(params.args, { signal: params.signal });
       if (allowFallback && isStructuredAvailabilityError(executed)) {
+        // Some providers report missing credentials as structured tool output.
+        // Treat that like unavailable only during auto-detected fallback.
         lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
         continue;
       }

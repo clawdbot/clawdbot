@@ -1,7 +1,10 @@
+// Resolves queue mode and admission policy for a reply turn.
 import type { QueueSettings } from "./queue.js";
 
+/** Queue decisions for messages that arrive while an agent run is active. */
 export type ActiveRunQueueAction = "run-now" | "enqueue-followup" | "drop";
 
+/** Resolves whether an active session should run, queue, or drop a new inbound turn. */
 export function resolveActiveRunQueueAction(params: {
   isActive: boolean;
   isHeartbeat: boolean;
@@ -18,6 +21,7 @@ export function resolveActiveRunQueueAction(params: {
   if (params.resetTriggered) {
     return "run-now";
   }
+  // Follow-up queueing is only meaningful for non-heartbeat user turns.
   if (params.shouldFollowup) {
     return "enqueue-followup";
   }

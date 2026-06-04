@@ -7,12 +7,20 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
-const { runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
+const { lookupMock, runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
   streamableTransportConstructorMock: vi.fn(),
 }));
 
+vi.mock("node:dns/promises", () => ({
+  lookup: lookupMock,
+}));
+
 vi.mock("../infra/net/undici-runtime.js", () => ({
+  createHttp1Agent: (options: unknown) => ({ options }),
+  createHttp1EnvHttpProxyAgent: (options: unknown) => ({ options }),
+  createHttp1ProxyAgent: (options: unknown) => ({ options }),
   loadUndiciRuntimeDeps: () => ({
     fetch: runtimeFetchMock,
   }),
@@ -70,6 +78,8 @@ function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | unde
 
 describe("resolveMcpTransport", () => {
   beforeEach(() => {
+    lookupMock.mockReset();
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     streamableTransportConstructorMock.mockClear();
   });
@@ -114,6 +124,21 @@ describe("resolveMcpTransport", () => {
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
     expect(redirectedHeaders.get("accept")).toBe("application/json, text/event-stream");
     expect(redirectedHeaders.get("user-agent")).toBe("node");
+  });
+
+  it("blocks streamable HTTP redirects to private network targets", async () => {
+    runtimeFetchMock.mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+
+    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
+      "Blocked hostname or private/internal/special-use IP address",
+    );
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves replayable request bodies for cross-origin streamable HTTP redirects", async () => {
@@ -214,7 +239,7 @@ describe("resolveMcpTransport", () => {
     expect(runtimeFetchMock).toHaveBeenCalledTimes(21);
   });
 
-  it("returns streamable HTTP redirect responses that do not include a location", async () => {
+  it("rejects streamable HTTP redirect responses that do not include a location", async () => {
     const response = redirectWithoutLocationResponse();
     runtimeFetchMock.mockResolvedValueOnce(response);
 
@@ -223,7 +248,9 @@ describe("resolveMcpTransport", () => {
       transport: "streamable-http",
     });
 
-    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).resolves.toBe(response);
+    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
+      "Redirect missing location header (302)",
+    );
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
   });
@@ -247,7 +274,7 @@ describe("resolveMcpTransport", () => {
   });
 
   it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {
-    runtimeFetchMock.mockResolvedValue(new Response("ok"));
+    runtimeFetchMock.mockImplementation(async () => new Response("ok"));
 
     resolveMcpTransport("probe", {
       url: "https://mcp.example.com/mcp",

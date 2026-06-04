@@ -1,3 +1,4 @@
+// Persists queued session deliveries for retry and recovery.
 import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
 import {
@@ -11,6 +12,8 @@ import {
 } from "./delivery-queue-sqlite.js";
 import { generateSecureUuid } from "./secure-random.js";
 
+// Session delivery queue persists session-scoped messages until channel
+// delivery acknowledges them or recovery exhausts retry policy.
 const QUEUE_NAME = "session";
 
 type SessionDeliveryContext = {
@@ -33,6 +36,7 @@ export type SessionDeliveryRoute = {
   chatType: ChatType;
 };
 
+/** Payload variants that can be replayed by session delivery recovery. */
 export type QueuedSessionDeliveryPayload =
   | ({
       kind: "systemEvent";
@@ -78,6 +82,7 @@ function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQu
   };
 }
 
+/** Enqueue a session delivery and return its durable id. */
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
@@ -103,10 +108,12 @@ export async function enqueueSessionDelivery(
   return id;
 }
 
+/** Acknowledge a successfully delivered session entry. */
 export async function ackSessionDelivery(id: string, stateDir?: string): Promise<void> {
   deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
 }
 
+/** Record a failed delivery attempt and increment retry metadata. */
 export async function failSessionDelivery(
   id: string,
   error: string,
@@ -123,6 +130,7 @@ export async function failSessionDelivery(
   });
 }
 
+/** Load one pending session delivery by durable id. */
 export async function loadPendingSessionDelivery(
   id: string,
   stateDir?: string,
@@ -130,12 +138,14 @@ export async function loadPendingSessionDelivery(
   return loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
 }
 
+/** Load all pending session deliveries in retry order. */
 export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
   return loadDeliveryQueueEntries(QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
 }
 
+/** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
   moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
 }

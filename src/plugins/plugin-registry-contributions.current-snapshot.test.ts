@@ -1,3 +1,4 @@
+// Verifies current plugin registry contribution snapshots.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

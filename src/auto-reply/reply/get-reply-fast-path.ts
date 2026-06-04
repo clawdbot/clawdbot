@@ -1,3 +1,4 @@
+// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,

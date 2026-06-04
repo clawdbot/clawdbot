@@ -8,6 +8,12 @@ import {
 } from "./model-auth-markers.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 
+/**
+ * Reapplies source-managed secret markers to normalized provider config.
+ *
+ * This keeps runtime snapshots from materializing secret refs as plain values after config
+ * normalization rewrites provider entries.
+ */
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 function normalizeSourceProviderLookup(
@@ -70,6 +76,7 @@ function resolveSourceManagedHeaderMarkers(params: {
   return markers;
 }
 
+/** Preserves source-managed apiKey/header markers from the original provider config. */
 export function enforceSourceManagedProviderSecrets(params: {
   providers: ModelsConfig["providers"];
   sourceProviders: ModelsConfig["providers"] | undefined;
@@ -120,6 +127,8 @@ export function enforceSourceManagedProviderSecrets(params: {
       const currentHeaders = isRecord(nextProvider.headers)
         ? (nextProvider.headers as Record<string, unknown>)
         : undefined;
+      // Merge marker headers over normalized headers so auth metadata remains managed while
+      // unrelated provider headers survive normalization.
       const nextHeaders = {
         ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
       };

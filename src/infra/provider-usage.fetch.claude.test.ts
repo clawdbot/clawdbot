@@ -1,3 +1,4 @@
+// Tests Claude provider usage fetch normalization and error handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createProviderUsageFetch,

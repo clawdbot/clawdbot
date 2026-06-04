@@ -1,3 +1,4 @@
+// Covers fs-safe import boundary rules in source files.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

@@ -1,3 +1,4 @@
+/** Tests unsupported SecretRef surface policy matching and messages. */
 import { describe, expect, it } from "vitest";
 import {
   collectUnsupportedSecretRefConfigCandidates,

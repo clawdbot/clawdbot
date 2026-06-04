@@ -1,3 +1,4 @@
+// Webchat reply media path normalizer for display-safe outbound payloads.
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -24,6 +25,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
   return payload.trustedLocalMedia === true;
 }
 
+/** Normalize reply media paths for webchat display without leaking sensitive media. */
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

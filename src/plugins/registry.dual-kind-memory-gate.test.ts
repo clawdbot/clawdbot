@@ -1,3 +1,4 @@
+/** Verifies memory provider registration keeps text and binary embedding kinds isolated. */
 import {
   createPluginRegistryFixture,
   registerTestPlugin,

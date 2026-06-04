@@ -1,3 +1,4 @@
+// Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
 import {
   findCommandGroupEntry,

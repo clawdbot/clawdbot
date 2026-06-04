@@ -1,5 +1,11 @@
+import { expect } from "vitest";
+import type { WebSocket } from "ws";
 import type { GatewayClient } from "./client.js";
+import { rpcReq } from "./test-helpers.js";
 
+/**
+ * Node invoke acknowledgement helper for gateway tests.
+ */
 export function acknowledgeNodeInvokeRequestForTest(params: {
   client: GatewayClient;
   event: { event?: string; payload?: unknown };
@@ -21,4 +27,18 @@ export function acknowledgeNodeInvokeRequestForTest(params: {
     ok: true,
     payloadJSON: JSON.stringify({ ok: true }),
   });
+}
+
+export async function getConnectedNodeIdForTest(ws: WebSocket): Promise<string> {
+  const nodes = await rpcReq<{ nodes?: Array<{ nodeId?: string; connected?: boolean }> }>(
+    ws,
+    "node.list",
+    {},
+  );
+  expect(nodes.ok).toBe(true);
+  const nodeId = nodes.payload?.nodes?.find((node) => node.connected)?.nodeId;
+  if (!nodeId) {
+    throw new Error("expected connected node id");
+  }
+  return nodeId;
 }

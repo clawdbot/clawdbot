@@ -1,3 +1,4 @@
+// Resolves npm project roots for plugin package inspection.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +12,7 @@ function sortPaths(paths: string[]): string[] {
   return paths.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Lists project-level npm roots managed below the plugin npm root. */
 export function listManagedPluginNpmProjectRootsSync(npmRoot: string): string[] {
   const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
   try {
@@ -28,6 +30,7 @@ export function listManagedPluginNpmProjectRootsSync(npmRoot: string): string[] 
   }
 }
 
+/** Async variant of project-level managed npm root discovery. */
 export async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string[]> {
   const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
   try {
@@ -44,10 +47,12 @@ export async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise
   }
 }
 
+/** Returns the root npm install plus all managed project npm roots. */
 export function listManagedPluginNpmRootsSync(npmRoot: string): string[] {
   return [npmRoot, ...listManagedPluginNpmProjectRootsSync(npmRoot)];
 }
 
+/** Async variant of managed npm root discovery. */
 export async function listManagedPluginNpmRoots(npmRoot: string): Promise<string[]> {
   return [npmRoot, ...(await listManagedPluginNpmProjectRoots(npmRoot))];
 }

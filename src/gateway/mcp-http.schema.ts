@@ -3,8 +3,12 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+// MCP loopback schema projection adapts gateway tool definitions into MCP
+// tools/list entries. It flattens provider-hostile union schemas into object
+// schemas because some MCP clients cannot render anyOf/oneOf controls.
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
+/** MCP tools/list schema entry derived from a gateway loopback tool. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -19,6 +23,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
+/** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -136,6 +141,7 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
+/** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

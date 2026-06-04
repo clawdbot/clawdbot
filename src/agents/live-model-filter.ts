@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 
+// Curates live-test model sweeps to modern, high-signal refs while preserving a
+// smaller local-model lane for cheap smoke coverage.
 type ModelRef = {
   provider?: string | null;
   id?: string | null;
@@ -74,6 +76,7 @@ for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
   }
 }
 
+/** Return providers represented in the high-signal live model priority list. */
 export function getHighSignalLiveModelProviders(): string[] {
   return [...HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.keys()].toSorted((left, right) =>
     left.localeCompare(right),
@@ -167,6 +170,7 @@ function isUnsupportedCuratedProviderLiveModelRef(provider: string, id: string):
   return !(HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider)?.has(id) ?? false);
 }
 
+/** Return whether a provider/model ref is modern enough for live checks. */
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -187,6 +191,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
   return false;
 }
 
+/** Return whether a provider/model ref belongs in high-signal live sweeps. */
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -214,22 +219,27 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   return isHighSignalClaudeModelId(id);
 }
 
+/** Return whether a ref is explicitly prioritized for high-signal live sweeps. */
 export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
   return hasPrioritizedLiveModelRef(HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX, ref);
 }
 
+/** Return whether a ref belongs to the curated small-model live lane. */
 export function isSmallLiveModelRef(ref: ModelRef): boolean {
   return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
 }
 
+/** Return whether a ref is explicitly prioritized for the small-model live lane. */
 export function isPrioritizedSmallLiveModelRef(ref: ModelRef): boolean {
   return isSmallLiveModelRef(ref);
 }
 
+/** List high-signal priority refs in priority order. */
 export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
   return listPrioritizedLiveModelRefs(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);
 }
 
+/** List small-model priority refs in priority order. */
 export function listPrioritizedSmallLiveModelRefs(): Array<{ provider: string; id: string }> {
   return listPrioritizedLiveModelRefs(SMALL_LIVE_MODEL_PRIORITY);
 }
@@ -246,6 +256,7 @@ function listPrioritizedLiveModelRefs(
   });
 }
 
+/** Decide whether default high-signal sweeps should skip a provider. */
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   provider?: string | null;
   useExplicitModels: boolean;
@@ -269,6 +280,8 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
       return false;
     }
     if (requestedProvider) {
+      // If a user asked for a sibling provider owned by the same plugin, keep
+      // this provider eligible so owner-scoped filters do not hide coverage.
       const sharesOwner = params.resolveProviderOwners
         ? (params.resolveProviderOwners(requestedProvider) ?? []).some((owner) =>
             (params.resolveProviderOwners?.(provider) ?? []).includes(owner),
@@ -347,6 +360,7 @@ function capByProviderSpread<T>(
   return selected;
 }
 
+/** Select high-signal live items by explicit priority, then provider spread. */
 export function selectHighSignalLiveItems<T>(
   items: T[],
   maxItems: number,
@@ -362,6 +376,7 @@ export function selectHighSignalLiveItems<T>(
   );
 }
 
+/** Select small live items by explicit priority, then provider spread. */
 export function selectSmallLiveItems<T>(
   items: T[],
   maxItems: number,
@@ -407,6 +422,7 @@ function selectPrioritizedLiveItems<T>(
   return [...selected, ...capByProviderSpread(remaining, maxItems - selected.length, providerOf)];
 }
 
+/** Resolve the high-signal live model cap from CLI/config inputs. */
 export function resolveHighSignalLiveModelLimit(params: {
   rawMaxModels?: string;
   useExplicitModels: boolean;
@@ -422,6 +438,7 @@ export function resolveHighSignalLiveModelLimit(params: {
   return params.defaultLimit ?? DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT;
 }
 
+/** Return the priority index for a high-signal live ref, if prioritized. */
 export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | null {
   const key = toCanonicalLiveModelKey(ref);
   if (!key) {

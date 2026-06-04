@@ -1,3 +1,4 @@
+// Audits installed plugins for trust, provenance, and filesystem risks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -29,6 +30,7 @@ type PluginTrustPolicyDeps = {
 
 let pluginTrustPolicyDepsPromise: Promise<PluginTrustPolicyDeps> | undefined;
 
+/** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
 async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
   pluginTrustPolicyDepsPromise ??= Promise.all([
     import("../agents/sandbox/config.js"),
@@ -274,6 +276,7 @@ function isPinnedRegistrySpec(spec: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+/** Collect supply-chain and reachable-tool findings for installed plugins and hook packs. */
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
@@ -292,6 +295,8 @@ export async function collectPluginsTrustFindings(params: {
         config: params.cfg,
         stateDir: params.stateDir,
       });
+      // Allowlist entries may use aliases/canonical ids. Normalize against the
+      // current registry before treating an entry as phantom.
       const normalizePluginId = createPluginRegistryIdNormalizer(pluginIndex);
       const indexedPluginIds = new Set(
         pluginIndex.plugins.map((plugin) => plugin.pluginId.toLowerCase()),
@@ -392,6 +397,8 @@ export async function collectPluginsTrustFindings(params: {
         const profile = context.tools?.profile ?? params.cfg.tools?.profile;
         const restrictiveProfile = Boolean(deps.resolveToolProfilePolicy(profile));
         const sandboxMode = deps.resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+        // Probe with a synthetic plugin tool id: broad allow policies will allow
+        // it, while restrictive profiles or explicit allowlists should not.
         const policies = resolveToolPolicies({
           cfg: params.cfg,
           deps,
@@ -482,6 +489,8 @@ export async function collectPluginsTrustFindings(params: {
       if (!recordedVersion) {
         continue;
       }
+      // Installed package.json is the local truth; registry metadata drift means
+      // update/reinstall should refresh the recorded supply-chain evidence.
       const installPath = record.installPath ?? path.join(params.stateDir, "extensions", pluginId);
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {

@@ -1,3 +1,6 @@
+// Parses provider batch output lines into the custom-id embedding map.
+
+/** Minimal OpenAI-compatible embedding batch output line. */
 export type EmbeddingBatchOutputLine = {
   custom_id?: string;
   error?: { message?: string };
@@ -14,6 +17,7 @@ export type EmbeddingBatchOutputLine = {
   };
 };
 
+/** Apply one output line, collecting errors and successful embeddings by custom id. */
 export function applyEmbeddingBatchOutputLine(params: {
   line: EmbeddingBatchOutputLine;
   remaining: Set<string>;

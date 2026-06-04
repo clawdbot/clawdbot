@@ -1,3 +1,4 @@
+// Normalizes group-policy config for channel and runtime decisions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

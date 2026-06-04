@@ -15,6 +15,9 @@ import {
   appendBoundedOutput,
   assertCommandResourceCeiling,
   assertDiagnosticStabilityClean,
+  assertExpectedKitchenSinkToolEntries,
+  assertKitchenSinkSearchInvokeResult,
+  assertKitchenSinkTextInvokeResult,
   assertResourceCeiling,
   cleanupKitchenSinkEnv,
   createGatewayReadyLogScanner,
@@ -92,7 +95,7 @@ describe("kitchen-sink RPC isolated state", () => {
   });
 
   it("can fail the walk when generated temp cleanup cannot remove the root", async () => {
-    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+    const rmSyncSpy = vi.spyOn(fs, "rmSync").mockImplementation(() => {
       throw new Error("device busy");
     });
 
@@ -107,9 +110,9 @@ describe("kitchen-sink RPC isolated state", () => {
       ).rejects.toThrow(
         "failed to remove Kitchen Sink RPC temp root: /tmp/openclaw-kitchen-sink-rpc-stuck",
       );
-      expect(rmSync).toHaveBeenCalledTimes(3);
+      expect(rmSyncSpy).toHaveBeenCalledTimes(3);
     } finally {
-      rmSync.mockRestore();
+      rmSyncSpy.mockRestore();
     }
   });
 });
@@ -203,6 +206,48 @@ describe("kitchen-sink RPC gateway teardown", () => {
         }),
       ).rejects.toThrow("gateway exited before ready");
       expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts stalled readiness probes when the gateway exits mid-probe", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-exit-during-ready-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "gateway died during readiness\n");
+      const child = Object.assign(new EventEmitter(), {
+        exitCode: null,
+        signalCode: null as NodeJS.Signals | null,
+      });
+      const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason = init.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("fetch aborted"));
+            },
+            { once: true },
+          );
+        });
+      });
+      const startedAt = Date.now();
+      setTimeout(() => {
+        child.signalCode = "SIGTERM";
+        child.emit("exit", null, "SIGTERM");
+      }, 25);
+
+      await expect(
+        waitForGatewayReady(child, 9, logPath, {
+          fetchImpl,
+          pollDelayMs: 5_000,
+          timeoutMs: 2_000,
+        }),
+      ).rejects.toThrow("gateway exited before ready");
+
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -323,6 +368,23 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
     }
   });
 
+  it("does not allowlist dirty error lines that mention zero errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-zero-error-smuggle-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "[ERROR] 0 errors reported but fatal state remained\n");
+
+      expect(findErrorLogFindings(logPath)).toEqual([
+        {
+          line: "[ERROR] 0 errors reported but fatal state remained",
+          lineNumber: 1,
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("bounds scanner memory for very long log lines", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-long-line-"));
     try {
@@ -392,6 +454,30 @@ setInterval(() => {}, 1000);
       if (grandchildPid && isProcessAlive(grandchildPid)) {
         process.kill(grandchildPid, "SIGKILL");
       }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-zero-"));
+    const scriptPath = path.join(root, "term-zero.mjs");
+    writeFileSync(
+      scriptPath,
+      `
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    try {
+      await expect(
+        runCommand(process.execPath, [scriptPath], {
+          timeoutKillGraceMs: 1000,
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow("timed out after 100ms");
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -521,6 +607,79 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         ],
       }),
     ).toEqual(["kitchen", "kitchen-sink"]);
+  });
+
+  it("requires every expected Kitchen Sink plugin tool", () => {
+    expect(() =>
+      assertExpectedKitchenSinkToolEntries(
+        [{ id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" }],
+        "tools.catalog plugin tools",
+        { requirePluginProvenance: true },
+      ),
+    ).toThrow("tools.catalog plugin tools missing kitchen_sink_search, kitchen_sink_image_job");
+  });
+
+  it("requires plugin provenance for expected catalog tools", () => {
+    expect(() =>
+      assertExpectedKitchenSinkToolEntries(
+        [
+          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
+          { id: "kitchen_sink_search", source: "core", pluginId: "openclaw-kitchen-sink-fixture" },
+          { id: "kitchen_sink_image_job", source: "plugin", pluginId: "other-plugin" },
+        ],
+        "tools.catalog plugin tools",
+        { requirePluginProvenance: true },
+      ),
+    ).toThrow("tools.catalog plugin tools plugin provenance mismatch");
+  });
+
+  it("accepts complete expected tool coverage", () => {
+    expect(
+      assertExpectedKitchenSinkToolEntries(
+        [
+          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
+          {
+            id: "kitchen_sink_search",
+            source: "plugin",
+            pluginId: "openclaw-kitchen-sink-fixture",
+          },
+          {
+            id: "kitchen_sink_image_job",
+            source: "plugin",
+            pluginId: "openclaw-kitchen-sink-fixture",
+          },
+        ],
+        "tools.catalog plugin tools",
+        { requirePluginProvenance: true },
+      ),
+    ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
+  });
+
+  it("checks search and text tool invocation fixtures separately", () => {
+    expect(() =>
+      assertKitchenSinkSearchInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { results: [{ title: "Kitchen Sink image fixture" }] },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertKitchenSinkTextInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: {
+          route: "tool:kitchen_sink_text",
+          text: "Kitchen Sink text provider produced a deterministic reply.",
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertKitchenSinkTextInvokeResult({
+        ok: true,
+        source: "plugin",
+        output: { route: "tool:kitchen_sink_search" },
+      }),
+    ).toThrow("Kitchen Sink text tool output missed expected fixture");
   });
 });
 
@@ -928,11 +1087,11 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
   });
 
-  it("allows missing command samples but fails command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).not.toThrow();
-    expect(() =>
-      assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 }),
-    ).toThrow("command aggregate RSS exceeded 8192 MiB: 8193 MiB");
+  it("fails missing command samples and command RSS spikes", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
+    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
+      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+    );
   });
 });
 

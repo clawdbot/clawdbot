@@ -2,7 +2,14 @@ import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
 
+/**
+ * Channel schema regressions for browser login and status diagnostics.
+ * These payloads are consumed by dashboard/operator UI, so QR payload bounds
+ * and event-loop diagnostic shape are part of the public gateway contract.
+ */
+
 describe("WebLoginWaitParamsSchema", () => {
+  /** Compiled validator reused across QR bounds cases. */
   const validate = Compile(WebLoginWaitParamsSchema);
 
   it("bounds caller-provided QR data URLs", () => {
@@ -26,6 +33,7 @@ describe("WebLoginWaitParamsSchema", () => {
 });
 
 describe("ChannelsStatusResultSchema", () => {
+  /** Compiled status validator for channel docking diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {

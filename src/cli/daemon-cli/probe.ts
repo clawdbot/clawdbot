@@ -1,3 +1,4 @@
+// Gateway status probe helper used by `gateway status` service diagnostics.
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -44,6 +45,7 @@ function readRuntimeVersionFromStatusPayload(payload: unknown): string | null {
     : null;
 }
 
+/** Probe Gateway connectivity or read-capability status with optional RPC verification. */
 export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;

@@ -1,3 +1,4 @@
+// Covers document extractor runtime hooks supplied by plugins.
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";

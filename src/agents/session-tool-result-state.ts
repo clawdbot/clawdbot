@@ -13,6 +13,7 @@ type PendingToolCallState = {
   shouldFlushBeforeNewToolCalls: (toolCallCount: number) => boolean;
 };
 
+/** Tracks pending tool calls so sanitized transcript repair can flush in order. */
 export function createPendingToolCallState(): PendingToolCallState {
   const pending = new Map<string, string | undefined>();
 

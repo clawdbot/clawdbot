@@ -20,6 +20,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.js";
 
+/** Channel route normalized enough to address an outbound delivery target. */
 export type RoutableChannelRouteRef = ChannelRouteRef & {
   channel: string;
   target: {
@@ -29,6 +30,7 @@ export type RoutableChannelRouteRef = ChannelRouteRef & {
   };
 };
 
+/** Session fields that can carry or reconstruct a channel route. */
 export type SessionRouteDeliveryFields = {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
@@ -38,6 +40,7 @@ export type SessionRouteDeliveryFields = {
   lastThreadId?: string | number;
 };
 
+/** Normalizes a route and rejects routes that cannot address a channel target. */
 export function normalizeRoutableChannelRoute(
   route?: ChannelRouteRef | null,
 ): RoutableChannelRouteRef | undefined {
@@ -57,14 +60,17 @@ export function normalizeRoutableChannelRoute(
   return normalized as RoutableChannelRouteRef;
 }
 
+/** Converts legacy delivery context metadata into a channel route. */
 export function routeFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
   return channelRouteFromDeliveryContext(normalizeDeliveryContext(context));
 }
 
+/** Converts a channel route back to legacy delivery context metadata. */
 export function deliveryContextFromRoute(route?: ChannelRouteRef): DeliveryContext | undefined {
   return deliveryContextFromChannelRoute(route);
 }
 
+/** Projects the best known delivery route from a stored session entry. */
 export function routeFromSessionEntry(entry?: SessionEntry | null): ChannelRouteRef | undefined {
   if (!entry) {
     return undefined;
@@ -75,12 +81,14 @@ export function routeFromSessionEntry(entry?: SessionEntry | null): ChannelRoute
   );
 }
 
+/** Builds session persistence fields from a channel route. */
 export function sessionDeliveryFieldsFromRoute(
   route?: ChannelRouteRef,
 ): SessionRouteDeliveryFields {
   return normalizeSessionDeliveryFields({ route });
 }
 
+/** Converts a persisted conversation reference into a channel route. */
 export function routeFromConversationRef(
   conversation?: ConversationRef | null,
 ): ChannelRouteRef | undefined {
@@ -101,24 +109,28 @@ export function routeFromConversationRef(
   });
 }
 
+/** Converts a conversation reference into a routable channel route. */
 export function routableRouteFromConversationRef(
   conversation?: ConversationRef | null,
 ): RoutableChannelRouteRef | undefined {
   return normalizeRoutableChannelRoute(routeFromConversationRef(conversation));
 }
 
+/** Extracts a channel route from a session binding record. */
 export function routeFromBindingRecord(
   binding?: SessionBindingRecord | null,
 ): ChannelRouteRef | undefined {
   return routeFromConversationRef(binding?.conversation);
 }
 
+/** Extracts a routable channel route from a session binding record. */
 export function routableRouteFromBindingRecord(
   binding?: SessionBindingRecord | null,
 ): RoutableChannelRouteRef | undefined {
   return normalizeRoutableChannelRoute(routeFromBindingRecord(binding));
 }
 
+/** Projects route fields used by older session and delivery callers. */
 export function routeToDeliveryFields(route?: ChannelRouteRef): {
   deliveryContext?: DeliveryContext;
   channel?: string;
@@ -136,6 +148,7 @@ export function routeToDeliveryFields(route?: ChannelRouteRef): {
   };
 }
 
+/** Compares whether two routes address the same delivery target. */
 export function routesShareDeliveryTarget(params: {
   left?: ChannelRouteRef | null;
   right?: ChannelRouteRef | null;
@@ -148,6 +161,7 @@ export function routesShareDeliveryTarget(params: {
   return (
     left.channel === right.channel &&
     channelRouteTarget(left) === channelRouteTarget(right) &&
+    // Missing account ids are wildcards; thread ids must match when present.
     (left.accountId == null || right.accountId == null || left.accountId === right.accountId) &&
     String(channelRouteThreadId(left) ?? "") === String(channelRouteThreadId(right) ?? "")
   );

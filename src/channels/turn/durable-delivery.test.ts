@@ -33,6 +33,7 @@ type SendDurableMessageBatchRequest = {
   to?: string;
   threadId?: string | number | null;
   durability?: string;
+  gatewayClientScopes?: readonly string[];
 };
 
 type DeliverySupportRequest = {
@@ -141,6 +142,7 @@ describe("durable inbound reply delivery", () => {
     expect(request.to).toBe("chat-1");
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
+    expect(request.gatewayClientScopes).toEqual([]);
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {

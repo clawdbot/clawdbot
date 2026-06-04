@@ -1,3 +1,4 @@
+// Covers approval handler runtime adapter creation and lazy wiring.
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelApprovalHandlerFromCapability,

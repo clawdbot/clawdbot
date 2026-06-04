@@ -1,3 +1,4 @@
+/** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,

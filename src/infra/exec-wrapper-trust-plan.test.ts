@@ -1,3 +1,4 @@
+// Covers trust-plan unwrapping for exec command wrappers.
 import { describe, expect, test } from "vitest";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 

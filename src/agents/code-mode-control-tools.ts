@@ -2,6 +2,8 @@ import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+// Code-mode control tool helpers. They mark exec/wait tools that belong to the
+// isolated code-mode runtime and keep before-tool-call params in code/command sync.
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
 export const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
@@ -15,11 +17,13 @@ export type CodeModeExecHookMetadata = {
 
 const codeModeControlTools = new WeakSet<AnyAgentTool>();
 
+/** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
   codeModeControlTools.add(tool);
   return tool;
 }
 
+/** Return whether a tool was marked as code-mode owned. */
 export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
   return codeModeControlTools.has(tool);
 }
@@ -49,6 +53,8 @@ function normalizeCodeModeExecParams(params: unknown): unknown {
   const code = params.code;
   const command = params.command;
   if (typeof code === "string" && typeof command !== "string") {
+    // Code-mode accepts both `code` and generic exec `command`; keep them paired
+    // so downstream hooks can read either shape.
     return { ...params, command: params.code };
   }
   if (typeof command === "string" && typeof code !== "string") {
@@ -57,6 +63,7 @@ function normalizeCodeModeExecParams(params: unknown): unknown {
   return params;
 }
 
+/** Build before-tool-call metadata for a marked code-mode exec tool. */
 export function getCodeModeExecBeforeHookMetadata(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -71,6 +78,7 @@ export function getCodeModeExecBeforeHookMetadata(params: {
   };
 }
 
+/** Build before-tool-call metadata when only the tool kind is available. */
 export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   toolKind: unknown;
   params: unknown;
@@ -85,6 +93,7 @@ export function getCodeModeExecBeforeHookMetadataForToolKind(params: {
   };
 }
 
+/** Normalize before-hook params for a marked code-mode exec tool. */
 export function normalizeCodeModeExecBeforeHookParams(params: {
   tool: AnyAgentTool;
   params: unknown;
@@ -95,6 +104,7 @@ export function normalizeCodeModeExecBeforeHookParams(params: {
   return normalizeCodeModeExecParams(params.params);
 }
 
+/** Normalize before-hook params when only the code-mode tool kind is available. */
 export function normalizeCodeModeExecBeforeHookParamsForToolKind(params: {
   toolKind: unknown;
   params: unknown;
@@ -105,6 +115,7 @@ export function normalizeCodeModeExecBeforeHookParamsForToolKind(params: {
   return normalizeCodeModeExecParams(params.params);
 }
 
+/** Reconcile hook-adjusted `code` and `command` fields after code-mode normalization. */
 export function reconcileCodeModeExecBeforeHookParams(params: {
   tool: AnyAgentTool;
   originalParams: unknown;

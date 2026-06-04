@@ -1,3 +1,4 @@
+// Fetches Claude provider usage windows.
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,

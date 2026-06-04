@@ -1,3 +1,4 @@
+// Registers transcript providers and resolves enabled source runtimes.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
@@ -9,6 +10,13 @@ import {
 } from "../plugins/provider-registry-shared.js";
 import type { TranscriptSourceProvider } from "./provider-types.js";
 
+/**
+ * Transcript source provider registry.
+ *
+ * Transcript providers are plugin capability providers; this module exposes
+ * canonical/alias lookup and keeps direct plugin resolution ahead of map fallback.
+ */
+/** Normalize transcript source provider ids for registry lookup. */
 export function normalizeTranscriptSourceProviderId(
   providerId: string | undefined,
 ): string | undefined {
@@ -29,10 +37,12 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   return buildCapabilityProviderMaps(resolveTranscriptsSourceProviderEntries(cfg));
 }
 
+/** List canonical transcript source providers for a config snapshot. */
 export function listTranscriptSourceProviders(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/** Resolve a transcript provider by canonical id or alias. */
 export function getTranscriptSourceProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,

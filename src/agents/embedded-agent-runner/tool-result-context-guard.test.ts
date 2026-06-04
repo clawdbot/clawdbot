@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
@@ -785,6 +786,61 @@ describe("installContextEngineLoopHook", () => {
     });
 
     expect(transformed).toBe(compactedView);
+  });
+
+  it("repairs tool-result pairing in ownsCompaction assembled loop views", async () => {
+    const agent = makeGuardableAgent();
+    const assembledView = [makeUser("compacted"), makeToolResult("call_orphan", "stale")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: assembledView, estimatedTokens: 0 }),
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      repairAssembledMessages: sanitizeToolUseResultPairing,
+    });
+
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+
+    expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "compacted" })]);
+    expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
+      false,
+    );
+  });
+
+  it("repairs same-reference ownsCompaction assembled loop views", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      repairAssembledMessages: sanitizeToolUseResultPairing,
+    });
+
+    const { transformed, withNew } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+
+    expect(recordMockArg(engine.assemble).messages).toBe(withNew);
+    expect(transformed).not.toBe(withNew);
+    expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "first" })]);
+    expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
+      false,
+    );
   });
 
   it("clears an assembled view when the engine fails on a later source", async () => {

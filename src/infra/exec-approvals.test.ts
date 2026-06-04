@@ -1,3 +1,4 @@
+// Covers exec approval allowlist evaluation.
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
 import {

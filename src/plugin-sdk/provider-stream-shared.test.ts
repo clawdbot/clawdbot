@@ -1,3 +1,6 @@
+/**
+ * Tests provider stream shared helpers and stream hook capture.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";

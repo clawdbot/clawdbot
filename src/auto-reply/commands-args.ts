@@ -1,3 +1,4 @@
+/** Argument serializers for command definitions that expose structured values. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,7 +21,7 @@ function normalizeArgValue(value: unknown): string | undefined {
   } else if (typeof value === "function") {
     text = normalizeOptionalString(value.toString()) ?? "";
   } else {
-    // Objects and arrays
+    // Objects and arrays are rare but preserve structured test values losslessly enough for text.
     text = JSON.stringify(value);
   }
   return text ? text : undefined;
@@ -152,6 +153,7 @@ const formatExecArgs: CommandArgsFormatter = (values) => {
   return parts.length > 0 ? parts.join(" ") : undefined;
 };
 
+/** Command-specific serializers used when rebuilding slash-command text from parsed args. */
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
   mcp: formatMcpArgs,

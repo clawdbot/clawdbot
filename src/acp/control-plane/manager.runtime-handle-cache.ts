@@ -1,3 +1,4 @@
+/** Process-local ACP runtime handle cache with idle eviction and reuse checks. */
 import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
@@ -16,6 +17,7 @@ import { RuntimeCache, type CachedRuntimeState } from "./runtime-cache.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 
+/** Process-local cache of live ACP runtime handles keyed by canonical session actor. */
 export class ManagerRuntimeHandleCache {
   private readonly runtimeCache = new RuntimeCache();
   private evictedRuntimeCount = 0;
@@ -41,6 +43,7 @@ export class ManagerRuntimeHandleCache {
     this.runtimeCache.clear(normalizeActorKey(sessionKey));
   }
 
+  /** Returns cache counters used by ACP manager observability snapshots. */
   getObservabilitySnapshot(cfg: OpenClawConfig) {
     return {
       activeSessions: this.runtimeCache.size(),
@@ -50,6 +53,7 @@ export class ManagerRuntimeHandleCache {
     };
   }
 
+  /** Closes and removes one cached runtime handle when present. */
   async close(params: { sessionKey: string; reason: string }): Promise<void> {
     const cached = this.get(params.sessionKey);
     if (!cached) {
@@ -69,6 +73,7 @@ export class ManagerRuntimeHandleCache {
     }
   }
 
+  /** Clears a cached handle only when the caller still owns the same runtime identifiers. */
   clearIfHandleMatches(params: { sessionKey: string; handle: AcpRuntimeHandle }): void {
     const cached = this.get(params.sessionKey);
     if (!cached || !this.runtimeHandlesMatch(cached.handle, params.handle)) {
@@ -77,6 +82,7 @@ export class ManagerRuntimeHandleCache {
     this.clear(params.sessionKey);
   }
 
+  /** Closes handles that exceeded the configured idle TTL without racing active turns. */
   async evictIdle(params: {
     cfg: OpenClawConfig;
     actorQueue: SessionActorQueue;
@@ -96,6 +102,7 @@ export class ManagerRuntimeHandleCache {
     }
 
     for (const candidate of candidates) {
+      // Evict under the same actor queue so turns cannot race with runtime close.
       await params.actorQueue.run(candidate.actorKey, async () => {
         if (params.activeTurnBySession.has(candidate.actorKey)) {
           return;
@@ -125,6 +132,7 @@ export class ManagerRuntimeHandleCache {
     }
   }
 
+  /** Checks whether a cached runtime handle is still healthy enough to reuse. */
   async isReusable(params: {
     sessionKey: string;
     runtime: AcpRuntime;

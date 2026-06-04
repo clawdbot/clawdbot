@@ -1,3 +1,4 @@
+// Tests get-reply import boundaries for lazy runtime and side-effect control.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

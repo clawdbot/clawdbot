@@ -1,3 +1,4 @@
+// Route-first CLI entry point for commands that can run before full Commander setup.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -29,6 +30,7 @@ async function prepareRoutedCommand(params: {
   });
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
+  // Routed commands still honor config guards, logging policy, and plugin loading decisions.
   await ensureCliExecutionBootstrap({
     runtime: defaultRuntime,
     commandPath: params.commandPath,
@@ -37,6 +39,7 @@ async function prepareRoutedCommand(params: {
   });
 }
 
+/** Try a lightweight route-first command before falling back to the full CLI program. */
 export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) {
     return false;
@@ -53,6 +56,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
     return false;
   }
   if (route.canRun && !route.canRun(argv)) {
+    // Let Commander own unsupported argv shapes so user-facing validation stays centralized.
     return false;
   }
   await prepareRoutedCommand({

@@ -1,3 +1,4 @@
+// Persists managed task-flow records through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -32,6 +33,7 @@ type FlowRegistryDatabase = {
   path: string;
 };
 
+// SQLite-backed task-flow store mirrors the in-process registry into openclaw-state.db.
 let cachedDatabase: FlowRegistryDatabase | null = null;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
@@ -57,6 +59,7 @@ function parseJsonValue(raw: string | null): JsonValue | undefined {
 }
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
+  // Older single_task rows did not persist sync_mode; preserve their mirrored semantics.
   const syncMode = parseOptionalTaskFlowSyncMode(row.sync_mode);
   if (syncMode) {
     return syncMode;

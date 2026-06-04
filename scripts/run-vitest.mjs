@@ -28,13 +28,17 @@ const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
   "test/vitest/vitest.ui-e2e.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.full-core-contracts.config.ts",
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/openclaw-e2e-instance.test.ts",
 ]);
+const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
 const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
+const NON_RUN_VITEST_SUBCOMMANDS = new Set(["bench", "list", "related"]);
 const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--attachmentsDir",
   "--bail",
@@ -44,6 +48,7 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "-c",
   "--changed",
   "--dir",
+  "--diff",
   "--environment",
   "--exclude",
   "--execArgv",
@@ -424,16 +429,24 @@ function optionConsumesNextArg(arg) {
   );
 }
 
-function isExplicitTestFileArg(arg) {
-  if (!EXPLICIT_TEST_FILE_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
-    return false;
-  }
+function isPathLikeExplicitFileArg(arg) {
   return (
     path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
   );
 }
 
-function collectExplicitTestFileArgs(argv) {
+function isExplicitFileTargetArg(arg) {
+  if (!EXPLICIT_FILE_TARGET_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  return isPathLikeExplicitFileArg(arg);
+}
+
+function isExplicitTestFileArg(arg) {
+  return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
+}
+
+function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {
   const files = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -447,11 +460,15 @@ function collectExplicitTestFileArgs(argv) {
     if (arg.startsWith("-")) {
       continue;
     }
-    if (isExplicitTestFileArg(arg)) {
+    if (predicate(arg)) {
       files.push(arg);
     }
   }
   return files;
+}
+
+function collectExplicitTestFileArgs(argv) {
+  return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
 }
 
 export function resolveExplicitTestFileNoPassArgs(argv) {
@@ -547,15 +564,34 @@ function stripRunSubcommand(argv) {
   return stripped;
 }
 
+function hasNonRunVitestSubcommand(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      return false;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return NON_RUN_VITEST_SUBCOMMANDS.has(arg);
+  }
+  return false;
+}
+
 export function resolveTestProjectsDelegationArgs(argv) {
   if (
     hasExplicitVitestConfigArg(argv) ||
     hasAlternateVitestRootArg(argv) ||
     hasExplicitVitestProjectArg(argv) ||
     resolveExplicitVitestMode(argv) === "watch" ||
+    hasNonRunVitestSubcommand(argv) ||
     hasExplicitDisabledRunFlag(argv) ||
     hasSeparateVitestOptionValueArg(argv) ||
-    collectExplicitTestFileArgs(argv).length === 0
+    collectExplicitFileTargetArgs(argv).length === 0
   ) {
     return null;
   }
@@ -566,7 +602,7 @@ export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImp
   if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
     return [];
   }
-  return collectExplicitTestFileArgs(argv)
+  return collectExplicitFileTargetArgs(argv)
     .filter((arg) => {
       const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
       return !fsImpl.existsSync(filePath);
@@ -854,7 +890,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   if (missingTestFiles.length > 0) {
     console.error(
       [
-        "[vitest] explicit test file(s) not found:",
+        "[vitest] explicit test/source file(s) not found:",
         ...missingTestFiles.map((file) => `  - ${file}`),
       ].join("\n"),
     );

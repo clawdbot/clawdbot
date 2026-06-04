@@ -74,21 +74,30 @@ type ApprovalOriginOrSessionTargetChecker =
   ChannelApprovalForwardingEvaluatorParams["hasOriginOrSessionTarget"];
 
 export type ChannelApprovalForwardingEligibilityParams = {
+  /** Full config containing exec/plugin approval forwarding settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
+  /** Approval family whose forwarding config should be evaluated. */
   approvalKind: ApprovalKind;
+  /** Approval request being considered for native delivery. */
   request: ApprovalRequest;
 };
 
 export type ChannelApprovalPotentialRouteParams = {
+  /** Full config containing exec/plugin approval forwarding settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
+  /** Approval family whose forwarding config should be evaluated. */
   approvalKind: ApprovalKind;
+  /** When true, ignore explicit target routes and only consider session/native origin routes. */
   nativeSessionOnly?: boolean;
 };
 
 export type ChannelApprovalExplicitTargetEligibilityParams =
   ChannelApprovalForwardingEligibilityParams & {
+    /** Forwarding target that may be handled by the channel-native approval route. */
     target: ChannelApprovalForwardTarget;
   };
 
@@ -193,36 +202,51 @@ type NativeApprovalChannelRouteGates = {
 };
 
 type BaseOriginResolverParams<TTarget> = {
+  /** Channel id whose origin target should be resolved. */
   channel: string;
+  /** Optional gate; returning false prevents native origin delivery. */
   shouldHandleRequest?: (params: ApprovalResolverParams) => boolean;
+  /** Maps request turn-source metadata to a native target. */
   resolveTurnSourceTarget: (request: ApprovalRequest) => TTarget | null;
+  /** Maps a persisted session target to a native target. */
   resolveSessionTarget: (
     sessionTarget: ExecApprovalSessionTarget,
     request: ApprovalRequest,
   ) => TTarget | null;
+  /** Normalizes the returned target before delivery. */
   normalizeTarget?: NativeApprovalTargetNormalizer<TTarget>;
+  /** Normalizes only matcher inputs when delivery target shape must stay native. */
   normalizeTargetForMatch?: NativeApprovalTargetNormalizer<TTarget>;
+  /** Optional fallback target when neither turn-source nor session target resolves. */
   resolveFallbackTarget?: (request: ApprovalRequest) => TTarget | null;
 };
 
 type NativeOriginResolverParams<TTarget extends NativeApprovalTarget> =
   BaseOriginResolverParams<TTarget> & {
+    /** Optional native target matcher; defaults to route-exact target matching. */
     targetsMatch?: (a: TTarget, b: TTarget) => boolean;
   };
 
 type CustomOriginResolverParams<TTarget> = BaseOriginResolverParams<TTarget> & {
+  /** Custom matcher required when target shape is not `NativeApprovalTarget`. */
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
 };
 
 export type NativeApprovalTarget = {
+  /** Channel-local destination id. */
   to: string;
+  /** Optional channel account id associated with the destination. */
   accountId?: string | null;
+  /** Optional thread/topic id inside the destination. */
   threadId?: string | number | null;
 };
 
 export function nativeApprovalTargetsMatch(params: {
+  /** Channel id used for route target normalization. */
   channel?: string | null;
+  /** Left native target to compare. */
   left: NativeApprovalTarget;
+  /** Right native target to compare. */
   right: NativeApprovalTarget;
 }): boolean {
   return channelRouteTargetsMatchExact({
@@ -242,25 +266,37 @@ export function nativeApprovalTargetsMatch(params: {
 }
 
 export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  /** Full config containing top-level or channel-specific approval settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped native delivery checks. */
   accountId?: string | null;
+  /** Reply payload that may already contain exec approval metadata. */
   payload: ReplyPayload;
+  /** Outbound payload hint proving an active native exec approval route. */
   hint?: ChannelOutboundPayloadHint;
+  /** Legacy transport gate for native delivery. */
   isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  /** Preferred transport gate for native delivery. */
   isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  /** Optional channel-specific approval config resolver. */
   resolveApprovalConfig?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     metadata: ExecApprovalReplyMetadata;
   }) => LocalNativeExecApprovalConfig | undefined;
+  /** Whether the resolved approval config must be enabled before suppressing local prompt. */
   requireApprovalConfigEnabled?: boolean;
+  /** Whether forwarding mode must be session/both unless exact target proof is present. */
   enforceForwardingMode?: boolean;
+  /** Optional session-route gate for the approval metadata. */
   isSessionRouteEligible?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     metadata: ExecApprovalReplyMetadata;
   }) => boolean;
+  /** Proof that target-mode forwarding already matched this exact native target. */
   hasExactTargetProof?: boolean;
+  /** Whether agent filters may fall back to the agent segment in sessionKey. */
   fallbackAgentIdFromSessionKey?: boolean;
 }): boolean {
   if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
@@ -292,6 +328,8 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
     params.enforceForwardingMode ?? params.resolveApprovalConfig === undefined;
   if (enforceForwardingMode) {
     const mode = config?.mode ?? "session";
+    // In targets-only mode, local prompt suppression requires exact target
+    // proof so a session/native route cannot hide the only visible prompt.
     if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
       return false;
     }
@@ -849,6 +887,8 @@ function createOriginTargetResolver<TTarget>(
       resolveSessionTarget: (sessionTarget) =>
         normalizeTarget(params.resolveSessionTarget(sessionTarget, input.request)),
       targetsMatch: (left, right) => {
+        // Some transports need native delivery ids unchanged while matching on
+        // normalized aliases, so matcher normalization is separate from output normalization.
         const normalizedLeft = normalizeTargetForMatch(left);
         const normalizedRight = normalizeTargetForMatch(right);
         return Boolean(
@@ -890,11 +930,14 @@ export function createChannelApproverDmTargetResolver<
   TApprover,
   TTarget extends NativeApprovalTarget = NativeApprovalTarget,
 >(params: {
+  /** Optional gate; returning false skips approver DM delivery for the request. */
   shouldHandleRequest?: (params: ApprovalResolverParams) => boolean;
+  /** Resolves approver records from config and optional account scope. */
   resolveApprovers: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => readonly TApprover[];
+  /** Maps one approver record to a native DM target; nullish results are skipped. */
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;
 }) {
   return (input: ApprovalResolverParams): TTarget[] => {

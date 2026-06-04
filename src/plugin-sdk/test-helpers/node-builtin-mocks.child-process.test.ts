@@ -1,3 +1,6 @@
+/**
+ * Tests child_process behavior in the shared Node builtin mock helpers.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());

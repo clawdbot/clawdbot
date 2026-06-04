@@ -15,6 +15,7 @@ const HOST_COMMAND_WRAPPER_BACKSTOP_MS = 5_000;
 const HOST_COMMAND_CHILD_PID_PREFIX = "__OPENCLAW_HOST_COMMAND_CHILD_PID__";
 const HOST_COMMAND_SPAWN_ERROR_PREFIX = "__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__";
 const HOST_COMMAND_TIMEOUT_PREFIX = "__OPENCLAW_HOST_COMMAND_TIMEOUT__";
+let progressStderrDepth = 0;
 
 type HostCommandInvocation = {
   args: string[];
@@ -42,11 +43,21 @@ function hostInvocationFromRunner(runner: HostCommandInvocation): HostCommandInv
 }
 
 export function say(message: string): void {
-  process.stdout.write(`==> ${message}\n`);
+  const stream = progressStderrDepth > 0 ? process.stderr : process.stdout;
+  stream.write(`==> ${message}\n`);
 }
 
 export function warn(message: string): void {
   process.stderr.write(`warn: ${message}\n`);
+}
+
+export async function withProgressOnStderr<T>(fn: () => Promise<T>): Promise<T> {
+  progressStderrDepth++;
+  try {
+    return await fn();
+  } finally {
+    progressStderrDepth--;
+  }
 }
 
 export function die(message: string): never {
@@ -68,9 +79,7 @@ function signalHostCommandProcess(pid: number | undefined, signal: NodeJS.Signal
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ESRCH") {
       warn(
-        `failed to send ${signal} to timed host command process ${pid}: ${
-          code ?? String(error)
-        }`,
+        `failed to send ${signal} to timed host command process ${pid}: ${code ?? String(error)}`,
       );
     }
   }
@@ -279,21 +288,20 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
   const env = { ...process.env, ...options.env };
   const invocation = resolveHostCommandInvocation(command, args, { env });
   const usesPosixTimedWrapper = process.platform !== "win32" && options.timeoutMs !== undefined;
-  const result =
-    usesPosixTimedWrapper
-      ? runPosixTimedCommandSync(invocation, env, options)
-      : spawnSync(invocation.command, invocation.args, {
-          cwd: options.cwd ?? repoRoot,
-          encoding: "utf8",
-          env: invocation.env ?? env,
-          input: options.input,
-          killSignal: "SIGKILL",
-          maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-          stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-          shell: invocation.shell,
-          timeout: options.timeoutMs,
-          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        });
+  const result = usesPosixTimedWrapper
+    ? runPosixTimedCommandSync(invocation, env, options)
+    : spawnSync(invocation.command, invocation.args, {
+        cwd: options.cwd ?? repoRoot,
+        encoding: "utf8",
+        env: invocation.env ?? env,
+        input: options.input,
+        killSignal: "SIGKILL",
+        maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+        stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+        shell: invocation.shell,
+        timeout: options.timeoutMs,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      });
 
   let wrapperTimedOut = false;
   if (usesPosixTimedWrapper) {
@@ -511,7 +519,12 @@ export async function runStreaming(
         } else {
           resolve(code ?? (signal ? 128 : 1));
         }
-      })();
+      })().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        reject(
+          new Error(`failed to write Parallels host command log: ${message}`, { cause: error }),
+        );
+      });
     });
   });
 }

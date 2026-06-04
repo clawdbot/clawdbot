@@ -2,6 +2,9 @@ import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registr
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { resolveBundledChannelRootScope } from "./bundled-root.js";
 
+/**
+ * Lists bundled channel plugin ids for a package root/cache scope.
+ */
 export function listBundledChannelPluginIdsForRoot(
   _packageRoot: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -16,6 +19,9 @@ export function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists bundled channel ids for a package root/cache scope.
+ */
 export function listBundledChannelIdsForRoot(
   _packageRoot: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -31,6 +37,9 @@ export function listBundledChannelIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists bundled channel plugin ids for the current runtime root scope.
+ */
 export function listBundledChannelPluginIds(
   env: NodeJS.ProcessEnv = process.env,
   discovery?: PluginDiscoveryResult,
@@ -42,6 +51,9 @@ export function listBundledChannelPluginIds(
   );
 }
 
+/**
+ * Lists bundled channel ids for the current runtime root scope.
+ */
 export function listBundledChannelIds(
   env: NodeJS.ProcessEnv = process.env,
   discovery?: PluginDiscoveryResult,

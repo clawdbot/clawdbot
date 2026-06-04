@@ -1,3 +1,4 @@
+// Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

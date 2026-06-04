@@ -1,3 +1,7 @@
+/**
+ * Process-local registry that lets Talk protocol methods resolve opaque
+ * `sessionId` values to the concrete relay or managed-room backend.
+ */
 export type UnifiedTalkSessionRecord =
   | {
       kind: "realtime-relay";
@@ -18,6 +22,7 @@ export type UnifiedTalkSessionRecord =
 
 const unifiedTalkSessions = new Map<string, UnifiedTalkSessionRecord>();
 
+/** Associates a public Talk session id with its concrete gateway backend. */
 export function rememberUnifiedTalkSession(
   sessionId: string,
   session: UnifiedTalkSessionRecord,
@@ -25,6 +30,7 @@ export function rememberUnifiedTalkSession(
   unifiedTalkSessions.set(sessionId, session);
 }
 
+/** Resolves a Talk session id or throws the protocol-facing unknown-session error. */
 export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionRecord {
   const session = unifiedTalkSessions.get(sessionId);
   if (!session) {
@@ -33,10 +39,12 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
   return session;
 }
 
+/** Removes a Talk session id after the concrete backend closes. */
 export function forgetUnifiedTalkSession(sessionId: string): void {
   unifiedTalkSessions.delete(sessionId);
 }
 
+/** Enforces that a relay-backed Talk session is controlled by its owner socket. */
 export function requireUnifiedTalkSessionConn(
   session: Extract<UnifiedTalkSessionRecord, { connId: string }>,
   connId: string | undefined,
@@ -47,6 +55,7 @@ export function requireUnifiedTalkSessionConn(
   return connId;
 }
 
+/** Clears process-local Talk session mappings between tests. */
 export function clearUnifiedTalkSessionsForTest(): void {
   unifiedTalkSessions.clear();
 }

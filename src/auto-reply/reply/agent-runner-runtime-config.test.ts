@@ -1,3 +1,4 @@
+// Tests agent runner runtime config assembly from command and session state.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,

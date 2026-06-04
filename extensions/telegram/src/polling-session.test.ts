@@ -19,7 +19,9 @@ import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js"
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
-const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
+const computeBackoffMock = vi.hoisted(() =>
+  vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
+);
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 const drainPendingDeliveriesMock = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
@@ -190,19 +192,37 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
   });
   const realSetTimeout = globalThis.setTimeout;
   const realClearTimeout = globalThis.clearTimeout;
+  const watchdogs: Array<() => void> = [];
+  const watchdogWaiters: Array<{
+    count: number;
+    resolve: (fn: () => void) => void;
+    reject: (err: Error) => void;
+    timeout: ReturnType<typeof realSetTimeout>;
+  }> = [];
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn, delay) => {
     if (delay === POLLING_TEST_WATCHDOG_INTERVAL_MS) {
       watchdog = fn as () => void;
+      watchdogs.push(watchdog);
       resolveWatchdog?.(watchdog);
+      for (let index = watchdogWaiters.length - 1; index >= 0; index -= 1) {
+        const waiter = watchdogWaiters[index];
+        if (watchdogs.length < waiter.count) {
+          continue;
+        }
+        realClearTimeout(waiter.timeout);
+        watchdogWaiters.splice(index, 1);
+        waiter.resolve(watchdogs[waiter.count - 1]);
+      }
     }
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-    void Promise.resolve().then(() => (fn as () => void)());
-    return 1 as unknown as ReturnType<typeof setTimeout>;
+  const setTimeoutSpy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((fn) => realSetTimeout(fn as () => void, 0));
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timeoutId) => {
+    realClearTimeout(timeoutId);
   });
-  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
   const dateNowSpy = vi.spyOn(Date, "now");
   for (const value of dateNowSequence) {
     dateNowSpy.mockImplementationOnce(() => value);
@@ -228,6 +248,18 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
             reject(toLintErrorObject(error, "Non-Error rejection"));
           },
         );
+      });
+    },
+    async waitForWatchdogRegistration(count: number) {
+      const registered = watchdogs[count - 1];
+      if (registered) {
+        return registered;
+      }
+      return await new Promise<() => void>((resolve, reject) => {
+        const timeout = realSetTimeout(() => {
+          reject(new Error(`Timed out waiting for polling watchdog registration ${count}`));
+        }, 5_000);
+        watchdogWaiters.push({ count, resolve, reject, timeout });
       });
     },
     setNow(now: number) {
@@ -662,7 +694,29 @@ describe("TelegramPollingSession", () => {
       mockObjectArg(createTelegramBotMock, "createTelegramBot").minimumClientTimeoutSeconds,
     ).toBe(45);
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(computeBackoffMock).toHaveBeenCalledWith(
+      {
+        initialMs: 30_000,
+        maxMs: 600_000,
+        factor: 2,
+        jitter: 0.2,
+      },
+      1,
+    );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets restart backoff after a healthy polling cycle", () => {
+    const state = pollingSessionTesting.createTelegramRestartBackoffState();
+    pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true });
+    pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true });
+    pollingSessionTesting.resetTelegramRestartBackoffState(state);
+    pollingSessionTesting.resolveTelegramRestartDelayMs(state);
+
+    expect(computeBackoffMock.mock.calls.map((call) => call[1])).toEqual([1, 2, 1, 1]);
+    expect(
+      computeBackoffMock.mock.calls.map((call) => (call[0] as { initialMs: number }).initialMs),
+    ).toEqual([30_000, 30_000, 120_000, 30_000]);
   });
 
   it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
@@ -961,6 +1015,63 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
+  it("resets restart backoff after isolated ingress reports poll success", async () => {
+    const abort = new AbortController();
+    const init = vi.fn(async () => undefined);
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init,
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+    sleepWithAbortMock.mockImplementation(async () => {
+      if (sleepWithAbortMock.mock.calls.length >= 2) {
+        abort.abort();
+      }
+    });
+
+    let cycle = 0;
+    const createWorker = vi.fn(() => {
+      let onMessage: WorkerPollSuccessListener | undefined;
+      cycle += 1;
+      return {
+        onMessage: vi.fn((handler) => {
+          onMessage = handler;
+          return () => undefined;
+        }),
+        stop: vi.fn(async () => undefined),
+        task: vi.fn(async () => {
+          if (cycle === 2) {
+            onMessage?.({
+              type: "poll-success",
+              offset: null,
+              finishedAt: Date.now(),
+              count: 0,
+            });
+          }
+        }),
+      };
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 10,
+      },
+    });
+
+    await session.runUntilAbort();
+
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(computeBackoffMock.mock.calls.map((call) => call[1])).toEqual([1, 1]);
+  });
+
   it("restarts isolated ingress when worker liveness stalls", async () => {
     const abort = new AbortController();
     const log = vi.fn();
@@ -1026,6 +1137,98 @@ describe("TelegramPollingSession", () => {
 
       expectLogIncludes(log, "Polling stall detected");
       expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
+      expectLogExcludes(log, "Isolated polling ingress stop timed out");
+    } finally {
+      watchdogHarness.restore();
+      abort.abort();
+    }
+  });
+
+  it("applies stop-timeout cooldown to isolated ingress forced restarts", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+    computeBackoffMock.mockImplementation((policy: { initialMs: number }, attempt: number) => {
+      if (policy.initialMs === 120_000) {
+        return attempt * 100_000;
+      }
+      return attempt * 1_000;
+    });
+
+    const finishStoppedWorkers: Array<() => void> = [];
+    let workerCycle = 0;
+    const createWorker = vi.fn(() => {
+      workerCycle += 1;
+      if (workerCycle <= 2) {
+        let finishTask: (() => void) | undefined;
+        const task = new Promise<void>((resolve) => {
+          finishTask = resolve;
+        });
+        let finishStop: (() => void) | undefined;
+        const stop = new Promise<void>((resolve) => {
+          finishStop = resolve;
+        });
+        finishStoppedWorkers.push(() => {
+          finishStop?.();
+          finishTask?.();
+        });
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: vi.fn(() => stop),
+          task: vi.fn(async () => {
+            await task;
+          }),
+        };
+      }
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => undefined),
+        task: vi.fn(async () => {
+          abort.abort();
+        }),
+      };
+    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 30_000,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 500,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const firstWatchdog = await watchdogHarness.waitForWatchdog();
+      watchdogHarness.setNow(31_000);
+      firstWatchdog?.();
+      await vi.waitFor(() => expectLogIncludes(log, "Isolated polling ingress stop timed out"));
+      finishStoppedWorkers.shift()?.();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+
+      const secondWatchdog = await watchdogHarness.waitForWatchdogRegistration(2);
+      watchdogHarness.setNow(62_000);
+      secondWatchdog?.();
+      await vi.waitFor(() => expectLogIncludes(log, "Stop timeout burst=2; applying cooldown."));
+      finishStoppedWorkers.shift()?.();
+      await runPromise;
+
+      const stopCooldownCalls = computeBackoffMock.mock.calls.filter(
+        ([policy]) => (policy as { initialMs: number }).initialMs === 120_000,
+      );
+      expect(stopCooldownCalls.map((call) => call[1])).toEqual([1]);
     } finally {
       watchdogHarness.restore();
       abort.abort();
@@ -2762,6 +2965,7 @@ describe("TelegramPollingSession", () => {
   it("forces a restart when polling stalls without getUpdates activity", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
+    const secondBotStop = vi.fn(async () => undefined);
     const firstRunnerStop = vi.fn(async () => undefined);
     const secondRunnerStop = vi.fn(async () => undefined);
     const bot = {
@@ -2772,7 +2976,10 @@ describe("TelegramPollingSession", () => {
       },
       stop: botStop,
     };
-    createTelegramBotMock.mockReturnValue(bot);
+    createTelegramBotMock.mockReturnValueOnce(bot).mockReturnValueOnce({
+      ...bot,
+      stop: secondBotStop,
+    });
 
     let firstTaskResolve: (() => void) | undefined;
     const firstTask = new Promise<void>((resolve) => {
@@ -2826,12 +3033,44 @@ describe("TelegramPollingSession", () => {
 
       expect(runMock).toHaveBeenCalledTimes(2);
       expect(firstRunnerStop).toHaveBeenCalledTimes(1);
-      expect(botStop).toHaveBeenCalled();
+      expect(botStop).toHaveBeenCalledTimes(1);
       expectLogIncludes(log, "Polling stall detected");
       expectLogIncludes(log, "polling stall detected");
+      expectLogExcludes(log, "Polling runner stop timed out");
     } finally {
       watchdogHarness.restore();
     }
+  });
+
+  it("cools down repeated stop-timeout restart bursts", () => {
+    computeBackoffMock.mockImplementation((policy: { initialMs: number }, attempt: number) => {
+      if (policy.initialMs === 120_000) {
+        return attempt * 100_000;
+      }
+      return attempt * 1_000;
+    });
+
+    const state = pollingSessionTesting.createTelegramRestartBackoffState();
+    expect(
+      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
+    ).toEqual({ delayMs: 1_000, stopTimeoutSuffix: "" });
+    expect(
+      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
+    ).toEqual({
+      delayMs: 100_000,
+      stopTimeoutSuffix: " Stop timeout burst=2; applying cooldown.",
+    });
+    expect(
+      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
+    ).toEqual({
+      delayMs: 200_000,
+      stopTimeoutSuffix: " Stop timeout burst=3; applying cooldown.",
+    });
+
+    const stopCooldownCalls = computeBackoffMock.mock.calls.filter(
+      ([policy]) => (policy as { initialMs: number }).initialMs === 120_000,
+    );
+    expect(stopCooldownCalls.map((call) => call[1])).toEqual([1, 2]);
   });
 
   it("forces a restart when the runner task is pending but reports not running", async () => {

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -51,6 +52,24 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     });
   }
   throw new Error(`process still alive: ${pid}`);
+}
+
+async function waitForExit(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode as NodeJS.Signals | null };
+  }
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`process did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
 }
 
 afterEach(() => {
@@ -147,38 +166,150 @@ setInterval(() => {}, 1000);
     },
   );
 
+  it.runIf(process.platform !== "win32")("kills timed-out child process groups", async () => {
+    const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
+    const childPidPath = path.join(dir, "child.pid");
+    let childPid: number | undefined;
+
+    try {
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
+        timeoutKillGraceMs: 25,
+        timeoutMs: 100,
+      });
+      await waitForFile(childPidPath, 2_000);
+      childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+
+      await expect(runPromise).rejects.toMatchObject({
+        code: "ETIMEDOUT",
+        message: expect.stringContaining("timed out after 100ms"),
+      });
+      await waitForDead(childPid, 2_000);
+    } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
-    "kills timed-out child process groups",
+    "exits promptly after forwarded SIGTERM children exit cleanly",
     async () => {
-      const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
+      const dir = makeTempDir("openclaw-telegram-credential-signal-");
+      const runnerPath = path.join(dir, "runner.mjs");
+      const readyPath = path.join(dir, "ready.txt");
       const childPidPath = path.join(dir, "child.pid");
+      const ioModuleUrl = new URL(
+        "../../scripts/e2e/telegram-user-credential-io.ts",
+        import.meta.url,
+      ).href;
+      const childScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      writeFileSync(
+        runnerPath,
+        [
+          `import { runCommand } from ${JSON.stringify(ioModuleUrl)};`,
+          `await runCommand(process.execPath, ['-e', ${JSON.stringify(childScript)}], undefined, { timeoutMs: 30_000 });`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let childPid: number | undefined;
-
       try {
-        const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          "const fs = require('node:fs');",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-          "setInterval(() => {}, 1000);",
-        ].join("");
-
-        const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
-          timeoutKillGraceMs: 25,
-          timeoutMs: 100,
-        });
-        await waitForFile(childPidPath, 2_000);
+        await waitForFile(readyPath, 2_000);
         childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        const startedAt = Date.now();
+        runner.kill("SIGTERM");
+        const exit = await waitForExit(runner, 2_000);
 
-        await expect(runPromise).rejects.toMatchObject({
-          code: "ETIMEDOUT",
-          message: expect.stringContaining("timed out after 100ms"),
-        });
+        expect(exit).toEqual({ code: 143, signal: null });
+        expect(Date.now() - startedAt).toBeLessThan(1_500);
         await waitForDead(childPid, 2_000);
       } finally {
+        if (runner.exitCode === null && runner.signalCode === null) {
+          runner.kill("SIGKILL");
+        }
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps the forwarded signal force-kill armed while grandchildren survive",
+    async () => {
+      const dir = makeTempDir("openclaw-telegram-credential-grandchild-signal-");
+      const runnerPath = path.join(dir, "runner.mjs");
+      const readyPath = path.join(dir, "ready.txt");
+      const grandchildPidPath = path.join(dir, "grandchild.pid");
+      const ioModuleUrl = new URL(
+        "../../scripts/e2e/telegram-user-credential-io.ts",
+        import.meta.url,
+      ).href;
+      const grandchildScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, String(grandchild.pid));`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      writeFileSync(
+        runnerPath,
+        [
+          `import { runCommand } from ${JSON.stringify(ioModuleUrl)};`,
+          `await runCommand(process.execPath, ['-e', ${JSON.stringify(parentScript)}], undefined, { timeoutMs: 30_000 });`,
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS: "100",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let grandchildPid: number | undefined;
+      try {
+        await waitForFile(readyPath, 2_000);
+        await waitForFile(grandchildPidPath, 2_000);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        runner.kill("SIGTERM");
+        const exit = await waitForExit(runner, 2_000);
+
+        expect(exit).toEqual({ code: 143, signal: null });
+        await waitForDead(grandchildPid, 2_000);
+      } finally {
+        if (runner.exitCode === null && runner.signalCode === null) {
+          runner.kill("SIGKILL");
+        }
+        if (grandchildPid !== undefined && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
         }
       }
     },

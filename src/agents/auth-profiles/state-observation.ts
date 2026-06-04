@@ -5,6 +5,7 @@ import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 
 const observationLog = createSubsystemLogger("agent/embedded");
 
+/** Logs an auth profile failure/cooldown/disable state transition. */
 export function logAuthProfileFailureStateChange(params: {
   runId?: string;
   profileId: string;
@@ -18,8 +19,8 @@ export function logAuthProfileFailureStateChange(params: {
     params.reason === "billing" || params.reason === "auth_permanent" ? "disabled" : "cooldown";
   const previousCooldownUntil = params.previous?.cooldownUntil;
   const previousDisabledUntil = params.previous?.disabledUntil;
-  // Active cooldown/disable windows are intentionally immutable; log whether this
-  // update reused the existing window instead of extending it.
+  // Active cooldown/disable windows are intentionally immutable; log whether
+  // this update reused the existing window instead of extending it.
   const windowReused =
     windowType === "disabled"
       ? typeof previousDisabledUntil === "number" &&

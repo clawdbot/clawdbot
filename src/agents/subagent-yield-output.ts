@@ -1,5 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
+/**
+ * Detects sessions_yield calls and yielded tool results in provider transcript shapes.
+ *
+ * Providers encode tool calls/results differently, so this module accepts the
+ * common OpenAI/Anthropic/function-call variants used by transcript repair.
+ */
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);
   if (!record) {
@@ -28,6 +34,7 @@ function isToolCallBlock(value: unknown): boolean {
   );
 }
 
+/** Returns true when an assistant message requested the sessions_yield tool. */
 export function assistantCallsSessionsYield(message: unknown): boolean {
   const record = asOptionalRecord(message);
   if (!record || record.role !== "assistant" || !Array.isArray(record.content)) {
@@ -78,6 +85,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
   return undefined;
 }
 
+/** Returns true when a tool result represents a completed sessions_yield handoff. */
 export function isSessionsYieldToolResult(
   message: unknown,
   previousAssistantCalledYield: boolean,
@@ -93,6 +101,7 @@ export function isSessionsYieldToolResult(
   if (!previousAssistantCalledYield) {
     return false;
   }
+  // Some providers omit the tool name on results; use adjacency plus yielded status as fallback.
   const details = asOptionalRecord(record.details);
   if (details?.status === "yielded") {
     return true;

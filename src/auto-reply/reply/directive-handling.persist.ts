@@ -1,3 +1,4 @@
+// Persists directive-derived session preferences such as model and auth choices.
 import {
   resolveAgentDir,
   resolveDefaultAgentId,

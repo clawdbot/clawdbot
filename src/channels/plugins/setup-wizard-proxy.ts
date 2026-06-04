@@ -15,16 +15,25 @@ type ResolveGroupAllowlistParams = Parameters<
   NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
 >[0];
 
+/**
+ * Delegates setup configured-state checks to a lazily loaded wizard.
+ */
 export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async ({ cfg, accountId }: ResolveConfiguredParams) =>
     await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
 }
 
+/**
+ * Delegates setup preparation to a lazily loaded wizard.
+ */
 export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]) =>
     await (await loadWizard()).prepare?.(params);
 }
 
+/**
+ * Delegates setup finalization to a lazily loaded wizard.
+ */
 export function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]) =>
     await (await loadWizard()).finalize?.(params);
@@ -35,6 +44,9 @@ type DelegatedStatusBase = Omit<
   "resolveConfigured" | "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
 >;
 
+/**
+ * Creates a setup wizard facade with selected hooks delegated to a lazy wizard.
+ */
 export function createDelegatedSetupWizardProxy(params: {
   channel: string;
   loadWizard: () => Promise<ChannelSetupWizard>;
@@ -56,6 +68,8 @@ export function createDelegatedSetupWizardProxy(params: {
       resolveConfigured: createDelegatedResolveConfigured(params.loadWizard),
       ...createDelegatedSetupWizardStatusResolvers(params.loadWizard),
     },
+    // Keep static setup metadata available immediately, while expensive
+    // prepare/finalize/status behavior loads only when the wizard needs it.
     ...(params.resolveShouldPromptAccountIds
       ? { resolveShouldPromptAccountIds: params.resolveShouldPromptAccountIds }
       : {}),
@@ -70,6 +84,9 @@ export function createDelegatedSetupWizardProxy(params: {
   } satisfies ChannelSetupWizard;
 }
 
+/**
+ * Creates a setup wizard proxy that delegates allowlist resolution when available.
+ */
 export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
   loadWizard: () => Promise<ChannelSetupWizard>;
   createBase: (handlers: {
@@ -92,6 +109,8 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
     resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
       const wizard = await params.loadWizard();
       if (!wizard.allowFrom) {
+        // A base wizard may expose allowlist UI before the delegated wizard has
+        // resolver support. Preserve raw entries as unresolved instead of failing.
         return entries.map((input) => ({ input, resolved: false, id: null }));
       }
       return await wizard.allowFrom.resolveEntries({
@@ -104,6 +123,8 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
     resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
       const wizard = await params.loadWizard();
       if (!wizard.groupAccess?.resolveAllowlist) {
+        // Group allowlists are channel-specific; callers provide the safe
+        // fallback representation when the delegated wizard has no resolver.
         return params.fallbackResolvedGroupAllowlist(entries);
       }
       return (await wizard.groupAccess.resolveAllowlist({

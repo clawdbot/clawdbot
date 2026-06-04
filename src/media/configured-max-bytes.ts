@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const MB = 1024 * 1024;
 
+/** Resolves the global generated-media byte cap from the user-facing MB config value. */
 export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
   if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
@@ -11,10 +12,12 @@ export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | u
   return undefined;
 }
 
+/** Returns the configured media cap, falling back to the media-core per-kind default. */
 export function resolveGeneratedMediaMaxBytes(cfg: OpenClawConfig | undefined, kind: MediaKind) {
   return resolveConfiguredMediaMaxBytes(cfg) ?? maxBytesForKind(kind);
 }
 
+/** Reads channel/account media caps from raw channel config without requiring typed account schemas. */
 export function resolveChannelAccountMediaMaxMb(params: {
   cfg: OpenClawConfig;
   channel?: string | null;

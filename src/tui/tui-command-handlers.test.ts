@@ -1,3 +1,4 @@
+// Covers TUI slash command handlers and backend call wiring.
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {

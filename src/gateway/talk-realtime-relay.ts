@@ -48,6 +48,13 @@ import {
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
+/**
+ * Gateway-owned relay between browser Talk audio and realtime voice providers.
+ *
+ * Each relay is scoped to the owning WebSocket connection; events are broadcast
+ * back only to that connection so audio, transcript, and tool-call state cannot
+ * leak across clients that know another relay id.
+ */
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
@@ -259,6 +266,8 @@ function submitRelayAgentControlProviderResults(
   for (const callId of activeCallIds) {
     const forcedConsult = session.forcedConsults.handles().find((handle) => handle.id === callId);
     if (forcedConsult) {
+      // Forced consults may have both synthetic and provider-native call ids;
+      // cancelling must satisfy every native id or the provider keeps waiting.
       session.forcedConsults.markCancelled(forcedConsult);
       for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
         session.bridge.submitToolResult(nativeCallId, result.providerResult, {
@@ -327,6 +336,7 @@ function enforceRelaySessionLimits(connId: string): void {
   }
 }
 
+/** Creates a realtime voice relay session and returns the browser audio contract. */
 export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
@@ -477,6 +487,8 @@ export function createTalkRealtimeRelaySession(
           pruneInactiveRelayAgentRuns(relay) > 0 &&
           shouldAutoControlRealtimeVoiceAgentText(question)
         ) {
+          // While an agent consult is active, short user utterances like "stop"
+          // steer the chat run instead of becoming a new consult.
           void steerTalkRealtimeRelayAgentRun({
             relaySessionId,
             connId: params.connId,
@@ -727,6 +739,7 @@ function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   });
 }
 
+/** Streams one base64-encoded browser audio frame into the owning relay. */
 export function sendTalkRealtimeRelayAudio(params: {
   relaySessionId: string;
   connId: string;
@@ -755,6 +768,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
 }
 
+/** Delivers a tool result from the browser/client side back to the provider. */
 export function submitTalkRealtimeRelayToolResult(params: {
   relaySessionId: string;
   connId: string;
@@ -821,6 +835,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
   });
 }
 
+/** Tracks the chat run started for a realtime agent-consult tool call. */
 export function registerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
@@ -838,6 +853,7 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   }
 }
 
+/** Applies realtime voice-control text to the active agent-consult chat run. */
 export async function steerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
@@ -880,6 +896,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   return result;
 }
 
+/** Cancels the active relay turn, aborts agent work, and clears provider audio. */
 export function cancelTalkRealtimeRelayTurn(params: {
   relaySessionId: string;
   connId: string;
@@ -902,6 +919,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
   });
 }
 
+/** Closes a realtime relay session owned by the current connection. */
 export function stopTalkRealtimeRelaySession(params: {
   relaySessionId: string;
   connId: string;
@@ -910,6 +928,7 @@ export function stopTalkRealtimeRelaySession(params: {
   closeRelaySession(session, "completed");
 }
 
+/** Clears process-local realtime relays between tests. */
 export function clearTalkRealtimeRelaySessionsForTest(): void {
   for (const session of relaySessions.values()) {
     session.forcedConsults.clear();

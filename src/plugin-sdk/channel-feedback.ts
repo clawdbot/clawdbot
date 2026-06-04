@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel feedback reactions, status reactions, and logging helpers.
+ */
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   createAckReactionHandle,

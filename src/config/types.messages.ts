@@ -1,3 +1,4 @@
+// Defines message queue and delivery configuration types.
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
 

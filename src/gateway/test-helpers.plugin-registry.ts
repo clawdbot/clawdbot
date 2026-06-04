@@ -4,6 +4,9 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";
 import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.js";
 
+/**
+ * Process-wide plugin registry fixture for gateway tests.
+ */
 function createStubPluginRegistry(): PluginRegistry {
   return {
     plugins: [],
@@ -60,16 +63,19 @@ const pluginRegistryState = resolveGlobalSingleton(GATEWAY_TEST_PLUGIN_REGISTRY_
 
 setActivePluginRegistry(pluginRegistryState.registry);
 
+/** Installs a plugin registry fixture as the active runtime registry. */
 export function setTestPluginRegistry(registry: PluginRegistry): void {
   pluginRegistryState.registry = registry;
   setActivePluginRegistry(registry);
 }
 
+/** Restores the default empty gateway test plugin registry. */
 export function resetTestPluginRegistry(): void {
   pluginRegistryState.registry = createStubPluginRegistry();
   setActivePluginRegistry(pluginRegistryState.registry);
 }
 
+/** Returns the currently active gateway test plugin registry. */
 export function getTestPluginRegistry(): PluginRegistry {
   return pluginRegistryState.registry;
 }

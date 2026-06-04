@@ -1,3 +1,4 @@
+// Covers voice wake routing normalization and validation.
 import { describe, expect, it } from "vitest";
 import {
   normalizeVoiceWakeRoutingConfig,

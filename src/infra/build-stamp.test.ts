@@ -1,3 +1,4 @@
+// Tests build stamp file parsing and fallback behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { writeBuildStamp } from "../../scripts/build-stamp.mjs";

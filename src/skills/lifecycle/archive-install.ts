@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -6,12 +7,14 @@ import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { installPackageDir } from "../../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../../infra/install-safe-path.js";
 import {
-  scanSkillInstallSource,
+  evaluateSkillInstallPolicy,
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
+import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
+/** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "SKILL.md",
   "skill.md",
@@ -28,20 +31,22 @@ function hasNonAscii(value: string): boolean {
   return false;
 }
 
-type SkillArchiveInstallScan =
-  | false
-  | {
-      dangerouslyForceUnsafeInstall?: boolean;
-      installId?: string;
-      origin: string;
-    };
+type SkillArchiveInstallPolicy = {
+  config?: OpenClawConfig;
+  installId?: string;
+  origin: InstallPolicyOrigin;
+  requestedSpecifier?: string;
+  source?: InstallPolicySource;
+};
 
+/** Result shape for installing a skill archive into a workspace skills dir. */
 export type SkillArchiveInstallResult =
   | { ok: true; targetDir: string }
   | { ok: false; error: string; failureKind: SkillArchiveInstallFailureKind };
 
 export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
 
+/** Normalizes a tracked slug without accepting traversal or path separators. */
 export function normalizeTrackedSkillSlug(raw: string): string {
   const slug = raw.trim();
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
@@ -129,7 +134,7 @@ export async function installExtractedSkillRoot(params: {
   mode: "install" | "update";
   timeoutMs?: number;
   logger?: ArchiveLogger;
-  scan?: SkillArchiveInstallScan;
+  policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
 }): Promise<SkillArchiveInstallResult> {
   try {
@@ -147,19 +152,24 @@ export async function installExtractedSkillRoot(params: {
     } catch (err) {
       return installFailure(formatErrorMessage(err), "invalid-request");
     }
-    if (params.mode === "install" && (await pathExists(targetDir))) {
+    const targetExists = await pathExists(targetDir);
+    const effectiveMode = params.mode === "update" && targetExists ? "update" : "install";
+    if (params.mode === "install" && targetExists) {
       return installFailure(
         `Skill already exists at ${targetDir}. Re-run with force/update.`,
         "invalid-request",
       );
     }
 
-    if (params.scan) {
-      const scanResult = await scanSkillInstallSource({
-        dangerouslyForceUnsafeInstall: params.scan.dangerouslyForceUnsafeInstall,
-        installId: params.scan.installId ?? "archive",
+    if (params.policy) {
+      const scanResult = await evaluateSkillInstallPolicy({
+        config: params.policy.config,
+        installId: params.policy.installId ?? "archive",
         logger: params.logger ?? {},
-        origin: params.scan.origin,
+        origin: params.policy.origin,
+        requestedSpecifier: params.policy.requestedSpecifier,
+        source: params.policy.source,
+        mode: effectiveMode,
         skillName: params.slug,
         sourceDir: params.extractedRoot,
       });
@@ -174,7 +184,7 @@ export async function installExtractedSkillRoot(params: {
     const install = await installPackageDir({
       sourceDir: params.extractedRoot,
       targetDir,
-      mode: params.mode,
+      mode: effectiveMode,
       timeoutMs: params.timeoutMs ?? 120_000,
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
@@ -197,7 +207,7 @@ export async function installSkillArchiveFromPath(params: {
   force?: boolean;
   timeoutMs?: number;
   logger?: ArchiveLogger;
-  scan?: SkillArchiveInstallScan;
+  policy?: SkillArchiveInstallPolicy;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -213,7 +223,7 @@ export async function installSkillArchiveFromPath(params: {
         mode: params.force ? "update" : "install",
         timeoutMs: params.timeoutMs,
         logger: params.logger,
-        scan: params.scan,
+        policy: params.policy,
       }),
   });
   if (!result.ok) {

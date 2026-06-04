@@ -1,3 +1,4 @@
+// Covers plugin middleware that can transform agent tool results.
 import { describe, expect, it } from "vitest";
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 

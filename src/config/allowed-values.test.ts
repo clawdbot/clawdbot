@@ -1,3 +1,4 @@
+// Verifies allowed-value metadata for config docs and validation.
 import { describe, expect, it } from "vitest";
 import { summarizeAllowedValues } from "./allowed-values.js";
 

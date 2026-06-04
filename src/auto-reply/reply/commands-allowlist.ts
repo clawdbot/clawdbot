@@ -1,3 +1,4 @@
+/** Handles /allowlist commands across config and pairing-store targets. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -263,6 +264,7 @@ async function readAllowlistConfig(params: {
   );
 }
 
+/** Command handler for listing, adding, and removing allowlist entries. */
 export const handleAllowlistCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

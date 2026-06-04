@@ -1,3 +1,4 @@
+// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,

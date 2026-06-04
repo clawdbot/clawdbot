@@ -7,6 +7,7 @@ import {
 } from "../../tool-search.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
+/** Tool-search control tools that may be auto-added when tool search is enabled. */
 export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -16,6 +17,7 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
+/** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
 export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
@@ -23,6 +25,11 @@ export type ToolSearchRunPlan = {
   emptyAllowlistCallableNames: string[];
 };
 
+/**
+ * Builds the callable-name list used to decide whether an allowlist is empty.
+ * Auto-added tool-search controls are excluded so they do not make an otherwise
+ * empty user/tool allowlist look populated.
+ */
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -39,6 +46,11 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   ];
 }
 
+/**
+ * Identifies tool-search control names that were added by policy rather than
+ * explicitly allowed by the user. Explicit controls stay visible to empty
+ * allowlist checks because the user selected them.
+ */
 export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   toolSearchControlsEnabled: boolean;
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -74,6 +86,11 @@ function collectExplicitlyAllowedClientToolNames(params: {
     .filter((name) => explicitNames.has(normalizeToolName(name)));
 }
 
+/**
+ * Builds the complete tool-search allowlist plan for one run. Visible tools use
+ * compacted prompt state, replay tools use uncompacted state, and catalog-backed
+ * client tools are represented through synthetic tool-search callable names.
+ */
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];
@@ -93,6 +110,8 @@ export function buildToolSearchRunPlan(params: {
     clientTools: params.clientTools,
   });
   if (params.controlsEnabled) {
+    // A control that was visible in the compacted prompt must remain allowed
+    // during replay even when the uncompacted tool set would otherwise omit it.
     for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
       if (visibleAllowedToolNames.has(controlName)) {
         replayAllowedToolNames.add(controlName);

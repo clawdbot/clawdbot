@@ -507,6 +507,7 @@ vi.mock("../plugins/install.js", () => ({
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
     SECURITY_SCAN_BLOCKED: "security_scan_blocked",
     SECURITY_SCAN_FAILED: "security_scan_failed",
+    UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
   },
   installPluginFromNpmSpec: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>

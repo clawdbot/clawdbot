@@ -9,6 +9,7 @@ type ApplyLinkUnderstandingResult = {
   urls: string[];
 };
 
+/** Runs link understanding and folds successful outputs into the inbound context. */
 export async function applyLinkUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

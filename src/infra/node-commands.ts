@@ -1,3 +1,4 @@
+// Node tool command names shared by routing, auth, and approval surfaces.
 export const NODE_SYSTEM_RUN_COMMANDS = [
   "system.run.prepare",
   "system.run",

@@ -1,3 +1,4 @@
+// Covers the standalone Vitest E2E config shape.
 import { describe, expect, it } from "vitest";
 import {
   normalizeConfigPath,

@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
@@ -8,6 +9,7 @@ const WizardRunStatusSchema = Type.Union([
   Type.Literal("error"),
 ]);
 
+/** Starts a setup wizard, optionally scoped to a local or remote workspace. */
 export const WizardStartParamsSchema = Type.Object(
   {
     mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
@@ -16,6 +18,7 @@ export const WizardStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Client answer payload for the current wizard step. */
 export const WizardAnswerSchema = Type.Object(
   {
     stepId: NonEmptyString,
@@ -24,6 +27,7 @@ export const WizardAnswerSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Advances a wizard session, with an answer when the previous step requested input. */
 export const WizardNextParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -32,6 +36,7 @@ export const WizardNextParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Shared session-id-only params for cancel and status requests. */
 const WizardSessionIdParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -39,10 +44,13 @@ const WizardSessionIdParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Cancels an active wizard session. */
 export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
 
+/** Reads status for an active or recently completed wizard session. */
 export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
+/** Selectable value shown in a choice-based wizard step. */
 export const WizardStepOptionSchema = Type.Object(
   {
     value: Type.Unknown(),
@@ -52,6 +60,7 @@ export const WizardStepOptionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -76,6 +85,7 @@ export const WizardStepSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Common response fields for start and next calls. */
 const WizardResultFields = {
   done: Type.Boolean(),
   step: Type.Optional(WizardStepSchema),
@@ -83,10 +93,12 @@ const WizardResultFields = {
   error: Type.Optional(Type.String()),
 };
 
+/** Result after advancing a wizard session. */
 export const WizardNextResultSchema = Type.Object(WizardResultFields, {
   additionalProperties: false,
 });
 
+/** Result returned when a wizard session is created. */
 export const WizardStartResultSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -95,6 +107,7 @@ export const WizardStartResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Minimal status poll result used when the client does not need the next step. */
 export const WizardStatusResultSchema = Type.Object(
   {
     status: WizardRunStatusSchema,

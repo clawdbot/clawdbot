@@ -31,6 +31,10 @@ function isAllowedUrl(raw: string): boolean {
   }
 }
 
+/**
+ * Extracts unique, SSRF-filtered bare HTTP(S) links from inbound text.
+ * Markdown links are ignored so display-only citations do not trigger fetches.
+ */
 export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
   const source = message?.trim();
   if (!source) {

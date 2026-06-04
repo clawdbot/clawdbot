@@ -1,3 +1,4 @@
+// Defines normalized provider catalog results from plugin metadata.
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
@@ -44,11 +45,13 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
   "metadataSource",
 ] as const satisfies readonly (keyof ModelDefinitionConfig)[];
 
+/** Projection of a provider catalog result into provider config entries. */
 export type ProviderCatalogResultProjection =
   | { kind: "provider"; provider: ModelProviderConfig }
   | { kind: "providers"; providers: Array<[string, ModelProviderConfig]> }
   | { kind: "empty" };
 
+/** Copies provider config data out of a provider catalog result. */
 export function copyProviderCatalogResultProjection(
   result: ProviderCatalogResult,
 ): ProviderCatalogResultProjection {
@@ -66,6 +69,7 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
+/** Copies provider catalog result entries, using providerId for single-provider results. */
 export function copyProviderCatalogResultEntries(params: {
   providerId: string;
   result: ProviderCatalogResult;
@@ -77,6 +81,7 @@ export function copyProviderCatalogResultEntries(params: {
   return projection.kind === "providers" ? projection.providers : [];
 }
 
+/** Copies model definitions from provider catalog provider config. */
 export function copyProviderCatalogModels(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig["models"] {
@@ -109,6 +114,7 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
   return copied as ModelDefinitionConfig;
 }
 
+/** Copies the supported provider config fields from a provider catalog result. */
 export function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
 ): ModelProviderConfig | undefined {

@@ -1,3 +1,5 @@
+// Public barrel for model catalog normalization, ids, refs, and types.
+
 export * from "./configured-model-refs.js";
 export * from "./model-catalog-normalize.js";
 export * from "./model-catalog-refs.js";

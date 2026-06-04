@@ -1,3 +1,4 @@
+// Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import path from "node:path";
 import {

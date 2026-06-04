@@ -1,3 +1,4 @@
+// Program command registry facade: exports core descriptors and registers core plus sub-CLIs.
 import type { Command } from "commander";
 import {
   getCoreCliCommandDescriptors,
@@ -17,8 +18,11 @@ export {
   registerCoreCliByName,
   registerCoreCliCommands,
 };
+
+/** Core command registration contract re-exported for program builders and tests. */
 export type { CommandRegistration };
 
+/** Register all root-program commands for the current argv shape. */
 export function registerProgramCommands(
   program: Command,
   ctx: ProgramContext,

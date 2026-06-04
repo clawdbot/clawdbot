@@ -8,6 +8,8 @@ import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+// Shared CLI runner test doubles. They replace supervisor/process and bootstrap
+// dependencies so CLI runner tests can assert process behavior deterministically.
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 type EnqueueSystemEventFn = typeof enqueueSystemEvent;
@@ -41,6 +43,8 @@ setCliRunnerExecuteTestDeps({
     spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
       let stdoutDelivered = false;
       let stderrDelivered = false;
+      // Supervisor tests sometimes return captured output even when streaming
+      // was requested; replay it through callbacks once to match production.
       const wrappedParams = {
         ...params,
         onStdout: params.onStdout
@@ -121,6 +125,7 @@ type ManagedRunMock = {
   cancel: Mock<() => void>;
 };
 
+/** Build a managed-run mock returned by the process supervisor test double. */
 export function createManagedRun(
   exit: MockRunExit,
   pid = 1234,
@@ -135,6 +140,7 @@ export function createManagedRun(
   };
 }
 
+/** Queue one successful CLI supervisor run. */
 export function mockSuccessfulCliRun() {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
@@ -150,6 +156,7 @@ export function mockSuccessfulCliRun() {
   );
 }
 
+/** Restore prepare-time CLI runner test dependencies after a test overrides them. */
 export function restoreCliRunnerPrepareTestDeps() {
   setCliRunnerPrepareTestDeps({
     makeBootstrapWarn: () => () => {},

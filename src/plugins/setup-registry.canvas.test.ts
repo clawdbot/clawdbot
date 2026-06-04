@@ -1,3 +1,4 @@
+// Covers canvas setup entries in the plugin setup registry.
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

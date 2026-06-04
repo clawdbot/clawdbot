@@ -1,3 +1,6 @@
+/**
+ * Gateway agent-result test helper coverage.
+ */
 import { describe, expect, it } from "vitest";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 

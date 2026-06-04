@@ -1,3 +1,4 @@
+// Builds structured context reports for context command responses.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";

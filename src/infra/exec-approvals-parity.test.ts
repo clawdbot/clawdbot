@@ -1,3 +1,4 @@
+// Covers shell parser and wrapper-resolution parity fixtures.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

@@ -1,3 +1,5 @@
+// Pre-action policy for `plugins install`: decide whether an install may bypass invalid
+// config so plugin-owned doctor/recovery code can repair broken plugin state.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -15,6 +17,7 @@ import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-com
 
 type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
 
+/** Parsed install request plus recovery metadata needed by CLI pre-action config policy. */
 export type PluginInstallRequestContext = {
   rawSpec: string;
   normalizedSpec: string;
@@ -180,6 +183,7 @@ function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) 
   return rawSpec ? { rawSpec, marketplace } : null;
 }
 
+/** Resolve install metadata from the raw spec before Commander action handlers mutate config. */
 export function resolvePluginInstallRequestContext(params: {
   rawSpec: string;
   marketplace?: string;
@@ -231,6 +235,7 @@ export function resolvePluginInstallRequestContext(params: {
   };
 }
 
+/** Recover the plugin install request from Commander state plus raw argv fallback parsing. */
 export function resolvePluginInstallPreactionRequest(params: {
   actionCommand: Command;
   commandPath: string[];
@@ -256,6 +261,7 @@ export function resolvePluginInstallPreactionRequest(params: {
   return request.ok ? request.request : null;
 }
 
+/** Decide whether invalid config should block a command before plugin recovery can run. */
 export function resolvePluginInstallInvalidConfigPolicy(
   request: PluginInstallRequestContext | null,
 ): PluginInstallInvalidConfigPolicy {

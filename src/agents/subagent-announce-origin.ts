@@ -18,6 +18,8 @@ import type {
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 export type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+// Resolves where subagent completion announcements should appear. The merge
+// keeps requester context primary while avoiding stale thread IDs on retargets.
 function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
   const rawTo = normalizeOptionalString(context?.to);
   if (!rawTo) {
@@ -53,6 +55,7 @@ function shouldStripThreadFromAnnounceEntry(
   return false;
 }
 
+/** Resolve the delivery origin for a subagent completion announcement. */
 export function resolveAnnounceOrigin(
   entry?: DeliveryContextSessionSource,
   requesterOrigin?: DeliveryContext,
@@ -71,6 +74,7 @@ export function resolveAnnounceOrigin(
   const entryForMerge =
     normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
+          // A stored thread only applies to the same normalized route target.
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
         })()

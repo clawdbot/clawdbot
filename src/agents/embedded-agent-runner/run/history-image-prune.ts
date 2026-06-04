@@ -1,6 +1,9 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
+/** Replacement text for old image blocks that were already available to the model. */
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+
+/** Replacement text for old textual media references that would otherwise be reloaded. */
 export const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
 
@@ -148,6 +151,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+/** Installs an agent context transform that prunes old image/media history before model input. */
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {

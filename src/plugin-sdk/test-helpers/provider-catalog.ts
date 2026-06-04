@@ -1,3 +1,6 @@
+/**
+ * Provider catalog contract assertions and expected Codex catalog fixtures.
+ */
 export {
   expectAugmentedCodexCatalog,
   expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,

@@ -1,3 +1,4 @@
+// Verifies task imports stay inside allowed runtime and registry boundaries.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   listTaskBoundarySourceFiles,

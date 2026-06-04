@@ -1,3 +1,4 @@
+/** Tests system.run approval plans, cwd snapshots, and mutable script operand binding. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

@@ -105,6 +105,23 @@ describe("run-with-pty", () => {
     }
   });
 
+  it("fails when the transcript log cannot be written", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    try {
+      const result = await runPtyProbe(
+        tempRoot,
+        {},
+        [process.execPath, "-e", "console.log('ready')"],
+        "",
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("run-with-pty transcript log failed:");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   posixIt("escalates forwarded termination signals for PTY commands that ignore them", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
     const logPath = path.join(tempRoot, "pty.log");

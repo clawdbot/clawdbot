@@ -1,9 +1,11 @@
+/** Cleanup helpers for failed ACP spawn flows. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { getAcpSessionManager } from "./manager.js";
 
+/** Minimal runtime handle needed to close a just-created session during failed spawn cleanup. */
 export type AcpSpawnRuntimeCloseHandle = {
   runtime: {
     close: (params: {
@@ -14,6 +16,7 @@ export type AcpSpawnRuntimeCloseHandle = {
   handle: { sessionKey: string; backend: string; runtimeSessionName: string };
 };
 
+/** Best-effort cleanup for partially created ACP sessions, bindings, and transcripts. */
 export async function cleanupFailedAcpSpawn(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

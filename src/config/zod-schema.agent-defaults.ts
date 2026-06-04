@@ -1,3 +1,4 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {

@@ -1,3 +1,4 @@
+/** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +14,7 @@ import {
 } from "./persistent-bindings.types.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
+// Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
@@ -53,6 +55,7 @@ function sessionMatchesConfiguredBinding(params: {
   return true;
 }
 
+/** Creates or replaces the ACP session required by one configured binding. */
 export async function ensureConfiguredAcpBindingSession(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
@@ -115,6 +118,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
+/** Resolves a configured binding for a conversation and ensures its ACP session exists. */
 export async function ensureConfiguredAcpBindingReady(params: {
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
@@ -135,6 +139,7 @@ export async function ensureConfiguredAcpBindingReady(params: {
   };
 }
 
+/** Resets a configured ACP binding session without changing the bound conversation key. */
 export async function resetAcpSessionInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

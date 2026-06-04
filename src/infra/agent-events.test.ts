@@ -1,3 +1,4 @@
+// Covers agent event sequencing and run context cleanup.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   clearAgentRunContext,

@@ -36,10 +36,16 @@ let dispatchAcpRuntimePromise: Promise<
 > | null = null;
 
 function loadDispatchAcpRuntime() {
+  // ACP dispatch pulls in session/media/manager code; cache the dynamic import so
+  // startup-loaded plugin surfaces stay light and concurrent hooks share one load.
   dispatchAcpRuntimePromise ??= import("../auto-reply/reply/dispatch-acp.runtime.js");
   return dispatchAcpRuntimePromise;
 }
 
+/**
+ * Dispatch a plugin reply hook through ACP when the event targets an ACP-bound session.
+ * Returns a handled result only when ACP consumes the reply; otherwise callers continue normal delivery.
+ */
 export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,

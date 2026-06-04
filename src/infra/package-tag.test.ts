@@ -1,3 +1,4 @@
+// Tests package tag parsing and stable release tag behavior.
 import { describe, expect, it } from "vitest";
 import { normalizePackageTagInput } from "./package-tag.js";
 

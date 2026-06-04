@@ -1,3 +1,6 @@
+/**
+ * Tests pairing loop guard runtime helpers for channel setup flows.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createPairLoopGuard,

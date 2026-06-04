@@ -1,3 +1,6 @@
+/**
+ * Shared plugin-registry mock used by gateway server-agent tests.
+ */
 import { vi } from "vitest";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry as setActivePluginRegistryLocal } from "../plugins/runtime.js";
@@ -7,6 +10,7 @@ export const registryState: { registry: PluginRegistry } = {
   registry: createEmptyPluginRegistry(),
 };
 
+/** Installs the supplied registry into both gateway test and plugin runtime globals. */
 export function setRegistry(registry: PluginRegistry) {
   registryState.registry = registry;
   setTestPluginRegistry(registry);

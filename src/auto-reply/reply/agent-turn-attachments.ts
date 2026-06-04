@@ -1,3 +1,4 @@
+/** Resolves media attachments available to the current agent turn. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,10 +16,12 @@ const agentTurnMediaRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-media.runtime.js"),
 );
 
+/** Lazily loads media runtime dependencies for agent-turn attachments. */
 export function loadAgentTurnMediaRuntime() {
   return agentTurnMediaRuntimeLoader.load();
 }
 
+/** Runtime surface needed to resolve agent-turn media attachments. */
 export type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
@@ -41,10 +44,12 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
+/** True when current or recent inbound history may contain agent-turn attachments. */
 export function hasPotentialAgentTurnAttachments(ctx: MsgContext): boolean {
   return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
 }
 
+/** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -144,6 +149,7 @@ export async function resolveAgentTurnAttachments(params: {
     !currentImageResolved &&
     (!hasCurrentMedia || hasCurrentImageCandidate)
   ) {
+    // History images are only used when the current turn did not already provide an image.
     for (const attachment of historyAttachments) {
       await resolveImageAttachment(attachment);
     }
@@ -151,6 +157,7 @@ export async function resolveAgentTurnAttachments(params: {
   return { attachments: results, recentHistoryImages: resolvedHistoryImages };
 }
 
+/** Resolves only the attachment payloads for callers that do not need history metadata. */
 export async function resolveAgentAttachments(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -159,6 +166,7 @@ export async function resolveAgentAttachments(params: {
   return (await resolveAgentTurnAttachments(params)).attachments;
 }
 
+/** Converts inline image content into ACP attachment payloads. */
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {

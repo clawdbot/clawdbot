@@ -1,8 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+// Shared validation for model-supplied tool call names. Names are kept compact
+// and ASCII-ish before comparing against any allowed-tool set.
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
+/** Normalize an optional iterable of allowed tool names for lookup. */
 export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
   if (!allowedToolNames) {
     return null;
@@ -21,6 +24,7 @@ export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): 
   return normalized.size > 0 ? normalized : null;
 }
 
+/** Return whether a model-supplied tool call name is syntactically and policy allowed. */
 export function isAllowedToolCallName(
   name: unknown,
   allowedToolNames: Set<string> | null,

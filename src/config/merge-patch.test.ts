@@ -1,3 +1,4 @@
+// Covers JSON merge-patch behavior for config mutations.
 import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "./merge-patch.js";
 

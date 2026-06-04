@@ -1,3 +1,4 @@
+// Control UI link builder for local, LAN, tailnet, and custom gateway binds.
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   pickBestEffortPrimaryLanIPv4,
@@ -5,6 +6,7 @@ import {
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
 
+/** Resolve the advertised HTTP and websocket URLs for the Control UI. */
 export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";

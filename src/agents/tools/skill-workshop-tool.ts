@@ -28,6 +28,9 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
+// Agent tool wrapper around Skill Workshop proposal lifecycle. The service owns
+// storage and scan semantics; this file handles schema, parameter coercion, and
+// compact model-facing output.
 const SKILL_WORKSHOP_ACTIONS = [
   "create",
   "update",
@@ -126,6 +129,7 @@ export type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
 };
 
+/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   return {
     label: "Skill Workshop",
@@ -373,6 +377,8 @@ function listProposalEntries(params: {
   const query = params.query?.trim().toLowerCase();
   const normalizedQuery = query ? normalizeProposalSearchText(query) : undefined;
   const limit = Math.min(Math.max(params.limit, 1), 50);
+  // Pending proposals sort first so the model sees actionable work before
+  // historical applied/rejected records.
   return params.proposals
     .filter((proposal) => !params.status || proposal.status === params.status)
     .filter((proposal) => {
@@ -386,9 +392,6 @@ function listProposalEntries(params: {
         proposal.skillName,
         proposal.skillKey,
       ].some((value) => {
-        if (typeof value !== "string") {
-          return false;
-        }
         const lower = value.toLowerCase();
         return (
           lower.includes(query) ||

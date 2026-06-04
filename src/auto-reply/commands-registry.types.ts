@@ -1,9 +1,11 @@
+/** Type contracts for text/native chat command definitions and command detection. */
 import type { OpenClawConfig } from "../config/types.js";
 import type { CommandArgValues } from "./commands-args.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
+/** Where a command may be invoked. */
 export type CommandScope = "text" | "native" | "both";
 
 /**
@@ -23,8 +25,10 @@ export type CommandCategory =
   | "tools"
   | "docks";
 
+/** Primitive command argument kinds supported by native command surfaces. */
 type CommandArgType = "string" | "number" | "boolean";
 
+/** Context passed to dynamic command argument choice providers. */
 export type CommandArgChoiceContext = {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -38,6 +42,7 @@ export type CommandArgChoice = string | { value: string; label: string };
 
 type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
 
+/** One positional argument accepted by a chat command. */
 export type CommandArgDefinition = {
   name: string;
   description: string;
@@ -48,6 +53,7 @@ export type CommandArgDefinition = {
   captureRemaining?: boolean;
 };
 
+/** Menu metadata for commands that should prompt for a missing argument. */
 export type CommandArgMenuSpec = {
   arg: string;
   title?: string;
@@ -55,6 +61,7 @@ export type CommandArgMenuSpec = {
 
 export type CommandArgsParsing = "none" | "positional";
 
+/** Canonical registry entry for one chat command across text and native surfaces. */
 export type ChatCommandDefinition = {
   key: string;
   nativeName?: string;
@@ -74,6 +81,7 @@ export type ChatCommandDefinition = {
   tier?: CommandTier;
 };
 
+/** Provider-facing native command registration shape. */
 export type NativeCommandSpec = {
   name: string;
   description: string;
@@ -83,15 +91,18 @@ export type NativeCommandSpec = {
   isAlias?: boolean;
 };
 
+/** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
 };
 
+/** Cached exact/regex command detector built from current registry aliases. */
 export type CommandDetection = {
   exact: Set<string>;
   regex: RegExp;
 };
 
+/** Inputs for deciding whether text slash commands should run on a surface. */
 export type ShouldHandleTextCommandsParams = {
   cfg: OpenClawConfig;
   surface: string;

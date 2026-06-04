@@ -1,3 +1,4 @@
+// Verifies security audit summary formatting and severity counts.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectAttackSurfaceSummaryFindings } from "./audit-extra.summary.js";

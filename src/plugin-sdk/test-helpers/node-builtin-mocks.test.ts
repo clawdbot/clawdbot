@@ -1,3 +1,6 @@
+/**
+ * Tests Node builtin mock helpers exported for plugin SDK test fixtures.
+ */
 import { describe, expect, it } from "vitest";
 import { mockNodeBuiltinModule } from "./node-builtin-mocks.js";
 

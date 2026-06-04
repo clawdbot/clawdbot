@@ -25,7 +25,9 @@ import {
   resolveUbuntuVmName,
   resolveWindowsProviderAuth,
   run,
+  runStreaming,
   shellQuote,
+  withProgressOnStderr,
 } from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
 import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
@@ -325,6 +327,26 @@ describe("Parallels smoke model selection", () => {
       12,
     );
     expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it("keeps JSON-mode progress off stdout", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await withProgressOnStderr(async () => {
+        const { say } = await import("../../scripts/e2e/parallels/common.ts");
+        say("progress");
+        process.stdout.write('{"ok":true}\n');
+      });
+
+      expect(stdoutWrite).toHaveBeenCalledTimes(1);
+      expect(stdoutWrite).toHaveBeenCalledWith('{"ok":true}\n');
+      expect(JSON.parse(String(stdoutWrite.mock.calls[0]?.[0]))).toEqual({ ok: true });
+      expect(stderrWrite).toHaveBeenCalledWith("==> progress\n");
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
   });
 
   it("waits for host artifact server exit after SIGKILL before stop resolves", async () => {
@@ -983,6 +1005,20 @@ setInterval(() => {}, 1000);
         timeoutMs: 50,
       }),
     ).toThrow(/ENOENT/u);
+  });
+
+  it("rejects streaming host commands when log writes fail", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-log-"));
+    try {
+      await expect(
+        runStreaming(process.execPath, ["-e", "process.stdout.write('ok')"], {
+          logPath: tempDir,
+          quiet: true,
+        }),
+      ).rejects.toThrow(/failed to write Parallels host command log/u);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it.runIf(process.platform !== "win32")(

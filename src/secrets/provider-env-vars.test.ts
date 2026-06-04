@@ -1,3 +1,4 @@
+/** Tests provider env-var candidate and auth evidence lookup. */
 import { describe, expect, it } from "vitest";
 import {
   getProviderEnvVars,

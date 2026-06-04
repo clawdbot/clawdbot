@@ -1,3 +1,6 @@
+/**
+ * Tests for environment gateway methods and configured environment discovery.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";

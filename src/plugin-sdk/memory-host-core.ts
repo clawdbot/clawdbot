@@ -1,3 +1,6 @@
+/**
+ * Public SDK facade for memory host runtime core and public artifact discovery.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
@@ -32,6 +35,7 @@ async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Lists public memory artifacts for one workspace, including notes and event logs. */
 export async function listMemoryWorkspacePublicArtifacts(params: {
   workspaceDir: string;
   agentIds: string[];
@@ -87,6 +91,7 @@ export async function listMemoryWorkspacePublicArtifacts(params: {
   return [...deduped.values()];
 }
 
+/** Lists public memory artifacts across all configured memory workspaces. */
 export async function listMemoryHostPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {

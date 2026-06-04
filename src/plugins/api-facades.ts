@@ -1,9 +1,11 @@
+// Builds plugin API facades exposed to bundled and external plugins.
 import type { OpenClawPluginApi } from "./types.js";
 
 type PluginApiFacadeFields = Pick<
   OpenClawPluginApi,
   "agent" | "lifecycle" | "runContext" | "session"
 >;
+/** Plugin API shape without nested facade namespaces attached. */
 export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
@@ -23,6 +25,7 @@ type PluginApiFacadeSource = Pick<
   | "unscheduleSessionTurnsByTag"
 >;
 
+/** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
 ): T & PluginApiFacadeFields {

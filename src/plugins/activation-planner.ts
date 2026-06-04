@@ -1,3 +1,4 @@
+/** Computes which manifest-owned plugins need activation for commands, routes, providers, or capabilities. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -11,6 +12,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
+/** Runtime surface that can request a lazily activated plugin owner. */
 export type PluginActivationPlannerTrigger =
   | { kind: "command"; command: string }
   | { kind: "provider"; provider: string }
@@ -63,6 +65,7 @@ type ResolveManifestActivationPlanParams = {
   allowRestrictiveAllowlistBypass?: boolean;
 };
 
+/** Returns a deterministic activation plan without importing plugin runtime modules. */
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
@@ -115,6 +118,7 @@ export function resolveManifestActivationPlan(
   };
 }
 
+/** Convenience wrapper for callers that only need plugin ids from the activation plan. */
 export function resolveManifestActivationPluginIds(
   params: ResolveManifestActivationPlanParams,
 ): string[] {

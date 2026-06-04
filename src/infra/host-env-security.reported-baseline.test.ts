@@ -1,3 +1,4 @@
+// Covers reported host-env security baseline parity.
 import fs from "node:fs";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";

@@ -1,3 +1,6 @@
+/**
+ * Public SDK facade for browser profile defaults and activated profile resolution.
+ */
 import path from "node:path";
 import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -13,6 +16,7 @@ export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
 
+/** Resolved browser tab cleanup settings after defaults and config are applied. */
 export type ResolvedBrowserTabCleanupConfig = {
   enabled: boolean;
   idleMinutes: number;
@@ -20,6 +24,7 @@ export type ResolvedBrowserTabCleanupConfig = {
   sweepMinutes: number;
 };
 
+/** Fully resolved browser plugin config used by browser runtime callers. */
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
@@ -46,6 +51,7 @@ export type ResolvedBrowserConfig = {
   extraArgs: string[];
 };
 
+/** One resolved browser profile target including CDP endpoint and launch mode. */
 export type ResolvedBrowserProfile = {
   name: string;
   cdpPort: number;
@@ -82,6 +88,7 @@ function loadBrowserProfilesSurface(): BrowserProfilesSurface {
   return cachedBrowserProfilesSurface;
 }
 
+/** Resolves browser config through the activated bundled browser profile facade. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -89,6 +96,7 @@ export function resolveBrowserConfig(
   return loadBrowserProfilesSurface().resolveBrowserConfig(cfg, rootConfig);
 }
 
+/** Resolves one named browser profile from an already resolved browser config. */
 export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,

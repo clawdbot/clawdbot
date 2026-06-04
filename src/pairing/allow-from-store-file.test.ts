@@ -1,3 +1,4 @@
+// Tests allow-from store file parsing and persistence.
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {

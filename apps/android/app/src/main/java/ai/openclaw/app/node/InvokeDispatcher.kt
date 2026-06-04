@@ -89,7 +89,6 @@ class InvokeDispatcher(
   private val debugBuild: () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
-  private val refreshCanvasHostUrl: suspend () -> String?,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
 ) {
@@ -242,24 +241,11 @@ class InvokeDispatcher(
   }
 
   private suspend fun withReadyA2ui(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult {
-    var a2uiUrl =
-      a2uiHandler.resolveA2uiHostUrl()
-        ?: refreshCanvasHostUrl().let { a2uiHandler.resolveA2uiHostUrl() }
-        ?: return GatewaySession.InvokeResult.error(
-          code = "A2UI_HOST_NOT_CONFIGURED",
-          message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-        )
-    val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
-    if (!readyOnFirstCheck) {
-      // Gateway canvas host metadata can lag reconnects; refresh once before failing the command.
-      refreshCanvasHostUrl()
-      a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: a2uiUrl
-      if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
-        return GatewaySession.InvokeResult.error(
-          code = "A2UI_HOST_UNAVAILABLE",
-          message = "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
-        )
-      }
+    if (!a2uiHandler.ensureA2uiReady()) {
+      return GatewaySession.InvokeResult.error(
+        code = "A2UI_HOST_UNAVAILABLE",
+        message = "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable",
+      )
     }
     return block()
   }

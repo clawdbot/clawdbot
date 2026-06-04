@@ -1,3 +1,4 @@
+// Verifies compaction settings config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { applyCompactionDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";

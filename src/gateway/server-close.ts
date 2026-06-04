@@ -18,6 +18,8 @@ import {
 import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
+// Gateway shutdown/restart close orchestration with bounded drain and cleanup steps.
+
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
@@ -37,6 +39,7 @@ export type ShutdownResult = {
   warnings: string[];
 };
 
+/** Create a timeout promise plus cleanup hook for shutdown races. */
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   timer = setTimeout(() => {
@@ -64,6 +67,7 @@ function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   };
 }
 
+/** Run one shutdown step and record a warning instead of aborting the whole close. */
 async function shutdownStep(
   name: string,
   fn: () => Promise<void> | void,
@@ -80,12 +84,14 @@ async function shutdownStep(
   }
 }
 
+/** Record a shutdown warning once. */
 function recordShutdownWarning(warnings: string[], name: string): void {
   if (!warnings.includes(name)) {
     warnings.push(name);
   }
 }
 
+/** Count pending replies and active runs that must drain before restart shutdown. */
 function getRestartReplyDrainCounts(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -101,12 +107,14 @@ function getRestartReplyDrainCounts(params: {
   };
 }
 
+/** List active runs participating in restart drain. */
 function listRestartDrainRuns(
   chatAbortControllers: Map<string, ChatAbortControllerEntry>,
 ): Array<[string, ChatAbortControllerEntry]> {
   return Array.from(chatAbortControllers.entries());
 }
 
+/** Format drain counts for shutdown logs. */
 function formatRestartReplyDrainDetails(counts: {
   pendingReplies: number;
   activeRuns: number;
@@ -121,6 +129,7 @@ function formatRestartReplyDrainDetails(counts: {
   return details.length > 0 ? details.join(", ") : "no pending reply work";
 }
 
+/** Sleep helper with unref'd timer for restart drain polling. */
 async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, delayMs);
@@ -141,6 +150,7 @@ type RestartRunAbortParams = {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
+/** Wait for pending replies and active runs to drain before restart shutdown. */
 async function waitForRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -175,6 +185,7 @@ async function waitForRestartReplyDrain(params: {
   }
 }
 
+/** Abort active chat runs that did not drain before restart shutdown. */
 function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
   let aborted = 0;
   for (const [runId, entry] of listRestartDrainRuns(params.chatAbortControllers)) {
@@ -193,6 +204,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
   return aborted;
 }
 
+/** Drain or abort pending reply work before restart shutdown proceeds. */
 async function drainRestartPendingRepliesForShutdown(
   params: {
     getPendingReplyCount: () => number;

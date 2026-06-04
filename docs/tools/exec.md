@@ -52,7 +52,11 @@ force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
-Approval prompt behavior for `gateway` / `node` execution.
+The baseline ask mode comes from `tools.exec.ask` and host approvals.
+For channel-origin model calls, per-call `ask` is ignored when the
+effective host ask is `off`; otherwise it can only harden to a stricter
+mode. Trusted internal/API callers that construct exec tools with an
+explicit `ask` value are unchanged.
 </ParamField>
 
 <ParamField path="node" type="string">

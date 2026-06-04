@@ -9,6 +9,12 @@ import {
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
+/**
+ * Cache-TTL eligibility and session markers for provider prompt-cache retention.
+ *
+ * Providers can override eligibility through plugin runtime hooks; built-in fallback logic covers
+ * Anthropic-family and Google prompt-cache semantics.
+ */
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -24,6 +30,7 @@ type CacheTtlContext = {
   modelId?: string;
 };
 
+/** Returns whether this provider/model pair supports cache-TTL session markers. */
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
@@ -75,6 +82,7 @@ function matchesCacheTtlContext(
   return true;
 }
 
+/** Reads the most recent cache-TTL marker that matches the optional provider/model context. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,

@@ -1,3 +1,4 @@
+// Covers sync Kysely helper type preservation.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {

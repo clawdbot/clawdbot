@@ -7,6 +7,12 @@ import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
+/**
+ * Shared image-tool helpers for model selection, data URL decoding, and response validation.
+ *
+ * These helpers are reused by image, PDF, and media factory paths.
+ */
+/** Image tool model config uses the shared tool model config shape. */
 export type ImageModelConfig = ToolModelConfig;
 
 const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
@@ -54,6 +60,7 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
   return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
+/** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
   if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
@@ -79,6 +86,7 @@ export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolea
   return false;
 }
 
+/** Decodes a base64 image data URL with optional decoded-size protection. */
 export function decodeDataUrl(
   dataUrl: string,
   opts?: { maxBytes?: number },
@@ -98,6 +106,7 @@ export function decodeDataUrl(
   }
   const b64 = (match[2] ?? "").trim();
   if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+    // Estimate before decoding so oversized inline payloads do not allocate large buffers.
     throw new Error("Invalid data URL: payload exceeds size limit.");
   }
   const buffer = Buffer.from(b64, "base64");
@@ -107,6 +116,7 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
+/** Extracts assistant text or throws a provider/model-specific image failure. */
 export function coerceImageAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -131,6 +141,7 @@ export function coerceImageAssistantText(params: {
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
 
+/** Reads imageModel defaults from config into the shared tool model config shape. */
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
@@ -211,6 +222,7 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   );
 }
 
+/** Resolves providerless configured image model refs against configured provider models. */
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
@@ -235,6 +247,7 @@ export function resolveConfiguredImageModelRefs(params: {
   };
 }
 
+/** Returns the configured vision-capable model for a provider, if present. */
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;

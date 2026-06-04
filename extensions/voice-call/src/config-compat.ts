@@ -2,8 +2,12 @@ import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-co
 import type { VoiceCallConfig } from "./config.js";
 import { VoiceCallConfigSchema } from "./config.js";
 
+// Legacy voice-call config warnings and doctor-fix migration helpers.
+
+/** Version where legacy voice-call config shape support is removed. */
 export const VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION = "2026.6.0";
 
+/** One legacy config issue with the replacement path and message. */
 type VoiceCallLegacyConfigIssue = {
   path: string;
   replacement: string;
@@ -13,11 +17,13 @@ type VoiceCallLegacyConfigIssue = {
 const asObject = asOptionalRecord;
 const getString = readStringField;
 
+/** Read finite numeric config values. */
 function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = obj?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** Merge legacy provider-specific values into the canonical providers map. */
 function mergeProviderConfig(
   providersValue: unknown,
   providerId: string,
@@ -38,6 +44,7 @@ function mergeProviderConfig(
   };
 }
 
+/** Collect legacy voice-call config keys that should be migrated. */
 export function collectVoiceCallLegacyConfigIssues(value: unknown): VoiceCallLegacyConfigIssue[] {
   const raw = asObject(value) ?? {};
   const realtime = asObject(raw.realtime);
@@ -107,6 +114,7 @@ export function collectVoiceCallLegacyConfigIssues(value: unknown): VoiceCallLeg
   return issues;
 }
 
+/** Format runtime warnings for legacy voice-call config keys. */
 export function formatVoiceCallLegacyConfigWarnings(params: {
   value: unknown;
   configPathPrefix: string;
@@ -125,6 +133,7 @@ export function formatVoiceCallLegacyConfigWarnings(params: {
   ];
 }
 
+/** Migrate legacy voice-call config input to the current canonical shape. */
 export function migrateVoiceCallLegacyConfigInput(params: {
   value: unknown;
   configPathPrefix?: string;
@@ -254,10 +263,12 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   return { config, changes, issues };
 }
 
+/** Normalize legacy voice-call config input without returning migration metadata. */
 export function normalizeVoiceCallLegacyConfigInput(value: unknown): Record<string, unknown> {
   return migrateVoiceCallLegacyConfigInput({ value }).config;
 }
 
+/** Parse voice-call plugin config after applying legacy normalization. */
 export function parseVoiceCallPluginConfig(value: unknown): VoiceCallConfig {
   return VoiceCallConfigSchema.parse(normalizeVoiceCallLegacyConfigInput(value));
 }

@@ -1,8 +1,10 @@
+// Provides generic retry timing and sleep helpers.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 import { generateSecureFraction } from "./secure-random.js";
 
+/** Retry timing knobs shared by generic retry runners and channel retry policies. */
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -10,6 +12,7 @@ export type RetryConfig = {
   jitter?: number;
 };
 
+/** Metadata emitted before a retry attempt sleeps and reruns the operation. */
 export type RetryInfo = {
   attempt: number;
   maxAttempts: number;
@@ -18,6 +21,7 @@ export type RetryInfo = {
   label?: string;
 };
 
+/** Retry execution options, including predicates, Retry-After hooks, and retry callbacks. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
@@ -54,6 +58,7 @@ function resolveRetryDelayMs(value: number): number {
   return resolveTimerTimeoutMs(value, 0, 0);
 }
 
+/** Resolves retry config overrides into clamped timer-safe settings. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
@@ -97,6 +102,7 @@ function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmet
   return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
+/** Runs an async operation until it succeeds, retry policy stops, or attempts are exhausted. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,

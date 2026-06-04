@@ -1,8 +1,12 @@
+// Safe terminal stream writer that treats broken pipes as closed output.
+
+/** Hooks for safe stream writes. */
 export type SafeStreamWriterOptions = {
   beforeWrite?: () => void;
   onBrokenPipe?: (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => void;
 };
 
+/** Writer facade that tracks closed/broken-pipe state. */
 export type SafeStreamWriter = {
   write: (stream: NodeJS.WriteStream, text: string) => boolean;
   writeLine: (stream: NodeJS.WriteStream, text: string) => boolean;
@@ -10,11 +14,13 @@ export type SafeStreamWriter = {
   isClosed: () => boolean;
 };
 
+/** Detect broken pipe style stream errors. */
 function isBrokenPipeError(err: unknown): err is NodeJS.ErrnoException {
   const code = (err as NodeJS.ErrnoException)?.code;
   return code === "EPIPE" || code === "EIO";
 }
 
+/** Create a stream writer that stops writing after EPIPE/EIO. */
 export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): SafeStreamWriter {
   let closed = false;
   let notified = false;

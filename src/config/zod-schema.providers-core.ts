@@ -1,3 +1,4 @@
+// Defines core provider schema fragments for config parsing.
 import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";

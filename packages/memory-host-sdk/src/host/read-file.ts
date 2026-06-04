@@ -23,6 +23,9 @@ import {
 } from "./read-file-shared.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 
+// Secure markdown memory-file reader for workspace and configured extra paths.
+
+/** Check that an absolute path stays inside an allowed extra directory without symlink escapes. */
 async function isAllowedAdditionalDirectoryPath(
   additionalPath: string,
   absPath: string,
@@ -46,6 +49,7 @@ async function isAllowedAdditionalDirectoryPath(
   return true;
 }
 
+/** Return true when a file vanished after path validation but before content read. */
 function isFileDisappearedDuringReadError(err: unknown): boolean {
   return (
     isFileMissingError(err) ||
@@ -58,6 +62,7 @@ function isFileDisappearedDuringReadError(err: unknown): boolean {
   );
 }
 
+/** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
   extraPaths?: string[];
@@ -112,6 +117,7 @@ export async function readMemoryFile(params: {
   }
   if (allowedWorkspace) {
     try {
+      // Workspace reads use the safe fs root so symlink escapes are rejected before file IO.
       const workspaceRoot = await root(params.workspaceDir);
       await workspaceRoot.resolve(relPath);
     } catch (err) {
@@ -150,6 +156,7 @@ export async function readMemoryFile(params: {
   });
 }
 
+/** Resolve agent memory config and read one memory file for that agent. */
 export async function readAgentMemoryFile(params: {
   cfg: OpenClawConfig;
   agentId: string;

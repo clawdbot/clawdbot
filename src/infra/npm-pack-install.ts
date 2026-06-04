@@ -1,3 +1,4 @@
+// Installs packages from npm pack artifacts for smoke and release checks.
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -26,6 +27,11 @@ type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
       integrityDrift?: NpmIntegrityDrift;
     };
 
+/**
+ * Adapts installers with additional domain params to the shared npm-pack flow.
+ * The archive path stays owned by this module so callers cannot install a stale
+ * or caller-supplied tarball while reusing the npm resolution checks.
+ */
 export async function installFromNpmSpecArchiveWithInstaller<
   TResult extends { ok: boolean },
   TArchiveInstallParams extends { archivePath: string },
@@ -54,6 +60,11 @@ export async function installFromNpmSpecArchiveWithInstaller<
   });
 }
 
+/**
+ * Final caller-facing result after a packed npm spec install.
+ * Failed pack/validation results and installer failures keep their original
+ * shapes; successful installs gain the npm resolution metadata.
+ */
 export type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
   | { ok: false; error: string }
   | Exclude<TResult, { ok: true }>
@@ -68,6 +79,10 @@ function isSuccessfulInstallResult<TResult extends { ok: boolean }>(
   return result.ok;
 }
 
+/**
+ * Collapses the shared flow result back into the installer's result union while
+ * preserving npm metadata only for a successful install.
+ */
 export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
   flowResult: NpmSpecArchiveInstallFlowResult<TResult>,
 ): NpmSpecArchiveFinalInstallResult<TResult> {
@@ -89,6 +104,10 @@ export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
   return finalized;
 }
 
+/**
+ * Packs a validated registry npm spec into a temporary tarball, verifies the
+ * resolved package metadata, then delegates archive extraction to the caller.
+ */
 export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
   tempDirPrefix: string;
   spec: string;
@@ -106,6 +125,8 @@ export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>
         error: "unsupported npm spec",
       };
     }
+    // Pack before checking prerelease policy so dist-tag and range specs are
+    // evaluated against the version the registry actually resolved.
     const packedResult = await packNpmSpecToArchive({
       spec: params.spec,
       timeoutMs: params.timeoutMs,
@@ -135,6 +156,8 @@ export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>
       };
     }
 
+    // Integrity drift is the last shared gate before extraction; installer
+    // callbacks should only run for archives the caller accepted.
     const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
       spec: params.spec,
       expectedIntegrity: params.expectedIntegrity,

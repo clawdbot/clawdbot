@@ -14,8 +14,12 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
+/**
+ * Music-generation list/status/duplicate-guard action helpers.
+ */
 type MusicGenerateActionResult = MediaGenerateActionResult;
 
+/** Formats provider capability details for the music generation `list` action. */
 function summarizeMusicGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
 ): string {
@@ -56,6 +60,7 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
+/** Builds the music-generation provider listing result shown to the agent. */
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
   options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
@@ -81,12 +86,14 @@ const musicGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
   buildStatusDetails: buildMusicGenerationTaskStatusDetails,
 });
 
+/** Builds status output for the active music-generation task in the current session. */
 export function createMusicGenerateStatusActionResult(
   sessionKey?: string,
 ): MusicGenerateActionResult {
   return musicGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
+/** Returns duplicate-guard status output when a matching music task is already active. */
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },

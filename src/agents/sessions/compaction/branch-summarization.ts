@@ -10,6 +10,9 @@ import {
 } from "../../runtime/index.js";
 import type { SessionEntry, ReadonlySessionManager } from "../session-manager.js";
 
+/**
+ * Branch-summary bridge from session managers to the shared agent-core summarizer.
+ */
 export type { BranchPreparation, BranchSummaryDetails, FileOperations };
 export { prepareBranchEntries };
 
@@ -36,6 +39,7 @@ export interface GenerateBranchSummaryOptions {
   reserveTokens?: number;
 }
 
+/** Collects entries that differ between two session branches for summarization. */
 export function collectEntriesForBranchSummary(
   session: ReadonlySessionManager,
   oldLeafId: string | null,
@@ -50,6 +54,7 @@ export function collectEntriesForBranchSummary(
   return collectEntriesForBranchSummaryFromBranches(oldBranch, targetPath);
 }
 
+/** Generates a human-readable branch summary through the shared agent-core runtime. */
 export async function generateBranchSummary(
   entries: SessionEntry[],
   options: GenerateBranchSummaryOptions,

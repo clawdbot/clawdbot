@@ -61,6 +61,7 @@ internal enum class ClawStatus {
 internal fun ClawScaffold(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.lg, vertical = ClawTheme.spacing.lg),
+  contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
   content: @Composable () -> Unit,
 ) {
   Box(
@@ -68,7 +69,7 @@ internal fun ClawScaffold(
       modifier
         .fillMaxSize()
         .background(ClawTheme.colors.canvas)
-        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .windowInsetsPadding(contentWindowInsets)
         .padding(contentPadding),
   ) {
     content()

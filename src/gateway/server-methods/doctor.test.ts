@@ -1,3 +1,6 @@
+/**
+ * Tests for doctor gateway methods and repair command dispatch.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

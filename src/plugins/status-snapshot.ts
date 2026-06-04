@@ -1,3 +1,4 @@
+/** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -10,6 +11,7 @@ import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } fro
 import { buildSnapshotPluginDependencyStatus } from "./status-snapshot-dependencies.js";
 import type { PluginLogger } from "./types.js";
 
+/** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
 export type PluginRegistryStatusReport = PluginRegistry & {
   workspaceDir?: string;
   registrySource: PluginRegistrySnapshotSource;
@@ -124,6 +126,7 @@ function buildPluginRecordFromInstalledIndex(
   };
 }
 
+/** Resolves the best available plugin registry snapshot and annotates dependency status. */
 export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {

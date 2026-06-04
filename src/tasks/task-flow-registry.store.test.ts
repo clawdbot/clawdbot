@@ -1,3 +1,4 @@
+// Covers task-flow registry store persistence, events, and state queries.
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

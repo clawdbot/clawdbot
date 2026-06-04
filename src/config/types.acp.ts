@@ -1,3 +1,4 @@
+// Defines ACP session and runtime configuration types.
 import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 
 export type AcpDispatchConfig = {

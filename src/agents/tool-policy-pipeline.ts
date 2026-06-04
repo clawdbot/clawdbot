@@ -10,6 +10,12 @@ import {
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
+/**
+ * Applies layered tool policy in runtime resolution order.
+ *
+ * Policy diagnostics stay tied to the layer that introduced them, while plugin
+ * groups are expanded only after unknown core/plugin entries are classified.
+ */
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
 const toolPolicyWarningOrder: string[] = [];
@@ -29,6 +35,7 @@ function rememberToolPolicyWarning(warning: string): boolean {
   return true;
 }
 
+/** One named policy layer in the effective runtime tool policy pipeline. */
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
@@ -38,6 +45,7 @@ export type ToolPolicyPipelineStep = {
   unavailableCoreToolReason?: string;
 };
 
+/** Builds the default profile, provider, agent, group, and sender policy layers. */
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
   profile?: string;
@@ -115,6 +123,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   ];
 }
 
+/** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
 export function applyToolPolicyPipeline(params: {
   tools: AnyAgentTool[];
   toolMeta: (tool: AnyAgentTool) => { pluginId: string } | undefined;
@@ -142,6 +151,7 @@ export function applyToolPolicyPipeline(params: {
 
     let policy: ToolPolicyLike | undefined = step.policy;
     if (step.stripPluginOnlyAllowlist) {
+      // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       const resolved = analyzeAllowlistByToolType(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
         const unavailableCoreWarningAllowlist = new Set(
@@ -230,6 +240,7 @@ function describeUnknownAllowlistSuffix(params: {
   return preface ? `${preface} ${detail}` : detail;
 }
 
+/** Clears process-local warning dedupe state between tests. */
 export function resetToolPolicyWarningCacheForTest(): void {
   seenToolPolicyWarnings.clear();
   toolPolicyWarningOrder.length = 0;

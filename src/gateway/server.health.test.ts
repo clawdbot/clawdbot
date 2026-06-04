@@ -1,3 +1,6 @@
+/**
+ * Gateway health endpoint integration tests.
+ */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";

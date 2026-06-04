@@ -1,3 +1,4 @@
+// Tests UI app settings refresh behavior for agent files.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadAgentsMock = vi.hoisted(() =>

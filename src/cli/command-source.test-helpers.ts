@@ -1,3 +1,4 @@
+// Test helper for reading command source plus lazy runtime modules that carry secret resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -42,6 +43,7 @@ async function readModuleSource(modulePath: string, seen: Set<string>): Promise<
   return nestedSources.length > 0 ? [source, ...nestedSources].join("\n") : source;
 }
 
+/** Read a command source file and selected nested runtime modules for source-policy tests. */
 export async function readCommandSource(
   relativePath: string,
   cwd = process.cwd(),

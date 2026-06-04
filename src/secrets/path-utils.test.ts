@@ -1,3 +1,4 @@
+/** Tests dotted-path get/set/delete helpers used by secrets migration. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

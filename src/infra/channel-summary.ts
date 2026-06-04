@@ -1,3 +1,4 @@
+// Formats channel account summaries for CLI status surfaces.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";

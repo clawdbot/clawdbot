@@ -1,11 +1,15 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
 
+/**
+ * Per-connection guard that suppresses noisy unauthorized-role retries.
+ */
 export type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;
   logEvery?: number;
 };
 
+/** Decision returned after recording one unauthorized role failure. */
 export type UnauthorizedFloodDecision = {
   shouldClose: boolean;
   shouldLog: boolean;
@@ -16,6 +20,7 @@ export type UnauthorizedFloodDecision = {
 const DEFAULT_CLOSE_AFTER = 10;
 const DEFAULT_LOG_EVERY = 100;
 
+/** Counts unauthorized failures and decides when to log or close the socket. */
 export class UnauthorizedFloodGuard {
   private readonly closeAfter: number;
   private readonly logEvery: number;
@@ -58,6 +63,7 @@ export class UnauthorizedFloodGuard {
   }
 }
 
+/** Identifies role-auth failures that should feed the flood guard. */
 export function isUnauthorizedRoleError(error?: ErrorShape): boolean {
   if (!error) {
     return false;

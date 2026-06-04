@@ -9,6 +9,7 @@ import {
 } from "./runner.js";
 import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
+/** Runs the configured audio-understanding pipeline and returns the first transcript output. */
 export async function runAudioTranscription(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

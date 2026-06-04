@@ -1,3 +1,6 @@
+/**
+ * Tests timeout behavior for gateway HTTP hook request handling.
+ */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createHookRequest,

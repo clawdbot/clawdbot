@@ -1,3 +1,4 @@
+// Shared subagent helpers for routing, labels, and transcript text.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

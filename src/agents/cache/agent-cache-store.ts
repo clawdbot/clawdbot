@@ -1,3 +1,5 @@
+// Agent runtime cache store contract. Implementations persist scoped key/value
+// data plus optional blobs and expiration metadata.
 export type AgentRuntimeCacheValue = {
   agentId: string;
   scope: string;

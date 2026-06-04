@@ -1,3 +1,4 @@
+// Covers strict finite number parsing helpers.
 import { describe, expect, it } from "vitest";
 import {
   parseFiniteNumber,

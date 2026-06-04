@@ -1,3 +1,4 @@
+// Checks web-search credential presence from config and plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";

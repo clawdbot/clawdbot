@@ -1,5 +1,8 @@
+// Batch status helpers shared by remote embedding providers.
+
 const TERMINAL_FAILURE_STATES = new Set(["failed", "expired", "cancelled", "canceled"]);
 
+/** Minimal provider batch status used for completion and terminal-failure checks. */
 type BatchStatusLike = {
   id?: string;
   status?: string;
@@ -7,11 +10,13 @@ type BatchStatusLike = {
   error_file_id?: string | null;
 };
 
+/** File ids returned once a batch has completed. */
 export type BatchCompletionResult = {
   outputFileId: string;
   errorFileId?: string;
 };
 
+/** Convert a completed provider status payload into output/error file ids. */
 export function resolveBatchCompletionFromStatus(params: {
   provider: string;
   batchId: string;
@@ -26,6 +31,7 @@ export function resolveBatchCompletionFromStatus(params: {
   };
 }
 
+/** Throw when a provider reports a terminal failure, including error-file detail if available. */
 export async function throwIfBatchTerminalFailure(params: {
   provider: string;
   status: BatchStatusLike;
@@ -42,6 +48,7 @@ export async function throwIfBatchTerminalFailure(params: {
   throw new Error(`${params.provider} batch ${params.status.id ?? "<unknown>"} ${state}${suffix}`);
 }
 
+/** Resolve the completed batch files, optionally waiting according to caller policy. */
 export async function resolveCompletedBatchResult(params: {
   provider: string;
   status: BatchStatusLike;

@@ -1,3 +1,4 @@
+// Defines common channel messaging configuration types.
 import type {
   BlockStreamingCoalesceConfig,
   ContextVisibilityMode,

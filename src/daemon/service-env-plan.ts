@@ -1,6 +1,7 @@
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
+/** Provenance labels for environment values rendered into managed services. */
 export type ServiceEnvSource =
   | "state-dotenv"
   | "config-env"

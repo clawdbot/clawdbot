@@ -1,10 +1,13 @@
 import { expect, it } from "vitest";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../config/runtime-group-policy.js";
 
+// Shared runtime group-policy contract for open-provider channels. Missing
+// provider config must fail closed to allowlist regardless of open defaults.
 export type RuntimeGroupPolicyResolver = (
   params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
 ) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 
+/** Installs fallback-policy tests for a channel-specific resolver wrapper. */
 export function installChannelRuntimeGroupPolicyFallbackSuite(params: {
   configuredLabel: string;
   defaultGroupPolicyUnderTest: "allowlist" | "disabled" | "open";

@@ -1,3 +1,4 @@
+// Tests reply history loading, trimming, and rendering for prompt context.
 import { describe, expect, it } from "vitest";
 import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from "./history.js";
 import type { HistoryEntry } from "./history.types.js";

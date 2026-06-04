@@ -1,3 +1,4 @@
+// Tests abort request handling, cutoff persistence, and active run cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

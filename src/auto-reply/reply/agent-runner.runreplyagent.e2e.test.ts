@@ -1,3 +1,4 @@
+// E2E tests for run-reply-agent execution and generated session artifacts.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

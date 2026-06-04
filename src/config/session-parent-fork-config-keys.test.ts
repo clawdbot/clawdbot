@@ -1,3 +1,4 @@
+// Verifies parent-fork session config keys stay aligned with schema.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 

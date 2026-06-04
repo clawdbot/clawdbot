@@ -20,6 +20,9 @@ import {
 } from "./src/manager/store.js";
 import type { CallRecord } from "./src/types.js";
 
+// Doctor state migration for Voice Call legacy JSONL call logs.
+
+/** Plugin state metadata row for one migrated call record event. */
 type CallRecordEventMeta = {
   chunkCount: number;
   byteLength: number;
@@ -27,11 +30,13 @@ type CallRecordEventMeta = {
   sequence?: number;
 };
 
+/** Plugin state chunk row for one migrated call record event. */
 type CallRecordEventChunk = {
   index: number;
   dataBase64: string;
 };
 
+/** Prepared legacy JSONL call record ready for plugin state import. */
 type PreparedLegacyCallRecord = {
   eventKey: string;
   lineNumber: number;
@@ -39,10 +44,12 @@ type PreparedLegacyCallRecord = {
   meta: CallRecordEventMeta;
 };
 
+/** Resolve home from doctor env with OS fallback. */
 function resolveHome(env: NodeJS.ProcessEnv): string {
   return env.HOME?.trim() || os.homedir();
 }
 
+/** Resolve config paths, including "~", against the doctor env home. */
 function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -54,6 +61,7 @@ function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
   return path.resolve(trimmed);
 }
 
+/** Read the configured voice-call store path from either package id. */
 function getVoiceCallConfigStore(config: PluginDoctorStateMigrationParams["config"]): string {
   for (const pluginId of ["voice-call", "@openclaw/voice-call"]) {
     const rawConfig = config.plugins?.entries?.[pluginId]?.config;
@@ -72,6 +80,7 @@ type PluginDoctorStateMigrationParams = Parameters<
   PluginDoctorStateMigration["detectLegacyState"]
 >[0];
 
+/** Resolve the voice-call store path used by legacy and plugin-state call records. */
 function resolveVoiceCallStorePath(params: {
   config: PluginDoctorStateMigrationParams["config"];
   env: NodeJS.ProcessEnv;
@@ -83,6 +92,7 @@ function resolveVoiceCallStorePath(params: {
   return path.join(resolveHome(params.env), ".openclaw", "voice-calls");
 }
 
+/** Return true when a path exists and is a file. */
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(filePath);
@@ -92,10 +102,12 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** Build the plugin state key for one migrated event chunk. */
 function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
+/** Chunk a prepared call record into bounded plugin state rows. */
 function prepareChunks(call: CallRecord): {
   chunks: CallRecordEventChunk[];
   meta: CallRecordEventMeta;
@@ -125,6 +137,7 @@ function prepareChunks(call: CallRecord): {
   };
 }
 
+/** Read and prepare legacy JSONL call records, collecting line-level warnings. */
 async function readLegacyCallRecords(filePath: string): Promise<{
   entries: PreparedLegacyCallRecord[];
   warnings: string[];
@@ -167,6 +180,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
   return { entries, warnings };
 }
 
+/** Archive the legacy JSONL source after a complete migration. */
 async function archiveLegacySource(params: {
   filePath: string;
   changes: string[];
@@ -187,6 +201,7 @@ async function archiveLegacySource(params: {
   }
 }
 
+/** Select newest missing records that fit remaining plugin state capacity. */
 async function selectEntriesForImport(params: {
   entries: PreparedLegacyCallRecord[];
   eventStore: PluginStateKeyedStore<CallRecordEventMeta>;
@@ -217,6 +232,7 @@ async function selectEntriesForImport(params: {
   return { existingEventKeys, entries: selected.toReversed() };
 }
 
+/** Import prepared legacy call records into plugin state. */
 async function importLegacyCallRecords(params: {
   entries: PreparedLegacyCallRecord[];
   eventStore: PluginStateKeyedStore<CallRecordEventMeta>;
@@ -245,6 +261,7 @@ async function importLegacyCallRecords(params: {
   return imported;
 }
 
+/** Doctor migrations owned by the voice-call plugin. */
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "voice-call-calls-jsonl-to-plugin-state",

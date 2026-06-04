@@ -1,3 +1,4 @@
+// Tests wide-area DNS discovery parsing and timeout behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

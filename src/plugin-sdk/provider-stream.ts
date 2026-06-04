@@ -45,18 +45,30 @@ export {
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
+/** Named stream-wrapper bundles that provider plugins can opt into without duplicating policy. */
 export type ProviderStreamFamily =
+  /** Applies Google thinking-level payload normalization. */
   | "google-thinking"
+  /** Applies Kilocode proxy reasoning payload normalization. */
   | "kilocode-thinking"
+  /** Applies Moonshot thinking type/keep normalization. */
   | "moonshot-thinking"
+  /** Enables MiniMax high-speed model routing when requested. */
   | "minimax-fast-mode"
+  /** Applies the default OpenAI Responses wrapper stack. */
   | "openai-responses-defaults"
+  /** Applies OpenRouter proxy reasoning payload normalization. */
   | "openrouter-thinking"
+  /** Enables tool-call event streaming unless explicitly disabled. */
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
 
+/** Builds provider hook objects for one supported stream-wrapper family. */
 export function buildProviderStreamFamilyHooks(
+  /**
+   * Family key selecting the exact wrapper bundle to attach to a provider.
+   */
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
@@ -96,6 +108,8 @@ export function buildProviderStreamFamilyHooks(
     case "openai-responses-defaults":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          // Wrapper order is observable: header/default params must be in place
+          // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
           if (resolveOpenAIFastMode(ctx.extraParams)) {

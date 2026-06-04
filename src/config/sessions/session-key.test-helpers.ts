@@ -7,6 +7,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
+/** Builds the minimum message context needed by session key tests. */
 export function makeCtx(overrides: Partial<MsgContext>): MsgContext {
   return {
     Body: "",

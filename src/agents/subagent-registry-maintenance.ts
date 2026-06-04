@@ -4,6 +4,9 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+// Session maintenance must preserve child sessions that are active, awaiting a
+// completion announce, or suspended for later delivery. Completed cleanup rows
+// no longer need to pin their session keys.
 function isCleanupCompleteForMaintenance(entry: SubagentRunRecord): boolean {
   return typeof entry.cleanupCompletedAt === "number";
 }
@@ -32,6 +35,7 @@ function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** Lists child session keys protected from session-store maintenance pruning. */
 export function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   const keys = new Set<string>();
   for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {

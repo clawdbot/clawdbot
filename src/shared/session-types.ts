@@ -1,3 +1,4 @@
+/** Agent identity fields returned by gateway session listing APIs. */
 export type GatewayAgentIdentity = {
   name?: string;
   theme?: string;
@@ -6,22 +7,26 @@ export type GatewayAgentIdentity = {
   avatarUrl?: string;
 };
 
+/** Model summary returned for an agent/session row. */
 export type GatewayAgentModel = {
   primary?: string;
   fallbacks?: string[];
 };
 
+/** Runtime selection metadata for an agent row. */
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
   source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };
 
+/** Thinking-level option exposed to UI clients. */
 export type GatewayThinkingLevelOption = {
   id: string;
   label: string;
 };
 
+/** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;
   name?: string;
@@ -34,6 +39,7 @@ export type GatewayAgentRow = {
   thinkingDefault?: string;
 };
 
+/** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {
   ts: number;
   path: string;
@@ -47,6 +53,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   sessions: TRow[];
 };
 
+/** Generic base for successful session patch responses. */
 export type SessionsPatchResultBase<TEntry> = {
   ok: true;
   path: string;

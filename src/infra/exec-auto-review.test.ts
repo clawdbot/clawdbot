@@ -1,3 +1,4 @@
+// Covers conservative default exec auto-review decisions.
 import { describe, expect, it } from "vitest";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "./exec-auto-review.js";
 

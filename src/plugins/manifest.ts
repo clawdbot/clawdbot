@@ -1,3 +1,4 @@
+/** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
@@ -32,6 +33,7 @@ import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
+/** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
@@ -54,6 +56,7 @@ const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
 
+/** Clears process-local manifest parse cache for tests and explicit refresh flows. */
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
 }

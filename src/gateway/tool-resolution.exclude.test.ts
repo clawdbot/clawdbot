@@ -1,3 +1,6 @@
+/**
+ * Gateway tool-resolution exclusion tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

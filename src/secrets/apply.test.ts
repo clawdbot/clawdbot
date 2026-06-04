@@ -1,7 +1,15 @@
+/** Tests secrets apply dry-run/write behavior across config and auth stores. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -34,6 +42,7 @@ type ApplyFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
+  agentDir: string;
   authStorePath: string;
   authJsonPath: string;
   envPath: string;
@@ -56,7 +65,19 @@ function stripVolatileConfigMeta(input: string): Record<string, unknown> {
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  if (path.basename(filePath) === "openclaw-agent.sqlite") {
+    saveAuthProfileStore(value as AuthProfileStore, path.dirname(filePath), {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    return;
+  }
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function readAuthStore(fixture: ApplyFixture): Promise<AuthProfileStore> {
+  const { loadPersistedAuthProfileStore } = await import("../agents/auth-profiles/persisted.js");
+  return loadPersistedAuthProfileStore(fixture.agentDir) ?? { version: 1, profiles: {} };
 }
 
 function createOpenAiProviderConfig(apiKey: unknown = "sk-openai-plaintext") {
@@ -70,12 +91,14 @@ function createOpenAiProviderConfig(apiKey: unknown = "sk-openai-plaintext") {
 
 function buildFixturePaths(rootDir: string) {
   const stateDir = path.join(rootDir, ".openclaw");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
   return {
     rootDir,
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    authStorePath: path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-    authJsonPath: path.join(stateDir, "agents", "main", "agent", "auth.json"),
+    agentDir,
+    authStorePath: resolveAuthProfileDatabasePath(agentDir),
+    authJsonPath: path.join(agentDir, "auth.json"),
     envPath: path.join(stateDir, ".env"),
   };
 }
@@ -85,7 +108,7 @@ async function createApplyFixture(): Promise<ApplyFixture> {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-")),
   );
   await fs.mkdir(path.dirname(paths.configPath), { recursive: true });
-  await fs.mkdir(path.dirname(paths.authStorePath), { recursive: true });
+  await fs.mkdir(paths.agentDir, { recursive: true });
   return {
     ...paths,
     env: {
@@ -262,6 +285,7 @@ describe("secrets apply", () => {
 
   afterEach(async () => {
     clearSecretsRuntimeSnapshot();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -287,7 +311,7 @@ describe("secrets apply", () => {
     };
     expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -327,7 +351,7 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: { "openai:bot": { token?: string; tokenRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:bot"].token).toBeUndefined();
@@ -353,7 +377,7 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -501,6 +525,16 @@ describe("secrets apply", () => {
   });
 
   it("applies auth-profiles sibling ref targets to the scoped agent store", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-ope...text", // pragma: allowlist secret
+        },
+      },
+    });
     const plan: SecretsApplyPlan = {
       version: 1,
       protocolVersion: 1,
@@ -526,7 +560,7 @@ describe("secrets apply", () => {
     expect(result.changed).toBe(true);
     expect(result.changedFiles).toContain(fixture.authStorePath);
 
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -535,6 +569,46 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("uses the configured agent id for custom auth-profile target agent dirs", async () => {
+    const coderAgentDir = path.join(fixture.rootDir, "custom-coder-agent");
+    const coderStorePath = resolveAuthProfileDatabasePath(coderAgentDir);
+    await writeJsonFile(fixture.configPath, {
+      agents: {
+        list: [{ id: "coder", agentDir: coderAgentDir }],
+      },
+    });
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "coder",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          authProfileProvider: "openai",
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    expect(result.changedFiles).toContain(coderStorePath);
+    const database = openOpenClawAgentDatabase({
+      agentId: "coder",
+      path: coderStorePath,
+    });
+    expect(database.agentId).toBe("coder");
   });
 
   it("preserves unrelated oauth profiles while applying auth-profile key ref targets", async () => {
@@ -590,7 +664,7 @@ describe("secrets apply", () => {
     const result = await runSecretsApply({ plan, env: fixture.env, write: true });
 
     expect(result.changed).toBe(true);
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: Record<
         string,
         {
@@ -615,12 +689,11 @@ describe("secrets apply", () => {
     expect(nextAuthStore.profiles["openai:sidecar"]).toMatchObject({
       type: "oauth",
       provider: "openai",
-      oauthRef: codexOAuthRef,
       email: "codex@example.invalid",
     });
     expect(nextAuthStore.profiles["anthropic:claude-cli"]).toEqual({
       provider: "claude-cli",
-      mode: "oauth",
+      type: "oauth",
     });
     expect(nextAuthStore.order?.["openai"]).toEqual(["openai:sidecar", "openai:static"]);
     expect(nextAuthStore.lastGood?.["claude-cli"]).toBe("anthropic:claude-cli");
@@ -650,7 +723,7 @@ describe("secrets apply", () => {
     };
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
-    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
       profiles: {
         "openai:bot": {
           type: string;
@@ -679,12 +752,11 @@ describe("secrets apply", () => {
     const first = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(first.changed).toBe(true);
     const configAfterFirst = await fs.readFile(fixture.configPath, "utf8");
-    const authStoreAfterFirst = await fs.readFile(fixture.authStorePath, "utf8");
+    const authStoreAfterFirst = JSON.stringify(await readAuthStore(fixture));
     const authJsonAfterFirst = await fs.readFile(fixture.authJsonPath, "utf8");
     const envAfterFirst = await fs.readFile(fixture.envPath, "utf8");
 
     await fs.chmod(fixture.configPath, 0o400);
-    await fs.chmod(fixture.authStorePath, 0o400);
 
     const second = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(second.mode).toBe("write");
@@ -692,7 +764,7 @@ describe("secrets apply", () => {
     expect(stripVolatileConfigMeta(configAfterSecond)).toEqual(
       stripVolatileConfigMeta(configAfterFirst),
     );
-    await expect(fs.readFile(fixture.authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
+    expect(JSON.stringify(await readAuthStore(fixture))).toBe(authStoreAfterFirst);
     await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
     await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(envAfterFirst);
   });

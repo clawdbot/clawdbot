@@ -1,3 +1,4 @@
+// Tests session-state cleanup helpers used by integration fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

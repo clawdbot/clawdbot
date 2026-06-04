@@ -77,6 +77,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
+/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;
@@ -110,6 +111,8 @@ export async function summarizeText(
     const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
+      // Keep summarization on the simple-completion path so provider auth,
+      // aliases, and timeout behavior match other lightweight model calls.
       const res = await deps.completeSimple(
         completionModel,
         {

@@ -71,7 +71,7 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
@@ -87,7 +87,7 @@ export async function modelsAuthOrderClearCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
+      `Failed to update auth state; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
     );
   }
 
@@ -132,7 +132,7 @@ export async function modelsAuthOrderSetCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
+      `Failed to update auth state; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
     );
   }
 

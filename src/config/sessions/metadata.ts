@@ -10,6 +10,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+// Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -51,6 +52,7 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
+/** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },

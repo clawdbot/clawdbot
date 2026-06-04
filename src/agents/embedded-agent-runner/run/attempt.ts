@@ -604,6 +604,16 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
   (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
 }
 
+function repairAttemptToolUseResultPairing(
+  messages: AgentMessage[],
+  isOpenAIResponsesApi: boolean,
+): AgentMessage[] {
+  return sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
+  });
+}
+
 function shouldPreservePromptErrorAfterCleanupError(params: {
   promptError: unknown;
   cleanupError: unknown;
@@ -1963,6 +1973,10 @@ export async function runEmbeddedAttempt(
         config: params.config,
         env: process.env,
       });
+      const isOpenAIResponsesApi =
+        params.model.api === "openai-responses" ||
+        params.model.api === "azure-openai-responses" ||
+        params.model.api === "openai-chatgpt-responses";
 
       await prewarmSessionFile(params.sessionFile);
       const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
@@ -2254,9 +2268,13 @@ export async function runEmbeddedAttempt(
         applySystemPromptToSession(activeSession, nextSystemPrompt);
       };
       setActiveSessionSystemPrompt(systemPromptText);
+      let didDeliverSourceReplyViaMessageTool = false;
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        onDeliveredSourceReply: () => {
+          didDeliverSourceReplyViaMessageTool = true;
+        },
       });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
@@ -2356,6 +2374,12 @@ export async function runEmbeddedAttempt(
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
+          ...(transcriptPolicy.repairToolUseResultPairing
+            ? {
+                repairAssembledMessages: (messages) =>
+                  repairAttemptToolUseResultPairing(messages, isOpenAIResponsesApi),
+              }
+            : {}),
           getPrePromptMessageCount: () => prePromptMessageCount,
           onAfterTurnCheckpoint: (messageCount) => {
             contextEngineAfterTurnCheckpoint = messageCount;
@@ -2653,11 +2677,6 @@ export async function runEmbeddedAttempt(
       // historical messages at attempt start, but the agent loop's internal tool call →
       // tool result cycles bypass that path. Wrap streamFn so every outbound request
       // sees sanitized tool call IDs.
-      const isOpenAIResponsesApi =
-        params.model.api === "openai-responses" ||
-        params.model.api === "azure-openai-responses" ||
-        params.model.api === "openai-chatgpt-responses";
-
       const replayToolCallIdSanitizerDecision = {
         sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
         toolCallIdMode: transcriptPolicy.toolCallIdMode,
@@ -2920,10 +2939,7 @@ export async function runEmbeddedAttempt(
           // limitHistoryTurns can orphan tool_result blocks by removing the
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
-                ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
-              })
+            ? repairAttemptToolUseResultPairing(truncated, isOpenAIResponsesApi)
             : truncated;
           cacheTrace?.recordStage("session:limited", { messages: limited });
           if (limited.length > 0 || prior.length > 0) {
@@ -2952,8 +2968,11 @@ export async function runEmbeddedAttempt(
             if (!assembled) {
               throw new Error("context engine assemble returned no result");
             }
-            if (assembled.messages !== activeSession.messages) {
-              activeSession.agent.state.messages = assembled.messages;
+            const assembledMessages = transcriptPolicy.repairToolUseResultPairing
+              ? repairAttemptToolUseResultPairing(assembled.messages, isOpenAIResponsesApi)
+              : assembled.messages;
+            if (assembledMessages !== activeSession.messages) {
+              activeSession.agent.state.messages = assembledMessages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
@@ -5115,6 +5134,7 @@ export async function runEmbeddedAttempt(
         currentAttemptAssistant,
         lastToolError,
         didSendViaMessagingTool: didSendViaMessagingTool(),
+        didDeliverSourceReplyViaMessageTool,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),

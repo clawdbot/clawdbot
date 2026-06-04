@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "../../catalog.js";
 
+// Reusable catalog contract suites for channel plugins. Fixtures exercise the
+// same manifest/catalog loading paths that setup uses for install-on-demand.
 type CatalogEntryMeta = {
   id: string;
   label: string;
@@ -49,6 +51,7 @@ export function describeChannelCatalogEntryContract(params: {
   });
 }
 
+/** Verifies catalog entries that come only from bundled manifest metadata. */
 export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   pluginId: string;
   packageName: string;
@@ -101,6 +104,7 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
   });
 }
 
+/** Verifies fallback ordering between bundled, official, and external catalogs. */
 export function describeOfficialFallbackChannelCatalogContract(params: {
   channelId: string;
   npmSpec: string;

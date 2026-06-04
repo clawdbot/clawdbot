@@ -1,3 +1,4 @@
+// Covers heartbeat wake cooldown and flood-deferral decisions.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FLOOD_THRESHOLD,

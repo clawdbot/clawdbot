@@ -16,6 +16,7 @@ const TAR_VERBOSE_MONTHS = new Set([
 ]);
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// Tar verbose prefixes encode file type in the first mode character.
 function mapTarVerboseTypeChar(typeChar: string): string {
   switch (typeChar) {
     case "l":
@@ -67,6 +68,7 @@ function parseTarSizeToken(raw: string, line: string): number {
   return size;
 }
 
+/** Parses tar verbose metadata into type and byte size entries. */
 export function parseTarVerboseMetadata(stdout: string): Array<{ type: string; size: number }> {
   const lines = normalizeStringEntries(stdout.split("\n"));
   return lines.map((line) => {

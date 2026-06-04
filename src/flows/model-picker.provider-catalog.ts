@@ -20,6 +20,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 
+// Loads live provider model catalogs for the preferred-provider model picker.
 const log = createSubsystemLogger("model-picker-provider-catalog");
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
@@ -73,6 +74,7 @@ async function resolvePreferredProviderLiveCatalogProviders(params: {
     return liveProviders;
   }
 
+  // Fallback activates setup-mode providers only when discovery returned no live catalog runner.
   const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
   return resolvePluginProviders({
     config: params.cfg,
@@ -112,6 +114,7 @@ function resolveProviderEnvApiKey(
   return undefined;
 }
 
+// Converts provider plugin catalog rows into the model picker shape without losing window metadata.
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -136,6 +139,7 @@ function modelFromProviderCatalog(params: {
   };
 }
 
+/** Loads live catalog models for the user's preferred provider, ordered by discovery priority. */
 export async function loadPreferredProviderPickerCatalog(params: {
   cfg: OpenClawConfig;
   preferredProvider: string;
@@ -179,6 +183,7 @@ export async function loadPreferredProviderPickerCatalog(params: {
   const resolveProviderAuth = createProviderAuthResolver(env, getAuthStore, params.cfg);
   const resolveFastProviderApiKey = (provider: ProviderPlugin, providerId = provider.id) => {
     const normalizedProviderId = normalizeProviderId(providerId);
+    // Prefer direct env keys for the current provider before touching the auth profile store.
     if (providerAuthIds(provider).includes(normalizedProviderId)) {
       const fromEnv = resolveProviderEnvApiKey(provider, env);
       if (fromEnv) {
@@ -191,6 +196,7 @@ export async function loadPreferredProviderPickerCatalog(params: {
   const rows: ModelCatalogEntry[] = [];
   const seen = new Set<string>();
 
+  // Discovery order is a contract: simple/profile results win over paired/late duplicates.
   for (const order of DISCOVERY_ORDERS) {
     for (const provider of byOrder[order]) {
       let result: Awaited<ReturnType<typeof runProviderCatalog>>;

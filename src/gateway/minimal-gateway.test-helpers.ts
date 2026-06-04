@@ -3,6 +3,9 @@ import type { WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../infra/ws.js";
 
+/**
+ * Minimal WebSocket gateway fixtures used by client/backend tests.
+ */
 export type MinimalGatewayRequestFrame = {
   type?: string;
   id?: string;
@@ -13,12 +16,14 @@ export type MinimalGatewayRequestFrame = {
   };
 };
 
+/** Parses a raw WebSocket frame into the small request shape used by tests. */
 export function parseMinimalGatewayRequestFrame(
   data: WebSocket.RawData,
 ): MinimalGatewayRequestFrame {
   return JSON.parse(rawDataToString(data)) as MinimalGatewayRequestFrame;
 }
 
+/** Sends the connect challenge event expected by minimal gateway clients. */
 export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-nonce"): void {
   ws.send(
     JSON.stringify({
@@ -29,6 +34,7 @@ export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-
   );
 }
 
+/** Builds a minimal hello-ok payload for fake gateway servers. */
 export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
@@ -55,10 +61,12 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   };
 }
 
+/** Sends a successful response frame from a fake gateway server. */
 export function sendMinimalGatewayResponse(ws: WebSocket, id: string, payload: unknown): void {
   ws.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
+/** Terminates all clients and closes a fake WebSocket gateway server. */
 export async function closeMinimalGatewayServer(wss: WebSocketServer): Promise<void> {
   for (const client of wss.clients) {
     client.terminate();

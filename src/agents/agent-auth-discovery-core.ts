@@ -1,8 +1,4 @@
-import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
-import { isRecord } from "../utils.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import {
   listProviderEnvAuthLookupKeys,
@@ -10,12 +6,14 @@ import {
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 
+/** Options for discovering env-backed credentials during agent auth discovery. */
 export type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
 
+/** Adds provider credentials resolvable from env/config without mutating existing credentials. */
 export function addEnvBackedAgentCredentials(
   credentials: AgentCredentialMap,
   options: AgentDiscoveryAuthLookupOptions = {},
@@ -55,47 +53,4 @@ export function addEnvBackedAgentCredentials(
     };
   }
   return next;
-}
-
-export function scrubLegacyStaticAuthJsonEntriesForDiscovery(pathname: string): void {
-  if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
-    return;
-  }
-  if (!fs.existsSync(pathname)) {
-    return;
-  }
-
-  const parsed = tryReadJsonSync(pathname);
-  if (!isRecord(parsed)) {
-    return;
-  }
-
-  let changed = false;
-  for (const [provider, value] of Object.entries(parsed)) {
-    if (!isRecord(value)) {
-      continue;
-    }
-    if (value.type !== "api_key") {
-      continue;
-    }
-    delete parsed[provider];
-    changed = true;
-  }
-
-  if (!changed) {
-    return;
-  }
-
-  if (Object.keys(parsed).length === 0) {
-    fs.rmSync(pathname, { force: true });
-    return;
-  }
-
-  replaceFileAtomicSync({
-    filePath: pathname,
-    content: `${JSON.stringify(parsed, null, 2)}\n`,
-    dirMode: 0o700,
-    mode: 0o600,
-    tempPrefix: ".agent-auth",
-  });
 }

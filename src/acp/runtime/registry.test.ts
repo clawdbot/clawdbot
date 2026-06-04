@@ -1,3 +1,4 @@
+/** Tests ACP runtime backend registration, health selection, and required lookup errors. */
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "./errors.js";

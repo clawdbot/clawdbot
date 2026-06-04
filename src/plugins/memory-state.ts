@@ -1,3 +1,4 @@
+/** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";

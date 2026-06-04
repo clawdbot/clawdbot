@@ -22,7 +22,6 @@ export async function transcribeFirstAudio(params: {
 }): Promise<string | undefined> {
   const { ctx, cfg } = params;
 
-  // Check if audio transcription is enabled in config
   const audioConfig = cfg.tools?.media?.audio;
   if (audioConfig?.enabled === false) {
     return undefined;
@@ -33,7 +32,6 @@ export async function transcribeFirstAudio(params: {
     return undefined;
   }
 
-  // Find first audio attachment
   const firstAudio = attachments.find(
     (att) => att && isAudioAttachment(att) && !att.alreadyTranscribed,
   );
@@ -69,7 +67,7 @@ export async function transcribeFirstAudio(params: {
       });
     }
 
-    // Mark this attachment as transcribed to avoid double-processing
+    // Mark this attachment as transcribed so the main media pass does not duplicate STT output.
     firstAudio.alreadyTranscribed = true;
 
     if (shouldLogVerbose()) {
@@ -80,7 +78,7 @@ export async function transcribeFirstAudio(params: {
 
     return transcript;
   } catch (err) {
-    // Log but don't throw - let the message proceed with text-only mention check
+    // Preflight cannot block message handling; mention checks can still run on text-only input.
     if (shouldLogVerbose()) {
       logVerbose(`audio-preflight: transcription failed: ${String(err)}`);
     }

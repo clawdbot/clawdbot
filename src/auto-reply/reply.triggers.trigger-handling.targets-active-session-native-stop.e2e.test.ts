@@ -1,3 +1,4 @@
+/** E2E tests for native /stop targeting the active auto-reply session. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
@@ -770,41 +772,30 @@ describe("trigger handling", () => {
       runEmbeddedAgentMock.mockReset();
       const storePath = requireSessionStorePath(cfg);
       const authDir = join(home, ".openclaw", "agents", "main", "agent");
-      await fs.mkdir(authDir, { recursive: true });
-      await fs.writeFile(
-        join(authDir, "auth-profiles.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              [TEST_PRIMARY_PROFILE_ID]: {
-                type: "oauth",
-                provider: "openai",
-                access: "oauth-access-token-josh",
-              },
-              [TEST_SECONDARY_PROFILE_ID]: {
-                type: "oauth",
-                provider: "openai",
-                access: "oauth-access-token",
-              },
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [TEST_PRIMARY_PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai",
+              access: "oauth-access-token-josh",
+              refresh: "oauth-refresh-token-josh",
+              expires: Date.now() + 60_000,
+            },
+            [TEST_SECONDARY_PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai",
+              access: "oauth-access-token",
+              refresh: "oauth-refresh-token",
+              expires: Date.now() + 60_000,
             },
           },
-          null,
-          2,
-        ),
-      );
-      await fs.writeFile(
-        join(authDir, "auth-state.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            order: {
-              openai: [TEST_PRIMARY_PROFILE_ID],
-            },
+          order: {
+            openai: [TEST_PRIMARY_PROFILE_ID],
           },
-          null,
-          2,
-        ),
+        },
+        authDir,
       );
 
       const slashSessionKey = "telegram:slash:111";

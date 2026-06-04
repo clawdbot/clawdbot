@@ -1,3 +1,4 @@
+// Stores and verifies web push subscriptions and delivery payloads.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";

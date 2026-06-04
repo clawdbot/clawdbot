@@ -1,3 +1,4 @@
+// Covers web provider resolution candidate selection.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

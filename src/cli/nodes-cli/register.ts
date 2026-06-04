@@ -1,3 +1,4 @@
+// Root `nodes` command registration: wires node status, pairing, invoke, media, and plugin extensions.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -12,6 +13,7 @@ import { registerNodesPushCommand } from "./register.push.js";
 import { registerNodesScreenCommands } from "./register.screen.js";
 import { registerNodesStatusCommands } from "./register.status.js";
 
+/** Register the `nodes` command group and lazy plugin-provided node commands. */
 export async function registerNodesCli(program: Command, argv: readonly string[] = process.argv) {
   const nodes = program
     .command("nodes")

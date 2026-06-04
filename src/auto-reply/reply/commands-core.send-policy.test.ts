@@ -1,3 +1,4 @@
+// Tests command send policy behavior for visible replies and message-tool routing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 

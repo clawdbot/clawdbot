@@ -1,9 +1,16 @@
+// Registers music generation provider runtimes by normalized provider id.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { MusicGenerationProviderPlugin } from "../plugins/types.js";
 
+/**
+ * Registry for music generation providers.
+ *
+ * Built-ins and plugin-provided capability providers share one alias map while
+ * rejecting unsafe object keys before they reach Maps or config-derived lookups.
+ */
 const BUILTIN_MUSIC_GENERATION_PROVIDERS: readonly MusicGenerationProviderPlugin[] = [];
 const UNSAFE_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -16,6 +23,7 @@ function normalizeMusicGenerationProviderId(id: string | undefined): string | un
 }
 
 function isSafeMusicGenerationProviderId(id: string | undefined): id is string {
+  // Keep prototype-pollution sentinel names out even after normal provider-id normalization.
   return Boolean(id && !UNSAFE_PROVIDER_IDS.has(id));
 }
 
@@ -59,12 +67,14 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
   return { canonical, aliases };
 }
 
+/** List canonical music generation providers available for the current config. */
 export function listMusicGenerationProviders(
   cfg?: OpenClawConfig,
 ): MusicGenerationProviderPlugin[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
+/** Resolve a music generation provider by canonical id or alias. */
 export function getMusicGenerationProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,

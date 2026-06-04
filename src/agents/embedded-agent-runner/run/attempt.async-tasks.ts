@@ -13,6 +13,7 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
+/** Summary of completion-required async task waits performed before a cron run can finish. */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -101,6 +102,8 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
+  // Registry lookup catches completion-required tasks started before their
+  // tool metadata reached the current attempt result.
   for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
       continue;
@@ -130,6 +133,7 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
+/** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -153,6 +157,12 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/**
+ * Polls completion-required async tasks until they reach terminal state, time
+ * out at the run deadline, or abort. Newly discovered task run ids are folded
+ * into later poll rounds so task metadata and registry state can arrive in any
+ * order.
+ */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
@@ -171,6 +181,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 
   while (true) {
     throwIfAborted(params.abortSignal);
+    // Re-read metadata every outer loop; tool calls may record async run ids
+    // after an earlier task wait finished.
     const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
     if (runIds.length === 0) {
       return {

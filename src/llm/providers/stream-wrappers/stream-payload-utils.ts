@@ -1,5 +1,6 @@
 import type { StreamFn } from "../../../agents/runtime/index.js";
 
+/** Wraps a stream function and lets callers mutate outgoing provider payload objects. */
 export function streamWithPayloadPatch(
   underlying: StreamFn,
   model: Parameters<StreamFn>[0],
@@ -11,6 +12,7 @@ export function streamWithPayloadPatch(
   return underlying(model, context, {
     ...options,
     onPayload: (payload) => {
+      // Payload hooks receive mutable provider request objects before the underlying sender uses them.
       if (payload && typeof payload === "object") {
         patchPayload(payload as Record<string, unknown>);
       }

@@ -1,3 +1,4 @@
+// Browser Origin validator for gateway HTTP and websocket requests.
 import net from "node:net";
 import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
@@ -32,6 +33,7 @@ function parseOrigin(
   }
 }
 
+/** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;

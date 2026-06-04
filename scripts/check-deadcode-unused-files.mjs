@@ -5,6 +5,7 @@ import {
   KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
   KNIP_UNUSED_FILE_ALLOWLIST,
 } from "./deadcode-unused-files.allowlist.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const KNIP_VERSION = "6.8.0";
 export const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
@@ -158,7 +159,17 @@ export async function runKnipUnusedFiles(params = {}) {
     let exitStatus = null;
     let exitSignal = null;
 
-    const child = run("pnpm", args, {
+    const pnpm = createPnpmRunnerSpawnSpec({
+      detached: process.platform !== "win32",
+      env: params.env,
+      nodeExecPath: params.nodeExecPath,
+      npmExecPath: params.npmExecPath,
+      platform: params.platform,
+      pnpmArgs: args,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const child = run(pnpm.command, pnpm.args, {
+      ...pnpm.options,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });

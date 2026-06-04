@@ -1,3 +1,4 @@
+// Normalizes markdown table configuration by channel and rendering mode.
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listChannelPlugins } from "../channels/plugins/registry.js";
 import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";

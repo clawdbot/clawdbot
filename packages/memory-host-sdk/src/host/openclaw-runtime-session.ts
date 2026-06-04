@@ -1,3 +1,5 @@
+// Narrow session/runtime facade re-exported for memory transcript helpers.
+
 export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,

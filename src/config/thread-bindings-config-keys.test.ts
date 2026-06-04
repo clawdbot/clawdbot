@@ -1,3 +1,4 @@
+// Checks thread-binding config keys stay aligned with schema metadata.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 

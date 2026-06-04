@@ -1,3 +1,9 @@
+/**
+ * Runtime dependency barrel for subagent announcement delivery.
+ *
+ * Tests mock this module to isolate delivery logic from gateway, outbound
+ * message routing, queue settings, hooks, and embedded-run state.
+ */
 export { getRuntimeConfig } from "../config/config.js";
 export {
   loadSessionStore,

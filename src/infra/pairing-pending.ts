@@ -1,3 +1,4 @@
+// Shared helpers for mutating pending pairing request state.
 type PendingState<TPending> = {
   pendingById: Record<string, TPending>;
 };

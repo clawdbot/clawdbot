@@ -1,3 +1,6 @@
+/**
+ * Tests QA runtime command loading and private CLI gating.
+ */
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

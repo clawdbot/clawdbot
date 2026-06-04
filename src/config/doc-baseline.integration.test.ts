@@ -1,3 +1,4 @@
+// Verifies generated config documentation baselines against source metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";

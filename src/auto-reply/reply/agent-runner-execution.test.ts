@@ -1,3 +1,4 @@
+// Tests agent runner execution setup, command args, and model fallback routing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";

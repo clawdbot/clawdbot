@@ -1,6 +1,9 @@
+// Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
+// Exec host requests cross the local JSONL socket boundary into a privileged
+// runner, so payloads stay explicit and HMAC-protected.
 export type ExecHostRequest = {
   command: string[];
   rawCommand?: string | null;
@@ -32,6 +35,7 @@ export type ExecHostResponse =
   | { ok: true; payload: ExecHostRunResult }
   | { ok: false; error: ExecHostError };
 
+/** Send an authenticated exec request over the host JSONL socket. */
 export async function requestExecHostViaSocket(params: {
   socketPath: string;
   token: string;
@@ -46,6 +50,8 @@ export async function requestExecHostViaSocket(params: {
   const requestJson = JSON.stringify(request);
   const nonce = crypto.randomBytes(16).toString("hex");
   const ts = Date.now();
+  // The host validates the exact JSON payload with nonce and timestamp, so the
+  // command body cannot be modified without invalidating the request HMAC.
   const hmac = crypto
     .createHmac("sha256", token)
     .update(`${nonce}:${ts}:${requestJson}`)

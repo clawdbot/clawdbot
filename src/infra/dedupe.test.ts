@@ -1,3 +1,4 @@
+// Covers process-local dedupe cache behavior.
 import { describe, expect, it } from "vitest";
 import { createDedupeCache } from "./dedupe.js";
 

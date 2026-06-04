@@ -1,3 +1,4 @@
+/** Formats and appends token/cost usage lines to reply payloads. */
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -7,6 +8,7 @@ import {
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
+/** Formats the optional usage/cost summary appended to agent replies. */
 export const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
@@ -52,6 +54,7 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
 };
 
+/** Appends a usage line to the last text payload while preserving payload metadata. */
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
   let index = -1;
   for (let i = payloads.length - 1; i >= 0; i -= 1) {
@@ -71,6 +74,7 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     text: `${existingText}${separator}${line}`,
   };
   const metadata = getReplyPayloadMetadata(existing);
+  // Transcript mirrors must track the mutated text or source-reply delivery drifts.
   const nextWithMetadata = metadata
     ? setReplyPayloadMetadata(next, {
         ...metadata,

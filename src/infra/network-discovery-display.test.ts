@@ -1,3 +1,4 @@
+// Covers best-effort network discovery display helpers.
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";

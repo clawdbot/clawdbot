@@ -1,3 +1,4 @@
+// Builds setup metadata for self-hosted provider plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

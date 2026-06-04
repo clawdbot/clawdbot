@@ -1,3 +1,9 @@
+/**
+ * PCM resampling and G.711 mu-law conversion helpers for Talk audio bridges.
+ *
+ * Telephony providers generally expect 8 kHz mu-law frames, while local audio
+ * capture and realtime providers can produce higher-rate signed 16-bit PCM.
+ */
 const TELEPHONY_SAMPLE_RATE = 8000;
 const RESAMPLE_FILTER_TAPS = 31;
 const RESAMPLE_CUTOFF_GUARD = 0.94;
@@ -16,10 +22,13 @@ type ResampleKernel = {
 
 const HOST_IS_LITTLE_ENDIAN = new Uint16Array(new Uint8Array([1, 0]).buffer)[0] === 1;
 
+/** Clamp an intermediate sample to signed 16-bit PCM range. */
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
 }
 
+// When the host and Buffer alignment allow it, an Int16Array view avoids copying
+// every PCM sample. The fallback below preserves correctness for odd offsets.
 function canUseInt16View(buffer: Buffer): boolean {
   return HOST_IS_LITTLE_ENDIAN && buffer.byteOffset % Int16Array.BYTES_PER_ELEMENT === 0;
 }
@@ -73,6 +82,8 @@ function buildResampleKernel(
   const inputStep = inputSampleRate / divisor;
   const phaseCount = outputSampleRate / divisor;
   if (phaseCount > RESAMPLE_MAX_PRECOMPUTED_PHASES) {
+    // Very unusual rate ratios would allocate too many phase tables; callers
+    // fall back to the direct bandlimited sampler instead.
     return undefined;
   }
   const coefficients = Array.from({ length: phaseCount }, (_, phaseIndex) => {
@@ -89,6 +100,7 @@ function buildResampleKernel(
   return { coefficients, inputStep, phaseCount };
 }
 
+// Samples through a precomputed windowed-sinc kernel for common rate ratios.
 function sampleBandlimitedWithCoefficients(
   input: Int16Array,
   center: number,
@@ -115,6 +127,7 @@ function sampleBandlimitedWithCoefficients(
   return weighted / weightSum;
 }
 
+// Direct windowed-sinc sampler used when precomputing phase tables is too large.
 function sampleBandlimited(
   input: Int16Array,
   srcPos: number,
@@ -145,6 +158,7 @@ function sampleBandlimited(
   return weighted / weightSum;
 }
 
+/** Resample little-endian signed 16-bit PCM to another integer sample rate. */
 export function resamplePcm(
   input: Buffer,
   inputSampleRate: number,
@@ -190,10 +204,12 @@ export function resamplePcm(
   return output;
 }
 
+/** Resample little-endian signed 16-bit PCM to the telephony 8 kHz rate. */
 export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer {
   return resamplePcm(input, inputSampleRate, TELEPHONY_SAMPLE_RATE);
 }
 
+/** Convert little-endian signed 16-bit PCM samples to G.711 mu-law bytes. */
 export function pcmToMulaw(pcm: Buffer): Buffer {
   const pcmView = readInt16Samples(pcm);
   const mulaw = Buffer.alloc(pcmView.length);
@@ -205,6 +221,7 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
   return mulaw;
 }
 
+/** Expand G.711 mu-law bytes into little-endian signed 16-bit PCM samples. */
 export function mulawToPcm(mulaw: Buffer): Buffer {
   const pcm = Buffer.alloc(mulaw.length * 2);
   const pcmView = canUseInt16View(pcm) ? int16View(pcm) : undefined;
@@ -221,10 +238,13 @@ export function mulawToPcm(mulaw: Buffer): Buffer {
   return pcm;
 }
 
+/** Resample signed 16-bit PCM to 8 kHz and encode it as G.711 mu-law. */
 export function convertPcmToMulaw8k(pcm: Buffer, inputSampleRate: number): Buffer {
   return pcmToMulaw(resamplePcmTo8k(pcm, inputSampleRate));
 }
 
+// ITU G.711-style mu-law companding. The bias and clip constants intentionally
+// match the standard table formula so round-trips remain provider-compatible.
 function linearToMulaw(sampleInput: number): number {
   let sample = sampleInput;
   const BIAS = 132;

@@ -1,3 +1,4 @@
+// Tests shared infra error formatting and classification.
 import { describe, expect, it } from "vitest";
 import {
   collectErrorGraphCandidates,

@@ -4,8 +4,12 @@ import {
   loadGatewayTlsRuntime as loadGatewayTlsRuntimeConfig,
 } from "../../infra/tls/gateway.js";
 
+/**
+ * Gateway TLS runtime loader boundary.
+ */
 export type { GatewayTlsRuntime } from "../../infra/tls/gateway.js";
 
+/** Loads certificate/key material for the gateway listener from config. */
 export async function loadGatewayTlsRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },

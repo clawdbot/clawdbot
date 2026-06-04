@@ -1,3 +1,4 @@
+/** Process-local active-turn registry for ACP maintenance and recovery decisions. */
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeActorKey } from "./manager.utils.js";
 
@@ -20,6 +21,7 @@ function getAcpActiveTurnState(): AcpActiveTurnState {
   }));
 }
 
+/** Marks a session as currently running an ACP turn. */
 export function markAcpTurnActive(sessionKey: string) {
   if (!sessionKey) {
     return;
@@ -27,6 +29,7 @@ export function markAcpTurnActive(sessionKey: string) {
   getAcpActiveTurnState().activeTurnKeys.add(normalizeActorKey(sessionKey));
 }
 
+/** Clears the active-turn marker for a session. */
 export function clearAcpTurnActive(sessionKey: string) {
   if (!sessionKey) {
     return;
@@ -34,6 +37,7 @@ export function clearAcpTurnActive(sessionKey: string) {
   getAcpActiveTurnState().activeTurnKeys.delete(normalizeActorKey(sessionKey));
 }
 
+/** Returns whether the process currently owns an in-flight ACP turn for a session. */
 export function isAcpTurnActive(sessionKey: string): boolean {
   if (!sessionKey) {
     return false;
@@ -41,6 +45,7 @@ export function isAcpTurnActive(sessionKey: string): boolean {
   return getAcpActiveTurnState().activeTurnKeys.has(normalizeActorKey(sessionKey));
 }
 
+/** Clears active-turn state for isolated tests. */
 export function resetAcpActiveTurnsForTests() {
   getAcpActiveTurnState().activeTurnKeys.clear();
 }

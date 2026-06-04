@@ -34,6 +34,9 @@ import type {
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
+// Builds the prepared runtime plan consumed by embedded agent runs. The plan
+// centralizes provider hooks, auth, tool schema policy, transcript policy, and
+// observability so hot paths reuse one resolved provider/runtime context.
 function formatResolvedRef(params: { provider: string; modelId: string }): string {
   return `${params.provider}/${params.modelId}`;
 }
@@ -90,6 +93,7 @@ function resolveProviderRuntimeHandleForPlugins(params: {
   });
 }
 
+/** Build delivery-specific runtime decisions for one provider/model. */
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
@@ -131,12 +135,14 @@ export function buildAgentRuntimeDeliveryPlan(
   };
 }
 
+/** Build run-outcome classification hooks for model fallback decisions. */
 export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
     classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };
 }
 
+/** Build the complete runtime plan for an embedded agent attempt. */
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const config = asOpenClawConfig(params.config);
   const model = asProviderRuntimeModel(params.model);
@@ -145,6 +151,8 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
   let toolPlanningMetadataSnapshot: PluginMetadataSnapshot | undefined;
   const loadToolPlanningMetadataSnapshot = () => {
+    // Metadata is process-stable for one run; load lazily because many attempts
+    // never need prepared tool planning.
     toolPlanningMetadataSnapshot ??= loadManifestMetadataSnapshot({
       config: toolPlanningConfig,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -233,6 +241,8 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
   const resolveDefaultTranscriptPolicy = () => {
+    // Default getters are memoized, while override resolvers remain fresh for
+    // callers that intentionally vary workspace/model details.
     memoizedTranscriptPolicy ??= resolveTranscriptRuntimePolicy();
     return memoizedTranscriptPolicy;
   };

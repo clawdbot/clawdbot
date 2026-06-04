@@ -1,3 +1,4 @@
+/** Runtime entrypoint for image generation with provider fallback and override normalization. */
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
@@ -20,6 +21,9 @@ import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
+// Runtime dependency seam for tests and plugin-host callers. Production uses
+// the plugin registry and provider-env helpers by default.
+/** Dependency seam used by image-generation runtime tests and plugin host callers. */
 export type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
@@ -42,6 +46,7 @@ function buildNoImageGenerationModelConfiguredMessage(
   });
 }
 
+/** Lists image-generation providers visible for the current config. */
 export function listRuntimeImageGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: ImageGenerationRuntimeDeps = {},
@@ -75,6 +80,8 @@ export async function generateImage(
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  // Try configured/fallback models in order and return the first provider that
+  // yields at least one image; failed attempts are preserved for diagnostics.
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
@@ -107,6 +114,8 @@ export async function generateImage(
         background: params.background,
         inputImages: params.inputImages,
       });
+      // Providers receive only supported overrides. Ignored/normalized values
+      // are returned to callers so user-facing replies can explain adjustments.
       const result: ImageGenerationResult = await provider.generateImage({
         provider: candidate.provider,
         model: candidate.model,

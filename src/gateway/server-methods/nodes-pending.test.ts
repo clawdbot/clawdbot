@@ -1,3 +1,6 @@
+/**
+ * Tests pending-node gateway method responses and state filtering.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nodePendingHandlers } from "./nodes-pending.js";
 

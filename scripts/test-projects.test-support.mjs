@@ -1647,8 +1647,7 @@ function resolveToolingChangedTestTargets(changedPaths, cwd = process.cwd()) {
   return [...new Set(targets)];
 }
 
-const TOOLING_SCRIPT_PATH_PATTERN =
-  /^scripts\/(.+)\.(?:mjs|cjs|js|mts|cts|ts|sh|py|ps1)$/u;
+const TOOLING_SCRIPT_PATH_PATTERN = /^scripts\/(.+)\.(?:mjs|cjs|js|mts|cts|ts|sh|py|ps1)$/u;
 
 function resolveConventionalToolingTestTargets(changedPath, cwd = process.cwd()) {
   const match = TOOLING_SCRIPT_PATH_PATTERN.exec(changedPath);
@@ -2088,6 +2087,9 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
     return false;
   }
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (isTestFileTarget(relative)) {
+    return false;
+  }
   return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
 }
 

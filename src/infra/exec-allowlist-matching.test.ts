@@ -1,3 +1,4 @@
+// Covers exec allowlist pattern matching.
 import { describe, expect, it } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 

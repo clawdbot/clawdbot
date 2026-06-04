@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import { buildTalkConfigResponse } from "../../../src/config/talk.js";
 import { validateTalkConfigResult } from "./index.js";
 
+/**
+ * Talk config contract tests shared between config normalization and gateway
+ * protocol validation. Fixtures capture provider selection and timeout behavior
+ * so config changes cannot silently diverge from the public RPC response shape.
+ */
+
+/** Expected resolved provider/config selection for one fixture case. */
 type ExpectedSelection = {
   provider: string;
   normalizedPayload: boolean;
@@ -10,6 +17,7 @@ type ExpectedSelection = {
   apiKey?: string;
 };
 
+/** Fixture row that validates normalized Talk provider selection. */
 type SelectionContractCase = {
   id: string;
   defaultProvider: string;
@@ -18,6 +26,7 @@ type SelectionContractCase = {
   talk: Record<string, unknown>;
 };
 
+/** Fixture row that validates Talk silence-timeout normalization. */
 type TimeoutContractCase = {
   id: string;
   fallback: number;
@@ -25,11 +34,13 @@ type TimeoutContractCase = {
   talk: Record<string, unknown>;
 };
 
+/** JSON fixture file shape used by this contract test. */
 type TalkConfigContractFixture = {
   selectionCases: SelectionContractCase[];
   timeoutCases: TimeoutContractCase[];
 };
 
+/** External fixture keeps the matrix readable and reusable across config edits. */
 const fixturePath = new URL("../../../test/fixtures/talk-config-contract.json", import.meta.url);
 const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfigContractFixture;
 

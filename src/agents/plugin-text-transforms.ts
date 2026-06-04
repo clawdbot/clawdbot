@@ -4,6 +4,9 @@ import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
+// Applies plugin-defined text replacement transforms to stream input/output.
+// Used by provider/CLI plugins that need compatibility rewrites at boundaries.
+/** Merge multiple plugin text-transform sets. */
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
 ): PluginTextTransforms | undefined {
@@ -18,6 +21,7 @@ export function mergePluginTextTransforms(
   };
 }
 
+/** Apply sequential plugin text replacements to one string. */
 export function applyPluginTextReplacements(
   text: string,
   replacements?: PluginTextReplacement[],
@@ -70,6 +74,7 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
   return next;
 }
 
+/** Apply input text replacements to a stream context. */
 export function transformStreamContextText(
   context: Parameters<StreamFn>[1],
   replacements?: PluginTextReplacement[],
@@ -126,6 +131,8 @@ function wrapStreamTextTransforms(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => transformMessageText(await originalResult(), replacements) as never;
 
+  // Wrap async iteration so streamed deltas and the final result receive the
+  // same output replacement policy.
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
@@ -146,6 +153,7 @@ function wrapStreamTextTransforms(
   return stream;
 }
 
+/** Wrap a stream function with plugin input/output text transforms. */
 export function wrapStreamFnTextTransforms(params: {
   streamFn: StreamFn;
   input?: PluginTextReplacement[];

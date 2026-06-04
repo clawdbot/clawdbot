@@ -1,7 +1,10 @@
+// Identifies wrapper commands that can carry hidden command payloads.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 
+// Command carriers are executables that can hide the real command behind
+// wrapper-specific options, environment assignments, or shell-style splitting.
 export const COMMAND_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
 
 export const SOURCE_EXECUTABLES = new Set([".", "source"]);
@@ -205,6 +208,8 @@ function resolveEnvSplitPayload(
     return null;
   }
   const carriedArgv = [...innerArgv, ...trailingArgv];
+  // env -S can recursively introduce another env wrapper; keep a bounded depth
+  // so malicious argv cannot create unbounded parser work.
   return resolveEnvCarriedArgv(["env", ...carriedArgv], depth + 1) ?? carriedArgv;
 }
 
@@ -215,6 +220,7 @@ export type ParsedEnvInvocationPrelude = {
   usesModifiers: boolean;
 };
 
+/** Parse the option and assignment prelude of an `env` invocation. */
 export function parseEnvInvocationPrelude(
   argv: string[],
   depth = 0,
@@ -282,11 +288,13 @@ export function envInvocationUsesModifiers(argv: string[]): boolean {
   return parsed?.usesModifiers ?? normalizeExecutableToken(argv[0] ?? "") === "env";
 }
 
+/** Return the argv carried by `env`, including argv reconstructed from `env -S`. */
 export function unwrapEnvInvocation(argv: string[]): string[] | null {
   const parsed = parseEnvInvocationPrelude(argv);
   return parsed ? (parsed.splitArgv ?? argv.slice(parsed.commandIndex)) : null;
 }
 
+/** Resolve the command argv behind an `env` carrier, honoring bounded `env -S` recursion. */
 export function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
   const parsed = parseEnvInvocationPrelude(argv, depth);
   return parsed ? (parsed.splitArgv ?? argv.slice(parsed.commandIndex)) : null;

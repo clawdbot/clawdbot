@@ -12,6 +12,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
+/** Builds a minimal ACP new-session request for translator tests. */
 export function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
     cwd,

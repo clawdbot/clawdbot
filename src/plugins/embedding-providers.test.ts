@@ -1,3 +1,4 @@
+// Covers plugin embedding provider registration and lookup.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearEmbeddingProviders,

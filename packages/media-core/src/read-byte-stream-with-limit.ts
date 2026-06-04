@@ -1,8 +1,10 @@
+/** Details passed to byte-stream overflow error factories. */
 export type ByteStreamLimitOverflow = {
   size: number;
   maxBytes: number;
 };
 
+/** Options for reading an async byte stream under a hard byte cap. */
 export type ReadByteStreamWithLimitOptions = {
   maxBytes: number;
   onOverflow?: (params: ByteStreamLimitOverflow) => Error;
@@ -29,6 +31,8 @@ function destroyReadableOnOverflow(stream: unknown, err: Error): void {
     destroy?: (error?: Error) => unknown;
     cancel?: (reason?: unknown) => unknown;
   };
+  // Stop upstream producers immediately after overflow; otherwise large media
+  // streams can continue buffering after the caller has already failed.
   if (typeof readable.destroy === "function") {
     try {
       readable.destroy(err);
@@ -42,6 +46,7 @@ function destroyReadableOnOverflow(stream: unknown, err: Error): void {
   }
 }
 
+/** Reads and concatenates an async byte stream, throwing once the byte cap is exceeded. */
 export async function readByteStreamWithLimit(
   stream: AsyncIterable<unknown>,
   opts: ReadByteStreamWithLimitOptions,

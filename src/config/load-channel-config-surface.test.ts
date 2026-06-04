@@ -1,3 +1,4 @@
+// Verifies channel config loading surfaces visible plugin settings.
 import fs from "node:fs";
 import path from "node:path";
 import type { createJiti as createJitiType } from "jiti";

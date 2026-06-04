@@ -1,3 +1,4 @@
+// Covers gateway port listener classification and diagnostics text.
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import {

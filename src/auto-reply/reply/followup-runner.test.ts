@@ -1,3 +1,4 @@
+// Tests follow-up runner delivery, transcript persistence, and no-reply contracts.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

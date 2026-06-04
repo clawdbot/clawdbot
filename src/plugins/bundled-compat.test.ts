@@ -1,3 +1,4 @@
+/** Covers bundled plugin compatibility modes and their activation defaults. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";

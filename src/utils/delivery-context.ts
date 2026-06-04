@@ -40,6 +40,7 @@ function normalizeConversationTargetParams(params: ConversationTargetParams): {
   return { channel, conversationId, parentConversationId };
 }
 
+/** Formats a conversation id into a deliverable target, using plugin hooks before generic fallback. */
 export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
   const { channel, conversationId, parentConversationId } =
     normalizeConversationTargetParams(params);
@@ -58,6 +59,7 @@ export function formatConversationTarget(params: ConversationTargetParams): stri
   return `channel:${conversationId}`;
 }
 
+/** Resolves a channel conversation into target/thread fields for delivery routing. */
 export function resolveConversationDeliveryTarget(params: {
   channel?: string;
   conversationId?: string | number;

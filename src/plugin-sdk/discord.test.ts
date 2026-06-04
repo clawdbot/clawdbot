@@ -1,3 +1,6 @@
+/**
+ * Tests Discord SDK helpers and Discord-facing compatibility behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {

@@ -1,3 +1,4 @@
+// Defines CLI configuration types.
 export type CliBannerTaglineMode = "random" | "default" | "off";
 
 export type CliConfig = {

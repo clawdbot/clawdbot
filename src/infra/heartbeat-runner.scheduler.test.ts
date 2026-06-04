@@ -1,3 +1,4 @@
+// Tests heartbeat runner scheduling and timer cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";

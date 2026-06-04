@@ -1,3 +1,4 @@
+/** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
   buildSafeBinsShellCommand,
@@ -23,6 +24,12 @@ import {
 } from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
+/**
+ * Allowlist analysis and argv rewriting for node-host system.run.
+ *
+ * This module keeps command approval analysis separate from process execution,
+ * and only rewrites shell transports when the rebuilt command still satisfies policy.
+ */
 const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 type SystemRunAllowlistAnalysis = {
@@ -34,6 +41,8 @@ type SystemRunAllowlistAnalysis = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+/** Evaluate system.run argv or shell command against the exec allowlist policy. */
+/** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
 export function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
@@ -95,6 +104,7 @@ export function evaluateSystemRunAllowlist(params: {
   };
 }
 
+/** Resolve the single planned argv that can replace the caller argv after allowlist approval. */
 export function resolvePlannedAllowlistArgv(params: {
   security: ExecSecurity;
   shellCommand: string | null;
@@ -119,6 +129,7 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
+/** Resolve final argv after safe-bin shell rewriting and allowlist revalidation. */
 export function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
@@ -152,6 +163,7 @@ export function resolveSystemRunExecArgv(params: {
     params.segments.length === 1 &&
     params.segments[0]?.argv.length > 0
   ) {
+    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
     execArgv = params.segments[0].argv;
   }
   if (
@@ -197,6 +209,7 @@ export function resolveSystemRunExecArgv(params: {
       autoAllowSkills: params.autoAllowSkills,
     });
     if (!rebuiltAllowlist.analysisOk || !rebuiltAllowlist.allowlistSatisfied) {
+      // Rewritten shell commands must prove the same allowlist contract before execution.
       return null;
     }
     execArgv = rewrittenArgv;
@@ -264,6 +277,7 @@ function replacePosixShellInlineCommand(params: {
     return rewritten;
   }
   if (token.endsWith(params.oldCommand)) {
+    // Combined shell flags can leave the inline command in a suffix of the same argv token.
     rewritten[absoluteValueIndex] =
       token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
     return rewritten;
@@ -271,6 +285,8 @@ function replacePosixShellInlineCommand(params: {
   return null;
 }
 
+/** Mark truncated output in stderr when possible, otherwise stdout. */
+/** Truncates captured stdout/stderr in place to the node-host output cap. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

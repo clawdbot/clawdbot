@@ -1,3 +1,4 @@
+// Public LLM runtime package surface for provider registry and stream helpers.
 export {
   clearApiProviders,
   getApiProvider,

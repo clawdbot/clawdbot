@@ -1,3 +1,6 @@
+/**
+ * Direct import smoke helper for plugin public artifact tests.
+ */
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

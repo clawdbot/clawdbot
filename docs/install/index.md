@@ -10,12 +10,16 @@ title: "Install"
 ## System requirements
 
 - **Node 24** (recommended) or Node 22.19+ - the installer script handles this automatically
-- **macOS, Linux, or Windows** - both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
+- **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source
 
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
+
+<Note>
+Windows desktop users can also install the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
+</Note>
 
 <Tabs>
   <Tab title="macOS / Linux / WSL2">

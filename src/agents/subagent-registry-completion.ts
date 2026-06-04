@@ -13,6 +13,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
+/** Compares subagent run outcomes, treating missing timing as compatible. */
 export function runOutcomesEqual(
   a: SubagentRunOutcome | undefined,
   b: SubagentRunOutcome | undefined,
@@ -37,6 +38,7 @@ export function runOutcomesEqual(
   return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
 }
 
+/** Returns true when an outcome carries timing fields. */
 export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
   return (
     Number.isFinite(outcome?.startedAt) ||
@@ -45,6 +47,7 @@ export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): bo
   );
 }
 
+/** Returns true when a run outcome update should replace current state. */
 export function shouldUpdateRunOutcome(
   current: SubagentRunOutcome | undefined,
   next: SubagentRunOutcome | undefined,
@@ -54,6 +57,7 @@ export function shouldUpdateRunOutcome(
   );
 }
 
+/** Maps registry run outcome to lifecycle event outcome. */
 export function resolveLifecycleOutcomeFromRunOutcome(
   outcome: SubagentRunOutcome | undefined,
 ): SubagentLifecycleEndedOutcome {
@@ -66,6 +70,7 @@ export function resolveLifecycleOutcomeFromRunOutcome(
   return SUBAGENT_ENDED_OUTCOME_OK;
 }
 
+/** Emits the subagent_ended hook once per completed run. */
 export async function emitSubagentEndedHookOnce(params: {
   entry: SubagentRunRecord;
   reason: SubagentLifecycleEndedReason;
@@ -87,6 +92,8 @@ export async function emitSubagentEndedHookOnce(params: {
     return false;
   }
 
+  // In-flight guard prevents concurrent completion paths from double-emitting
+  // the hook before endedHookEmittedAt is persisted.
   params.inFlightRunIds.add(runId);
   try {
     const hookRunner = getGlobalHookRunner();

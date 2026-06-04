@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
 import { listChannelPluginCatalogEntries } from "../../catalog.js";
 
+// Shared catalog contract suites for synthetic external/discovered channel
+// plugins. Each fixture writes real manifest files to prove parser behavior.
 function createCatalogEntry(params: {
   packageName: string;
   channelId: string;
@@ -116,6 +118,7 @@ function expectCatalogEntryMatch(params: {
   ).toMatchObject(params.expected);
 }
 
+/** Installs catalog entry tests shared by plugin registry and manifest suites. */
 export function describeChannelPluginCatalogEntriesContract() {
   describe("channel plugin catalog entries contract", () => {
     it.each([
@@ -473,6 +476,7 @@ export function describeChannelPluginCatalogEntriesContract() {
   });
 }
 
+/** Installs catalog path resolution tests that depend on env/home/state paths. */
 export function describeChannelPluginCatalogPathResolutionContract() {
   describe("channel plugin catalog path resolution contract", () => {
     it.each([

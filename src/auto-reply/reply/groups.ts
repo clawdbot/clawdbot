@@ -1,3 +1,4 @@
+/** Group/direct chat prompt context, activation, and silent-reply helpers. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -143,6 +144,7 @@ function resolveDiscordRequireMentionFallback(params: {
   return undefined;
 }
 
+/** Resolves whether a group/channel turn requires an explicit mention. */
 export async function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -195,6 +197,7 @@ export async function resolveGroupRequireMention(params: {
   });
 }
 
+/** Converts requireMention into the default prompt activation label. */
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
   return !requireMention ? "always" : "mention";
 }
@@ -218,6 +221,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
+/** Builds system prompt context for group/channel conversations. */
 export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -276,6 +280,7 @@ export function buildGroupChatContext(params: {
   return lines.join(" ");
 }
 
+/** Builds system prompt context for direct conversations. */
 export function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -297,6 +302,7 @@ export function buildDirectChatContext(params: {
   return lines.join(" ");
 }
 
+/** Resolves silent-reply behavior text for group prompt instructions. */
 export function resolveGroupSilentReplyBehavior(params: {
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
@@ -316,6 +322,7 @@ export function resolveGroupSilentReplyBehavior(params: {
   };
 }
 
+/** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;

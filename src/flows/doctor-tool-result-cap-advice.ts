@@ -3,6 +3,7 @@ import {
   resolveAutoLiveToolResultMaxChars,
 } from "../agents/embedded-agent-runner/tool-result-truncation.js";
 
+// Doctor advice for explicit live tool-result caps that fight model-window defaults.
 export type ToolResultCapDoctorAdviceParams = {
   contextWindowTokens: number;
   modelKey: string;
@@ -15,6 +16,7 @@ function formatNumber(value: number): string {
   return String(Math.max(0, Math.floor(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+/** Builds human-readable doctor lines for stale or ineffective toolResultMaxChars settings. */
 export function buildToolResultCapDoctorAdvice(params: ToolResultCapDoctorAdviceParams): string[] {
   if (!Number.isFinite(params.contextWindowTokens) || params.contextWindowTokens <= 0) {
     return [];
@@ -36,6 +38,7 @@ export function buildToolResultCapDoctorAdvice(params: ToolResultCapDoctorAdvice
 
   const lines: string[] = [];
   const prefix = params.scopeLabel ? `${params.scopeLabel}: ` : "";
+  // Deep mode always shows the effective cap, even when no warning is needed.
   if (params.deep) {
     lines.push(
       `- ${prefix}primary model "${params.modelKey}" context window ${formatNumber(

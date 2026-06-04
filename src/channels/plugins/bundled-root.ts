@@ -28,6 +28,9 @@ function derivePackageRootFromExtensionsDir(extensionsDir: string): string {
   return parentDir;
 }
 
+/**
+ * Resolves the package/cache scope used for bundled channel plugin metadata.
+ */
 export function resolveBundledChannelRootScope(
   env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelRootScope {
@@ -39,6 +42,8 @@ export function resolveBundledChannelRootScope(
     };
   }
   const resolvedPluginsDir = path.resolve(bundledPluginsDir);
+  // A direct extensions directory belongs to the package root; any other scan dir is its own
+  // cache scope so tests and packaged runtimes do not share stale metadata.
   return {
     packageRoot:
       path.basename(resolvedPluginsDir) === "extensions"

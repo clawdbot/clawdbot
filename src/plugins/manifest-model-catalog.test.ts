@@ -1,3 +1,4 @@
+// Covers model catalog metadata declared by plugin manifests.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

@@ -31,7 +31,11 @@ import {
   installPluginFromNpmPackArchive,
   type InstallPluginResult,
 } from "../plugins/install.js";
-import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  recordPluginInstall,
+  resolveNpmInstallRecordSpec,
+} from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
@@ -1240,7 +1244,11 @@ export async function ensureOnboardingPluginInstalled(params: {
     const install = {
       pluginId: result.pluginId,
       source: "npm",
-      spec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      spec: resolveNpmInstallRecordSpec({
+        requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+        resolution: result.npmResolution,
+        pinResolvedRegistrySpec: entry.trustedSourceLinkedOfficialInstall === true,
+      }),
       installPath: result.targetDir,
       version: result.version,
       ...buildNpmResolutionInstallFields(result.npmResolution),

@@ -1,3 +1,4 @@
+// Normalizes env flag values and logs env warnings lazily.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 
@@ -33,6 +34,7 @@ function formatEnvValue(value: string, redact?: boolean): string {
   return `${singleLine.slice(0, 160)}…`;
 }
 
+/** Logs an accepted env option once, with optional redaction for sensitive values. */
 export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
@@ -56,12 +58,14 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     });
 }
 
+/** Normalizes the legacy Z_AI_API_KEY spelling into the canonical ZAI_API_KEY env var. */
 export function normalizeZaiEnv(): void {
   if (!process.env.ZAI_API_KEY?.trim() && process.env.Z_AI_API_KEY?.trim()) {
     process.env.ZAI_API_KEY = process.env.Z_AI_API_KEY;
   }
 }
 
+/** Interprets common human/operator truthy env strings. */
 export function isTruthyEnvValue(value?: string): boolean {
   if (typeof value !== "string") {
     return false;
@@ -77,6 +81,7 @@ export function isTruthyEnvValue(value?: string): boolean {
   }
 }
 
+/** Detects Vitest/test execution from the env shape used by local and worker processes. */
 export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     env.VITEST === "true" ||
@@ -87,6 +92,7 @@ export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolea
   );
 }
 
+/** Applies process-wide env normalization before runtime configuration is read. */
 export function normalizeEnv(): void {
   normalizeZaiEnv();
 }

@@ -11,6 +11,12 @@ import {
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import type { ToolDetailMode } from "./tool-display-exec.js";
 
+/**
+ * Formats user-facing tool labels and compact details from display metadata.
+ *
+ * This module is presentation-only: it redacts final detail text and leaves
+ * execution semantics to the runtime.
+ */
 type ToolDisplay = {
   name: string;
   emoji: string;
@@ -42,6 +48,7 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
 };
 const MAX_DETAIL_ENTRIES = 8;
 
+/** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
@@ -82,11 +89,13 @@ export function resolveToolDisplay(params: {
   };
 }
 
+/** Formats and redacts detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
   return formatToolDetailText(detailRaw);
 }
 
+/** Builds the compact one-line summary shown in transcripts and logs. */
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && (display.name === "bash" || display.name === "exec")) {

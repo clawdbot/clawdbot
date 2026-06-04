@@ -1,3 +1,4 @@
+/** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {

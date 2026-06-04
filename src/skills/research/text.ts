@@ -1,5 +1,6 @@
 const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
 
+// Transcript content can be raw strings or Responses-style typed text blocks.
 function readTextValue(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -35,6 +36,7 @@ function extractMessageText(content: unknown): string {
   return extractTextBlock(content);
 }
 
+/** Extracts role/text pairs from mixed transcript message shapes. */
 export function extractTranscriptText(messages: unknown[]): Array<{ role: string; text: string }> {
   const result: Array<{ role: string; text: string }> = [];
   for (const message of messages) {

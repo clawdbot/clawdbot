@@ -193,6 +193,8 @@ export type EmbeddedAgentRunResult = {
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if message_tool_only delivered a visible reply to the current source conversation.
+  didDeliverSourceReplyViaMessageTool?: boolean;
   // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.

@@ -1,8 +1,11 @@
+// Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { CompiledQuery, Kysely, QueryResult } from "kysely";
 import { InsertQueryNode, Kysely as KyselyInstance } from "kysely";
 import { NodeSqliteKyselyDialect } from "./kysely-node-sqlite.js";
 
+// Sync query helpers execute compiled Kysely SQL against node:sqlite without
+// going through Kysely's async driver path.
 type CompilableQuery<Row = unknown> = {
   compile(): CompiledQuery<Row>;
 };
@@ -21,6 +24,7 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
   return kysely;
 }
 
+/** Execute a compiled Kysely query synchronously against node:sqlite. */
 export function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
   compiledQuery: CompiledQuery<Row>,
@@ -46,6 +50,7 @@ export function executeCompiledSqliteQuerySync<Row>(
   return result;
 }
 
+/** Compile and execute a Kysely query synchronously. */
 export function executeSqliteQuerySync<Row>(
   db: DatabaseSync,
   query: CompilableQuery<Row>,
@@ -53,6 +58,7 @@ export function executeSqliteQuerySync<Row>(
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
 }
 
+/** Execute a Kysely query synchronously and return its first row. */
 export function executeSqliteQueryTakeFirstSync<Row>(
   db: DatabaseSync,
   query: CompilableQuery<Row>,
@@ -60,6 +66,7 @@ export function executeSqliteQueryTakeFirstSync<Row>(
   return executeSqliteQuerySync<Row>(db, query).rows[0];
 }
 
+/** Drop the cached Kysely facade for a DatabaseSync after close/test reset. */
 export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
   kyselyByDatabase.delete(db);
 }

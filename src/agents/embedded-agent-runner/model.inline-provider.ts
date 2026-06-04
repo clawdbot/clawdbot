@@ -10,6 +10,9 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
 
+/**
+ * Normalizes inline `models.providers` config into runtime model entries.
+ */
 export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
   api?: Api;
   provider: string;
@@ -32,6 +35,7 @@ export type InlineProviderConfig = {
   localService?: ModelProviderConfig["localService"];
 };
 
+/** Returns a supported transport API id from raw config values. */
 export function normalizeResolvedTransportApi(
   api: unknown,
 ): ModelDefinitionConfig["api"] | undefined {
@@ -52,6 +56,7 @@ export function normalizeResolvedTransportApi(
   }
 }
 
+/** Sanitizes configured provider/model headers before they enter runtime model metadata. */
 export function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -65,6 +70,8 @@ export function sanitizeModelHeaders(
       continue;
     }
     if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+      // Catalog/runtime model records are inspectable. Secret-ref markers are resolved later during
+      // auth setup, so inline provider discovery must not expose them as literal headers.
       continue;
     }
     next[headerName] = headerValue;
@@ -94,6 +101,7 @@ function isLegacyFoundryVisionModelCandidate(params: {
   );
 }
 
+/** Resolves model input modalities with Foundry legacy vision-model compatibility. */
 export function resolveProviderModelInput(params: {
   provider?: string;
   modelId?: string;
@@ -127,6 +135,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
+/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {

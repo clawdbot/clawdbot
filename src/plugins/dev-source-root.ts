@@ -1,8 +1,10 @@
+// Resolves development source roots for local plugin installs.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 
+/** Env var that points bundled-plugin lookup at an OpenClaw source checkout. */
 export const OPENCLAW_DEV_SOURCE_ROOT_ENV = "OPENCLAW_DEV_SOURCE_ROOT";
 
 function readPackageName(packageJsonPath: string): string | null {
@@ -14,6 +16,7 @@ function readPackageName(packageJsonPath: string): string | null {
   }
 }
 
+/** Resolves and validates the configured OpenClaw development source root. */
 export function resolveOpenClawDevSourceRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const rawRoot = env[OPENCLAW_DEV_SOURCE_ROOT_ENV]?.trim();
   if (!rawRoot) {
@@ -36,6 +39,7 @@ export function resolveOpenClawDevSourceRoot(env: NodeJS.ProcessEnv = process.en
   return realRoot;
 }
 
+/** True when a bundled plugin root is inside the configured development source root. */
 export function isBundledPluginInsideDevSourceRoot(params: {
   rootDir: string;
   env: NodeJS.ProcessEnv;

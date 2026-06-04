@@ -1,3 +1,4 @@
+// Records structured diagnostics timeline events and spans.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -62,6 +63,7 @@ type DiagnosticsTimelineOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+/** Active timeline span carried through async-local scope for nested diagnostics. */
 export type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
@@ -90,6 +92,7 @@ function resolveDiagnosticsTimelineOptions(
   };
 }
 
+/** Returns true when diagnostics flags and a JSONL output path both allow timeline writes. */
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
   const { config, env } = resolveDiagnosticsTimelineOptions(options);
   return (
@@ -167,6 +170,7 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
   return `${JSON.stringify(normalized)}\n`;
 }
 
+/** Appends one normalized diagnostics timeline event to the configured JSONL file. */
 export function emitDiagnosticsTimelineEvent(
   event: DiagnosticsTimelineEvent,
   options: DiagnosticsTimelineOptions = {},
@@ -190,11 +194,13 @@ export function emitDiagnosticsTimelineEvent(
   } catch (error) {
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;
+      // Diagnostics output is best-effort; one warning avoids recursive stderr spam.
       process.stderr.write(`[diagnostics] failed to write timeline event: ${String(error)}\n`);
     }
   }
 }
 
+/** Returns the currently active span so callers can preserve parentage across memoized work. */
 export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
   return activeDiagnosticsTimelineSpan.getStore();
 }
@@ -285,6 +291,7 @@ function emitFailedDiagnosticsTimelineSpan(
   );
 }
 
+/** Measures async work as a start/end timeline span, emitting an error span before rethrowing. */
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
   run: () => Promise<T> | T,
@@ -304,6 +311,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
   }
 }
 
+/** Measures sync work as a start/end timeline span, emitting an error span before rethrowing. */
 export function measureDiagnosticsTimelineSpanSync<T>(
   name: string,
   run: () => T,
@@ -323,6 +331,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   }
 }
 
+/** Lets tests await any future asynchronous timeline cleanup without changing call sites. */
 export async function flushDiagnosticsTimelineForTest(): Promise<void> {
   await Promise.resolve();
 }

@@ -1,3 +1,4 @@
+// HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -14,6 +15,7 @@ import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 
+/** Handle `/tools/invoke` requests and return false when another HTTP route should handle them. */
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

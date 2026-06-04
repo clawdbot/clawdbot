@@ -1,3 +1,4 @@
+/** Tests JSON Pointer helpers used by file-backed secret refs. */
 import { describe, expect, it } from "vitest";
 import { readJsonPointer } from "./json-pointer.js";
 

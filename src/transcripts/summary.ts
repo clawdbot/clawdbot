@@ -1,6 +1,14 @@
+// Builds transcript summaries and normalized transcript metadata.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
+/**
+ * Lightweight transcript summarization and markdown rendering.
+ *
+ * This is a deterministic heuristic summary used for captured/imported
+ * transcripts when no model-backed summarizer is involved.
+ */
+/** Summary artifact written alongside transcript sessions. */
 export type TranscriptsSummary = {
   sessionId: string;
   title: string;
@@ -46,6 +54,7 @@ function formatTranscript(utterances: TranscriptUtterance[]): string[] {
   return utterances.map(formatSpeakerLine).filter(Boolean);
 }
 
+/** Build a deterministic summary from transcript utterances. */
 export function summarizeTranscripts(params: {
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
@@ -69,6 +78,7 @@ function renderList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "- None captured";
 }
 
+/** Render a transcript summary as markdown for local artifacts. */
 export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
   return [
     `# ${summary.title}`,

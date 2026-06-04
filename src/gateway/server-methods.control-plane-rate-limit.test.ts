@@ -1,3 +1,6 @@
+/**
+ * Tests control-plane rate limiting for gateway method dispatch.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import {

@@ -1,3 +1,4 @@
+// Formats CLI command examples with active container/profile hints when they apply.
 import { replaceCliName, resolveCliName } from "./cli-name.js";
 import { normalizeProfileName } from "./profile-utils.js";
 
@@ -9,6 +10,7 @@ const UPDATE_COMMAND_RE =
   /^(?:pnpm|npm|bunx|npx)\s+openclaw\b.*(?:^|\s)update(?:\s|$)|^openclaw\b.*(?:^|\s)update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
+/** Add active root options to a displayed command without duplicating explicit flags. */
 export function formatCliCommand(
   command: string,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,

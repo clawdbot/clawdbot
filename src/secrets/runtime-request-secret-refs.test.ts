@@ -1,3 +1,4 @@
+/** Tests request-scoped secret ref resolution for runtime operations. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

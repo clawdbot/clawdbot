@@ -5,6 +5,7 @@ export type SystemdUnavailableKind =
   | "user_bus_unavailable"
   | "generic_unavailable";
 
+// Normalizes platform command output before matching known systemd failure families.
 function normalizeDetail(detail?: string): string {
   return normalizeLowercaseStringOrEmpty(detail);
 }

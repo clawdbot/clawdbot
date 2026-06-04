@@ -1,3 +1,4 @@
+/** Tests ACP runtime mode/config option persistence and backend control calls. */
 import { describe, expect, it, vi } from "vitest";
 import {
   type AcpRuntime,

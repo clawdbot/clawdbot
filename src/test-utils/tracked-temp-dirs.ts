@@ -1,7 +1,9 @@
+// Tracks temporary directories created by tests so leaks can be detected.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+/** Allocates temp directories under reusable roots with explicit cleanup control. */
 export function createTrackedTempDirs() {
   const prefixRoots = new Map<string, { root: string; nextIndex: number }>();
   const pendingPrefixRoots = new Map<string, Promise<{ root: string; nextIndex: number }>>();

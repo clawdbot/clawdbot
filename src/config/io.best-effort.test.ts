@@ -1,3 +1,4 @@
+// Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {

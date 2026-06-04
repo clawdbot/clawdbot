@@ -4,17 +4,33 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Shared node-selection policy for CLI, gateway-facing SDK helpers, and plugins.
+ *
+ * Exact ids, remote IPs, normalized display names, and long id prefixes are the
+ * only accepted query shapes; fuzzy ordering lives here so callers agree.
+ */
+
+/** Node fields accepted by shared CLI/API node selection helpers. */
 export type NodeMatchCandidate = {
+  /** Stable node id used for RPC/session routing. */
   nodeId: string;
+  /** Human-facing node name used for fuzzy operator input. */
   displayName?: string;
+  /** Tailscale or network address accepted as an exact match. */
   remoteIp?: string;
+  /** Connected nodes win only after the strongest match type is chosen. */
   connected?: boolean;
+  /** Client id used to prefer current OpenClaw nodes over legacy migration ties. */
   clientId?: string;
 };
 
 type ScoredNodeMatch = {
+  /** Candidate that matched one of the accepted query shapes. */
   node: NodeMatchCandidate;
+  /** Match class strength; higher classes outrank all tie-break heuristics. */
   matchScore: number;
+  /** Tie-break score within one match class, such as connected/current-client preference. */
   selectionScore: number;
 };
 
@@ -74,6 +90,7 @@ function resolveMatchScore(
   query: string,
   queryNormalized: string,
 ): number {
+  // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
     return 4_000;
   }
@@ -154,6 +171,8 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
     return strongestMatches[0]?.node.nodeId ?? "";
   }
 
+  // Only after the strongest match class is isolated do operational tie-breakers
+  // like connected state and current-client preference choose a winner.
   const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
   const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
   if (matches.length === 1) {

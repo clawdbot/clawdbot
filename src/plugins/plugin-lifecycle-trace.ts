@@ -1,5 +1,7 @@
+// Records compact plugin lifecycle trace details for diagnostics.
 type TraceDetails = Record<string, boolean | number | string | undefined>;
 
+/** Checks the opt-in plugin lifecycle tracing environment flag. */
 function isPluginLifecycleTraceEnabled(): boolean {
   const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
@@ -29,6 +31,7 @@ function emitPluginLifecycleTrace(params: {
   );
 }
 
+/** Traces a synchronous plugin lifecycle phase when tracing is enabled. */
 export function tracePluginLifecyclePhase<T>(
   phase: string,
   fn: () => T,
@@ -51,6 +54,7 @@ export function tracePluginLifecyclePhase<T>(
   }
 }
 
+/** Traces an async plugin lifecycle phase when tracing is enabled. */
 export async function tracePluginLifecyclePhaseAsync<T>(
   phase: string,
   fn: () => Promise<T>,

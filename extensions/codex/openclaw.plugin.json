@@ -114,7 +114,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated", "openai-bundled", "openai-primary-runtime"]
+                  "enum": ["openai-curated"]
                 },
                 "pluginName": {
                   "type": "string"

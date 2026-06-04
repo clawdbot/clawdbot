@@ -1,3 +1,4 @@
+// Covers preferred OpenClaw temp directory resolution.
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";

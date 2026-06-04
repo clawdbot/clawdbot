@@ -450,6 +450,14 @@ export const fa: TranslationMap = {
     logs: "گزارش‌های زنده Gateway.",
     dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "فعالیت",
     subtitle: "فعالیت موقتی ابزار که از رویدادهای نشست زنده استخراج شده است.",

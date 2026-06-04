@@ -1,3 +1,4 @@
+// Tests execution hint propagation through get-reply run setup.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";

@@ -1,3 +1,4 @@
+// Covers archive entry path normalization and traversal rejection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

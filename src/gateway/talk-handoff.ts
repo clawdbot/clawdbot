@@ -17,9 +17,16 @@ import {
   type TalkTransport,
 } from "../talk/talk-session-controller.js";
 
+/**
+ * In-memory managed-room handoff registry for browser Talk rooms.
+ *
+ * Handoffs are intentionally process-local because the token and active client
+ * state only protect the short-lived room URL created by this gateway process.
+ */
 const DEFAULT_TALK_HANDOFF_TTL_MS = 10 * 60 * 1000;
 const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;
 
+/** Inputs captured when a gateway caller creates a managed Talk room. */
 export type TalkHandoffCreateParams = {
   sessionKey: string;
   sessionId?: string;
@@ -34,6 +41,7 @@ export type TalkHandoffCreateParams = {
   ttlMs?: number;
 };
 
+/** Private handoff state, including the hashed room token and event controller. */
 export type TalkHandoffRecord = {
   id: string;
   roomId: string;
@@ -54,6 +62,7 @@ export type TalkHandoffRecord = {
   room: TalkHandoffRoomState;
 };
 
+/** Public handoff shape returned to clients; never includes token material. */
 export type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "room"> & {
   room: {
     activeClientId?: string;
@@ -103,6 +112,7 @@ type TalkHandoffRoomState = {
 
 const handoffs = new Map<string, TalkHandoffRecord>();
 
+/** Creates a short-lived Talk room and returns the only plaintext join token. */
 export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffCreateResult {
   pruneExpiredTalkHandoffs();
   const rawCreatedAt = Date.now();
@@ -146,11 +156,13 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
   return { ...toPublicTalkHandoffRecord(record), token };
 }
 
+/** Returns a non-expired handoff record for gateway-internal callers. */
 export function getTalkHandoff(id: string): TalkHandoffRecord | undefined {
   pruneExpiredTalkHandoffs();
   return handoffs.get(id);
 }
 
+/** Joins a managed room, replacing any previous active client for that room. */
 export function joinTalkHandoff(
   id: string,
   token: string,
@@ -181,6 +193,7 @@ export function joinTalkHandoff(
   };
 }
 
+/** Starts a client turn in a joined managed room. */
 export function startTalkHandoffTurn(
   id: string,
   token: string,
@@ -207,6 +220,7 @@ export function startTalkHandoffTurn(
   };
 }
 
+/** Ends the active managed-room turn and returns the emitted Talk event. */
 export function endTalkHandoffTurn(
   id: string,
   token: string,
@@ -232,6 +246,7 @@ export function endTalkHandoffTurn(
   };
 }
 
+/** Cancels the active managed-room turn with a client-visible reason. */
 export function cancelTalkHandoffTurn(
   id: string,
   token: string,
@@ -257,6 +272,7 @@ export function cancelTalkHandoffTurn(
   };
 }
 
+/** Revokes a handoff and emits the final room-close event if it existed. */
 export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   pruneExpiredTalkHandoffs();
   const record = handoffs.get(id);
@@ -277,10 +293,12 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   };
 }
 
+/** Verifies the caller token without exposing the stored token hash. */
 export function verifyTalkHandoffToken(record: TalkHandoffRecord, token: string): boolean {
   return record.tokenHash === hashTalkHandoffToken(token);
 }
 
+/** Clears process-local handoffs between tests. */
 export function clearTalkHandoffsForTest(): void {
   handoffs.clear();
 }
@@ -357,6 +375,8 @@ function resolveTalkHandoffAccess(
     return { ok: false, reason: "not_found" };
   }
   if (!isFutureDateTimestampMs(record.expiresAt)) {
+    // Expiry emits the same close event as explicit revocation so room clients
+    // can reconcile state without knowing which cleanup path won the race.
     appendTalkHandoffRoomEvent(record, {
       type: "session.closed",
       payload: { reason: "expired", handoffId: id, roomId: record.roomId },

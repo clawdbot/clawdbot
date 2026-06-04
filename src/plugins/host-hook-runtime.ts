@@ -1,3 +1,4 @@
+/** Stores plugin host-hook run context, scheduler jobs, and pending event cleanup state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -168,6 +169,7 @@ function getPluginRunContextNamespaces(params: {
   return namespaces;
 }
 
+/** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */
 export function setPluginRunContext(params: {
   pluginId: string;
   patch: PluginRunContextPatch;
@@ -208,6 +210,7 @@ export function setPluginRunContext(params: {
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
+/** Reads previously stored plugin run context for one run/plugin/namespace tuple. */
 export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
   pluginId: string;
   get: PluginRunContextGetParams;

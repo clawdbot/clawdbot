@@ -1,3 +1,4 @@
+/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import crypto from "node:crypto";
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import {
@@ -456,6 +457,7 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
+/** Test-only hooks for overriding selected dispatch dependencies. */
 export const testing = {
   createReplyDispatchEvent,
 };
@@ -744,6 +746,7 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
+/** Reads final outcome counters from dispatchers that expose them. */
 export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
   cancelled: number;
   failed: number;
@@ -987,6 +990,7 @@ export type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 
+/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -1299,6 +1303,14 @@ export async function dispatchReplyFromConfig(
   };
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
+  let observedReplyDelivery = false;
+  const markObservedReplyDelivery = async () => {
+    if (observedReplyDelivery) {
+      return;
+    }
+    observedReplyDelivery = true;
+    await params.replyOptions?.onObservedReplyDelivery?.();
+  };
   const getReplyOptions = () => {
     const abortSignal = getDispatchAbortSignal();
     if (!abortSignal) {
@@ -2451,6 +2463,7 @@ export async function dispatchReplyFromConfig(
           {
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
+            onObservedReplyDelivery: markObservedReplyDelivery,
             suppressToolErrorWarnings,
             shouldSuppressToolErrorWarnings,
             typingPolicy: typing.typingPolicy,
@@ -2953,7 +2966,8 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
-      ...(!queuedFinal && !emptyFinalAllowedAsSilent
+      ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
+      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

@@ -1,3 +1,4 @@
+/** Tests plugin module loader cache keys and lifecycle reset behavior. */
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";

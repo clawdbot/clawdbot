@@ -1,3 +1,4 @@
+// Covers heartbeat commitment checks and runner scheduling behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+/** Builds web-tool secret metadata from config, plugins, and provider contracts. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,6 +87,8 @@ function needsRuntimeWebFetchProviderDiscovery(params: {
   if (params.rawProvider) {
     return true;
   }
+  // Limits-only fetch config must stay on the runtime fast path; credential-shaped values are
+  // the signal that provider discovery and SecretRef resolution are actually needed.
   return hasCredentialBearingObjectValue(params.fetch, params.defaults);
 }
 
@@ -172,6 +175,8 @@ async function hasCustomWebProviderPluginRisk(params: {
       env: params.env,
     }),
   );
+  // Public artifacts are complete only for bundled providers. Any configured non-bundled
+  // plugin surface has to fall back to manifest/runtime discovery to avoid hiding providers.
   const hasNonBundledPluginId = (pluginId: string) => !bundledPluginIds.has(pluginId.trim());
   if (Array.isArray(plugins.allow) && plugins.allow.some(hasNonBundledPluginId)) {
     return true;
@@ -309,6 +314,8 @@ async function resolveSecretInputWithEnvFallback(params: {
 
   const fallback = readNonEmptyEnvValue(params.context.env, params.envVars);
   if (fallback.value) {
+    // Provider env vars remain the explicit recovery path for unresolved refs so startup can
+    // continue while diagnostics still report which configured SecretRef failed.
     return {
       value: fallback.value,
       source: "env",
@@ -356,6 +363,8 @@ async function resolveBundledWebSearchProviders(params: {
       : params.onlyPluginIds && params.onlyPluginIds.length > 0
         ? sortUniqueStrings(params.onlyPluginIds)
         : undefined;
+  // Narrow plugin hints can use explicit public artifacts first; broad custom-plugin risk still
+  // routes through runtime discovery because installed or path-loaded providers may participate.
   if (onlyPluginIds && onlyPluginIds.length > 0) {
     const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });
     if (bundled && bundled.length > 0) {
@@ -400,6 +409,8 @@ async function resolveBundledWebFetchProviders(params: {
   hasCustomWebFetchPluginRisk: boolean;
 }): Promise<PluginWebFetchProviderEntry[]> {
   const env = { ...process.env, ...params.context.env };
+  // Web fetch has no keyless auto-detect fallback; a configured bundled owner can be resolved
+  // directly without loading every provider manifest.
   if (params.configuredBundledPluginId) {
     const bundled = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
       onlyPluginIds: [params.configuredBundledPluginId],
@@ -509,6 +520,11 @@ function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): s
     : [provider.credentialPath];
 }
 
+/**
+ * Resolves runtime web search/fetch provider metadata and writes selected credentials into a
+ * cloned runtime config without mutating the source config.
+ */
+/** Resolves web search/fetch secret metadata from config, plugins, and fallback runtime providers. */
 export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;

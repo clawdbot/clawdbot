@@ -1,3 +1,6 @@
+/**
+ * Tests channel lifecycle queue ordering and failure handling.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { createChannelRunQueue } from "./channel-lifecycle.core.js";
 

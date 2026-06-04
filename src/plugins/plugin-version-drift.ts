@@ -1,3 +1,4 @@
+// Detects plugin version drift between config, manifests, and installs.
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";

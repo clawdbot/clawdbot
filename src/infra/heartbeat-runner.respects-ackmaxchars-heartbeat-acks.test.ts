@@ -1,3 +1,4 @@
+// Covers heartbeat ack truncation limits.
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

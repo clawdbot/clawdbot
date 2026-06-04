@@ -25,6 +25,6 @@ export function createGatewayProjectShardVitestConfig() {
   return createProjectShardVitestConfig(gatewayProjectConfigs);
 }
 
-export default process.env.OPENCLAW_GATEWAY_PROJECT_SHARDS === "1"
-  ? createGatewayProjectShardVitestConfig()
-  : createGatewayVitestConfig();
+export default process.env.OPENCLAW_GATEWAY_PROJECT_SHARDS === "0"
+  ? createGatewayVitestConfig()
+  : createGatewayProjectShardVitestConfig();

@@ -1,3 +1,4 @@
+// Shared valid and invalid secret reference ids for tests.
 export const VALID_FILE_SECRET_REF_IDS = [
   "value",
   "/",

@@ -1,3 +1,4 @@
+/** Tests command-specific secret assignment collection from config snapshots. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

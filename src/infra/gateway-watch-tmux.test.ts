@@ -1,3 +1,4 @@
+// Covers gateway watch tmux script helpers.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGatewayWatchTmuxCommand,

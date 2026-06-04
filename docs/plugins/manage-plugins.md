@@ -153,6 +153,10 @@ the install instead.
 | npm pack    | You are proving a local package artifact through npm install semantics      | `openclaw plugins install npm-pack:<path.tgz>`                 |
 | marketplace | You are installing a Claude-compatible marketplace plugin                   | `openclaw plugins install <plugin> --marketplace <source>`     |
 
+Managed local path installs must be plugin directories or archives. Put
+standalone plugin files in `plugins.load.paths` instead of installing them with
+`plugins install`.
+
 ## Publish plugins
 
 ClawHub is the primary public discovery surface for OpenClaw plugins. Publish

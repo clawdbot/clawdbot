@@ -1,6 +1,11 @@
+/** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  readPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
@@ -31,21 +36,24 @@ import {
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
-  listAuthProfileStorePaths,
+  listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
+/** Stable finding codes emitted by `openclaw secrets audit`. */
 export type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
 
+/** Audit severity used for CLI output and check-mode exit behavior. */
 export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
+/** One secret audit finding with file/path context. */
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
@@ -56,8 +64,10 @@ export type SecretsAuditFinding = {
   profileId?: string;
 };
 
+/** Overall audit state derived from findings and unresolved refs. */
 export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
+/** Structured report returned by the secrets audit command. */
 export type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
@@ -226,29 +236,19 @@ function collectConfigSecrets(params: {
 }
 
 function collectAuthStoreSecrets(params: {
-  authStorePath: string;
+  agentDir: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
 }): void {
-  if (!fs.existsSync(params.authStorePath)) {
+  const authStorePath = resolveAuthProfileDatabasePath(params.agentDir);
+  if (!fs.existsSync(authStorePath)) {
     return;
   }
-  params.collector.filesScanned.add(params.authStorePath);
-  const parsedResult = readJsonObjectIfExists(params.authStorePath);
-  if (parsedResult.error) {
-    addFinding(params.collector, {
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: params.authStorePath,
-      jsonPath: "<root>",
-      message: `Invalid JSON in auth-profiles store: ${parsedResult.error}`,
-    });
+  const parsed = readPersistedAuthProfileStoreRaw(params.agentDir);
+  if (!isRecord(parsed) || !isRecord(parsed.profiles)) {
     return;
   }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.profiles)) {
-    return;
-  }
+  params.collector.filesScanned.add(authStorePath);
   for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
     if (entry.kind === "api_key" || entry.kind === "token") {
       const { ref } = resolveSecretInputRef({
@@ -259,7 +259,7 @@ function collectAuthStoreSecrets(params: {
       const authoredValueRef = coerceSecretRef(entry.value, params.defaults);
       if (ref) {
         params.collector.refAssignments.push({
-          file: params.authStorePath,
+          file: authStorePath,
           path: `profiles.${entry.profileId}.${entry.valueField}`,
           ref,
           expected: "string",
@@ -274,7 +274,7 @@ function collectAuthStoreSecrets(params: {
         addFinding(params.collector, {
           code: "PLAINTEXT_FOUND",
           severity: "warn",
-          file: params.authStorePath,
+          file: authStorePath,
           jsonPath: `profiles.${entry.profileId}.${entry.valueField}`,
           message:
             entry.kind === "api_key"
@@ -291,7 +291,7 @@ function collectAuthStoreSecrets(params: {
       addFinding(params.collector, {
         code: "LEGACY_RESIDUE",
         severity: "info",
-        file: params.authStorePath,
+        file: authStorePath,
         jsonPath: `profiles.${entry.profileId}`,
         message: "OAuth credentials are present (out of scope for static SecretRef migration).",
         provider: entry.provider,
@@ -496,6 +496,8 @@ async function collectUnresolvedRefFindings(params: {
       // Fall back to per-ref resolution for provider-specific pinpoint errors.
     }
 
+    // Batch resolution is cheaper, but individual fallback gives path-specific diagnostics when
+    // a provider returns mixed id failures.
     const tasks = selectedRefs.refsToResolve.map(
       (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
         key: secretRefKey(ref),
@@ -606,6 +608,8 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
   };
 }
 
+/** Runs local storage/config audit and returns a structured report. */
+/** Runs a secrets audit over config/auth stores and returns structured findings. */
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -642,9 +646,9 @@ export async function runSecretsAudit(
       configPath,
       collector,
     });
-    for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
+    for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({
-        authStorePath,
+        agentDir,
         collector,
         defaults,
       });
@@ -704,6 +708,7 @@ export async function runSecretsAudit(
   };
 }
 
+/** Maps audit results to CLI exit codes. */
 export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
   if (report.summary.unresolvedRefCount > 0) {
     return 2;

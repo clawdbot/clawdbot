@@ -1,9 +1,11 @@
+// Waiting-status helpers kept pure so animation text can be tested without a TUI.
 type MinimalTheme = {
   dim: (s: string) => string;
   bold: (s: string) => string;
   accentSoft: (s: string) => string;
 };
 
+/** Default phrase cycle for animated waiting status. */
 export const defaultWaitingPhrases = [
   "flibbertigibbeting",
   "kerfuffling",
@@ -17,11 +19,13 @@ export const defaultWaitingPhrases = [
   "conjuring",
 ];
 
+/** Picks a stable phrase for a timer tick. */
 export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
   const idx = Math.floor(tick / 10) % phrases.length;
   return phrases[idx] ?? phrases[0] ?? "waiting";
 }
 
+/** Applies a moving highlight window to status text. */
 export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
@@ -38,6 +42,7 @@ export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   return out;
 }
 
+/** Builds the single-line waiting status shown while a TUI run is active. */
 export function buildWaitingStatusMessage(params: {
   theme: MinimalTheme;
   tick: number;

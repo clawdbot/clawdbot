@@ -1,3 +1,4 @@
+// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,

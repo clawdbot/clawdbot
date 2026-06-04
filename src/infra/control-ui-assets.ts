@@ -1,3 +1,4 @@
+// Resolves and checks packaged Control UI assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";

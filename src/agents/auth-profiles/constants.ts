@@ -28,7 +28,7 @@ export const AUTH_STORE_LOCK_OPTIONS = {
 
 // Separate from AUTH_STORE_LOCK_OPTIONS for independent tuning: this lock
 // serializes the cross-agent OAuth refresh (see issue #26322), whereas
-// AUTH_STORE_LOCK_OPTIONS guards per-store file writes. Keeping them
+// AUTH_STORE_LOCK_OPTIONS guards per-store refresh updates. Keeping them
 // distinct lets us widen the refresh lock's timeout/retry budget without
 // affecting the hot-path auth-store writers.
 //

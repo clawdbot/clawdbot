@@ -1,3 +1,4 @@
+// Implements subagent log retrieval and pagination.
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { callGateway } from "../../../gateway/call.js";

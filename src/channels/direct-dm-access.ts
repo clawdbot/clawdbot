@@ -14,6 +14,7 @@ import {
 import type { ChannelId } from "./plugins/types.public.js";
 export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.js";
 
+/** Runtime hooks needed by the legacy direct-DM access resolver. */
 export type DirectDmCommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
@@ -24,7 +25,10 @@ export type DirectDmCommandAuthorizationRuntime = {
   }) => boolean;
 };
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Legacy direct-DM ingress decision with command-authorization compatibility fields.
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export type ResolvedInboundDirectDmAccess = {
   access: {
     decision: "allow" | "block" | "pairing";
@@ -50,7 +54,10 @@ function toLegacyDmReasonCode(reasonCode: string): DmGroupAccessReasonCode {
   }
 }
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Resolves legacy direct-DM access lists, pairing-store entries, and command authorization.
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export async function resolveInboundDirectDmAccessWithRuntime(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -79,6 +86,8 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
           readStore: params.readStoreAllowFrom,
         })
       : [];
+  // Pairing-mode store entries and configured allowlists both support access groups.
+  // Expand them separately so the access reason still reflects the source list.
   const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
     expandAllowFromWithAccessGroups({
       cfg: params.cfg,
@@ -112,6 +121,8 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
     params.senderId,
     access.effectiveAllowFrom,
   );
+  // Older channel plugins inject their command authorizer here. When absent,
+  // preserve the legacy direct-DM behavior: command access follows sender allowlist access.
   const commandAuthorized = shouldComputeAuth
     ? (params.runtime.resolveCommandAuthorizedFromAuthorizers?.({
         useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
@@ -138,7 +149,10 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
   };
 }
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Creates a pre-crypto authorizer that can issue pairing challenges before payload decryption.
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export function createPreCryptoDirectDmAuthorizer(params: {
   resolveAccess: (
     senderId: string,
@@ -164,6 +178,8 @@ export function createPreCryptoDirectDmAuthorizer(params: {
     }
     if (access.decision === "pairing") {
       if (params.issuePairingChallenge) {
+        // Pairing challenges happen before decrypting the DM payload; keep this branch
+        // side-effect free apart from the explicit reply hook.
         await params.issuePairingChallenge({
           senderId: input.senderId,
           reply: input.reply,

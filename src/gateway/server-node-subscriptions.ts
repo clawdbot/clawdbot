@@ -1,5 +1,7 @@
 import { serializeEventPayload, type SerializedEventPayload } from "./node-registry.js";
 
+// Node subscription manager keeps bidirectional node/session indexes so gateway
+// events can fan out by session and all node cleanup paths remove reverse links.
 type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
@@ -32,6 +34,7 @@ type NodeSubscriptionManager = {
   clear: () => void;
 };
 
+/** Manages node subscriptions to gateway session events. */
 export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
@@ -115,6 +118,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
     }
 
     const payloadJSON = toPayloadJSON(payload);
+    // Serialize once per event and reuse across all subscribed nodes to keep
+    // fanout deterministic and avoid repeated JSON conversion.
     for (const nodeId of subs) {
       sendEvent({ nodeId, event, payloadJSON });
     }

@@ -1,3 +1,4 @@
+// Tests agent runner session reset cleanup and restart behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

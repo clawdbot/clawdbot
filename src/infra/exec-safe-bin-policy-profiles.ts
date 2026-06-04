@@ -1,3 +1,4 @@
+// Defines safe-bin policy profile fixtures and metadata.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 

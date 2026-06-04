@@ -1,3 +1,4 @@
+/** Tests command authorization owner defaults for direct-message senders. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveCommandAuthorization } from "./command-auth.js";

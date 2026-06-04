@@ -21,6 +21,12 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
+/**
+ * Gateway hook HTTP handler factory.
+ *
+ * Hooks can either enqueue wake events or spawn isolated agent turns; both paths
+ * sanitize external input before it reaches logs or system-event text.
+ */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
@@ -84,6 +90,7 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+/** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
@@ -143,6 +150,8 @@ export function createGatewayHooksRequestHandler(params: {
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
+        // Agent hooks run after the HTTP response path has returned, so failure
+        // handling must record a system event instead of throwing to the caller.
         const cfg = getRuntimeConfig();
         hookEventSessionKey = resolveHookEventSessionKey({
           cfg,

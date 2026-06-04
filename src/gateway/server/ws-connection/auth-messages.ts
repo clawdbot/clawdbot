@@ -5,8 +5,12 @@ import {
 } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 
+/**
+ * Human-readable WebSocket auth failure messages for CLI, UI, and webchat clients.
+ */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+/** Formats a client-specific auth failure message without exposing secret values. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;

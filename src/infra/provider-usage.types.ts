@@ -1,3 +1,4 @@
+/** One quota window reported by a provider usage endpoint. */
 export type UsageWindow = {
   label: string;
   usedPercent: number;

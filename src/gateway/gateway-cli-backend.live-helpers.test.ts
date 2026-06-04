@@ -1,3 +1,6 @@
+/**
+ * Tests live helper utilities for gateway CLI backend probes.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 

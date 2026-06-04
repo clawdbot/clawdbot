@@ -1,3 +1,4 @@
+// Parses gateway process command lines for process discovery.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 

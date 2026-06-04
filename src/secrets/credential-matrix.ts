@@ -1,3 +1,4 @@
+/** Generates the documented matrix of user-supplied credential fields that accept SecretRefs. */
 import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
 import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
@@ -21,11 +22,14 @@ export type SecretRefCredentialMatrixDocument = {
   entries: CredentialMatrixEntry[];
 };
 
+/** Builds the public SecretRef credential matrix from the source target registry. */
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
   for (const entry of getSourceSecretTargetRegistry()) {
     const isCanonicalFirecrawlWebFetchEntry =
       entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
+    // Firecrawl web fetch moved to the plugin-owned path, but matrix docs keep the public
+    // tools.web.fetch.firecrawl path as the canonical operator-facing surface.
     const canonicalId = isCanonicalFirecrawlWebFetchEntry
       ? "tools.web.fetch.firecrawl.apiKey"
       : entry.id;

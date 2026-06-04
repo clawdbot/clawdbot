@@ -4,6 +4,8 @@ import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/que
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
+// Compaction summary quality helpers. They define the structured summary contract
+// and audit whether summaries preserve pending asks plus exact identifiers.
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
@@ -38,6 +40,8 @@ function resolveExactIdentifierSectionInstruction(
   if (policy === "custom") {
     const custom = summarizationInstructions?.identifierInstructions?.trim();
     if (custom) {
+      // Operator text is runtime data, not prompt authority. Wrap it as
+      // untrusted data before inserting it into compaction instructions.
       const customBlock = wrapUntrustedInstructionBlock(
         "For ## Exact identifiers, apply this operator-defined policy text",
         custom,
@@ -50,6 +54,7 @@ function resolveExactIdentifierSectionInstruction(
   return STRICT_EXACT_IDENTIFIERS_INSTRUCTION;
 }
 
+/** Build the required structured summary instructions for compaction. */
 export function buildCompactionStructureInstructions(
   customInstructions?: string,
   summarizationInstructions?: CompactionSummarizationInstructions,
@@ -94,6 +99,7 @@ function hasRequiredSummarySections(summary: string): boolean {
   return true;
 }
 
+/** Return a structured fallback summary when model output is missing/invalid. */
 export function buildStructuredFallbackSummary(
   previousSummary: string | undefined,
   _summarizationInstructions?: CompactionSummarizationInstructions,
@@ -121,6 +127,7 @@ export function buildStructuredFallbackSummary(
   ].join("\n");
 }
 
+/** Append an already-formatted summary section without disturbing empty summaries. */
 export function appendSummarySection(summary: string, section: string): string {
   if (!section) {
     return summary;
@@ -218,6 +225,7 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   return overlapCount >= requiredMatches;
 }
 
+/** Audit summary structure, exact identifier preservation, and latest-ask coverage. */
 export function auditSummaryQuality(params: {
   summary: string;
   identifiers: string[];

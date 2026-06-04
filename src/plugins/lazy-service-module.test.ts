@@ -1,3 +1,4 @@
+// Verifies lazy service module loading and disabled-state handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { defaultLoadOverrideModule, startLazyPluginServiceModule } from "./lazy-service-module.js";

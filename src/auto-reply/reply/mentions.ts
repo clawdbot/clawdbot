@@ -1,3 +1,4 @@
+/** Mention matching, stripping, and explicit mention handling for group triggers. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -128,6 +129,7 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
+/** Builds mention regexes from config, agent identity, and channel policy. */
 export function buildMentionRegexes(
   cfg: OpenClawConfig | undefined,
   agentId?: string,
@@ -145,12 +147,14 @@ export function buildMentionRegexes(
   });
 }
 
+/** Normalizes text before mention matching. */
 export function normalizeMentionText(text: string): string {
   return normalizeLowercaseStringOrEmpty(
     (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
   );
 }
 
+/** Returns true when text matches one of the configured mention patterns. */
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
   if (mentionRegexes.length === 0) {
     return false;
@@ -159,6 +163,7 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
+/** Combines regex mention matching with provider-native explicit mention metadata. */
 export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
@@ -175,6 +180,7 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
+/** Removes structural prompt prefixes before mention stripping. */
 export function stripStructuralPrefixes(text: string): string {
   if (!text) {
     return "";
@@ -197,6 +203,7 @@ export function stripStructuralPrefixes(text: string): string {
     .trim();
 }
 
+/** Removes bot mentions from command text before command normalization. */
 export function stripMentions(
   text: string,
   ctx: MsgContext,

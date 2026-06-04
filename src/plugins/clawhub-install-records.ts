@@ -1,6 +1,8 @@
+// Converts ClawHub plugin entries into install records.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubPackageChannel, ClawHubPackageFamily } from "../infra/clawhub.js";
 
+/** Install record fields captured for ClawHub plugin installs. */
 export type ClawHubPluginInstallRecordFields = {
   source: "clawhub";
   clawhubUrl: string;
@@ -22,6 +24,7 @@ export type ClawHubPluginInstallRecordFields = {
   clawpackSize?: number;
 };
 
+/** Builds plugin install record fields from resolved ClawHub package metadata. */
 export function buildClawHubPluginInstallRecordFields(
   fields: ClawHubPluginInstallRecordFields,
 ): Pick<

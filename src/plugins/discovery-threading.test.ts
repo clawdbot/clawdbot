@@ -1,3 +1,4 @@
+// Covers plugin discovery threading and concurrency behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginDiscoveryResult } from "./discovery.js";
 

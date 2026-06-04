@@ -1,3 +1,4 @@
+// Collects and verifies package dist inventory metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -149,6 +150,7 @@ function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
   return pluginDependencyDir.toLowerCase() === "node_modules";
 }
 
+/** Detects transient plugin dependency install-stage directories inside packaged extension dist. */
 export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
   const parts = splitRelativePath(relativePath);
   return (
@@ -379,6 +381,7 @@ async function collectRelativeFiles(
   }
 }
 
+/** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
   const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
   const scanContext = createPackageDistInventoryScanContext();
@@ -390,6 +393,7 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
   );
 }
 
+/** Lists legacy plugin dependency staging directories that must not ship in package dist. */
 export async function collectLegacyPluginDependencyStagingDebrisPaths(
   packageRoot: string,
 ): Promise<string[]> {
@@ -465,6 +469,7 @@ export async function collectLegacyPluginDependencyStagingDebrisPaths(
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Fails when transient plugin dependency staging debris remains in package dist. */
 export async function assertNoLegacyPluginDependencyStagingDebris(
   packageRoot: string,
 ): Promise<void> {
@@ -477,6 +482,7 @@ export async function assertNoLegacyPluginDependencyStagingDebris(
   );
 }
 
+/** Writes the current sorted package dist inventory and returns the entries written. */
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
   await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
   const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
@@ -497,12 +503,14 @@ async function readPackageDistInventoryOptional(packageRoot: string): Promise<st
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
+/** Reads an existing package dist inventory, returning null when the inventory is absent. */
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
   return await readPackageDistInventoryOptional(packageRoot);
 }
 
+/** Compares recorded and current package dist inventory entries and returns human-readable errors. */
 export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
   const expectedFiles = await readPackageDistInventoryIfPresent(packageRoot);
   if (expectedFiles === null) {

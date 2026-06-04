@@ -1,3 +1,6 @@
+/**
+ * Assistant identity resolution tests for gateway-visible agents.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";

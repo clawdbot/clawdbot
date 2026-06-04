@@ -1,3 +1,4 @@
+/** Tests inbound dispatch hook composition, diagnostics, and dispatcher integration. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";

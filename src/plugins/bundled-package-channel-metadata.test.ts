@@ -1,3 +1,4 @@
+// Verifies bundled package channel metadata stays aligned with catalogs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

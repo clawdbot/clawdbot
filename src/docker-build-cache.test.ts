@@ -1,3 +1,4 @@
+// Tests Docker build cache configuration and dependency cache keys.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

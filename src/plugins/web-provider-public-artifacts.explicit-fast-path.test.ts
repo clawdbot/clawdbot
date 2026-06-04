@@ -1,3 +1,4 @@
+// Verifies explicit web-provider artifact fast paths avoid runtime loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({

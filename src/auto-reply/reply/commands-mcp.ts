@@ -1,3 +1,4 @@
+/** Handles /mcp commands for showing and mutating configured MCP servers. */
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
@@ -15,6 +16,7 @@ function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+/** Command handler for /mcp show/set/unset operations. */
 export const handleMcpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

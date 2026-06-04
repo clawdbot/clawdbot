@@ -1,3 +1,5 @@
+// Public barrel for media URL, MIME, path, and bounded-read helpers.
+
 export * from "./base64.js";
 export * from "./constants.js";
 export * from "./content-length.js";

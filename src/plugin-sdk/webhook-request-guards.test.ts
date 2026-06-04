@@ -1,3 +1,6 @@
+/**
+ * Tests webhook request guard body parsing and rejection behavior.
+ */
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";

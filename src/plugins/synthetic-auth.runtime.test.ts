@@ -1,3 +1,4 @@
+/** Covers synthetic and external auth provider refs from manifests and active registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type SyntheticAuthRegistrySnapshotResult = {

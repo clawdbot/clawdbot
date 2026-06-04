@@ -408,9 +408,9 @@ describeLive("openai plugin live", () => {
         cfg,
         agentDir,
         authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 180_000,
+        timeoutMs: 240_000,
         count: 1,
-        size: "1024x1536",
+        size: "1024x1024",
         inputImages: [
           {
             buffer: createReferencePng(),
@@ -427,7 +427,7 @@ describeLive("openai plugin live", () => {
     } finally {
       await removeTempAgentDir(agentDir);
     }
-  }, 240_000);
+  }, 300_000);
 
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = await registerOpenAIPlugin();

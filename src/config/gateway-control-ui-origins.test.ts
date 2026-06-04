@@ -1,3 +1,4 @@
+// Covers gateway Control UI origin parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "./gateway-control-ui-origins.js";
 

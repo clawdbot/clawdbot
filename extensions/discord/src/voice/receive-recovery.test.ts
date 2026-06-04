@@ -1,4 +1,4 @@
-import { OpusError, OpusErrorCode } from "libopus-wasm";
+import { OpusError } from "libopus-wasm";
 import { describe, expect, it, vi } from "vitest";
 import {
   analyzeVoiceReceiveError,
@@ -6,6 +6,8 @@ import {
   enableDaveReceivePassthrough,
   noteVoiceDecryptFailure,
 } from "./receive-recovery.js";
+
+const OPUS_INVALID_PACKET_CODE = -4;
 
 describe("voice receive recovery", () => {
   it("treats passthrough-disabled decrypt errors as decrypt failures", () => {
@@ -34,9 +36,7 @@ describe("voice receive recovery", () => {
 
   it("treats corrupt Opus packets as non-recoverable decode noise", () => {
     expect(
-      analyzeVoiceReceiveError(
-        new OpusError(OpusErrorCode.InvalidPacket, "not inspected", "decode"),
-      ),
+      analyzeVoiceReceiveError(new OpusError(OPUS_INVALID_PACKET_CODE, "not inspected", "decode")),
     ).toEqual({
       message: "not inspected",
       isAbortLike: false,
@@ -50,7 +50,7 @@ describe("voice receive recovery", () => {
     const analysis = analyzeVoiceReceiveError({
       name: "OpusError",
       message: "libopus decode failed (-4): corrupted stream",
-      code: OpusErrorCode.InvalidPacket,
+      code: OPUS_INVALID_PACKET_CODE,
       codeName: "InvalidPacket",
       operation: "decode",
     });

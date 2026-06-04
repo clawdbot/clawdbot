@@ -1,3 +1,4 @@
+/** Pending chat-history windows and prompt context builders for auto-reply turns. */
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
@@ -30,6 +31,7 @@ export function evictOldHistoryKeys<T>(
 
 export type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
+/** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {
   historyText: string;
   currentMessage: string;
@@ -45,6 +47,7 @@ export function buildHistoryContext(params: {
   );
 }
 
+/** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
 export function appendHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -124,6 +127,7 @@ function isImageHistoryMediaEntry(entry: HistoryMediaEntry): boolean {
   return entry.kind === "image" || contentType?.startsWith("image/") === true;
 }
 
+/** Filters history media to local image entries safe to re-attach to prompt context. */
 export function normalizeHistoryMediaEntries(params: {
   media?: readonly HistoryMediaEntry[] | null;
   limit?: number;
@@ -194,6 +198,7 @@ export async function recordPendingHistoryEntryWithMedia<T extends HistoryEntry>
       limit: params.limit,
     });
     const resolvedMedia = await params.media();
+    // The turn can be cancelled while media resolves; keep text but avoid late media attachment.
     if (params.shouldRecord && !params.shouldRecord()) {
       return history;
     }
@@ -272,6 +277,7 @@ export function buildInboundHistoryFromMap<T extends HistoryEntry>(params: {
   });
 }
 
+/** Builds structured inbound history entries from an existing window. */
 export function buildInboundHistoryFromEntries(params: {
   entries: readonly HistoryEntry[];
   limit: number;
@@ -359,6 +365,7 @@ export function clearHistoryEntriesIfEnabled(params: {
   clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
 }
 
+/** Builds prompt text from already-recorded history entries. */
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;

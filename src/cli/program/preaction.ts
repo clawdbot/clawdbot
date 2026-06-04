@@ -1,3 +1,4 @@
+// Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
@@ -95,6 +96,7 @@ function isGuidedConfigCommandPath(commandPath: string[]): boolean {
   );
 }
 
+/** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);

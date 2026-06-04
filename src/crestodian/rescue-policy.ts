@@ -1,6 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
+/**
+ * Policy checks for remote Crestodian rescue commands.
+ *
+ * Rescue intentionally opens only for owner-controlled, non-sandboxed YOLO host
+ * posture unless config explicitly enables it, because remote commands can write local state.
+ */
 type CrestodianRescueDecision =
   | {
       allowed: true;
@@ -63,6 +69,7 @@ function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
   return security === "full" && ask === "off";
 }
 
+/** Decide whether a message-channel rescue command is allowed for this sender/context. */
 export function resolveCrestodianRescuePolicy(
   input: CrestodianRescuePolicyInput,
 ): CrestodianRescueDecision {
@@ -72,6 +79,7 @@ export function resolveCrestodianRescuePolicy(
   const pendingTtlMinutes = resolvePendingTtlMinutes(rescue?.pendingTtlMinutes);
   const sandboxActive = resolveScopedSandboxMode(input.cfg, input.agentId) !== "off";
   const yolo = !sandboxActive && isYoloHostPosture(input.cfg, input.agentId);
+  // "auto" means rescue follows host posture; explicit false/true still keeps owner/DM gates.
   const enabled = configuredEnabled === "auto" ? yolo : configuredEnabled;
 
   if (!enabled) {

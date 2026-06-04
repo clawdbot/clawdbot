@@ -6,6 +6,7 @@ import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.ClawErrorState
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -473,6 +474,14 @@ private fun GatewaySetupScreen(
             onClick = { advancedOpen = true },
           )
         }
+        error?.let { message ->
+          item {
+            ClawErrorState(
+              title = "Setup code issue",
+              body = message,
+            )
+          }
+        }
         item {
           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Surface(
@@ -505,9 +514,6 @@ private fun GatewaySetupScreen(
               }
               ClawTextField(value = token, onValueChange = onTokenChange, placeholder = "Token optional")
               ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = "Password optional")
-              error?.let {
-                Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
-              }
             }
           }
         }

@@ -14,6 +14,7 @@ type ServiceRuntimeLike = {
   systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
 };
 
+// Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
   [129, "SIGHUP"],
   [130, "SIGINT"],

@@ -1,3 +1,4 @@
+/** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -73,6 +74,7 @@ function createScopedPluginIdNormalizer(): NormalizePluginId {
     });
 }
 
+/** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
   return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }

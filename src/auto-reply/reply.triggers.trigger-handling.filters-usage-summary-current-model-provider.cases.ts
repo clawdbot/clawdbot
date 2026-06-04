@@ -1,3 +1,4 @@
+/** Shared cases for filtering usage summaries by current model/provider. */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";

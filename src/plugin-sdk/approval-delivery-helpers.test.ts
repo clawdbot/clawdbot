@@ -1,3 +1,6 @@
+/**
+ * Tests approval delivery helper capability composition.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,

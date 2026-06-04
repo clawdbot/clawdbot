@@ -1,3 +1,6 @@
+/**
+ * Tests single-row session cache behavior in gateway session utilities.
+ */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";

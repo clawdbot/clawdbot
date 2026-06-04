@@ -1,3 +1,4 @@
+// Runtime archive barrel used by lazy session archive paths.
 export {
   archiveSessionTranscriptsDetailed,
   archiveSessionTranscripts,

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
+import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
@@ -21,21 +22,20 @@ import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
-import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
-import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
+  projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
-  sanitizeChatSendMessageInput,
-} from "./chat.js";
+} from "../chat-display-projection.js";
+import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { waitForAgentJob } from "./agent-job.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 

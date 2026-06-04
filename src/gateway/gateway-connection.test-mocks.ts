@@ -1,5 +1,8 @@
 import { vi, type Mock } from "vitest";
 
+/**
+ * Shared module mocks for gateway connection/startup tests.
+ */
 type TestMock<TArgs extends unknown[] = unknown[], TResult = unknown> = Mock<
   (...args: TArgs) => TResult
 >;

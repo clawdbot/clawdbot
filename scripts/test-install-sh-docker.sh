@@ -14,23 +14,30 @@ run_install_smoke_container() {
 }
 
 resolve_default_smoke_platform() {
-  local host_os
   local host_arch
   if [[ -n "${OPENCLAW_INSTALL_SMOKE_PLATFORM:-}" ]]; then
     printf "%s" "$OPENCLAW_INSTALL_SMOKE_PLATFORM"
     return
   fi
+  host_arch="$(uname -m)"
   if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    case "$host_arch" in
+      arm64 | aarch64)
+        printf "linux/arm64"
+        return
+        ;;
+    esac
     printf "linux/amd64"
     return
   fi
-  host_os="$(uname -s)"
-  host_arch="$(uname -m)"
-  if [[ "$host_os" == "Darwin" && "$host_arch" == "arm64" ]]; then
-    printf "linux/arm64"
-    return
-  fi
-  printf "linux/amd64"
+  case "$host_arch" in
+    arm64 | aarch64)
+      printf "linux/arm64"
+      ;;
+    *)
+      printf "linux/amd64"
+      ;;
+  esac
 }
 
 print_pack_audit() {

@@ -1,3 +1,4 @@
+// Tests queue directive validation and error copy for invalid queue settings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";

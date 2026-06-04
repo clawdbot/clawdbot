@@ -1,3 +1,4 @@
+// Covers embedding provider runtime hooks supplied by plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

@@ -1,3 +1,4 @@
+// Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -26,6 +27,7 @@ import {
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder },

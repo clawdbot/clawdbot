@@ -4,6 +4,7 @@ import http from "node:http";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 
 const port = readPositiveIntEnv("CLICKCLACK_FIXTURE_PORT", 44181);
+const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
 const token = process.env.CLICKCLACK_FIXTURE_TOKEN ?? "clickclack-release-token";
 const statePath = process.env.CLICKCLACK_FIXTURE_STATE ?? "/tmp/openclaw-clickclack-fixture.json";
 const workspace = {
@@ -86,19 +87,63 @@ function checkAuth(req, res) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
+    let settled = false;
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
+      if (settled) {
+        return;
+      }
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > requestMaxBytes) {
+        settled = true;
+        body = "";
+        req.resume();
+        reject(requestBodyTooLargeError());
+        return;
+      }
       body += chunk;
     });
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch {
         resolve({});
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   });
+}
+
+function requestBodyTooLargeError() {
+  return Object.assign(new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+function isRequestBodyTooLargeError(error) {
+  return error instanceof Error && error.code === "ETOOBIG";
+}
+
+function handleRequestError(res, error) {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  if (isRequestBodyTooLargeError(error)) {
+    json(res, 413, { error: error.message });
+    return;
+  }
+  json(res, 500, { error: String(error instanceof Error ? error.message : error) });
 }
 
 function createMessage({ body, author = humanUser, parentMessageId }) {
@@ -171,8 +216,8 @@ function broadcast(event) {
   }
 }
 
-const server = http.createServer((req, res) => {
-  void (async () => {
+async function handleRequest(req, res) {
+  try {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (!checkAuth(req, res)) {
       return;
@@ -244,7 +289,13 @@ const server = http.createServer((req, res) => {
       return;
     }
     json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
-  })();
+  } catch (error) {
+    handleRequestError(res, error);
+  }
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res);
 });
 
 server.on("upgrade", (req, socket) => {

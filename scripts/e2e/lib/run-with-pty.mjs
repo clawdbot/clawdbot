@@ -13,6 +13,16 @@ if (!logPath || !command) {
   process.exit(2);
 }
 
+let exiting = false;
+let forwardedSignal = null;
+let forceKillTimer = null;
+let logFailed = false;
+const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
+const outputState = {
+  bytes: 0,
+  truncated: false,
+};
+
 const log = fs.createWriteStream(logPath, { flags: "w" });
 const pty = spawn(command, args, {
   name: process.env.TERM || "xterm-256color",
@@ -22,14 +32,23 @@ const pty = spawn(command, args, {
   env: process.env,
 });
 
-let exiting = false;
-let forwardedSignal = null;
-let forceKillTimer = null;
-const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
-const outputState = {
-  bytes: 0,
-  truncated: false,
-};
+log.on("error", (error) => {
+  if (logFailed) {
+    return;
+  }
+  logFailed = true;
+  console.error(`run-with-pty transcript log failed: ${error.message}`);
+  if (exiting) {
+    process.exit(1);
+  }
+  if (!exiting) {
+    pty.kill("SIGTERM");
+    forceKillTimer ??= setTimeout(() => {
+      pty.kill("SIGKILL");
+    }, FORCE_KILL_MS);
+    forceKillTimer.unref?.();
+  }
+});
 
 function writeCappedOutput(data) {
   if (outputState.truncated) {
@@ -39,18 +58,24 @@ function writeCappedOutput(data) {
   const remainingBytes = OUTPUT_MAX_BYTES - outputState.bytes;
   if (buffer.byteLength <= remainingBytes) {
     outputState.bytes += buffer.byteLength;
-    log.write(buffer);
+    if (!logFailed) {
+      log.write(buffer);
+    }
     process.stdout.write(buffer);
     return;
   }
   if (remainingBytes > 0) {
     const head = buffer.subarray(0, remainingBytes);
-    log.write(head);
+    if (!logFailed) {
+      log.write(head);
+    }
     process.stdout.write(head);
   }
   outputState.bytes = OUTPUT_MAX_BYTES;
   outputState.truncated = true;
-  log.write(outputLimitMarker);
+  if (!logFailed) {
+    log.write(outputLimitMarker);
+  }
   process.stdout.write(outputLimitMarker);
 }
 
@@ -61,6 +86,9 @@ pty.onData((data) => {
 pty.onExit(({ exitCode, signal }) => {
   exiting = true;
   clearTimeout(forceKillTimer);
+  if (logFailed) {
+    process.exit(1);
+  }
   log.end(() => {
     if (forwardedSignal) {
       process.exit(signalExitCode(forwardedSignal));

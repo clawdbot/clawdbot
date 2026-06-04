@@ -1,5 +1,7 @@
+// Normalizes package tag inputs for install/update flows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Normalizes a package tag input, stripping known package-name prefixes when present. */
 export function normalizePackageTagInput(
   value: string | undefined | null,
   packageNames: readonly string[],

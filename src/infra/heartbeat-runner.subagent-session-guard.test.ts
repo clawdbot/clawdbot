@@ -1,3 +1,4 @@
+// Tests heartbeat runner guardrails for subagent sessions.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

@@ -17,6 +17,12 @@ import {
   readStringParam,
 } from "./common.js";
 
+/**
+ * Model-facing thread goal tools.
+ *
+ * Goal state is scoped to the current session store so agents can inspect,
+ * create, or close a persistent objective without direct store access.
+ */
 type GoalToolOptions = {
   agentSessionKey?: string;
   runSessionKey?: string;
@@ -54,6 +60,7 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   }
   const parsedSessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const parsedAgentSessionAgentId = parseAgentSessionKey(options.agentSessionKey)?.agentId;
+  // Prefer the run session's agent id; fall back to the agent session for legacy tool contexts.
   const agentId = normalizeAgentId(
     parsedSessionAgentId ?? parsedAgentSessionAgentId ?? options.sessionAgentId,
   );
@@ -65,6 +72,7 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   };
 }
 
+/** Creates the read-only tool that returns the current thread goal snapshot. */
 export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Get Goal",
@@ -82,6 +90,7 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
+/** Creates the tool that starts a new thread goal when explicitly requested. */
 export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Create Goal",
@@ -95,6 +104,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const objective = readStringParam(params, "objective", { required: true });
       const tokenBudget = readNumberParam(params, "token_budget", { integer: true });
       if (tokenBudget !== undefined && tokenBudget <= 0) {
+        // Budgets are positive limits; zero would immediately make accounting ambiguous.
         throw new ToolInputError("token_budget must be positive");
       }
       const goal = await createSessionGoal({
@@ -107,6 +117,7 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
   };
 }
 
+/** Creates the tool that marks the current thread goal complete or blocked. */
 export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
   return {
     label: "Update Goal",

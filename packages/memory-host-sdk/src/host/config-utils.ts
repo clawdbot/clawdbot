@@ -9,46 +9,61 @@ import {
 } from "./string-utils.js";
 export { splitShellArgs } from "./openclaw-runtime-io.js";
 
+// Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
+
+/** Chat shape used by memory send-policy matching. */
 export type ChatType = "direct" | "group" | "channel";
+/** Memory backend selected by user config. */
 export type MemoryBackend = "builtin" | "qmd";
+/** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
+/** QMD command mode used for search calls. */
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
+/** QMD startup policy for background indexing. */
 export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
+/** Action returned by a session send-policy rule. */
 export type SessionSendPolicyAction = "allow" | "deny";
+/** Match criteria for one memory send-policy rule. */
 export type SessionSendPolicyMatch = {
   channel?: string;
   chatType?: ChatType;
   keyPrefix?: string;
   rawKeyPrefix?: string;
 };
+/** One ordered rule in session send-policy config. */
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;
   match?: SessionSendPolicyMatch;
 };
+/** Memory send-policy config with default action and ordered rules. */
 export type SessionSendPolicyConfig = {
   default?: SessionSendPolicyAction;
   rules?: SessionSendPolicyRule[];
 };
 
+/** QMD collection path plus optional display name and glob pattern. */
 export type MemoryQmdIndexPath = {
   path: string;
   name?: string;
   pattern?: string;
 };
 
+/** QMD mcporter daemon integration config. */
 export type MemoryQmdMcporterConfig = {
   enabled?: boolean;
   serverName?: string;
   startDaemon?: boolean;
 };
 
+/** QMD session export config. */
 export type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
 };
 
+/** QMD update, debounce, startup, and timeout config. */
 export type MemoryQmdUpdateConfig = {
   interval?: string;
   debounceMs?: number;
@@ -62,6 +77,7 @@ export type MemoryQmdUpdateConfig = {
   embedTimeoutMs?: number;
 };
 
+/** Search and injection limits for QMD memory results. */
 export type MemoryQmdLimitsConfig = {
   maxResults?: number;
   maxSnippetChars?: number;
@@ -69,6 +85,7 @@ export type MemoryQmdLimitsConfig = {
   timeoutMs?: number;
 };
 
+/** Full QMD-backed memory config. */
 export type MemoryQmdConfig = {
   command?: string;
   mcporter?: MemoryQmdMcporterConfig;
@@ -82,12 +99,14 @@ export type MemoryQmdConfig = {
   scope?: SessionSendPolicyConfig;
 };
 
+/** Top-level memory config shared by host and runtime callers. */
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
 };
 
+/** Per-agent memory search enablement and extra collection paths. */
 export type MemorySearchConfig = {
   enabled?: boolean;
   extraPaths?: string[];
@@ -96,11 +115,13 @@ export type MemorySearchConfig = {
   };
 };
 
+/** Agent context limits that bound memory file reads. */
 export type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
   memoryGetDefaultLines?: number;
 };
 
+/** Secret reference accepted by provider header config. */
 export type SecretInput =
   | string
   | {
@@ -109,6 +130,7 @@ export type SecretInput =
       id: string;
     };
 
+/** Agent-level config fields consumed by memory host helpers. */
 type AgentConfig = {
   id?: string;
   default?: boolean;
@@ -117,6 +139,7 @@ type AgentConfig = {
   contextLimits?: AgentContextLimitsConfig;
 };
 
+/** Narrow OpenClaw config shape consumed by memory host utilities. */
 export type OpenClawConfig = {
   agents?: {
     defaults?: {
@@ -139,6 +162,7 @@ export type OpenClawConfig = {
   };
 };
 
+/** Root memory filename used in agent workspaces. */
 export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
@@ -156,6 +180,7 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
   d: 86_400_000,
 };
 
+/** Round parsed durations and reject values outside the safe integer range. */
 function roundDurationMs(raw: string, value: number): number {
   const rounded = Math.round(value);
   if (!Number.isSafeInteger(rounded)) {
@@ -164,6 +189,7 @@ function roundDurationMs(raw: string, value: number): number {
   return rounded;
 }
 
+/** Normalize user or config agent ids to the filesystem-safe canonical form. */
 export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
@@ -182,6 +208,7 @@ export function normalizeAgentId(value: string | undefined | null): string {
   );
 }
 
+/** Treat shell-placeholder home values as absent. */
 function normalizeHomeValue(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed || trimmed === "undefined" || trimmed === "null") {
@@ -190,6 +217,7 @@ function normalizeHomeValue(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+/** Resolve the underlying OS home before applying OpenClaw-specific overrides. */
 function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
   return (
     normalizeHomeValue(env.HOME) ??
@@ -198,6 +226,7 @@ function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): str
   );
 }
 
+/** Resolve OPENCLAW_HOME or the OS home, falling back to cwd for hermetic tests. */
 function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -209,6 +238,7 @@ function resolveRequiredHomeDir(
   return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
 }
 
+/** Resolve absolute user paths, including "~" against the effective OpenClaw home. */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -224,10 +254,12 @@ export function resolveUserPath(
   return path.resolve(trimmed);
 }
 
+/** Return legacy state roots in priority order. */
 function legacyStateDirs(homedir: () => string): string[] {
   return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
 }
 
+/** Resolve the current state root while preserving shipped legacy installs when present. */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -241,6 +273,7 @@ export function resolveStateDir(
   if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(nextDir)) {
     return nextDir;
   }
+  // Existing legacy state remains authoritative until an explicit migration creates .openclaw.
   const existingLegacy = legacyStateDirs(effectiveHome).find((dir) => {
     try {
       return fs.existsSync(dir);
@@ -251,6 +284,7 @@ export function resolveStateDir(
   return existingLegacy ?? nextDir;
 }
 
+/** Resolve the default agent workspace, partitioned by OPENCLAW_PROFILE when set. */
 function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string {
   const home = resolveRequiredHomeDir(env, os.homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
@@ -260,12 +294,14 @@ function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): 
   return path.join(home, ".openclaw", "workspace");
 }
 
+/** Return configured agent entries after dropping nullish placeholders. */
 function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
   return Array.isArray(cfg.agents?.list)
     ? cfg.agents.list.filter((entry): entry is AgentConfig => Boolean(entry))
     : [];
 }
 
+/** Resolve the default agent id from explicit default marker or first agent entry. */
 function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
@@ -275,15 +311,18 @@ function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
 }
 
+/** Find one agent config by canonical id. */
 function resolveAgentConfig(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+/** Remove null bytes before paths are handed to filesystem APIs. */
 function stripNullBytes(value: string): string {
   return value.replaceAll("\0", "");
 }
 
+/** Resolve the workspace directory for an agent id and config defaults. */
 export function resolveAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
@@ -306,6 +345,7 @@ export function resolveAgentWorkspaceDir(
   return stripNullBytes(path.join(resolveStateDir(env), `workspace-${id}`));
 }
 
+/** Resolve context limits for an agent with defaults fallback. */
 export function resolveAgentContextLimits(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
@@ -317,6 +357,7 @@ export function resolveAgentContextLimits(
   return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
 }
 
+/** Resolve enabled memory search config plus deduplicated extra paths for an agent. */
 export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -337,6 +378,7 @@ export function resolveMemorySearchConfig(
   };
 }
 
+/** Parse compact duration strings such as "500ms", "5s", or "1h30m" into milliseconds. */
 export function parseDurationMs(
   raw: string,
   opts?: { defaultUnit?: "ms" | "s" | "m" | "h" | "d" },

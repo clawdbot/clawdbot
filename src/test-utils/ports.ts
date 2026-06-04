@@ -1,3 +1,4 @@
+// Allocates available local ports for tests that start servers.
 import { createServer } from "node:net";
 import { isMainThread, threadId } from "node:worker_threads";
 

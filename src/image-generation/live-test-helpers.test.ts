@@ -1,3 +1,4 @@
+/** Tests live image-generation helper parsing and provider selection. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

@@ -1,3 +1,4 @@
+/** Builds and revalidates system.run approval plans for cwd and mutable executable operands. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +29,7 @@ import {
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+/** File identity snapshot for the approved working directory. */
 export type ApprovedCwdSnapshot = {
   cwd: string;
   stat: fs.Stats;
@@ -1061,6 +1063,7 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
   return snapshot.ok && snapshot.snapshot !== null;
 }
 
+/** Captures file identity for a mutable script operand that approval is bound to. */
 export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
@@ -1176,6 +1179,7 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
   };
 }
 
+/** Rechecks that the approved cwd still points at the same directory identity. */
 export function revalidateApprovedCwdSnapshot(params: { snapshot: ApprovedCwdSnapshot }): boolean {
   const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd);
   if (!current.ok) {

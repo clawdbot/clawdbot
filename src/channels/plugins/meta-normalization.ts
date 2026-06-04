@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMeta } from "./types.public.js";
 
+// Normalizes partially declared channel metadata while preserving optional
+// extension-owned fields from an existing manifest or registry entry.
 function stripRequiredChannelMeta(meta?: Partial<ChannelMeta> | null) {
   const {
     id: _ignoredId,
@@ -37,6 +39,8 @@ export function normalizeChannelMeta<TId extends string>(params: {
   const blurb =
     normalizeOptionalString(next?.blurb) ?? normalizeOptionalString(existing?.blurb) ?? "";
 
+  // Required fields are recomputed from normalized precedence above. Spreading
+  // only optional leftovers prevents stale ids or labels from winning later.
   return {
     ...stripRequiredChannelMeta(existing),
     ...stripRequiredChannelMeta(next),

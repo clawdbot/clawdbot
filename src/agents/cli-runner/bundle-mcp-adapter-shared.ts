@@ -2,12 +2,14 @@ import { isRecord } from "../../../packages/normalization-core/src/record-coerce
 import type { BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 export { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 
+// Shared normalization helpers for CLI-specific bundle MCP adapters.
 function normalizeStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
     ? [...value]
     : undefined;
 }
 
+/** Normalize a string-valued record, dropping non-string entries. */
 export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -18,6 +20,7 @@ export function normalizeStringRecord(value: unknown): Record<string, string> | 
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** Decode supported `${ENV}` and `Bearer ${ENV}` header placeholders. */
 export function decodeHeaderEnvPlaceholder(
   value: string,
 ): { envVar: string; bearer: boolean } | null {
@@ -32,6 +35,7 @@ export function decodeHeaderEnvPlaceholder(
   return null;
 }
 
+/** Copy common MCP server config fields into a CLI adapter config object. */
 export function applyCommonServerConfig(
   next: Record<string, unknown>,
   server: BundleMcpServerConfig,

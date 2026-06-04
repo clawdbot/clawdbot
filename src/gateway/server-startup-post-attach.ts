@@ -29,7 +29,7 @@ const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
-const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
+const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
@@ -233,9 +233,11 @@ function scheduleProviderAuthStatePrewarm(params: {
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   void (async () => {
-    const { clearCurrentProviderAuthState, warmCurrentProviderAuthStateOffMainThread } =
-      await import("../agents/model-provider-auth.js");
-    const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
+    const [{ setAuthProfileFailureHook }, { clearCurrentProviderAuthState }] = await Promise.all([
+      import("../agents/auth-profiles/failure-hook.js"),
+      import("../agents/model-provider-auth-state.js"),
+    ]);
+    const loadProviderAuthWarmModule = () => import("../agents/model-provider-auth.js");
     const runRewarm = async (reason: string) => {
       if (isStopped()) {
         return;
@@ -243,6 +245,7 @@ function scheduleProviderAuthStatePrewarm(params: {
       const cfg = params.getConfig();
       rewarmInFlight = true;
       try {
+        const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
         const metrics = await measureProviderAuthWarm(() =>
           warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
         );
@@ -298,6 +301,7 @@ function scheduleProviderAuthStatePrewarm(params: {
             return;
           }
           const cfg = params.getConfig();
+          const { warmCurrentProviderAuthStateOffMainThread } = await loadProviderAuthWarmModule();
           const metrics = await measureProviderAuthWarm(() =>
             warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
           );
@@ -1446,6 +1450,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
+  providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,

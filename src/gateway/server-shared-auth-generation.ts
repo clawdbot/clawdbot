@@ -1,17 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 
+// Tracks shared Gateway auth generations across config writes and reload modes.
+
+/** Gateway client subset relevant to shared auth generation enforcement. */
 export type SharedGatewayAuthClient = {
   usesSharedGatewayAuth?: boolean;
   sharedGatewaySessionGeneration?: string;
   socket: { close: (code: number, reason: string) => void };
 };
 
+/** Mutable shared auth generation state. */
 export type SharedGatewaySessionGenerationState = {
   current: string | undefined;
   required: string | undefined | null;
 };
 
+/** Disconnect shared-auth clients whose generation no longer matches the expected one. */
 export function disconnectStaleSharedGatewayAuthClients(params: {
   clients: Iterable<SharedGatewayAuthClient>;
   expectedGeneration: string | undefined;
@@ -31,6 +36,7 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
   }
 }
 
+/** Disconnect every shared-auth client regardless of generation. */
 export function disconnectAllSharedGatewayAuthClients(
   clients: Iterable<SharedGatewayAuthClient>,
 ): void {
@@ -46,12 +52,14 @@ export function disconnectAllSharedGatewayAuthClients(
   }
 }
 
+/** Resolve the generation clients must use, treating null as "current is required". */
 export function getRequiredSharedGatewaySessionGeneration(
   state: SharedGatewaySessionGenerationState,
 ): string | undefined {
   return state.required === null ? state.current : state.required;
 }
 
+/** Update current generation and clear stale required-generation markers. */
 export function setCurrentSharedGatewaySessionGeneration(
   state: SharedGatewaySessionGenerationState,
   nextGeneration: string | undefined,
@@ -67,6 +75,7 @@ export function setCurrentSharedGatewaySessionGeneration(
   }
 }
 
+/** Enforce shared auth generation behavior after a config write. */
 export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
   state: SharedGatewaySessionGenerationState;
   nextConfig: OpenClawConfig;

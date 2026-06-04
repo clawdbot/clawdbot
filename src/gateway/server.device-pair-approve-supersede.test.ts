@@ -1,3 +1,6 @@
+/**
+ * Tests device-pair approval superseding behavior in the gateway server.
+ */
 import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,

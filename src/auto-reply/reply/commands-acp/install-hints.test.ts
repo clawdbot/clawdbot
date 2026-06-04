@@ -1,3 +1,4 @@
+// Tests ACP install hint detection and command guidance.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";

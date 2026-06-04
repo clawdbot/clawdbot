@@ -1,3 +1,4 @@
+// Tests entrypoint respawn behavior for compile cache and process flags.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";

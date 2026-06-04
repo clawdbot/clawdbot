@@ -1,3 +1,4 @@
+// Tests channel plugin test registry helpers.
 import { describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createOutboundTestPlugin } from "./channel-plugins.js";
 

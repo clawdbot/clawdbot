@@ -1,3 +1,6 @@
+/**
+ * Shared WebSocket connection fixtures for gateway server tests.
+ */
 import { EventEmitter } from "node:events";
 import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";

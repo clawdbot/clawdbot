@@ -1,8 +1,12 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "../../runtime/index.js";
 
+/**
+ * Stream wrapper for applying message transforms immediately before provider dispatch.
+ */
 export type MessageTransform = (messages: AgentMessage[], model: unknown) => AgentMessage[];
 
+/** Wraps a stream function with a conditional message-list transform. */
 export function wrapStreamFnWithMessageTransform(
   streamFn: StreamFn,
   transform: MessageTransform,
@@ -19,6 +23,8 @@ export function wrapStreamFnWithMessageTransform(
     }
 
     return streamFn(
+      // Clone the context instead of mutating it so callers can reuse the original assembled
+      // context for logging, replay, or retry comparisons.
       model,
       {
         ...(context as unknown as Record<string, unknown>),

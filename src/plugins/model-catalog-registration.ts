@@ -1,3 +1,4 @@
+// Registers plugin-provided models into the model catalog.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogSource,
@@ -7,13 +8,13 @@ import {
   type MediaGenerationCatalogKind,
   type MediaGenerationCatalogProvider,
 } from "../../packages/media-generation-core/src/catalog.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   synthesizeVoiceModelCatalogEntries,
   type VoiceModelCapabilities,
   type VoiceModelProvider,
 } from "../../packages/speech-core/voice-models.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "./provider-catalog-unified-text.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -58,6 +59,7 @@ function mergeModelCatalogHooks(
   };
 }
 
+/** Creates handlers that register plugin model catalog providers into a registry. */
 export function createModelCatalogRegistrationHandlers(params: {
   registry: PluginRegistry;
   pushDiagnostic: (diagnostic: PluginDiagnostic) => void;

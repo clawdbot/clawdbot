@@ -1,3 +1,4 @@
+// Validation helpers for cron delivery targets before jobs enter runtime dispatch.
 function assertNonBlankStringField(field: string, value: unknown) {
   if (value === undefined || value === null || typeof value !== "string") {
     return;

@@ -1,3 +1,4 @@
+/** Release-lane coverage for npm plugin install security scanning. */
 import { execFile, spawnSync } from "node:child_process";
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

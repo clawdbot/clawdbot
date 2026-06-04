@@ -19,31 +19,47 @@ export {
 } from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
+  /** Plain text reply body. */
   text?: string;
+  /** Ordered media attachments for channels that can send multiple media items. */
   mediaUrls?: string[];
+  /** Legacy single media attachment. */
   mediaUrl?: string;
+  /** Rich presentation payload for channels that support structured replies. */
   presentation?: InternalReplyPayload["presentation"];
   /**
    * @deprecated Use presentation. Runtime support remains for legacy producers.
    */
   interactive?: InternalReplyPayload["interactive"];
+  /** Channel-specific opaque data forwarded to outbound adapters. */
   channelData?: InternalReplyPayload["channelData"];
+  /** Marks media as sensitive for channel-specific spoiler/safety handling. */
   sensitiveMedia?: boolean;
+  /** Platform message id that the outbound reply should target when supported. */
   replyToId?: string;
 };
 
 export type ReasoningReplyPayload = {
+  /** Reply text that may carry hidden reasoning markers. */
   text?: string;
+  /** Explicit reasoning flag from upstream payload producers. */
   isReasoning?: boolean;
 };
 
 export type SendableOutboundReplyParts = {
+  /** Raw text selected for delivery before trimming. */
   text: string;
+  /** Text after trimming whitespace for sendability checks. */
   trimmedText: string;
+  /** Normalized non-empty media URLs. */
   mediaUrls: string[];
+  /** Number of normalized media URLs. */
   mediaCount: number;
+  /** Whether trimmed text is sendable. */
   hasText: boolean;
+  /** Whether at least one media URL is sendable. */
   hasMedia: boolean;
+  /** Whether the payload has any sendable text or media. */
   hasContent: boolean;
 };
 
@@ -188,11 +204,17 @@ export async function sendPayloadWithChunkedTextAndMedia<
   TContext extends { payload: object },
   TResult,
 >(params: {
+  /** Caller context containing the loose outbound payload. */
   ctx: TContext;
+  /** Text length limit passed to the chunker for text-only payloads. */
   textChunkLimit?: number;
+  /** Optional text chunker used only when no media URLs are present. */
   chunker?: ((text: string, limit: number) => string[]) | null;
+  /** Transport hook for text-only chunks. */
   sendText: (ctx: TContext & { text: string }) => Promise<TResult>;
+  /** Transport hook for media sends; first media receives the caption text. */
   sendMedia: (ctx: TContext & { text: string; mediaUrl: string }) => Promise<TResult>;
+  /** Result returned when payload has neither text nor media. */
   emptyResult: TResult;
 }): Promise<TResult> {
   const payload = params.ctx.payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string };
@@ -202,6 +224,8 @@ export async function sendPayloadWithChunkedTextAndMedia<
     return params.emptyResult;
   }
   if (urls.length > 0) {
+    // Caption-limited transports get text only on the first media item; the
+    // final result still represents the last platform send.
     let lastResult = await params.sendMedia({
       ...params.ctx,
       text,
@@ -225,13 +249,20 @@ export async function sendPayloadWithChunkedTextAndMedia<
   return lastResult!;
 }
 
+/** Sends a media sequence with caption text on the first item and returns the last send result. */
 export async function sendPayloadMediaSequence<TResult>(params: {
+  /** Caption text attached to the first non-empty media URL only. */
   text: string;
+  /** Ordered media URLs to send, with empty entries skipped. */
   mediaUrls: readonly string[];
   send: (input: {
+    /** Caption text for the first media send, otherwise empty. */
     text: string;
+    /** Media URL for this send. */
     mediaUrl: string;
+    /** Original index in `mediaUrls`. */
     index: number;
+    /** Whether this is the first media entry in the original sequence. */
     isFirst: boolean;
   }) => Promise<TResult>;
 }): Promise<TResult | undefined> {
@@ -251,8 +282,11 @@ export async function sendPayloadMediaSequence<TResult>(params: {
   return lastResult;
 }
 
+/** Sends a media sequence or returns a fallback when no media send produces a result. */
 export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
+  /** Caption text attached to the first non-empty media URL only. */
   text: string;
+  /** Ordered media URLs to send, with empty entries skipped. */
   mediaUrls: readonly string[];
   send: (input: {
     text: string;
@@ -260,7 +294,9 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
     index: number;
     isFirst: boolean;
   }) => Promise<TResult>;
+  /** Result returned when no media result is available. */
   fallbackResult: TResult;
+  /** Optional callback used instead of `fallbackResult` when there are no media URLs. */
   sendNoMedia?: () => Promise<TResult>;
 }): Promise<TResult> {
   if (params.mediaUrls.length === 0) {
@@ -269,8 +305,11 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
 }
 
+/** Sends media when present, then always runs finalization and returns its result. */
 export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>(params: {
+  /** Caption text attached to the first non-empty media URL only. */
   text: string;
+  /** Ordered media URLs to send before finalization. */
   mediaUrls: readonly string[];
   send: (input: {
     text: string;
@@ -278,6 +317,7 @@ export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>
     index: number;
     isFirst: boolean;
   }) => Promise<TMediaResult>;
+  /** Final callback whose result is returned after optional media sends. */
   finalize: () => Promise<TResult>;
 }): Promise<TResult> {
   if (params.mediaUrls.length > 0) {
@@ -286,9 +326,13 @@ export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>
   return await params.finalize();
 }
 
+/** Sends normalized text/media payloads through a channel outbound adapter. */
 export async function sendTextMediaPayload(params: {
+  /** Channel id used in the empty fallback result. */
   channel: string;
+  /** Channel send payload context. */
   ctx: SendPayloadContext;
+  /** Adapter transport hooks for text, media, and optional chunking. */
   adapter: SendPayloadAdapter;
 }): Promise<SendPayloadResult> {
   const text = params.ctx.payload.text ?? "";
@@ -296,6 +340,8 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
+  // Reply fanout may be single-use for implicit replies, so resolve it exactly
+  // once per platform send rather than copying the initial id into every part.
   const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;

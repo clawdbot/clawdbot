@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK type surface for plugin-scoped keyed state stores.
+ */
 export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,

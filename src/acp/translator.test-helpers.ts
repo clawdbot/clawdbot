@@ -7,6 +7,7 @@ type TestAcpConnection = AgentSideConnection & {
   __sessionUpdateMock: ReturnType<typeof vi.fn>;
 };
 
+/** Creates a mocked ACP connection with exposed permission and update spies. */
 export function createAcpConnection(
   params: {
     requestPermission?: ReturnType<typeof vi.fn>;

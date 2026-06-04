@@ -1,3 +1,4 @@
+/** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";

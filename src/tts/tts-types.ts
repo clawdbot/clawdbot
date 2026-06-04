@@ -8,8 +8,10 @@ import type {
 } from "../config/types.tts.js";
 import type { SpeechModelOverridePolicy, SpeechProviderConfig } from "./provider-types.js";
 
+/** Resolved directive override policy after config defaults are applied. */
 export type ResolvedTtsModelOverrides = SpeechModelOverridePolicy;
 
+/** Fully resolved TTS runtime config consumed by synthesis and status paths. */
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
   mode: TtsMode;

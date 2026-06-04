@@ -1,3 +1,4 @@
+/** Verifies the official external plugin catalog manifests, install specs, and labels. */
 import { describe, expect, it } from "vitest";
 import {
   type OfficialExternalPluginCatalogEntry,

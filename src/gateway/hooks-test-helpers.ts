@@ -1,6 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type { HooksConfigResolved } from "./hooks.js";
 
+/**
+ * Hook endpoint fixtures shared by gateway hook tests.
+ */
 export function createHooksConfig(): HooksConfigResolved {
   return {
     basePath: "/hooks",
@@ -20,6 +23,7 @@ export function createHooksConfig(): HooksConfigResolved {
   };
 }
 
+/** Builds an IncomingMessage-shaped request for hook handler tests. */
 export function createGatewayRequest(params: {
   path: string;
   authorization?: string;

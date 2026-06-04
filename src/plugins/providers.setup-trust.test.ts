@@ -1,3 +1,4 @@
+// Covers provider setup trust checks for plugin-owned providers.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

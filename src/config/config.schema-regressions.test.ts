@@ -1,3 +1,4 @@
+// Regresses known config schema edge cases and compatibility expectations.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 

@@ -1,3 +1,4 @@
+// Resolves package entry files for plugin loading and public surfaces.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -138,6 +139,7 @@ async function validatePackageExtensionEntry(params: {
   return { ok: true, exists: true };
 }
 
+/** Validates package extension/setup entries before installing a plugin package. */
 export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
   extensions: string[];
@@ -549,6 +551,7 @@ function resolvePackageRuntimeEntrySource(params: {
         return null;
       }
     }
+    // Installed packages must ship compiled JS for TS entries; only trusted source paths fall back.
     if (
       (params.requireBuiltRuntimeEntry ?? shouldRequireBuiltRuntimeEntry(params.origin)) &&
       isTypeScriptPackageEntry(safeEntry.relativePath)
@@ -597,6 +600,7 @@ function resolvePackageRuntimeEntrySource(params: {
   return null;
 }
 
+/** Resolves the runtime setup source for a plugin package manifest. */
 export function resolvePackageSetupSource(params: {
   packageDir: string;
   packageRootRealPath?: string;
@@ -632,6 +636,7 @@ export function resolvePackageSetupSource(params: {
   });
 }
 
+/** Resolves runtime extension sources for a plugin package manifest. */
 export function resolvePackageRuntimeExtensionSources(params: {
   packageDir: string;
   packageRootRealPath?: string;

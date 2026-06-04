@@ -62,6 +62,7 @@ export type {
   GatewayServiceState,
 } from "./service-types.js";
 
+// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
   write: (args: TArgs) => Promise<unknown>,
 ): (args: TArgs) => Promise<void> {

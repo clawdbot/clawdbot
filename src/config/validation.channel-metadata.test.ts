@@ -1,3 +1,4 @@
+// Verifies channel metadata validation and plugin capability lookups.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {

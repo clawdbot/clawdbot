@@ -8,6 +8,7 @@ type SkillSourceCompat = Skill & {
   };
 };
 
+/** Returns the stable source label attached to a loaded skill. */
 export function resolveSkillSource(skill: Skill): string {
   const compatSkill = skill as SkillSourceCompat;
   const canonical = normalizeOptionalString(compatSkill.source) ?? "";

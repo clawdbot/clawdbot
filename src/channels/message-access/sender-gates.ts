@@ -21,6 +21,8 @@ function senderGate(params: {
   policy: ChannelIngressPolicyInput["dmPolicy"] | ChannelIngressPolicyInput["groupPolicy"];
   allowlistSource: ResolvedIngressAllowlist;
 }): AccessGraphGate {
+  // Sender gates always include redacted allowlist facts so diagnostics can explain an
+  // allow/block result without exposing raw sender ids.
   return {
     id: params.id,
     phase: "sender",
@@ -34,6 +36,9 @@ function senderGate(params: {
   };
 }
 
+/**
+ * Evaluates direct-message sender policy against DM and pairing-store allowlists.
+ */
 export function senderGateForDirect(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -70,6 +75,8 @@ export function senderGateForDirect(params: {
     return block("dm_policy_disabled");
   }
   if (params.policy.dmPolicy === "open") {
+    // Open DM policy still requires either wildcard or an explicit normalized entry so
+    // configured allowlists keep their narrowing effect.
     if (dm.hasWildcard) {
       return allow("dm_policy_open");
     }
@@ -82,6 +89,7 @@ export function senderGateForDirect(params: {
     return allow("dm_policy_allowlisted");
   }
   if (params.policy.dmPolicy === "pairing" && pairingStore.match.matched) {
+    // Pairing-store matches are only valid for pairing policy, never for open/allowlist modes.
     return senderGate({
       id: "sender:dm",
       kind: "dmSender",
@@ -103,6 +111,9 @@ export function senderGateForDirect(params: {
   return block(reasonCode);
 }
 
+/**
+ * Evaluates group/channel sender policy after route sender allowlist overrides are applied.
+ */
 export function senderGateForGroup(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -146,6 +157,9 @@ export function senderGateForGroup(params: {
   return block(allowlistFailureReason(group) ?? "group_policy_not_allowlisted");
 }
 
+/**
+ * Applies event auth mode to sender gates for non-message callbacks.
+ */
 export function applyEventAuthModeToSenderGate(params: {
   state: ChannelIngressState;
   senderGate: AccessGraphGate;
@@ -153,6 +167,8 @@ export function applyEventAuthModeToSenderGate(params: {
   if (params.state.event.authMode === "inbound" || params.senderGate.allowed) {
     return params.senderGate;
   }
+  // Non-inbound events can be authorized by command/origin/route gates, so a failed sender
+  // gate becomes an ignored diagnostic instead of a dispatch block.
   const reasonCode = "sender_not_required";
   return {
     ...params.senderGate,

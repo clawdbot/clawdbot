@@ -1,8 +1,11 @@
+/** Integration-test helpers for preparing secrets runtime fixtures. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
+
+/** Shared integration helpers for full secrets runtime snapshot tests. */
 export {
   asConfig,
   createOpenAIFileRuntimeConfig,
@@ -16,8 +19,10 @@ export {
 export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
+/** Slow integration timeout used by plugin-origin and gateway-auth runtime tests. */
 export const SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS = 300_000;
 
+/** Start an isolated secrets runtime integration test with bundled plugin env removed. */
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
@@ -29,6 +34,7 @@ export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot
   return envSnapshot;
 }
 
+/** Restore env, mocks, config/plugin caches, and active secrets runtime state. */
 export function endSecretsRuntimeIsolationForTest(envSnapshot: SecretsRuntimeEnvSnapshot) {
   vi.restoreAllMocks();
   envSnapshot.restore();

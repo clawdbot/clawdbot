@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import type { OAuthCredential } from "./types.js";
 
+// Shared OAuth test mocks for provider runtime, CLI credentials, doctor hints,
+// and external CLI sync.
 const oauthProviderRuntimeMocks = vi.hoisted(() => ({
   refreshProviderOAuthCredentialWithPluginMock: vi.fn(
     async (_params?: { context?: unknown }) => undefined,
@@ -8,6 +10,7 @@ const oauthProviderRuntimeMocks = vi.hoisted(() => ({
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
 }));
 
+/** Return hoisted provider-runtime OAuth mocks for per-test setup. */
 export function getOAuthProviderRuntimeMocks() {
   return oauthProviderRuntimeMocks;
 }

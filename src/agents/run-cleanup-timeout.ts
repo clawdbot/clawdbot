@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
+// Cleanup steps must not block run completion forever. This module bounds each
+// cleanup step and logs enough context to debug late failures.
 export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 export const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
 export const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
@@ -49,6 +51,7 @@ function truncateCleanupTimeoutDetails(value: string): string {
   return `${value.slice(0, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
 }
 
+/** Resolve the timeout for one agent cleanup step. */
 export function resolveAgentCleanupStepTimeoutMs(params: {
   step: string;
   timeoutMs?: number;
@@ -70,6 +73,7 @@ export function resolveAgentCleanupStepTimeoutMs(params: {
   return parseTimeoutEnvValue(env[AGENT_CLEANUP_STEP_TIMEOUT_ENV]) ?? AGENT_CLEANUP_STEP_TIMEOUT_MS;
 }
 
+/** Run one cleanup step with timeout logging and late-rejection handling. */
 export async function runAgentCleanupStep(params: {
   runId: string;
   sessionId: string;
@@ -114,6 +118,8 @@ export async function runAgentCleanupStep(params: {
     params.log.warn(
       `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,
     );
+    // Keep observing the original cleanup promise so late failures do not turn
+    // into unhandled rejections after the timeout path returned.
     void cleanupPromise.catch((error: unknown) => {
       params.log.warn(
         `agent cleanup rejected after timeout: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,

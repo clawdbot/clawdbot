@@ -1,9 +1,11 @@
+// Model reference formatting helpers for auto-reply runtime status.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 
+/** Format a provider/model pair without duplicating provider prefixes already in the model id. */
 export function formatProviderModelRef(providerRaw: string, modelRaw: string): string {
   const provider = normalizeOptionalString(providerRaw) ?? "";
   const model = normalizeOptionalString(modelRaw) ?? "";
@@ -71,6 +73,7 @@ function normalizeModelRef(
   };
 }
 
+/** Compare configured selected model with the active model stored on a session. */
 export function resolveSelectedAndActiveModel(params: {
   selectedProvider: string;
   selectedModel: string;

@@ -1,3 +1,4 @@
+/** Tests ACP backend failover candidate ordering and transient-error detection. */
 import { describe, expect, it } from "vitest";
 import {
   isFailoverWorthyBackendError,

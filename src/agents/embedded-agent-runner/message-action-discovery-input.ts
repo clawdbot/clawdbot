@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/**
+ * Normalizes channel/session/message context before message-action discovery.
+ *
+ * Discovery expects absent optional fields as `undefined`; preserving nulls would create
+ * different cache/input shapes for the same missing runtime fact.
+ */
 export function buildEmbeddedMessageActionDiscoveryInput(params: {
   cfg?: OpenClawConfig;
   channel: string;

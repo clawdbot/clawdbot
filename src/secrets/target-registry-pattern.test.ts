@@ -1,3 +1,4 @@
+/** Tests secret target registry pattern compile/match/expand behavior. */
 import { describe, expect, it } from "vitest";
 import {
   expandPathTokens,

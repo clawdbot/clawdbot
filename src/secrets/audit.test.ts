@@ -1,13 +1,22 @@
+/** Tests secrets audit reporting and remediation hints. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { runSecretsAudit } from "./audit.js";
 
 type AuditFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
+  agentDir: string;
   authStorePath: string;
   authJsonPath: string;
   modelsPath: string;
@@ -29,7 +38,19 @@ function countNonEmptyLines(value: string): number {
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  if (path.basename(filePath) === "openclaw-agent.sqlite") {
+    saveAuthProfileStore(value as AuthProfileStore, path.dirname(filePath), {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    return;
+  }
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function removeAuthStore(fixture: AuditFixture): Promise<void> {
+  closeOpenClawAgentDatabasesForTest();
+  await fs.rm(fixture.authStorePath, { force: true });
 }
 
 async function writeExecResolverShellScript(params: {
@@ -128,18 +149,20 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
   const stateDir = path.join(rootDir, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-  const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
-  const modelsPath = path.join(stateDir, "agents", "main", "agent", "models.json");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const authStorePath = resolveAuthProfileDatabasePath(agentDir);
+  const authJsonPath = path.join(agentDir, "auth.json");
+  const modelsPath = path.join(agentDir, "models.json");
   const envPath = path.join(stateDir, ".env");
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.mkdir(agentDir, { recursive: true });
 
   return {
     rootDir,
     stateDir,
     configPath,
+    agentDir,
     authStorePath,
     authJsonPath,
     modelsPath,
@@ -239,6 +262,7 @@ describe("secrets audit", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -252,7 +276,7 @@ describe("secrets audit", () => {
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
-    await fs.rm(fixture.authStorePath, { force: true });
+    await removeAuthStore(fixture);
     await writeJsonFile(fixture.authJsonPath, {
       openai: {
         type: "api_key",
@@ -268,11 +292,9 @@ describe("secrets audit", () => {
   });
 
   it("reports malformed sidecar JSON as findings instead of crashing", async () => {
-    await fs.writeFile(fixture.authStorePath, "{invalid-json", "utf8");
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingFile(report, fixture.authStorePath);
     expectFindingFile(report, fixture.authJsonPath);
     expectFindingCode(report, "REF_UNRESOLVED");
   });
@@ -302,7 +324,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.authStorePath, { force: true });
+    await removeAuthStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -344,7 +366,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.authStorePath, { force: true });
+    await removeAuthStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
@@ -408,7 +430,7 @@ describe("secrets audit", () => {
       )}\n`,
       "utf8",
     );
-    await fs.rm(fixture.authStorePath, { force: true });
+    await removeAuthStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
@@ -625,17 +647,20 @@ describe("secrets audit", () => {
   });
 
   it("still flags auth profile plaintext when an explicit ref is also configured", async () => {
-    await writeJsonFile(fixture.authStorePath, {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-leftover-plaintext", // pragma: allowlist secret
-          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-leftover-plaintext", // pragma: allowlist secret
+            keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          },
         },
       },
-    });
+      fixture.agentDir,
+    );
 
     const report = await runSecretsAudit({ env: fixture.env });
     expect(

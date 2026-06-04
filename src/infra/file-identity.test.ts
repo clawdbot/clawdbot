@@ -1,3 +1,4 @@
+// Covers file identity comparison across platform stat shapes.
 import { describe, expect, it } from "vitest";
 import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 

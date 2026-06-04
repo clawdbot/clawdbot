@@ -1,5 +1,6 @@
 import type { RunRecord, RunState, TerminationReason } from "./types.js";
 
+/** In-memory run index for the supervisor; callers receive detached snapshots. */
 function nowMs() {
   return Date.now();
 }
@@ -35,6 +36,10 @@ export type RunRegistry = {
   delete: (runId: string) => void;
 };
 
+/**
+ * Create the supervisor's mutable run registry. Exited records are retained
+ * only for diagnostics, so the cap bounds memory without touching live runs.
+ */
 export function createRunRegistry(options?: { maxExitedRecords?: number }): RunRegistry {
   const records = new Map<string, RunRecord>();
   const maxExitedRecords = resolveMaxExitedRecords(options?.maxExitedRecords);
@@ -53,6 +58,7 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
       return;
     }
     let remove = exited - maxExitedRecords;
+    // Map insertion order is the retention policy: oldest exited records leave first.
     for (const [runId, record] of records.entries()) {
       if (remove <= 0) {
         break;
@@ -127,6 +133,8 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     const next: RunRecord = {
       ...current,
       state: "exited",
+      // First terminal observation wins; late fallback timers must not rewrite
+      // the exit reason or signal after a real process exit has been recorded.
       terminationReason: current.terminationReason ?? exit.reason,
       exitCode: current.exitCode !== undefined ? current.exitCode : exit.exitCode,
       exitSignal: current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,

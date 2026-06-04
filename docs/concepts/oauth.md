@@ -17,9 +17,17 @@ is now:
   told us this usage is allowed again
 
 OpenAI Codex OAuth is explicitly supported for use in external tools like
-OpenClaw. This page explains:
+OpenClaw.
+
+OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
+canonical provider id `openai`. Older `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries are legacy state repaired by
+`openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
+new config.
 
 For Anthropic in production, API key auth is the safer recommended path.
+
+This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -121,6 +129,18 @@ Flow shape:
 ### OpenAI Codex (ChatGPT OAuth)
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
+
+The login command still uses the canonical OpenAI provider id:
+
+```bash
+openclaw models auth login --provider openai
+```
+
+Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
+one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+that older prefix to a collision-free `openai:*` profile id; run
+`openclaw models auth list --provider openai` after repair before copying
+profile ids into `auth.order` or `/model ...@<profileId>`.
 
 Flow shape (PKCE):
 

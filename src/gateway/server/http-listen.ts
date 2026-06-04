@@ -1,3 +1,4 @@
+// Gateway HTTP server listen helper with retry and lock-aware errors.
 import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
@@ -15,6 +16,7 @@ async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
   });
 }
 
+/** Listen on the configured gateway host/port, retrying transient EADDRINUSE windows. */
 export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;

@@ -1,3 +1,4 @@
+/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
@@ -27,6 +28,7 @@ export {
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
+/** Normalizes pasted API-key input, including shell assignment forms. */
 export function normalizeApiKeyInput(raw: string): string {
   const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
   if (!trimmed) {
@@ -49,9 +51,11 @@ export function normalizeApiKeyInput(raw: string): string {
   return withoutSemicolon.trim();
 }
 
+/** Validates required API-key input for setup prompts. */
 export const validateApiKeyInput = (value: string) =>
   normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
 
+/** Formats a redacted API-key preview for setup confirmation prompts. */
 export function formatApiKeyPreview(
   raw: string,
   opts: { head?: number; tail?: number } = {},
@@ -73,12 +77,14 @@ export function formatApiKeyPreview(
   return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
 }
 
+/** Normalizes a token-provider selector from CLI/options input. */
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
   return normalizeOptionalLowercaseString(tokenProvider);
 }
 
+/** Normalizes secret input mode values accepted by provider setup. */
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
@@ -89,6 +95,7 @@ export function normalizeSecretInputModeInput(
   return undefined;
 }
 
+/** Applies a CLI-provided API key when its provider selector matches this auth method. */
 export async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -109,6 +116,7 @@ export async function maybeApplyApiKeyFromOption(params: {
   return apiKey;
 }
 
+/** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -156,6 +164,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   });
 }
 
+/** Resolves an API key from environment or interactive prompt and records the chosen secret mode. */
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

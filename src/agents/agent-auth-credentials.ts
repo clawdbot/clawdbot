@@ -4,6 +4,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
 
+// Converts auth-profile credentials into the compact credential map consumed by
+// agent runtimes. Secret refs can be represented by markers without reading
+// secret values.
 type AgentApiKeyCredential = { type: "api_key"; key: string };
 type AgentOAuthCredential = {
   type: "oauth";
@@ -41,6 +44,8 @@ function convertAuthProfileCredentialToAgent(
   if (cred.type === "api_key") {
     const key = normalizeOptionalString(cred.key) ?? "";
     if (!key) {
+      // A configured secret ref proves the credential exists, but this converter
+      // must not resolve or leak the actual secret value.
       return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key };
@@ -78,6 +83,7 @@ function convertAuthProfileCredentialToAgent(
   return null;
 }
 
+/** Build one credential per normalized provider from an auth profile store. */
 export function resolveAgentCredentialMapFromStore(
   store: AuthProfileStore,
   options?: ResolveAgentCredentialMapOptions,
@@ -96,6 +102,7 @@ export function resolveAgentCredentialMapFromStore(
   return credentials;
 }
 
+/** Compare agent runtime credential values without broad object equality. */
 export function agentCredentialsEqual(a: AgentCredential | undefined, b: AgentCredential): boolean {
   if (!a || typeof a !== "object") {
     return false;

@@ -448,6 +448,14 @@ export const ko: TranslationMap = {
     logs: "실시간 Gateway 로그.",
     dreams: "수면 중 메모리 통합.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "활동",
     subtitle: "라이브 세션 이벤트에서 파생된 임시 도구 활동입니다.",

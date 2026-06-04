@@ -9,6 +9,12 @@ import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-run
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
+/**
+ * Lazy-loads plugin-backed harness runtimes before selection.
+ *
+ * Only cold-loadable runtimes live here; always-loaded core/openclaw runtimes should not trigger
+ * plugin registry scans on every embedded-agent turn.
+ */
 const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
 function dedupePluginIds(values: readonly string[]): string[] {
@@ -40,6 +46,8 @@ function resolveHarnessPluginIds(params: {
     return [params.runtime];
   }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
+    // Respect a restrictive allowlist even when Codex would normally pull in provider owner
+    // plugins. Operators who set an allowlist expect no implicit plugin expansion.
     return ["codex"];
   }
   const providerOwnerPluginIds = dedupePluginIds(
@@ -93,6 +101,7 @@ function withRuntimePluginIdsAllowed(params: {
   };
 }
 
+/** Ensures the plugin that owns the selected harness runtime is loaded before harness selection. */
 export async function ensureSelectedAgentHarnessPlugin(params: {
   provider: string;
   modelId: string;

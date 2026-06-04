@@ -9,10 +9,14 @@ export { safeParseJson } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
+/**
+ * Shared response adapters for node-related gateway methods.
+ */
 type ValidatorFn = ((value: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
+/** Responds with the protocol validation error for invalid method params. */
 export function respondInvalidParams(params: {
   respond: RespondFn;
   method: string;
@@ -28,6 +32,7 @@ export function respondInvalidParams(params: {
   );
 }
 
+/** Converts thrown node-handler failures into `UNAVAILABLE` protocol errors. */
 export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {
   try {
     await fn();
@@ -36,6 +41,7 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
   }
 }
 
+/** Narrows successful node invoke results or responds with the node error details. */
 export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,
   res: T,

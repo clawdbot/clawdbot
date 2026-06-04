@@ -1,3 +1,5 @@
+// Public barrel for channel message delivery, live preview, receipt, receive, and recovery
+// contracts used by channel plugins and core delivery code.
 export { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
 export { defineChannelMessageAdapter } from "./adapter.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";

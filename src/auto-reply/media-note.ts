@@ -1,3 +1,4 @@
+/** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getMediaDir } from "../media/store.js";
@@ -15,6 +16,7 @@ function normalizeManagedInboundMediaRef(value: string): string {
   const candidate = stripDarwinPrivatePrefix(path.resolve(value));
   const inboundDir = path.join(mediaDir, "inbound");
   const relativeToInbound = path.relative(inboundDir, candidate);
+  // Managed inbound media gets a stable URI so prompts do not leak host-specific temp paths.
   if (
     !relativeToInbound ||
     relativeToInbound.startsWith("..") ||
@@ -127,6 +129,7 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
+/** Formats a prompt-visible media attachment note, omitting audio already represented by transcript. */
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;

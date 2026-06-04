@@ -1,5 +1,8 @@
 import { fetchWithSsrFGuard } from "../../../api.js";
 
+// Guarded Twilio REST API client helpers.
+
+/** Minimal Twilio REST API error payload. */
 type ParsedTwilioApiError = {
   code?: number;
   message?: string;
@@ -7,6 +10,7 @@ type ParsedTwilioApiError = {
 
 const TWILIO_API_TIMEOUT_MS = 30_000;
 
+/** Parse Twilio JSON error responses without trusting response shape. */
 function parseTwilioApiError(text: string): ParsedTwilioApiError {
   try {
     const parsed: unknown = JSON.parse(text);
@@ -23,6 +27,7 @@ function parseTwilioApiError(text: string): ParsedTwilioApiError {
   }
 }
 
+/** Error thrown for non-2xx Twilio REST API responses. */
 export class TwilioApiError extends Error {
   readonly httpStatus: number;
   readonly responseText: string;
@@ -39,6 +44,7 @@ export class TwilioApiError extends Error {
   }
 }
 
+/** POST a form-encoded Twilio REST API request through the SSRF guard. */
 export async function twilioApiRequest<T = unknown>(params: {
   baseUrl: string;
   accountSid: string;

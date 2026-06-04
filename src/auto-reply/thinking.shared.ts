@@ -1,3 +1,4 @@
+/** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
@@ -6,6 +7,7 @@ import {
 
 export { normalizeFastMode };
 
+/** Canonical thinking level values accepted by chat commands and session state. */
 export type ThinkLevel =
   | "off"
   | "minimal"
@@ -22,6 +24,7 @@ export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
+/** Minimal model catalog entry needed to choose thinking defaults. */
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
@@ -44,7 +47,7 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   max: 70,
 };
 
-// Normalize user-provided thinking level strings to the canonical enum.
+/** Normalizes user-provided thinking level strings to the canonical enum. */
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   const key = normalizeOptionalLowercaseString(raw);
   if (!key) {
@@ -84,6 +87,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   return undefined;
 }
 
+/** Returns true for command values that clear an inherited session override. */
 export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   const key = normalizeOptionalLowercaseString(raw);
   if (!key) {
@@ -92,10 +96,12 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
 }
 
+/** Human-readable hint for xhigh support in command menus and errors. */
 export function formatXHighModelHint(): string {
   return "provider models that advertise xhigh reasoning";
 }
 
+/** Chooses the default thinking level for one provider/model catalog entry. */
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
@@ -129,10 +135,12 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
   return undefined;
 }
 
+/** Normalizes /verbose values. */
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
   return normalizeOnOffFullLevel(raw);
 }
 
+/** Normalizes /trace values. */
 export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined {
   const key = normalizeOptionalLowercaseString(raw);
   if (!key) {
@@ -150,10 +158,12 @@ export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined
   return undefined;
 }
 
+/** Normalizes notice visibility values. */
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
   return normalizeOnOffFullLevel(raw);
 }
 
+/** Normalizes response usage display values. */
 export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
   if (!raw) {
     return undefined;
@@ -174,10 +184,12 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
   return undefined;
 }
 
+/** Resolves response usage display mode with the persisted default. */
 export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+/** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {
     return undefined;
@@ -198,6 +210,7 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   return undefined;
 }
 
+/** Collapses elevated levels into runtime execution mode. */
 export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
   if (!level || level === "off") {
     return "off";
@@ -208,6 +221,7 @@ export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode 
   return "ask";
 }
 
+/** Normalizes reasoning visibility values. */
 export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
   if (!raw) {
     return undefined;

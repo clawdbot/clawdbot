@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for plugin doctor migrations, compat checks, and uninstall helpers.
+ */
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export {
   asObjectRecord,

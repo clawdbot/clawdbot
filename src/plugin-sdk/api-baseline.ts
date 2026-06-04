@@ -76,8 +76,29 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
+export function normalizePluginSdkApiSourcePath(repoRoot: string, filePath: string): string {
+  const resolvedPath = path.resolve(filePath);
+  const relative = path.relative(repoRoot, resolvedPath);
+  const relativePosix = relative.split(path.sep).join(path.posix.sep);
+  if (
+    !relative.startsWith("..") &&
+    !path.isAbsolute(relative) &&
+    !relativePosix.startsWith("node_modules/")
+  ) {
+    return relativePosix;
+  }
+
+  const pathParts = resolvedPath.split(/[\\/]+/);
+  const nodeModulesIndex = pathParts.lastIndexOf("node_modules");
+  if (nodeModulesIndex >= 0 && nodeModulesIndex < pathParts.length - 1) {
+    return ["node_modules", ...pathParts.slice(nodeModulesIndex + 1)].join(path.posix.sep);
+  }
+
+  return relativePosix;
+}
+
 function relativePath(repoRoot: string, filePath: string): string {
-  return path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep);
+  return normalizePluginSdkApiSourcePath(repoRoot, filePath);
 }
 
 function isAbsoluteImportPath(value: string): boolean {

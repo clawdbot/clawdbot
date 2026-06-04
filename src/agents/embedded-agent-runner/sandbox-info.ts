@@ -4,6 +4,12 @@ import { resolveExecDefaults } from "../exec-defaults.js";
 import type { resolveSandboxContext } from "../sandbox.js";
 import type { EmbeddedFullAccessBlockedReason, EmbeddedSandboxInfo } from "./types.js";
 
+/**
+ * Resolves the sandbox/elevated-exec facts exposed to embedded agent results.
+ *
+ * This keeps host policy, per-agent exec defaults, and sandbox runtime state in one place so
+ * channel/status consumers do not infer full-access availability from partial config fields.
+ */
 type EmbeddedFullAccessExecPolicy = Pick<ExecToolDefaults, "mode" | "security" | "ask">;
 type EmbeddedFullAccessHostPolicy = Pick<ExecToolDefaults, "security" | "ask">;
 type EmbeddedSandboxInfoExecOverrides = Pick<
@@ -24,6 +30,7 @@ function execPolicyBlocksFullAccess(params: {
   );
 }
 
+/** Computes whether elevated exec can provide full host access for an embedded turn. */
 export function resolveEmbeddedFullAccessState(params: {
   execElevated?: ExecElevatedDefaults;
   execPolicy?: EmbeddedFullAccessExecPolicy;
@@ -33,6 +40,8 @@ export function resolveEmbeddedFullAccessState(params: {
   blockedReason?: EmbeddedFullAccessBlockedReason;
 } {
   if (execPolicyBlocksFullAccess(params)) {
+    // Explicit exec/host policy wins over elevated availability. A configured elevated backend
+    // must not bypass ask/security restrictions chosen for this agent or session.
     return {
       available: false,
       blockedReason: "host-policy",
@@ -56,6 +65,7 @@ export function resolveEmbeddedFullAccessState(params: {
   return { available: true };
 }
 
+/** Resolves the effective exec policy for sandbox-info reporting. */
 export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -78,6 +88,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   };
 }
 
+/** Builds the serializable sandbox metadata attached to embedded agent run results. */
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,

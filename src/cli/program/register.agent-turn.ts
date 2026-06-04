@@ -1,3 +1,4 @@
+// Single agent-turn command registration; delegates execution to the Gateway-backed agent command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -25,6 +26,7 @@ async function loadSetVerbose(): Promise<GlobalStateModule["setVerbose"]> {
   return (await import("../../global-state.js")).setVerbose;
 }
 
+/** Register `openclaw agent` for one Gateway-backed agent turn. */
 export function registerAgentTurnCommand(
   program: Command,
   args: { agentChannelOptions: string },

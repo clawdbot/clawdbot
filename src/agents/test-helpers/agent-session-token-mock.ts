@@ -1,3 +1,9 @@
+/**
+ * Agent-session token estimation mock.
+ *
+ * Tests import this before session modules to replace token estimation with a
+ * deterministic text-length approximation.
+ */
 import { vi } from "vitest";
 
 const agentSessionTokenMocks = vi.hoisted(() => {
@@ -16,6 +22,8 @@ const agentSessionTokenMocks = vi.hoisted(() => {
   }
 
   function estimateTokenish(message: unknown): number {
+    // Approximate one token per four characters while preserving a non-zero
+    // token count for empty messages that still participate in budgets.
     return Math.max(1, Math.ceil(readText(message).length / 4));
   }
 

@@ -1,16 +1,19 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Raw custom slash-command entry from config. */
 export type CustomCommandInput = {
   command?: string | null;
   description?: string | null;
 };
 
+/** Validation issue for one configured custom command. */
 export type CustomCommandIssue = {
   index: number;
   field: "command" | "description";
   message: string;
 };
 
+/** Command validation policy for one command family. */
 export type CustomCommandConfig = {
   label: string;
   pattern: RegExp;
@@ -20,6 +23,7 @@ export type CustomCommandConfig = {
 
 const DEFAULT_PREFIX = "/";
 
+/** Normalize a slash command name to the internal lowercase underscore form. */
 export function normalizeSlashCommandName(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -29,10 +33,12 @@ export function normalizeSlashCommandName(value: string): string {
   return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
 }
 
+/** Normalize command descriptions without changing user-authored wording. */
 export function normalizeCommandDescription(value: string): string {
   return value.trim();
 }
 
+/** Validate and normalize custom command config entries. */
 export function resolveCustomCommands(params: {
   commands?: CustomCommandInput[] | null;
   reservedCommands?: Set<string>;
@@ -55,6 +61,8 @@ export function resolveCustomCommands(params: {
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
+    // Accumulate issues instead of throwing so config UIs and CLIs can present
+    // all invalid commands in one pass.
     const normalized = normalizeSlashCommandName(entry?.command ?? "");
     if (!normalized) {
       issues.push({

@@ -1,3 +1,4 @@
+// Tests routeReply delivery decisions across channels and fallback paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelMessagingAdapter,

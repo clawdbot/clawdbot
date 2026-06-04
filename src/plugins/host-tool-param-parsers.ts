@@ -1,3 +1,4 @@
+// Parses host tool parameters supplied by plugin tool contracts.
 import {
   extractApplyPatchTargetPaths,
   type ApplyPatchPathExtractionOptions,

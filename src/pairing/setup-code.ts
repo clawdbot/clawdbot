@@ -1,3 +1,4 @@
+// Generates setup codes used to pair external channels with OpenClaw.
 import os from "node:os";
 import {
   isCarrierGradeNatIpv4Address,

@@ -1,3 +1,4 @@
+/** Tests ACP manager cancellation of active turns and idle sessions. */
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpSessionManager,

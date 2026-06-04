@@ -1,3 +1,6 @@
+/**
+ * Test support for gateway methods that spawn node child processes.
+ */
 import { vi } from "vitest";
 import { mockNodeBuiltinModule } from "../../plugin-sdk/test-helpers/node-builtin-mocks.js";
 

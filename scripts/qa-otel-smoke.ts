@@ -404,13 +404,19 @@ class ProtoReader {
     return new TextDecoder().decode(this.bytes());
   }
 
-  fixed64(): number {
-    const end = this.offset + 8;
+  private advance(length: number, label: string): number {
+    const start = this.offset;
+    const end = this.offset + length;
     if (end > this.buffer.length) {
-      throw new Error("truncated protobuf fixed64");
+      throw new Error(`truncated protobuf ${label}`);
     }
-    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 8);
     this.offset = end;
+    return start;
+  }
+
+  fixed64(): number {
+    const start = this.advance(8, "fixed64");
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + start, 8);
     return view.getFloat64(0, true);
   }
 
@@ -418,11 +424,11 @@ class ProtoReader {
     if (wire === 0) {
       this.varint();
     } else if (wire === 1) {
-      this.offset += 8;
+      this.advance(8, "fixed64");
     } else if (wire === 2) {
       this.bytes();
     } else if (wire === 5) {
-      this.offset += 4;
+      this.advance(4, "fixed32");
     } else {
       throw new Error(`unsupported protobuf wire type ${wire}`);
     }
@@ -737,9 +743,42 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
         res.end(error instanceof Error ? error.message : String(error));
         return;
       }
-      const spans = signal === "traces" ? decodeTraceRequest(body) : [];
-      const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
-      const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+      let spans: CapturedSpan[];
+      let metrics: CapturedMetric[];
+      let logRecords: CapturedLogRecord[];
+      try {
+        spans = signal === "traces" ? decodeTraceRequest(body) : [];
+        metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
+        logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+      } catch (error) {
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+        capturedRequests.push({
+          path: requestPath,
+          signal,
+          bytes: body.length,
+          contentEncoding,
+          status: 400,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        });
+        res.writeHead(400, { "content-type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
       if (spans.length > 0) {
         capturedSpans.push(...spans);
       }
@@ -749,7 +788,6 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
       if (logRecords.length > 0) {
         capturedLogRecords.push(...logRecords);
       }
-      appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedlesLocal);
       capturedRequests.push({
         path: requestPath,
         signal,
@@ -1321,6 +1359,9 @@ function assertSmoke(params: {
     if (emptyRequests.length > 0) {
       failures.push(`empty OTLP ${signal} request received`);
     }
+    for (const request of requests.filter((entry) => entry.status < 200 || entry.status >= 300)) {
+      failures.push(`OTLP ${signal} request ${request.path} returned status ${request.status}`);
+    }
   }
   if (params.spans.length === 0) {
     failures.push("no OTLP trace spans were decoded");
@@ -1555,10 +1596,12 @@ async function main() {
 
 export const testing = {
   appendCapturedBodyText,
+  assertSmoke,
   decodeRequestBody,
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,
+  startLocalOtlpReceiver,
   startDockerOtelCollector,
   terminateChildTree,
   waitForChild,

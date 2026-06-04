@@ -1,3 +1,6 @@
+/**
+ * iOS gateway client-id classification tests.
+ */
 import { describe, expect, test } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,

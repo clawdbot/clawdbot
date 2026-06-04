@@ -1,3 +1,4 @@
+// Covers gateway restart process and supervisor paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";

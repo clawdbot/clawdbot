@@ -5,12 +5,22 @@ import {
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
+/**
+ * Persisted-auth state probes backed by bundled channel package metadata.
+ */
+
+/**
+ * Lists bundled channels that declare persisted-auth state metadata.
+ */
 export function listBundledChannelIdsWithPersistedAuthState(
   discovery?: PluginDiscoveryResult,
 ): string[] {
   return listBundledChannelIdsForPackageState("persistedAuthState", discovery);
 }
 
+/**
+ * Returns whether a bundled channel reports persisted auth state.
+ */
 export function hasBundledChannelPersistedAuthState(params: {
   channelId: string;
   cfg: OpenClawConfig;

@@ -1,3 +1,4 @@
+// Covers provider auth input collection and credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {

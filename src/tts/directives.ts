@@ -22,6 +22,7 @@ type TextRange = {
   end: number;
 };
 
+/** Streaming cleaner used to strip TTS tags before final text parsing is available. */
 export type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
   flush: () => string;
@@ -148,6 +149,8 @@ function replaceOutsideMarkdownCode(
     if (typeof offset === "number" && isInsideRange(offset, codeRanges)) {
       return match;
     }
+    // String.replace passes captures before offset/input; keep the callback
+    // typed without depending on the exact regexp arity for each directive.
     const captures = args.slice(1, -2).map((capture) => String(capture));
     return replace(match, captures);
   });
@@ -176,6 +179,7 @@ function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | 
   return "other";
 }
 
+/** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
   let pending = "";
   let insideHiddenTextBlock = false;
@@ -202,6 +206,8 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
 
         const tagEnd = input.indexOf("]]", tagStart + 2);
         if (tagEnd === -1) {
+          // Directive delimiters can cross chunk boundaries; buffer from the
+          // opener so a partial tag never leaks to a streamed client.
           pending = input.slice(tagStart);
           break;
         }
@@ -232,6 +238,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   };
 }
 
+/** Parse TTS directives from final message text, leaving markdown code spans unchanged. */
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
@@ -388,6 +395,8 @@ export function parseTtsDirectives(
         break;
       }
       if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
+        // Unknown keys are only actionable when the user explicitly selected a
+        // provider; auto-selected providers may not support each other's knobs.
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

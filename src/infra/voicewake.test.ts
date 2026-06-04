@@ -1,3 +1,4 @@
+// Covers voice wake trigger defaults, sanitization, and persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

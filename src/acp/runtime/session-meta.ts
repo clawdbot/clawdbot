@@ -1,3 +1,4 @@
+/** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
@@ -26,6 +27,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { isRecord } from "../../utils.js";
 
+/** ACP metadata joined with its legacy session-store row and config context. */
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   storePath: string;
@@ -36,6 +38,7 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
+// ACP metadata lives in SQLite but is keyed through the legacy JSON session store.
 type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
@@ -69,6 +72,7 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
+/** Resolves the session store path that owns an ACP session key. */
 export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
@@ -154,6 +158,7 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
 }
 
 function acpSessionRowMatchesEntry(row: AcpSessionRow, entry: SessionEntry | undefined): boolean {
+  // Rows tied to a specific sessionId are stale after the JSON session entry rotates.
   return row.session_id == null || row.session_id === entry?.sessionId;
 }
 

@@ -1,3 +1,4 @@
+// Stores managed task-flow records in memory and notifies registry observers.
 import {
   closeTaskFlowRegistryDatabase,
   deleteTaskFlowRegistryRecordFromSqlite,

@@ -1,3 +1,4 @@
+// Covers deterministic heartbeat schedule phase calculation.
 import { describe, expect, it } from "vitest";
 import {
   computeNextHeartbeatPhaseDueMs,

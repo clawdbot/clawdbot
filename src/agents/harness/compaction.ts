@@ -13,6 +13,12 @@ import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
+/**
+ * Delegates session compaction to the selected agent harness when that runtime owns compaction.
+ *
+ * CLI runtimes and OpenClaw-native compaction stay on the embedded runner path; plugin harnesses
+ * can opt in through their `compact` hook.
+ */
 const log = createSubsystemLogger("agents/harness");
 
 function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams): {
@@ -70,6 +76,7 @@ async function resolveHarnessCompactApiKey(params: {
   return apiKeyInfo.apiKey?.trim() || undefined;
 }
 
+/** Runs harness-provided compaction when the selected runtime supports it. */
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
@@ -108,6 +115,8 @@ export async function maybeCompactAgentHarnessSession(
     if (agentHarnessRuntimeOverride) {
       const message = formatErrorMessage(err);
       if (message.includes("does not support")) {
+        // Explicit runtime overrides can name a harness that cannot serve this model. Falling back
+        // to native compaction preserves existing OpenClaw behavior instead of failing rotation.
         return undefined;
       }
     }

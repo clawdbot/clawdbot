@@ -1,3 +1,4 @@
+/** Verifies hook decision type guards and normalization helpers. */
 import { describe, expect, it } from "vitest";
 import {
   BLOCK_MESSAGE_PREFIX,

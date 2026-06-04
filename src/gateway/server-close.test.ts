@@ -1,3 +1,6 @@
+/**
+ * Gateway server close lifecycle tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 

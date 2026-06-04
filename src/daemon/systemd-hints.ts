@@ -10,6 +10,7 @@ type SystemdUnavailableHintOptions = {
   container?: boolean;
 };
 
+/** Detects details that should get systemd availability repair hints. */
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
 }

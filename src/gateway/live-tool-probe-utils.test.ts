@@ -1,3 +1,6 @@
+/**
+ * Tests for nonce matching and retry heuristics used by live tool probes.
+ */
 import { describe, expect, it } from "vitest";
 import {
   hasExpectedSingleNonce,

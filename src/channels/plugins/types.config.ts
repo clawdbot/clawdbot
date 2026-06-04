@@ -1,5 +1,8 @@
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 
+// Channel config schema metadata consumed by setup, docs, and validation UI.
+// Runtime schemas stay duck-typed so plugins can provide zod-like validators.
+/** Optional UI metadata for a JSON Schema property. */
 export type ChannelConfigUiHint = {
   label?: string;
   help?: string;
@@ -10,12 +13,14 @@ export type ChannelConfigUiHint = {
   itemTemplate?: unknown;
 };
 
+/** Normalized validation issue emitted by a channel runtime parser. */
 export type ChannelConfigRuntimeIssue = {
   path?: Array<string | number>;
   message?: string;
   code?: string;
 } & Record<string, unknown>;
 
+/** Minimal safeParse result shape accepted from channel-owned validators. */
 export type ChannelConfigRuntimeParseResult =
   | {
       success: true;
@@ -26,10 +31,12 @@ export type ChannelConfigRuntimeParseResult =
       issues: ChannelConfigRuntimeIssue[];
     };
 
+/** Runtime validator contract paired with the JSON Schema config surface. */
 export type ChannelConfigRuntimeSchema = {
   safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
 };
 
+/** Complete channel config schema description exposed to host tooling. */
 export type ChannelConfigSchema = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, ChannelConfigUiHint>;

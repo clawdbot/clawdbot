@@ -1,6 +1,7 @@
 import os from "node:os";
 import type { NetworkInterfacesSnapshot } from "../infra/network-interfaces.js";
 
+// Builders for deterministic os.networkInterfaces() snapshots in network tests.
 type NetworkInterfaceEntry = NonNullable<ReturnType<typeof os.networkInterfaces>[string]>[number];
 
 type NetworkInterfaceEntryInput = {

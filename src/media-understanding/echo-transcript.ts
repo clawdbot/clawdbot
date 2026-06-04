@@ -11,16 +11,14 @@ function loadMessageRuntime() {
   return messageRuntimePromise;
 }
 
+/** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
 function formatEchoTranscript(transcript: string, format: string): string {
   return format.replace("{transcript}", transcript);
 }
 
-/**
- * Sends the transcript echo back to the originating chat.
- * Best-effort: logs on failure, never throws.
- */
+/** Sends a best-effort transcript echo back to the originating deliverable chat. */
 export async function sendTranscriptEcho(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

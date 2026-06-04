@@ -1,3 +1,4 @@
+// Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";

@@ -1,6 +1,13 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Exec approval protocol schemas.
+ *
+ * These payloads cross the security-review boundary for command execution, so
+ * persisted policy, request snapshots, and resolve decisions stay explicit.
+ */
+/** One persisted allowlist entry for a command pattern or resolved executable. */
 export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
@@ -22,10 +29,12 @@ const ExecApprovalsPolicyFields = {
   autoAllowSkills: Type.Optional(Type.Boolean()),
 };
 
+/** Default exec approval policy shared by all agents unless overridden. */
 export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {
   additionalProperties: false,
 });
 
+/** Agent-specific exec approval policy and allowlist. */
 export const ExecApprovalsAgentSchema = Type.Object(
   {
     ...ExecApprovalsPolicyFields,
@@ -34,6 +43,7 @@ export const ExecApprovalsAgentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Versioned exec approvals config file edited through gateway APIs. */
 export const ExecApprovalsFileSchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -52,6 +62,7 @@ export const ExecApprovalsFileSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Read snapshot with path/hash metadata for optimistic writes. */
 export const ExecApprovalsSnapshotSchema = Type.Object(
   {
     path: NonEmptyString,
@@ -62,8 +73,10 @@ export const ExecApprovalsSnapshotSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for reading local exec approval policy. */
 export const ExecApprovalsGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Local exec approval policy write request with optional base hash guard. */
 export const ExecApprovalsSetParamsSchema = Type.Object(
   {
     file: ExecApprovalsFileSchema,
@@ -72,6 +85,7 @@ export const ExecApprovalsSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Node-scoped request payload for reading exec approval policy. */
 export const ExecApprovalsNodeGetParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -79,6 +93,7 @@ export const ExecApprovalsNodeGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Node-scoped exec approval policy write request with optional base hash guard. */
 export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -88,6 +103,7 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lookup request for one pending exec approval by id. */
 export const ExecApprovalGetParamsSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -95,6 +111,7 @@ export const ExecApprovalGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Pending command execution approval request shown to reviewers. */
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
@@ -166,6 +183,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reviewer decision payload for one pending exec approval. */
 export const ExecApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,

@@ -1,3 +1,4 @@
+// Shares web-search provider loading helpers across runtime paths.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {

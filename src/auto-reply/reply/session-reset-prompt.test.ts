@@ -1,3 +1,4 @@
+// Tests session reset prompt generation and transcript-preserving restart hints.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect } from "vitest";

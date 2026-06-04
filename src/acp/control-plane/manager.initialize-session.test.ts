@@ -1,3 +1,4 @@
+/** Tests ACP manager session initialization limits and persisted runtime options. */
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionManager,

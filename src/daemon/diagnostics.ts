@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
+// Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
   /refusing to bind gateway/i,
   /gateway auth mode/i,

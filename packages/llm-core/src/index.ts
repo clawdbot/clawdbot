@@ -1,3 +1,4 @@
+/** Public LLM core contracts shared by providers, plugin SDK wrappers, and tests. */
 export * from "./types.js";
 export * from "./utils/diagnostics.js";
 export * from "./utils/event-stream.js";

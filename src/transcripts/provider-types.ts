@@ -1,11 +1,20 @@
+// Transcript provider contracts for external and manual transcript sources.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/**
+ * Public contracts for transcript source providers.
+ *
+ * Providers can stream live utterances, import post-hoc transcript text, expose
+ * status, and stop active sessions using shared session/source descriptors.
+ */
+/** Supported source families for transcript providers. */
 export type TranscriptSourceKind =
   | "live-audio"
   | "live-caption"
   | "posthoc-transcript"
   | "recording-stt";
 
+/** Provider-specific locator for a live, recorded, or imported transcript source. */
 export type TranscriptSourceLocator = {
   providerId: string;
   kind?: TranscriptSourceKind;
@@ -18,11 +27,13 @@ export type TranscriptSourceLocator = {
   [key: string]: string | undefined;
 };
 
+/** Speaker/participant identity attached to an utterance. */
 export type TranscriptParticipant = {
   id?: string;
   label: string;
 };
 
+/** One captured or imported transcript utterance. */
 export type TranscriptUtterance = {
   id?: string;
   sessionId?: string;
@@ -34,6 +45,7 @@ export type TranscriptUtterance = {
   metadata?: Record<string, unknown>;
 };
 
+/** Durable transcript session metadata. */
 export type TranscriptSessionDescriptor = {
   sessionId: string;
   title?: string;
@@ -43,6 +55,7 @@ export type TranscriptSessionDescriptor = {
   metadata?: Record<string, unknown>;
 };
 
+/** Request passed to providers that can start live transcript capture. */
 export type TranscriptStartRequest = {
   cfg?: OpenClawConfig;
   session: TranscriptSessionDescriptor;
@@ -52,6 +65,7 @@ export type TranscriptStartRequest = {
   onStatus?: (status: TranscriptSourceStatus) => void | Promise<void>;
 };
 
+/** Result from starting a transcript source provider. */
 export type TranscriptsStartResult =
   | {
       ok: true;
@@ -62,6 +76,7 @@ export type TranscriptsStartResult =
       error: string;
     };
 
+/** Request passed to providers that can stop live transcript capture. */
 export type TranscriptStopRequest = {
   cfg?: OpenClawConfig;
   sessionId: string;
@@ -69,6 +84,7 @@ export type TranscriptStopRequest = {
   reason?: string;
 };
 
+/** Result from stopping a transcript source provider. */
 export type TranscriptsStopResult =
   | {
       ok: true;
@@ -80,6 +96,7 @@ export type TranscriptsStopResult =
       error: string;
     };
 
+/** Runtime status reported by transcript source providers. */
 export type TranscriptSourceStatus = {
   sessionId?: string;
   active: boolean;
@@ -87,6 +104,7 @@ export type TranscriptSourceStatus = {
   source?: TranscriptSourceLocator;
 };
 
+/** Request passed to providers that import post-hoc transcript text. */
 export type TranscriptImportRequest = {
   cfg?: OpenClawConfig;
   session: TranscriptSessionDescriptor;
@@ -94,6 +112,7 @@ export type TranscriptImportRequest = {
   speakerLabel?: string;
 };
 
+/** Provider contract for transcript capture/import integrations. */
 export type TranscriptSourceProvider = {
   id: string;
   aliases?: readonly string[];

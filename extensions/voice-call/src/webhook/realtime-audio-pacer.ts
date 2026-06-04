@@ -1,3 +1,5 @@
+// Realtime telephony audio pacing and speech-start detection for mulaw streams.
+
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
@@ -12,6 +14,7 @@ for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
 
+/** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
@@ -23,14 +26,17 @@ type RealtimeAudioQueueItem =
       type: "mark";
     };
 
+/** WebSocket send callback for realtime audio frames. */
 export type RealtimeAudioSend = (message: string) => boolean;
 
+/** Provider-specific serializer for media, clear, and mark frames. */
 export interface RealtimeAudioSerializer {
   media(payloadBase64: string): string;
   clear(): string;
   mark(name: string): string;
 }
 
+/** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -46,6 +52,7 @@ export class RealtimeAudioPacer {
     },
   ) {}
 
+  /** Queue mulaw audio and split it into 20ms-ish telephony chunks. */
   sendAudio(muLaw: Buffer): void {
     if (this.closed || muLaw.length === 0) {
       return;
@@ -67,6 +74,7 @@ export class RealtimeAudioPacer {
     this.ensurePump();
   }
 
+  /** Queue a provider mark frame after prior audio frames. */
   sendMark(name: string): void {
     if (this.closed || !name) {
       return;
@@ -75,6 +83,7 @@ export class RealtimeAudioPacer {
     this.ensurePump();
   }
 
+  /** Clear queued audio and notify the provider stream. */
   clearAudio(): number {
     if (this.closed) {
       return 0;
@@ -87,6 +96,7 @@ export class RealtimeAudioPacer {
     return clearedAudioBytes;
   }
 
+  /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;
     this.clearTimer();
@@ -94,6 +104,7 @@ export class RealtimeAudioPacer {
     this.queuedAudioBytes = 0;
   }
 
+  /** Clear the scheduled pump timer. */
   private clearTimer(): void {
     if (!this.timer) {
       return;
@@ -102,17 +113,20 @@ export class RealtimeAudioPacer {
     this.timer = null;
   }
 
+  /** Start the pump when queued work exists and no timer is active. */
   private ensurePump(): void {
     if (!this.timer) {
       this.pump();
     }
   }
 
+  /** Close the pacer and notify the caller about queued-audio backpressure. */
   private failBackpressure(): void {
     this.close();
     this.params.onBackpressure?.();
   }
 
+  /** Send one queued item and schedule the next send based on audio duration. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
@@ -144,6 +158,7 @@ export class RealtimeAudioPacer {
   }
 }
 
+/** Calculate normalized RMS from mulaw bytes. */
 export function calculateMulawRms(muLaw: Buffer): number {
   if (muLaw.length === 0) {
     return 0;
@@ -156,6 +171,7 @@ export function calculateMulawRms(muLaw: Buffer): number {
   return Math.sqrt(sum / muLaw.length);
 }
 
+/** Detect likely speech start from consecutive loud mulaw chunks. */
 export class RealtimeMulawSpeechStartDetector {
   private loudChunks = 0;
   private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
@@ -169,6 +185,7 @@ export class RealtimeMulawSpeechStartDetector {
     } = {},
   ) {}
 
+  /** Accept one mulaw chunk and return true only on transition into speaking. */
   accept(muLaw: Buffer): boolean {
     const rms = calculateMulawRms(muLaw);
     const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
@@ -193,6 +210,7 @@ export class RealtimeMulawSpeechStartDetector {
   }
 }
 
+/** Decode one G.711 mulaw byte to a linear PCM sample. */
 function decodeMulawSample(value: number): number {
   const muLaw = ~value & 0xff;
   const sign = muLaw & 0x80;

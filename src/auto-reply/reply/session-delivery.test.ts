@@ -1,3 +1,4 @@
+// Tests how session delivery preserves previous channel and target routing state.
 import { describe, expect, it } from "vitest";
 import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 

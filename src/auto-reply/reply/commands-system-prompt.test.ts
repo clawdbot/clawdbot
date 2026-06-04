@@ -1,3 +1,4 @@
+// Tests system prompt command output and bundled prompt section selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";

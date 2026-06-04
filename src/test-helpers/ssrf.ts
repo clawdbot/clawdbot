@@ -3,6 +3,8 @@ import { normalizeHostname } from "../infra/net/hostname.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import type { LookupFn } from "../infra/net/ssrf.js";
 
+// Pin SSRF hostname resolution to deterministic addresses for tests that must
+// exercise policy checks without depending on live DNS.
 export function mockPinnedHostnameResolution(addresses: string[] = ["93.184.216.34"]) {
   const resolvePinnedHostname = ssrf.resolvePinnedHostname;
   const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;

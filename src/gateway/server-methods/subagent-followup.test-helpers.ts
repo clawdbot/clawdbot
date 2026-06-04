@@ -1,5 +1,9 @@
+/**
+ * Assertions for the subagent follow-up reactivation broadcast path.
+ */
 import { expect } from "vitest";
 
+/** Checks both run replacement and the session-change broadcast emitted after steer. */
 export function expectSubagentFollowupReactivation(params: {
   replaceSubagentRunAfterSteerMock: unknown;
   broadcastToConnIds: unknown;

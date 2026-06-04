@@ -29,6 +29,7 @@ type ChannelPresenceOptions = {
   };
 };
 
+/** Source that made a channel look potentially configured. */
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
 type ChannelPresenceSignal = {
@@ -36,13 +37,17 @@ type ChannelPresenceSignal = {
   source: ChannelPresenceSignalSource;
 };
 
+/** Returns true when a channel config entry contains settings beyond enabled/disabled state. */
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
+  // `enabled` alone is operator intent, not configuration material; setup/status code uses this
+  // distinction to avoid treating explicit disables as configured channels.
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
+/** Lists channels explicitly disabled in config so activation logic can suppress auto-detection. */
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (!channels) {
@@ -57,6 +62,7 @@ export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): 
 function listChannelEnvPrefixes(
   channelIds: readonly string[],
 ): Array<[prefix: string, channelId: string]> {
+  // Match channel-owned env namespaces such as MATRIX_* without hardcoding bundled ids here.
   return channelIds.map((channelId) => [
     `${channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`,
     channelId,
@@ -80,6 +86,7 @@ function listPersistedAuthStateChannelIds(options: ChannelPresenceOptions): read
   if (persistedAuthStateChannelIds) {
     return persistedAuthStateChannelIds;
   }
+  // Bundled plugin metadata is process-stable; cache the static persisted-auth id list.
   persistedAuthStateChannelIds = listBundledChannelIdsWithPersistedAuthState();
   return persistedAuthStateChannelIds;
 }
@@ -102,6 +109,7 @@ function hasPersistedAuthState(params: {
   });
 }
 
+/** Lists channel ids detected from config, env vars, or persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -114,6 +122,7 @@ export function listPotentialConfiguredChannelIds(
   );
 }
 
+/** Lists deduplicated channel presence signals with their detection source. */
 export function listPotentialConfiguredChannelPresenceSignals(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -138,6 +147,8 @@ export function listPotentialConfiguredChannelPresenceSignals(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
+      // Shared channel defaults are not concrete channel configuration; only per-channel entries
+      // with meaningful settings should produce presence signals.
       if (hasMeaningfulChannelConfig(value)) {
         configuredChannelIds.add(key);
         addSignal(key, "config");
@@ -158,6 +169,8 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
+    // Persisted auth can make a channel usable even when config/env is empty, but only probe it
+    // when the state directory exists to keep startup/status checks cheap.
     for (const channelId of listPersistedAuthStateChannelIds(options)) {
       if (hasPersistedAuthState({ channelId, cfg, env, options })) {
         configuredChannelIds.add(channelId);
@@ -192,6 +205,7 @@ function hasEnvConfiguredChannel(
   );
 }
 
+/** Returns true when any channel appears configured from config, env, or persisted auth state. */
 export function hasPotentialConfiguredChannels(
   cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,

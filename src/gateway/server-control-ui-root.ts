@@ -8,6 +8,9 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
+// Control UI root resolution prefers explicit config, then bundled/proven
+// assets. Missing bundled assets trigger an async build attempt without blocking
+// gateway startup.
 function startControlUiAssetsBuild(params: {
   gatewayRuntime: RuntimeEnv;
   log: { warn: (message: string) => void };
@@ -25,6 +28,7 @@ function startControlUiAssetsBuild(params: {
     });
 }
 
+/** Resolves the Control UI asset root state for gateway startup. */
 export async function resolveGatewayControlUiRootState(params: {
   controlUiRootOverride?: string;
   controlUiEnabled: boolean;
@@ -55,6 +59,8 @@ export async function resolveGatewayControlUiRootState(params: {
 
   const resolvedRoot = resolveRoot();
   if (!resolvedRoot) {
+    // Source checkouts may need to build Control UI assets on demand; startup
+    // continues and the route can become available after the build completes.
     startControlUiAssetsBuild({
       gatewayRuntime: params.gatewayRuntime,
       log: params.log,

@@ -1,3 +1,4 @@
+// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

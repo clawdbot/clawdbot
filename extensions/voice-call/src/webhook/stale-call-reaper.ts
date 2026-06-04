@@ -1,8 +1,11 @@
 import type { CallManager } from "../manager.js";
 import { TerminalStates } from "../types.js";
 
+// Background cleanup loop for calls that never reached answered/terminal state.
+
 const CHECK_INTERVAL_MS = 30_000;
 
+/** Start a stale-call reaper and return its cleanup callback. */
 export function startStaleCallReaper(params: {
   manager: CallManager;
   staleCallReaperSeconds?: number;
@@ -20,6 +23,7 @@ export function startStaleCallReaper(params: {
         continue;
       }
 
+      // Unanswered provider calls can be stranded when callbacks are missed; end them explicitly.
       const age = now - call.startedAt;
       if (age > maxAgeMs) {
         console.log(

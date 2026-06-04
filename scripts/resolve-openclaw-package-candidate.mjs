@@ -185,14 +185,11 @@ function run(command, args, options = {}) {
     };
     const terminateChild = () => {
       killChild("SIGTERM");
-      killTimer = setTimeout(
-        () => {
-          killTimer = undefined;
-          killChild("SIGKILL");
-          timeoutReject?.();
-        },
-        options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
-      );
+      killTimer = setTimeout(() => {
+        killTimer = undefined;
+        killChild("SIGKILL");
+        timeoutReject?.();
+      }, options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS);
     };
     const timeout =
       options.timeoutMs === undefined

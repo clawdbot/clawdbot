@@ -1,12 +1,15 @@
+// Resolves plugin-provided memory embedding providers from config and registry.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { EmbeddingInput } from "../memory-host-sdk/host/embedding-inputs.js";
 
+/** Chunk submitted to memory embedding batch processing. */
 export type MemoryEmbeddingBatchChunk = {
   text: string;
   embeddingInput?: EmbeddingInput;
 };
 
+/** Options for batch memory embedding work. */
 export type MemoryEmbeddingBatchOptions = {
   agentId: string;
   chunks: MemoryEmbeddingBatchChunk[];
@@ -17,10 +20,12 @@ export type MemoryEmbeddingBatchOptions = {
   debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
+/** Per-call options for memory embedding providers. */
 export type MemoryEmbeddingProviderCallOptions = {
   signal?: AbortSignal;
 };
 
+/** Runtime metadata returned with memory embedding providers. */
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
@@ -29,6 +34,7 @@ export type MemoryEmbeddingProviderRuntime = {
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
+/** Created memory embedding provider instance. */
 export type MemoryEmbeddingProvider = {
   id: string;
   model: string;
@@ -45,6 +51,7 @@ export type MemoryEmbeddingProvider = {
   close?: () => Promise<void> | void;
 };
 
+/** Options passed to memory embedding provider adapters. */
 export type MemoryEmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -75,11 +82,13 @@ export type MemoryEmbeddingProviderCreateOptions = {
     | "FACT_VERIFICATION";
 };
 
+/** Result returned by a memory embedding provider adapter. */
 export type MemoryEmbeddingProviderCreateResult = {
   provider: MemoryEmbeddingProvider | null;
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
+/** Adapter contract for registered memory embedding providers. */
 export type MemoryEmbeddingProviderAdapter = {
   id: string;
   defaultModel?: string;
@@ -95,6 +104,7 @@ export type MemoryEmbeddingProviderAdapter = {
   shouldContinueAutoSelection?: (err: unknown) => boolean;
 };
 
+/** Registered memory embedding provider with optional owning plugin metadata. */
 export type RegisteredMemoryEmbeddingProvider = {
   adapter: MemoryEmbeddingProviderAdapter;
   ownerPluginId?: string;
@@ -113,6 +123,7 @@ function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingPro
   return created;
 }
 
+/** Registers a memory embedding provider adapter for the current process. */
 export function registerMemoryEmbeddingProvider(
   adapter: MemoryEmbeddingProviderAdapter,
   options?: { ownerPluginId?: string },
@@ -123,24 +134,29 @@ export function registerMemoryEmbeddingProvider(
   });
 }
 
+/** Returns a registered memory embedding provider entry. */
 export function getRegisteredMemoryEmbeddingProvider(
   id: string,
 ): RegisteredMemoryEmbeddingProvider | undefined {
   return getMemoryEmbeddingProviders().get(id);
 }
 
+/** Returns only the memory embedding provider adapter. */
 export function getMemoryEmbeddingProvider(id: string): MemoryEmbeddingProviderAdapter | undefined {
   return getMemoryEmbeddingProviders().get(id)?.adapter;
 }
 
+/** Lists registered memory embedding provider entries. */
 export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
   return Array.from(getMemoryEmbeddingProviders().values());
 }
 
+/** Lists registered memory embedding provider adapters. */
 export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {
   return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
 }
 
+/** Replaces registered memory embedding providers with adapter-only state. */
 export function restoreMemoryEmbeddingProviders(adapters: MemoryEmbeddingProviderAdapter[]): void {
   getMemoryEmbeddingProviders().clear();
   for (const adapter of adapters) {
@@ -148,6 +164,7 @@ export function restoreMemoryEmbeddingProviders(adapters: MemoryEmbeddingProvide
   }
 }
 
+/** Replaces registered memory embedding providers while preserving metadata. */
 export function restoreRegisteredMemoryEmbeddingProviders(
   entries: RegisteredMemoryEmbeddingProvider[],
 ): void {
@@ -159,6 +176,7 @@ export function restoreRegisteredMemoryEmbeddingProviders(
   }
 }
 
+/** Clears registered memory embedding providers. */
 export function clearMemoryEmbeddingProviders(): void {
   getMemoryEmbeddingProviders().clear();
 }

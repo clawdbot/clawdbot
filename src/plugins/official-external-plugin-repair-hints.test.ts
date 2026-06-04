@@ -1,3 +1,4 @@
+// Covers repair hints for official external plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "./official-external-plugin-repair-hints.js";
 

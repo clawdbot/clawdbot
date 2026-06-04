@@ -1,3 +1,6 @@
+// Runtime import barrel for node event handlers. Keeping these dependencies in
+// one lazy boundary prevents gateway startup paths from loading every node-event
+// helper before node traffic is actually handled.
 export { resolveSessionAgentId } from "../agents/agent-scope.js";
 export { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 export { normalizeChannelId } from "../channels/plugins/index.js";

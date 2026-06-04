@@ -1,3 +1,4 @@
+// Public facade for session stores, metadata, lifecycle, reset, transcript, and cleanup APIs.
 export * from "./sessions/combined-store-gateway.js";
 export * from "./sessions/group.js";
 export * from "./sessions/goals.js";

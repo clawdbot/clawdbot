@@ -1,3 +1,4 @@
+// Tests execution override directives passed through get-reply.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";

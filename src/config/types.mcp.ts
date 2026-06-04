@@ -1,3 +1,4 @@
+// Defines MCP server and tool approval configuration types.
 export type McpCodexToolApprovalMode = "auto" | "prompt" | "approve";
 
 export type McpServerCodexConfig = {

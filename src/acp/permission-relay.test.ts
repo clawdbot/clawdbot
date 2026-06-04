@@ -1,3 +1,4 @@
+/** Tests Gateway exec approval to ACP permission relay helpers. */
 import { describe, expect, it } from "vitest";
 import {
   buildAcpPermissionOptions,

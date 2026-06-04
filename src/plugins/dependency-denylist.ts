@@ -1,22 +1,27 @@
+/** Denylist checks for unsafe packages in plugin manifests and installed dependency trees. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES = ["plain-crypto-js"] as const;
 
+/** Package names blocked from installed plugin dependency trees. */
 export const blockedInstallDependencyPackageNames = [
   ...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES,
 ] as const;
 
+/** Finding for blocked dependencies declared in a plugin package manifest. */
 export type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
 };
 
+/** Finding for a blocked package directory inside an install tree. */
 export type BlockedPackageDirectoryFinding = {
   dependencyName: string;
   directoryRelativePath: string;
 };
 
+/** Finding for a blocked package file alias inside an install tree. */
 export type BlockedPackageFileFinding = {
   dependencyName: string;
   fileRelativePath: string;
@@ -188,6 +193,7 @@ function isPackageOverrideObject(value: unknown): value is PackageOverrideObject
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Finds blocked dependencies declared by name, alias, or override in a package manifest. */
 export function findBlockedManifestDependencies(
   manifest: PackageDependencyFields & PackageOverrideFields,
 ): BlockedManifestDependencyFinding[] {
@@ -226,6 +232,7 @@ export function findBlockedManifestDependencies(
   return findings;
 }
 
+/** Finds a blocked package directory beneath a node_modules-relative path. */
 export function findBlockedNodeModulesDirectory(params: {
   directoryRelativePath: string;
 }): BlockedPackageDirectoryFinding | undefined {
@@ -252,6 +259,7 @@ function parseBlockedPackageFileAliasName(fileName: string): string | undefined 
   return fileName;
 }
 
+/** Finds a blocked package file alias beneath a node_modules-relative path. */
 export function findBlockedNodeModulesFileAlias(params: {
   fileRelativePath: string;
 }): BlockedPackageFileFinding | undefined {
@@ -267,6 +275,7 @@ export function findBlockedNodeModulesFileAlias(params: {
     : undefined;
 }
 
+/** Finds a blocked package directory anywhere in a root-relative path. */
 export function findBlockedPackageDirectoryInPath(params: {
   pathRelativeToRoot: string;
 }): BlockedPackageDirectoryFinding | undefined {
@@ -306,6 +315,7 @@ export function findBlockedPackageDirectoryInPath(params: {
   return undefined;
 }
 
+/** Finds a blocked package file alias anywhere in a root-relative path. */
 export function findBlockedPackageFileAliasInPath(params: {
   pathRelativeToRoot: string;
 }): BlockedPackageFileFinding | undefined {

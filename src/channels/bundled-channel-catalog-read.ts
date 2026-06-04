@@ -25,6 +25,8 @@ const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | nul
 const bundledPackageCatalogCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
+  // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both
+  // once so channel metadata works in dev, linked packages, and published CLI layouts.
   return uniqueStrings(
     [
       resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
@@ -119,6 +121,9 @@ function toBundledChannelEntry(
   };
 }
 
+/**
+ * Lists bundled channel catalog entries from package manifests and generated catalog files.
+ */
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const entries = new Map<string, BundledChannelCatalogEntry>();
   for (const entry of readBundledExtensionCatalogEntriesSync()) {
@@ -130,6 +135,7 @@ export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[]
   for (const entry of readOfficialCatalogFileSync()) {
     const channelEntry = toBundledChannelEntry(entry);
     if (channelEntry) {
+      // Package manifests win over the generated catalog when both describe the same id.
       entries.set(channelEntry.id, entries.get(channelEntry.id) ?? channelEntry);
     }
   }

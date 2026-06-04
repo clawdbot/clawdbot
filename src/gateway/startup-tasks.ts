@@ -1,10 +1,14 @@
 import { formatErrorMessage } from "../infra/errors.js";
 
+// Startup tasks run sequentially so logs and side effects stay ordered during
+// gateway startup. Failures are collected and logged without aborting later
+// tasks.
 type StartupTaskResult =
   | { status: "skipped"; reason: string }
   | { status: "ran" }
   | { status: "failed"; reason: string };
 
+/** Startup task descriptor used by gateway startup side-effect runners. */
 export type StartupTask = {
   source: string;
   agentId?: string;
@@ -30,6 +34,7 @@ function taskMeta(task: StartupTask, result?: StartupTaskResult): Record<string,
   };
 }
 
+/** Runs startup tasks in order and logs failed/skipped task metadata. */
 export async function runStartupTasks(params: {
   tasks: StartupTask[];
   log: StartupTaskLogger;

@@ -1,3 +1,4 @@
+/** Basic channel secret runtime helpers for account/root credential collection. */
 import { coerceSecretRef } from "../config/types.secrets.js";
 import {
   collectSecretInputAssignment,
@@ -15,14 +16,17 @@ export type ChannelAccountEntry = {
   enabled: boolean;
 };
 
+/** Resolved view of a channel config, including synthetic default-account fallback. */
 export type ChannelAccountSurface = {
   hasExplicitAccounts: boolean;
   channelEnabled: boolean;
   accounts: ChannelAccountEntry[];
 };
 
+/** Predicate used by channel helpers to decide whether an account-owned secret is active. */
 export type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
 
+/** Reads a channel config block when it exists as an object. */
 export function getChannelRecord(
   config: { channels?: Record<string, unknown> },
   channelKey: string,
@@ -35,6 +39,7 @@ export function getChannelRecord(
   return isRecord(channel) ? channel : undefined;
 }
 
+/** Reads a channel config and its resolved account surface in one step. */
 export function getChannelSurface(
   config: { channels?: Record<string, unknown> },
   channelKey: string,
@@ -49,6 +54,7 @@ export function getChannelSurface(
   };
 }
 
+/** Resolves explicit channel accounts or creates a default account backed by the channel root. */
 export function resolveChannelAccountSurface(
   channel: Record<string, unknown>,
 ): ChannelAccountSurface {
@@ -89,15 +95,18 @@ export function isBaseFieldActiveForChannelSurface(
   if (!surface.hasExplicitAccounts) {
     return true;
   }
+  // Top-level channel fields are inherited by enabled accounts that do not override that field.
   return surface.accounts.some(
     ({ account, enabled }) => enabled && !hasOwnProperty(account, rootKey),
   );
 }
 
+/** Normalizes optional channel secret strings before deciding whether a value is configured. */
 export function normalizeSecretStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** Returns true when a channel value contains plaintext or a SecretRef-compatible value. */
 export function hasConfiguredSecretInputValue(
   value: unknown,
   defaults: SecretDefaults | undefined,
@@ -105,6 +114,8 @@ export function hasConfiguredSecretInputValue(
   return normalizeSecretStringValue(value).length > 0 || coerceSecretRef(value, defaults) !== null;
 }
 
+/** Collects a simple channel field from the channel root and explicit account overrides. */
+/** Collects root/account channel field SecretRef assignments for one credential path. */
 export function collectSimpleChannelFieldAssignments(params: {
   channelKey: string;
   field: string;
@@ -163,6 +174,7 @@ function isConditionalTopLevelFieldActive(params: {
   return params.surface.accounts.some(params.inheritedAccountActive);
 }
 
+/** Collects a channel field whose active state depends on caller-provided account predicates. */
 export function collectConditionalChannelFieldAssignments(params: {
   channelKey: string;
   field: string;
@@ -217,6 +229,7 @@ export function collectConditionalChannelFieldAssignments(params: {
   }
 }
 
+/** Collects a nested channel field from root and account-specific nested config blocks. */
 export function collectNestedChannelFieldAssignments(params: {
   channelKey: string;
   nestedKey: string;

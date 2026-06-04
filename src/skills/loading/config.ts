@@ -21,6 +21,7 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.evaluateEnabled": true,
 };
 
+/** Platform helpers re-exported for skill loading callers and tests. */
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {

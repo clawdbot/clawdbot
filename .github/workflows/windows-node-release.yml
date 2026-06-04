@@ -1,0 +1,126 @@
+name: Windows Node Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing OpenClaw release tag to receive Windows Hub installers, for example v2026.6.1
+        required: true
+        type: string
+      windows_node_tag:
+        description: openclaw-windows-node release tag to promote, or latest
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-node-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote_signed_windows_installers:
+    name: Promote signed Windows installers
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate inputs
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
+            throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
+          }
+          if ($env:WINDOWS_NODE_TAG -ne "latest" -and $env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$') {
+            throw "Invalid openclaw-windows-node release tag: $env:WINDOWS_NODE_TAG"
+          }
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY | Out-Null
+
+      - name: Download Windows Hub release installers
+        shell: pwsh
+        env:
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $tagArgs = @()
+          if ($env:WINDOWS_NODE_TAG -ne "latest") {
+            $tagArgs += $env:WINDOWS_NODE_TAG
+          }
+          gh release download @tagArgs `
+            --repo openclaw/openclaw-windows-node `
+            --pattern "OpenClawCompanion-Setup-*.exe" `
+            --dir dist
+
+          $expected = @(
+            "dist/OpenClawCompanion-Setup-x64.exe",
+            "dist/OpenClawCompanion-Setup-arm64.exe"
+          )
+          foreach ($file in $expected) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Missing expected Windows installer: $file"
+            }
+          }
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath dist -Filter "OpenClawCompanion-Setup-*.exe" | ForEach-Object {
+            $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "$($_.Name) Authenticode signature was $($signature.Status)."
+            }
+            if (-not $signature.SignerCertificate) {
+              throw "$($_.Name) has no signer certificate."
+            }
+            [pscustomobject]@{
+              File = $_.Name
+              Signer = $signature.SignerCertificate.Subject
+              Thumbprint = $signature.SignerCertificate.Thumbprint
+            } | Format-List
+          }
+
+      - name: Write SHA-256 manifest
+        shell: pwsh
+        run: |
+          Get-ChildItem -LiteralPath dist -Filter "OpenClawCompanion-Setup-*.exe" |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName
+              "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
+            } | Set-Content -Encoding utf8NoBOM -Path dist/OpenClawCompanion-SHA256SUMS.txt
+
+      - name: Upload to OpenClaw release
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload $env:RELEASE_TAG `
+            dist/OpenClawCompanion-Setup-x64.exe `
+            dist/OpenClawCompanion-Setup-arm64.exe `
+            dist/OpenClawCompanion-SHA256SUMS.txt `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+
+      - name: Summary
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+        run: |
+          @"
+          ## Windows Hub installers promoted
+
+          OpenClaw release: $env:RELEASE_TAG
+          Source release: openclaw/openclaw-windows-node@$env:WINDOWS_NODE_TAG
+
+          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-Setup-x64.exe
+          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-Setup-arm64.exe
+          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-SHA256SUMS.txt
+          "@ >> $env:GITHUB_STEP_SUMMARY

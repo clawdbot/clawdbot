@@ -20,8 +20,8 @@ title: "Features"
   <Card title="Media" icon="image" href="/nodes/images">
     Images, audio, video, documents, and image/video generation.
   </Card>
-  <Card title="Apps and UI" icon="monitor" href="/web/control-ui">
-    Web Control UI and macOS companion app.
+  <Card title="Apps and UI" icon="monitor" href="/platforms">
+    Windows Hub, Web Control UI, macOS app, and mobile nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.

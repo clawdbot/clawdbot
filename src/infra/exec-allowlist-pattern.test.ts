@@ -1,3 +1,4 @@
+// Verifies exec approval allowlist pattern parsing and matching.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";

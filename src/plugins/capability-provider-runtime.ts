@@ -1,3 +1,4 @@
+/** Resolves plugin capability providers through manifest contracts, bundled compat, and runtime registries. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveVoiceModelRefs } from "../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -99,6 +100,7 @@ function uniqueSorted(values: Iterable<string>): string[] {
   return sortUniqueStrings(values);
 }
 
+/** Loads the manifest snapshot used to resolve capability-provider ownership. */
 export function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;

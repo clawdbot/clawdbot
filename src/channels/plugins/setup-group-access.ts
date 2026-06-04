@@ -1,16 +1,32 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
+/**
+ * Shared setup prompts for channel group access allowlists.
+ */
+
+/**
+ * Group access policy selected during channel setup.
+ */
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
+/**
+ * Parses comma, semicolon, or newline separated allowlist entries.
+ */
 export function parseAllowlistEntries(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
+/**
+ * Formats allowlist entries for setup prompt initial values.
+ */
 export function formatAllowlistEntries(entries: string[]): string {
   return normalizeStringEntries(entries).join(", ");
 }
 
+/**
+ * Prompts for the group access policy allowed by the channel setup flow.
+ */
 export async function promptChannelAccessPolicy(params: {
   prompter: WizardPrompter;
   label: string;
@@ -35,6 +51,9 @@ export async function promptChannelAccessPolicy(params: {
   });
 }
 
+/**
+ * Prompts for group allowlist entries and normalizes the response.
+ */
 export async function promptChannelAllowlist(params: {
   prompter: WizardPrompter;
   label: string;
@@ -53,6 +72,9 @@ export async function promptChannelAllowlist(params: {
   return parseAllowlistEntries(raw);
 }
 
+/**
+ * Prompts for the full group access config, including allowlist entries when needed.
+ */
 export async function promptChannelAccessConfig(params: {
   prompter: WizardPrompter;
   label: string;
@@ -84,6 +106,8 @@ export async function promptChannelAccessConfig(params: {
     allowDisabled: params.allowDisabled,
   });
   if (policy !== "allowlist") {
+    // Open/disabled policies do not carry allowlist entries, so clear entries
+    // at the prompt boundary before callers write config.
     return { policy, entries: [] };
   }
   if (params.skipAllowlistEntries) {

@@ -1,3 +1,6 @@
+// Auxiliary gateway methods are exposed outside the primary chat/session method
+// list for approval and secret-management flows that need their own scopes.
+/** Gateway method ids handled by auxiliary approval/secret surfaces. */
 export const GATEWAY_AUX_METHODS = [
   "exec.approval.get",
   "exec.approval.list",

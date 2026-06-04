@@ -1,3 +1,4 @@
+// Tests applying parsed directives to get-reply execution options.
 import { describe, expect, it } from "vitest";
 import { formatModelOverrideResetEvent } from "./get-reply-directives-apply.js";
 

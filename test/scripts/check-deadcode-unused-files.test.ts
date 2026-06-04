@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   checkUnusedFiles,
@@ -128,24 +131,82 @@ src/a.ts: src/a.ts
 
   it("runs Knip through a process-group-aware subprocess", async () => {
     const calls: unknown[] = [];
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-runner-"));
+    const pnpmExecPath = path.join(root, "pnpm.cjs");
+    writeFileSync(pnpmExecPath, "console.log('pnpm');\n", "utf8");
+
+    try {
+      const resultPromise = runKnipUnusedFiles({
+        nodeExecPath: "/test-node",
+        npmExecPath: pnpmExecPath,
+        spawnCommand(command: string, args: string[], options: unknown) {
+          calls.push({ args, command, options });
+          const child = new FakeKnipProcess();
+          queueMicrotask(() => {
+            child.stdout.emit("data", "partial stdout");
+            child.stderr.emit("data", "partial stderr");
+            finishFakeProcess(child, 0, null);
+          });
+          return child;
+        },
+        writeStatus: () => {},
+      });
+
+      const result = await resultPromise;
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        args: [
+          pnpmExecPath,
+          "--config.minimum-release-age=0",
+          "dlx",
+          "--package",
+          "knip@6.8.0",
+          "knip",
+          "--config",
+          "config/knip.config.ts",
+          "--production",
+          "--no-progress",
+          "--reporter",
+          "compact",
+          "--files",
+          "--no-config-hints",
+        ],
+        command: "/test-node",
+        options: {
+          detached: process.platform !== "win32",
+          shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      });
+      expect(result).toStrictEqual({
+        errorCode: undefined,
+        errorMessage: undefined,
+        output: "partial stdoutpartial stderr",
+        signal: null,
+        status: 0,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to bare pnpm when no managed pnpm runner is available", async () => {
+    const calls: unknown[] = [];
 
     const resultPromise = runKnipUnusedFiles({
+      npmExecPath: "",
       spawnCommand(command: string, args: string[], options: unknown) {
         calls.push({ args, command, options });
         const child = new FakeKnipProcess();
-        queueMicrotask(() => {
-          child.stdout.emit("data", "partial stdout");
-          child.stderr.emit("data", "partial stderr");
-          finishFakeProcess(child, 0, null);
-        });
+        queueMicrotask(() => finishFakeProcess(child, 0, null));
         return child;
       },
       writeStatus: () => {},
     });
 
-    const result = await resultPromise;
+    await resultPromise;
 
-    expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       args: [
         "--config.minimum-release-age=0",
@@ -165,22 +226,16 @@ src/a.ts: src/a.ts
       command: "pnpm",
       options: {
         detached: process.platform !== "win32",
+        shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       },
-    });
-    expect(result).toStrictEqual({
-      errorCode: undefined,
-      errorMessage: undefined,
-      output: "partial stdoutpartial stderr",
-      signal: null,
-      status: 0,
     });
   });
 
   it("emits heartbeat status and reports Knip timeouts", async () => {
     const statuses: string[] = [];
     const child = new FakeKnipProcess();
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     const kills: Array<NodeJS.Signals | number | undefined> = [];
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
       if (Math.abs(pid) === child.pid) {
@@ -238,7 +293,7 @@ src/a.ts: src/a.ts
 
   it("bounds captured Knip output", async () => {
     const child = new FakeKnipProcess();
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
       if (Math.abs(pid) === child.pid) {
         finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");

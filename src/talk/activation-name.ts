@@ -1,8 +1,18 @@
+/**
+ * Realtime voice activation-name matching for direct spoken address.
+ *
+ * The matcher accepts short names at the leading or trailing edge of a
+ * transcript, strips the name before agent routing, and keeps fuzzy matching
+ * conservative so ordinary dictation does not trigger Talk turns.
+ */
 export const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
 
+/** Transcript edge where an activation name was heard. */
 export type RealtimeVoiceActivationNameEdge = "leading" | "trailing";
+/** Whether the heard name matched exactly or through the guarded fuzzy path. */
 export type RealtimeVoiceActivationNameMatchKind = "exact" | "fuzzy";
 
+/** Activation-name match result plus transcript text with the name removed. */
 export type RealtimeVoiceActivationNameTranscriptResult =
   | {
       allowed: true;
@@ -32,15 +42,18 @@ type PreparedEdgeActivationNameCandidate = {
   compact: string;
 };
 
+/** Count alphanumeric words in a configured activation name. */
 export function realtimeVoiceActivationNameWordCount(value: string): number {
   return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
 }
 
+/** Normalize configured activation names while preserving word boundaries. */
 export function normalizeRealtimeVoiceActivationName(value: string): string | undefined {
   const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }
 
+/** Extract the supported leading activation-name prefix from a longer phrase. */
 export function normalizeRealtimeVoiceActivationNamePrefix(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -52,6 +65,7 @@ export function normalizeRealtimeVoiceActivationNamePrefix(
   return words.slice(0, maxWords).join(" ");
 }
 
+/** Validate the configured activation name length bound. */
 export function isSupportedRealtimeVoiceActivationName(
   value: string,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -60,6 +74,7 @@ export function isSupportedRealtimeVoiceActivationName(
   return wordCount >= 1 && wordCount <= maxWords;
 }
 
+/** Normalize and reject unsupported activation names in one reusable step. */
 export function normalizeSupportedRealtimeVoiceActivationName(
   value: string | undefined,
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
@@ -73,10 +88,12 @@ export function normalizeSupportedRealtimeVoiceActivationName(
     : undefined;
 }
 
+/** Prefer longer names first so nested names match the most specific option. */
 export function sortRealtimeVoiceActivationNames(names: string[]): string[] {
   return names.toSorted((left, right) => right.length - left.length || left.localeCompare(right));
 }
 
+/** Match and strip a configured activation name from either transcript edge. */
 export function matchRealtimeVoiceActivationName(
   text: string,
   activationNames: string[],
@@ -145,6 +162,8 @@ function leadingActivationNameCandidates(
   text: string,
   maxWords: number,
 ): EdgeActivationNameCandidate[] {
+  // Consider both the full opener and the text after "hey/ok" so "hey Molty"
+  // records a useful heardName without letting the opener become required.
   const opener = /^\s*(?:(?:hey|ok|okay)(?:\s*[-,:;]+\s*|\s+))?/i.exec(text);
   const nameStart = opener?.[0].length ?? 0;
   const candidates: EdgeActivationNameCandidate[] = [];
@@ -209,6 +228,8 @@ function trailingActivationNameCandidates(
     if (!/(^|[\s,.:;!?-])$/.test(text.slice(0, startIndex))) {
       break;
     }
+    // Trailing fuzzy matches are only trusted when the speaker clearly used
+    // direct address as a question, e.g. "what changed, Molty?".
     const directAddressBoundary = /(^|[,.:;!?-]\s*)$/.test(text.slice(0, startIndex));
     const trailingQuestion = /\?\s*$/.test(text);
     if (wordCount > 1) {
@@ -249,6 +270,7 @@ function levenshteinDistance(left: string, right: string): number {
 
   let previous = new Uint32Array(right.length + 1);
   let current = new Uint32Array(right.length + 1);
+  // Keep only two rows so fuzzy matching stays allocation-light per transcript.
   for (let index = 0; index <= right.length; index += 1) {
     previous[index] = index;
   }
@@ -302,6 +324,8 @@ function commonPrefixLength(left: string, right: string): number {
   return limit;
 }
 
+// Fuzzy matching requires a strong punctuation/edge boundary and same first
+// letter, then applies stricter trailing-name rules to avoid dictation matches.
 function isFuzzyActivationNameMatch(
   candidate: EdgeActivationNameCandidate,
   heardCompact: string,

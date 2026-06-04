@@ -3,6 +3,12 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { appendRegularFile } from "../infra/fs-safe.js";
 
+/**
+ * Append-only audit log helpers for Crestodian writes.
+ *
+ * Discovery and read-only commands stay quiet; persistent operations append a
+ * JSONL entry under the state directory with config hashes and redacted details.
+ */
 type CrestodianAuditEntry = {
   timestamp: string;
   operation: string;
@@ -13,6 +19,7 @@ type CrestodianAuditEntry = {
   details?: Record<string, unknown>;
 };
 
+/** Resolve the JSONL audit path for Crestodian persistent operations. */
 export function resolveCrestodianAuditPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir = resolveStateDir(env),
@@ -20,6 +27,7 @@ export function resolveCrestodianAuditPath(
   return path.join(stateDir, "audit", "crestodian.jsonl");
 }
 
+/** Append one Crestodian audit entry and return the file path written. */
 export async function appendCrestodianAuditEntry(
   entry: Omit<CrestodianAuditEntry, "timestamp">,
   opts: { env?: NodeJS.ProcessEnv; auditPath?: string } = {},

@@ -1,3 +1,6 @@
+/**
+ * Preflight tests for Anthropic Vertex auth presence helpers.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({

@@ -173,7 +173,6 @@ final class NodeAppModel {
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
     private let watchMessagingService: any WatchMessagingServicing
-    var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
@@ -1037,10 +1036,7 @@ final class NodeAppModel {
             if url.isEmpty {
                 self.screen.showDefaultCanvas()
             } else {
-                let trustedA2UIURL = await self.resolveA2UIHostURL()
-                self.screen.navigate(
-                    to: url,
-                    trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
+                self.screen.navigate(to: url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -1049,10 +1045,7 @@ final class NodeAppModel {
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
             let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trustedA2UIURL = await self.resolveA2UIHostURL()
-            self.screen.navigate(
-                to: trimmedURL,
-                trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
+            self.screen.navigate(to: trimmedURL)
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -1095,20 +1088,13 @@ final class NodeAppModel {
             switch await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
             case .ready:
                 break
-            case .hostNotConfigured:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             case .hostUnavailable:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
+                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
             }
             let json = try await self.screen.eval(javaScript: """
             (() => {
@@ -1138,20 +1124,13 @@ final class NodeAppModel {
             switch await self.ensureA2UIReadyWithCapabilityRefresh(timeoutMs: 5000) {
             case .ready:
                 break
-            case .hostNotConfigured:
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host"))
             case .hostUnavailable:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable"))
+                        message: "A2UI_HOST_UNAVAILABLE: bundled A2UI host not reachable"))
             }
 
             let messagesJSON = try OpenClawCanvasA2UIJSONL.encodeMessagesJSONArray(messages)

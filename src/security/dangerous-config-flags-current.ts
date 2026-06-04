@@ -1,3 +1,4 @@
+// Collects dangerous config flag findings from the current config shape.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -44,6 +45,10 @@ function resolveCurrentPluginConfigContractsById(params: {
   return contractsById;
 }
 
+/**
+ * Collect dangerous flags using the gateway's current plugin metadata snapshot when it is complete.
+ * Returns undefined when any configured plugin is missing so callers can use manifest discovery.
+ */
 export function collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(
   cfg: OpenClawConfig,
 ): string[] | undefined {

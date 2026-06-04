@@ -1,3 +1,4 @@
+// Covers diagnostic error metadata extraction.
 import { describe, expect, it } from "vitest";
 import {
   diagnosticErrorCategory,

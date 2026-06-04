@@ -1,3 +1,4 @@
+// Gateway RPC handlers for cron job CRUD, run logs, wake, and delivery previews.
 import {
   ErrorCodes,
   errorShape,
@@ -239,6 +240,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
   );
 }
 
+/** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
     if (!validateWakeParams(params)) {

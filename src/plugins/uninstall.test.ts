@@ -1,3 +1,4 @@
+// Covers plugin uninstall flows and install-record cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

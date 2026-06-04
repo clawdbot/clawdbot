@@ -16,6 +16,9 @@ import type {
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
+/**
+ * Starts the agent-consult chat run that backs realtime Talk tool calls.
+ */
 export async function startTalkRealtimeAgentConsult(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;

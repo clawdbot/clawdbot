@@ -1,3 +1,4 @@
+/** Shared fixtures for secrets runtime unit tests. */
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";

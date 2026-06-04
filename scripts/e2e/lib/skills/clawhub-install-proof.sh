@@ -8,10 +8,19 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="${OPENCLAW_TEST_STATE_SCRIPT_B64:-}"
+openclaw_skill_install_owns_home=0
+cleanup_clawhub_skill_install_home() {
+  if [ "$openclaw_skill_install_owns_home" = "1" ] && [ -n "${HOME:-}" ]; then
+    rm -rf "$HOME"
+  fi
+}
+trap cleanup_clawhub_skill_install_home EXIT
+
 if [ -n "$OPENCLAW_TEST_STATE_SCRIPT_B64" ]; then
   openclaw_e2e_eval_test_state_from_b64 "$OPENCLAW_TEST_STATE_SCRIPT_B64"
 else
   export HOME="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-skill-install-home.XXXXXX")"
+  openclaw_skill_install_owns_home=1
   export USERPROFILE="$HOME"
   export OPENCLAW_HOME="$HOME"
   export OPENCLAW_STATE_DIR="$HOME/.openclaw"

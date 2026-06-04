@@ -1,3 +1,4 @@
+// Tests before-agent-reply hooks in the get-reply pipeline.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";

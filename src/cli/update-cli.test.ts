@@ -1580,6 +1580,49 @@ describe("update-cli", () => {
     expect(npmPluginUpdateCall()?.timeoutMs).toBe(1_800_000);
   });
 
+  it("prints plugin channel fallbacks near the post-core plugin summary", async () => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: false,
+      config: baseConfig,
+      outcomes: [
+        {
+          pluginId: "lossless-claw",
+          status: "updated",
+          message: "Updated lossless-claw: 1.0.0 -> 1.0.1.",
+          channelFallback: {
+            requestedSpec: "lossless-claw@beta",
+            usedSpec: "lossless-claw",
+            requestedLabel: "@beta",
+            usedLabel: "@latest",
+            reason: "unavailable",
+            message:
+              "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
+          },
+        },
+      ],
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "beta",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("npm plugins: 1 updated, 0 unchanged."))).toBe(true);
+    expect(
+      logs.some((line) =>
+        line.includes(
+          "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("uses a fail-closed integrity policy for post-core plugin updates", async () => {
     await withEnvAsync(
       {

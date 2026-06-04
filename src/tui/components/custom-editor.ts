@@ -1,5 +1,6 @@
 import { Editor, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 
+// Kitty keyboard protocol uses CSI-u sequences for AltGr on international layouts.
 const KITTY_CSI_U_SUFFIX_REGEX = /^(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/u;
 const KITTY_MODIFIERS = {
   alt: 2,
@@ -7,6 +8,7 @@ const KITTY_MODIFIERS = {
 };
 const LOCK_MODIFIER_MASK = 64 + 128;
 
+// Decodes Ctrl+Alt layout output into the intended printable AltGr character.
 function decodeAltGrPrintable(data: string): string | undefined {
   if (!data.startsWith("\u001b[")) {
     return undefined;
@@ -39,6 +41,7 @@ function decodeAltGrPrintable(data: string): string | undefined {
   }
 }
 
+/** Editor with OpenClaw TUI shortcuts layered on top of pi-tui text editing. */
 export class CustomEditor extends Editor {
   onEscape?: () => void;
   onCtrlC?: () => void;
@@ -52,6 +55,7 @@ export class CustomEditor extends Editor {
   onAltEnter?: () => void;
   onAltUp?: () => void;
 
+  /** Dispatches TUI shortcuts before falling back to normal editor input handling. */
   override handleInput(data: string): void {
     if (isKeyRelease(data)) {
       return;

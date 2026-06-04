@@ -1,3 +1,4 @@
+// Detects and decodes Windows console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
@@ -13,6 +14,7 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 
+/** Extracts a Windows console code page number from localized `chcp` output. */
 export function parseWindowsCodePage(raw: string): number | null {
   if (!raw) {
     return null;
@@ -28,6 +30,7 @@ export function parseWindowsCodePage(raw: string): number | null {
   return codePage;
 }
 
+/** Resolves and caches the current Windows console encoding for subprocess output. */
 export function resolveWindowsConsoleEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
@@ -51,6 +54,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
   return cachedWindowsConsoleEncoding;
 }
 
+/** Decodes one complete subprocess output buffer, preferring valid UTF-8 before legacy code pages. */
 export function decodeWindowsOutputBuffer(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
@@ -77,6 +81,7 @@ export function decodeWindowsOutputBuffer(params: {
   }
 }
 
+/** Creates a streaming decoder for subprocess output chunks that may split multibyte characters. */
 export function createWindowsOutputDecoder(params?: {
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
@@ -106,6 +111,8 @@ export function createWindowsOutputDecoder(params?: {
       if (useLegacyDecoder) {
         return legacyDecoder.decode(buffer, { stream: true });
       }
+      // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
+      // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
       const replayBuffer =
         pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
       try {

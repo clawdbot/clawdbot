@@ -5,6 +5,9 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
 
+// Shared context resolvers for model discovery. They keep callers from reaching
+// into runtime config or plugin metadata snapshot plumbing directly.
+/** Resolve the workspace directory model discovery should use for agent scope. */
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,
   explicitWorkspaceDir: string | undefined,
@@ -15,6 +18,12 @@ export function resolveModelWorkspaceDir(
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
+/**
+ * Resolve the plugin metadata snapshot for model discovery.
+ *
+ * Explicit snapshots win for tests and prepared runtimes. Otherwise we prefer
+ * the current process snapshot, then fall back to resolving from config/env.
+ */
 export function resolveModelPluginMetadataSnapshot(params: {
   allowWorkspaceScopedCurrent?: boolean;
   config?: OpenClawConfig;
@@ -30,6 +39,8 @@ export function resolveModelPluginMetadataSnapshot(params: {
   try {
     const config = params.config ?? (params.useRuntimeConfig ? getRuntimeConfig() : undefined);
     return (
+      // Current snapshots are already lifecycle-owned; discovery should reuse
+      // them before doing config/env-based resolution.
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
         env,
@@ -46,6 +57,8 @@ export function resolveModelPluginMetadataSnapshot(params: {
       })
     );
   } catch {
+    // Discovery is best-effort here; callers can continue with core/static
+    // models when plugin metadata is not available.
     return undefined;
   }
 }

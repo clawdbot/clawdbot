@@ -9,6 +9,12 @@ export type McpClientTempState = {
   tokenFile: string;
 };
 
+export type ReconnectableMcpClientHandle = {
+  cleanup: () => void;
+  client: { close: () => Promise<unknown> };
+  transport: { close: () => Promise<unknown> };
+};
+
 export function createMcpClientTempState(params: {
   gatewayToken: string;
   tempRoot?: string;
@@ -26,4 +32,29 @@ export function createMcpClientTempState(params: {
     stateDir,
     tokenFile,
   };
+}
+
+export async function connectMcpClientWithPairingReconnect<
+  T extends ReconnectableMcpClientHandle,
+>(params: {
+  connect: (tempState: McpClientTempState) => Promise<T>;
+  maybeApprovePairing: () => Promise<boolean>;
+  tempState: McpClientTempState;
+}): Promise<T> {
+  let handle = await params.connect(params.tempState);
+  let shouldReconnect: boolean;
+  try {
+    shouldReconnect = await params.maybeApprovePairing();
+  } catch (error) {
+    await Promise.allSettled([handle.client.close(), handle.transport.close()]);
+    handle.cleanup();
+    throw error;
+  }
+  if (!shouldReconnect) {
+    return handle;
+  }
+  await Promise.allSettled([handle.client.close(), handle.transport.close()]);
+  handle.cleanup();
+  handle = await params.connect(params.tempState);
+  return handle;
 }

@@ -27,7 +27,10 @@ import {
   startServer,
   startServerWithClient,
 } from "./test-helpers.js";
-import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.js";
+import {
+  acknowledgeNodeInvokeRequestForTest,
+  getConnectedNodeIdForTest,
+} from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -99,20 +102,6 @@ async function connectApprovedNode(params: {
     }
   }
   return client;
-}
-
-async function getConnectedNodeId(ws: WebSocket): Promise<string> {
-  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-    ws,
-    "node.list",
-    {},
-  );
-  expect(nodes.ok).toBe(true);
-  const nodeId = nodes.payload?.nodes?.find((node) => node.connected)?.nodeId ?? "";
-  if (!nodeId) {
-    throw new Error("expected connected node id");
-  }
-  return nodeId;
 }
 
 async function waitForMacrotasks(): Promise<void> {
@@ -677,7 +666,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
           sawInvoke = true;
         },
       });
-      await getConnectedNodeId(started.ws);
+      await getConnectedNodeIdForTest(started.ws);
 
       pairingWs = await connectPairingScopedIssuedOperator(started.port, attacker);
 

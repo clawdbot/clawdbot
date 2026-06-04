@@ -1,3 +1,6 @@
+/**
+ * Common root-level channel config keys safe to promote into a single account.
+ */
 const COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS = [
   "name",
   "token",
@@ -31,6 +34,9 @@ const COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS = [
   "defaultTo",
 ] as const;
 
+/**
+ * Setup-only config keys that can move during single-account migration.
+ */
 const SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS = [
   ...COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS,
   "streaming",
@@ -64,14 +70,23 @@ const SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS = [
 const commonSingleAccountPromotionKeys = new Set<string>(COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS);
 const setupSingleAccountPromotionKeys = new Set<string>(SETUP_SINGLE_ACCOUNT_PROMOTION_KEYS);
 
+/**
+ * Returns whether a config key is part of the channel-agnostic promotion set.
+ */
 export function isCommonSingleAccountPromotionKey(key: string): boolean {
   return commonSingleAccountPromotionKeys.has(key);
 }
 
+/**
+ * Returns whether a config key can be promoted by setup migration flows.
+ */
 export function isSetupSingleAccountPromotionKey(key: string): boolean {
   return setupSingleAccountPromotionKeys.has(key);
 }
 
+/**
+ * Lists root-level channel keys that could be promoted into account config.
+ */
 export function collectSingleAccountPromotionEntries(channel: Record<string, unknown>): {
   entries: string[];
   hasNamedAccounts: boolean;

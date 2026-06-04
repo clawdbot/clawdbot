@@ -1,3 +1,4 @@
+// Tests queue policy parsing and admission decisions.
 import { describe, expect, it } from "vitest";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 

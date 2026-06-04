@@ -10,7 +10,9 @@ import {
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
-const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
+const ANTHROPIC_LIVE =
+  isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) &&
+  (process.env.ANTHROPIC_API_KEY ?? "").trim().length > 0;
 const describeLive = ANTHROPIC_LIVE ? describe : describe.skip;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const TOOL_OUTPUT_SENTINEL = "TOOL-RESULT-LIVE-MAGENTA";

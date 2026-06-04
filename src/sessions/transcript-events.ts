@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Normalized transcript update emitted after a session transcript changes. */
 export type SessionTranscriptUpdate = {
   sessionFile: string;
   sessionKey?: string;
@@ -14,6 +15,7 @@ type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
 
+/** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
   return () => {
@@ -21,6 +23,7 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
+/** Emits a normalized transcript update to all registered listeners. */
 export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
   const normalized =
     typeof update === "string"

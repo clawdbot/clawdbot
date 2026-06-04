@@ -1,3 +1,4 @@
+// Tests shared ACP command helpers for formatting and identifiers.
 import { describe, expect, it } from "vitest";
 import { parseSpawnInput, parseSteerInput } from "./shared.js";
 

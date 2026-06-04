@@ -1,3 +1,4 @@
+// Determines whether persisted lock-file owners are stale.
 import {
   getProcessStartTime as defaultGetProcessStartTime,
   isPidDefinitelyDead as defaultIsPidDefinitelyDead,

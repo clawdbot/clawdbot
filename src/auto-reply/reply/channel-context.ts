@@ -1,3 +1,4 @@
+/** Resolves channel and account context for command handlers. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -30,6 +31,7 @@ type ChannelAccountParams = {
   };
 };
 
+/** Resolves the command surface channel from inbound context and command state. */
 export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
@@ -39,6 +41,7 @@ export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): stri
   return normalizeOptionalLowercaseString(channel) ?? "";
 }
 
+/** Resolves command account id, falling back to plugin default account config. */
 export function resolveChannelAccountId(params: ChannelAccountParams): string {
   const accountId = normalizeOptionalString(params.ctx.AccountId) ?? "";
   if (accountId) {

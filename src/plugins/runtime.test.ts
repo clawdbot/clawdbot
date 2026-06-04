@@ -1,3 +1,4 @@
+/** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";

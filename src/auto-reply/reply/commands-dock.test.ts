@@ -1,3 +1,4 @@
+// Tests dock command behavior for session binding and workspace handoff.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {

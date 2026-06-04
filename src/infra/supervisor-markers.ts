@@ -1,3 +1,4 @@
+// Defines process supervisor marker labels for gateway diagnostics.
 import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 
 const SUPERVISOR_HINTS = {
@@ -6,6 +7,7 @@ const SUPERVISOR_HINTS = {
   schtasks: ["OPENCLAW_WINDOWS_TASK_NAME"],
 } as const;
 
+/** Environment keys that imply the gateway process is supervised by an external respawner. */
 export const SUPERVISOR_HINT_ENV_VARS = [
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
@@ -17,6 +19,7 @@ export const SUPERVISOR_HINT_ENV_VARS = [
   "OPENCLAW_SERVICE_KIND",
 ] as const;
 
+/** Supported supervisor families that can respawn the gateway after update/restart handoff. */
 export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
 
 function hasAnyHint(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
@@ -36,6 +39,7 @@ function isCurrentGatewayLaunchdJob(env: NodeJS.ProcessEnv): boolean {
   return env.XPC_SERVICE_NAME?.trim() === GATEWAY_LAUNCH_AGENT_LABEL;
 }
 
+/** Detects the current platform supervisor from process environment hints. */
 export function detectRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,

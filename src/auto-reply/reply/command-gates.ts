@@ -1,3 +1,4 @@
+// Applies command feature gates before command handlers execute.
 import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";

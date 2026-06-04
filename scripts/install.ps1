@@ -655,7 +655,10 @@ function Invoke-InteractiveOpenClawCommand {
         throw "openclaw command not found on PATH."
     }
 
-    $null = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $process = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "openclaw $($Arguments -join ' ') failed with exit code $($process.ExitCode)."
+    }
 }
 
 function Resolve-CommandPath {

@@ -1,3 +1,6 @@
+/**
+ * Contract suites for provider setup wizard choices, options, and model pickers.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderAuthMethod } from "../plugin-entry.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";

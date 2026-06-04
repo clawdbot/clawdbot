@@ -1,3 +1,6 @@
+/**
+ * Tests memory host search manager lifecycle helpers.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

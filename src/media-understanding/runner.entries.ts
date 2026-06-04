@@ -364,6 +364,7 @@ function resolveProviderQuery(params: {
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
+/** Builds the normalized decision record for one provider or CLI model attempt. */
 export function buildModelDecision(params: {
   entry: MediaUnderstandingModelConfig;
   entryType: "provider" | "cli";
@@ -577,6 +578,7 @@ async function resolveProviderExecutionContext(params: {
   return { auth, baseUrl, headers, request };
 }
 
+/** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
   const total = attachments.length;
@@ -593,6 +595,7 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
 }
 
+/** Returns the first non-empty attempt reason, optionally filtered by outcome. */
 export function findDecisionReason(
   decision: MediaUnderstandingDecision,
   outcome?: MediaUnderstandingModelDecision["outcome"],
@@ -613,6 +616,7 @@ export function findDecisionReason(
   return undefined;
 }
 
+/** Trims provider/runtime error prefixes into a stable human-readable reason. */
 export function normalizeDecisionReason(reason?: string): string | undefined {
   const trimmed = typeof reason === "string" ? reason.trim() : "";
   if (!trimmed) {
@@ -622,6 +626,7 @@ export function normalizeDecisionReason(reason?: string): string | undefined {
   return normalized || undefined;
 }
 
+/** Produces the short reason token used in status and decision summary output. */
 export function summarizeDecisionReason(reason?: string): string | undefined {
   const normalized = normalizeDecisionReason(reason);
   if (!normalized) {
@@ -640,6 +645,7 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+/** Executes one provider-backed media-understanding entry for one attachment. */
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -860,6 +866,7 @@ export async function runProviderEntry(params: {
   };
 }
 
+/** Executes one CLI-backed media-understanding entry for one attachment. */
 export async function runCliEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;

@@ -1,3 +1,4 @@
+// Verifies plugin install override config and path behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

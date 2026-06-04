@@ -1,7 +1,9 @@
+// Stores and broadcasts agent lifecycle and streaming events.
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
+/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
   | "lifecycle"
   | "tool"
@@ -16,8 +18,11 @@ export type AgentEventStream =
   | "thinking"
   | (string & {});
 
+/** Lifecycle phase for a visible item in the agent activity feed. */
 export type AgentItemEventPhase = "start" | "update" | "end";
+/** Status rendered for an item-level agent activity event. */
 export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+/** Item category used by channels and Control UI to choose progress presentation. */
 export type AgentItemEventKind =
   | "tool"
   | "command"
@@ -26,6 +31,7 @@ export type AgentItemEventKind =
   | "analysis"
   | (string & {});
 
+/** Payload for a single item shown in the agent activity stream. */
 export type AgentItemEventData = {
   itemId: string;
   phase: AgentItemEventPhase;
@@ -46,6 +52,7 @@ export type AgentItemEventData = {
   approvalSlug?: string;
 };
 
+/** Plan update payload emitted when an agent publishes or revises its task list. */
 export type AgentPlanEventData = {
   phase: "update";
   title: string;
@@ -54,10 +61,14 @@ export type AgentPlanEventData = {
   source?: string;
 };
 
+/** Approval event phase for request/resolution transitions. */
 export type AgentApprovalEventPhase = "requested" | "resolved";
+/** Approval status after routing, user action, or delivery failure. */
 export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+/** Approval family used by renderers and host hooks. */
 export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
 
+/** Payload for approval requests and their later resolution events. */
 export type AgentApprovalEventData = {
   phase: AgentApprovalEventPhase;
   kind: AgentApprovalEventKind;
@@ -74,6 +85,7 @@ export type AgentApprovalEventData = {
   message?: string;
 };
 
+/** Incremental command output payload associated with an item/tool call. */
 export type AgentCommandOutputEventData = {
   itemId: string;
   phase: "delta" | "end";
@@ -87,6 +99,7 @@ export type AgentCommandOutputEventData = {
   cwd?: string;
 };
 
+/** Patch summary payload emitted after an agent applies file changes. */
 export type AgentPatchSummaryEventData = {
   itemId: string;
   phase: "end";
@@ -99,6 +112,7 @@ export type AgentPatchSummaryEventData = {
   summary: string;
 };
 
+/** Enriched event delivered to subscribers after sequencing and context stamping. */
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -115,6 +129,7 @@ export type AgentEventPayload = {
   agentId?: string;
 };
 
+/** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   sessionKey?: string;
   /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
@@ -145,6 +160,7 @@ function getAgentEventState(): AgentEventState {
   }));
 }
 
+/** Registers or merges per-run context used by later agent event emissions. */
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
     return;
@@ -181,10 +197,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
 }
 
+/** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
 }
 
+/** Clears context and sequence state for a run that has ended or been discarded. */
 export function clearAgentRunContext(runId: string) {
   const state = getAgentEventState();
   state.runContextById.delete(runId);
@@ -213,11 +231,13 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
   return swept;
 }
 
+/** Clears run context state without removing event listeners; test-only helper. */
 export function resetAgentRunContextForTest() {
   getAgentEventState().runContextById.clear();
   getAgentEventState().seqByRun.clear();
 }
 
+/** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const state = getAgentEventState();
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
@@ -251,6 +271,7 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   notifyListeners(state.listeners, enriched);
 }
 
+/** Emits an item activity event on the shared agent event bus. */
 export function emitAgentItemEvent(params: {
   runId: string;
   data: AgentItemEventData;
@@ -264,6 +285,7 @@ export function emitAgentItemEvent(params: {
   });
 }
 
+/** Emits a plan update event on the shared agent event bus. */
 export function emitAgentPlanEvent(params: {
   runId: string;
   data: AgentPlanEventData;
@@ -277,6 +299,7 @@ export function emitAgentPlanEvent(params: {
   });
 }
 
+/** Emits an approval event on the shared agent event bus. */
 export function emitAgentApprovalEvent(params: {
   runId: string;
   data: AgentApprovalEventData;
@@ -290,6 +313,7 @@ export function emitAgentApprovalEvent(params: {
   });
 }
 
+/** Emits command output for a running or completed item/tool call. */
 export function emitAgentCommandOutputEvent(params: {
   runId: string;
   data: AgentCommandOutputEventData;
@@ -303,6 +327,7 @@ export function emitAgentCommandOutputEvent(params: {
   });
 }
 
+/** Emits a patch summary for a completed file-editing item/tool call. */
 export function emitAgentPatchSummaryEvent(params: {
   runId: string;
   data: AgentPatchSummaryEventData;
@@ -316,11 +341,13 @@ export function emitAgentPatchSummaryEvent(params: {
   });
 }
 
+/** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
   return registerListener(state.listeners, listener);
 }
 
+/** Clears all agent event state, including listeners; test-only helper. */
 export function resetAgentEventsForTest() {
   const state = getAgentEventState();
   state.seqByRun.clear();

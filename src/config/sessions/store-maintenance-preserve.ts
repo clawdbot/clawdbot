@@ -1,9 +1,11 @@
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
+/** Provider hook for session keys that maintenance/pruning should preserve. */
 export type SessionMaintenancePreserveKeysProvider = () => Iterable<string> | undefined;
 
 const preserveKeysProviders = new Set<SessionMaintenancePreserveKeysProvider>();
 
+/** Registers a provider for session maintenance preserve keys. */
 export function registerSessionMaintenancePreserveKeysProvider(
   provider: SessionMaintenancePreserveKeysProvider,
 ): () => void {
@@ -32,6 +34,7 @@ function addSessionMaintenancePreserveKeys(
   }
 }
 
+/** Collects normalized session keys that maintenance/pruning must preserve. */
 export function collectSessionMaintenancePreserveKeys(
   baseKeys?: Iterable<string | undefined>,
 ): Set<string> | undefined {

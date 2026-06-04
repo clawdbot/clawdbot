@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
   createMigrationManualItem,
@@ -64,6 +67,10 @@ type HermesCodexAuthProfile = {
   result: ProviderAuthResult;
   sourceProfileId: string;
 };
+
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
   const hash = createHash("sha256");
@@ -389,7 +396,7 @@ export async function buildAuthItems(params: {
         kind: "auth",
         action: skipped ? "skip" : "create",
         source: profile.candidate.sourcePath,
-        target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
+        target: authProfileTarget(params.targets.agentDir, profileId),
         status: skipped ? "skipped" : conflict ? "conflict" : "planned",
         sensitive: true,
         reason: skipped

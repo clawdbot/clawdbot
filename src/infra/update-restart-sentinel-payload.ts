@@ -1,3 +1,4 @@
+// Builds restart sentinel payloads for update handoff reporting.
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
@@ -5,6 +6,9 @@ import {
 } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
+// Update restart sentinel payloads carry update result details across a process
+// restart so the next gateway can report completion or failure.
+/** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
   sessionKey?: string;
   deliveryContext?: {
@@ -18,6 +22,7 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
+/** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;

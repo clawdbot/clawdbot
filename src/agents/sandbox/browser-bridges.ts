@@ -1,5 +1,10 @@
 import type { BrowserBridge } from "../../plugin-sdk/browser-bridge.js";
 
+/**
+ * In-process browser bridge registry keyed by sandbox session.
+ *
+ * The prune path uses this table to stop bridge servers when their backing containers expire.
+ */
 export const BROWSER_BRIDGES = new Map<
   string,
   {

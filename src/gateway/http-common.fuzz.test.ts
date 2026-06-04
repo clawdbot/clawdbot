@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -16,7 +16,7 @@ import {
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
-import { makeMockHttpResponse } from "./test-http-response.js";
+import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
 /**
  * Seeded property-based / fuzz coverage for http-common.
@@ -369,16 +369,6 @@ describe("fuzz: setSseHeaders", () => {
 });
 
 describe("fuzz: watchClientDisconnect", () => {
-  function buildReqRes(
-    reqSocket: EventEmitter | null,
-    resSocket: EventEmitter | null,
-  ): { req: IncomingMessage; res: ServerResponse } {
-    return {
-      req: { socket: reqSocket } as unknown as IncomingMessage,
-      res: { socket: resSocket } as unknown as ServerResponse,
-    };
-  }
-
   it("invariants hold for arbitrary socket/controller/callback combinations", () => {
     const rng = makeRng(0xc105e);
     for (let i = 0; i < ITERATIONS; i += 1) {
@@ -408,7 +398,7 @@ describe("fuzz: watchClientDisconnect", () => {
       }
       const onDisconnect = hasCallback ? vi.fn() : undefined;
 
-      const { req, res } = buildReqRes(reqSocket, resSocket);
+      const { req, res } = makeMockHttpReqRes(reqSocket, resSocket);
       const cleanup = watchClientDisconnect(req, res, controller, onDisconnect);
 
       const uniqueSockets = new Set<EventEmitter>();

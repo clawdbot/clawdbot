@@ -1,3 +1,4 @@
+/** Tests before-tool-call hook ordering, mutation, and cancellation behavior. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-helpers.js";

@@ -1,3 +1,4 @@
+// Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";

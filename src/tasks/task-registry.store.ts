@@ -1,3 +1,4 @@
+// Stores task registry records in memory and bridges persistence runtime hooks.
 import {
   closeTaskRegistryDatabase,
   deleteTaskAndDeliveryStateFromSqlite,

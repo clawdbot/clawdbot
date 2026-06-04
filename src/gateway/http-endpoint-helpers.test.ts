@@ -1,3 +1,6 @@
+/**
+ * Unit tests for the shared POST JSON endpoint helper used by gateway HTTP surfaces.
+ */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "./auth.js";

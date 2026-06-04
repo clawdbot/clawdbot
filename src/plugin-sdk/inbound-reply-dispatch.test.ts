@@ -284,6 +284,13 @@ describe("recordInboundSessionAndDispatchReply", () => {
       }),
     ).toBe(true);
     expect(
+      hasVisibleInboundReplyDispatch({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
       hasFinalInboundReplyDispatch({
         queuedFinal: false,
         counts: { tool: 0, block: 1, final: 0 },

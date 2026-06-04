@@ -1,7 +1,9 @@
+// Creates temporary OpenClaw directories for runtime scratch work.
 import fs from "node:fs";
 import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
+/** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
 
 type MaybeNodeError = { code?: string };
@@ -13,6 +15,7 @@ type SecureDirStat = {
   uid?: number;
 };
 
+/** Injectable filesystem/platform hooks for resolving the preferred temp root in tests. */
 export type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
   chmodSync?: (path: string, mode: number) => void;
@@ -33,6 +36,7 @@ function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError 
   );
 }
 
+/** Resolves a safe OpenClaw temp root, falling back to user-scoped os.tmpdir paths when needed. */
 export function resolvePreferredOpenClawTmpDir(
   options: ResolvePreferredOpenClawTmpDirOptions = {},
 ): string {
@@ -131,6 +135,8 @@ export function resolvePreferredOpenClawTmpDir(
       if (tryRepairWritableBits(fallbackPath)) {
         return fallbackPath;
       }
+      // Never continue with a symlinked, wrong-owner, or world-writable temp root;
+      // callers create executable/media artifacts under this path.
       throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
     }
     try {

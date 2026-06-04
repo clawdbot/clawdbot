@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveAuthStorePathForDisplay } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +66,10 @@ function fakeJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.signature`;
 }
 
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
+
 describe("Hermes migration provider secret write failures", () => {
   afterEach(async () => {
     for (const root of tempRoots) {
@@ -97,7 +102,10 @@ describe("Hermes migration provider secret write failures", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:hermes-import`,
+        target: authProfileTarget(
+          path.join(stateDir, "agents", "main", "agent"),
+          "openai:hermes-import",
+        ),
         status: "error",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
@@ -154,7 +162,10 @@ describe("Hermes migration provider secret write failures", () => {
         kind: "auth",
         action: "create",
         source: opencodeAuthPath,
-        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:account-acct_fail`,
+        target: authProfileTarget(
+          path.join(stateDir, "agents", "main", "agent"),
+          "openai:account-acct_fail",
+        ),
         status: "error",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,

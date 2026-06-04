@@ -1,5 +1,6 @@
 import type { AnyAgentTool } from "./tools/common.js";
 
+/** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
   | null
   | boolean
@@ -8,17 +9,20 @@ export type RuntimeToolInputSchemaJson =
   | RuntimeToolInputSchemaJson[]
   | { [key: string]: RuntimeToolInputSchemaJson };
 
+/** Projected runtime tool schema plus validation violations. */
 export type RuntimeToolInputSchemaProjection = {
   readonly schema: RuntimeToolInputSchemaJson;
   readonly violations: readonly string[];
 };
 
+/** Diagnostic for one incompatible runtime tool schema. */
 export type RuntimeToolSchemaDiagnostic = {
   readonly toolName: string;
   readonly toolIndex: number;
   readonly violations: readonly string[];
 };
 
+/** Runtime tool list split into compatible tools and schema diagnostics. */
 export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
   readonly tools: readonly TTool[];
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
@@ -181,6 +185,7 @@ const schemaMapKeywords = new Set([
   "properties",
 ]);
 
+/** Projects one runtime tool input schema to JSON and reports runtime incompatibilities. */
 export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
@@ -261,18 +266,21 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   return { tools: compatibleTools, diagnostics };
 }
 
+/** Inspects runtime tool schemas and returns diagnostics without filtering tools. */
 export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
   return [...inspectToolEntries(readRuntimeToolEntries(tools), "runtime").diagnostics];
 }
 
+/** Filters tools to those with schemas accepted by the runtime as-is. */
 export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
   return inspectToolEntries(readRuntimeToolEntries(tools), "runtime");
 }
 
+/** Filters tools to those that providers can normalize before dispatch. */
 export function filterProviderNormalizableTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {

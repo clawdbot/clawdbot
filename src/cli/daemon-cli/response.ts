@@ -1,3 +1,4 @@
+// JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
 import type { GatewayService } from "../../daemon/service.js";
 import {
@@ -8,8 +9,10 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 
+/** Gateway service action emitted by lifecycle commands. */
 export type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
+/** Stable hint category for machine-readable daemon command output. */
 export type DaemonHintKind =
   | "install"
   | "container-restart"
@@ -19,11 +22,13 @@ export type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
+/** Classified daemon recovery hint item. */
 export type DaemonHintItem = {
   kind: DaemonHintKind;
   text: string;
 };
 
+/** Machine-readable response shape for service lifecycle commands. */
 export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
@@ -74,6 +79,7 @@ function classifyDaemonHintText(text: string): DaemonHintKind {
   return "generic";
 }
 
+/** Classify plain-text hints for JSON daemon responses. */
 export function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
   if (!hints?.length) {
     return undefined;
@@ -81,6 +87,7 @@ export function buildDaemonHintItems(hints: string[] | undefined): DaemonHintIte
   return hints.map((text) => ({ kind: classifyDaemonHintText(text), text }));
 }
 
+/** Build the service metadata snapshot embedded in JSON action responses. */
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
   return {
     label: service.label,
@@ -90,6 +97,7 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
   };
 }
 
+/** Writable sink used when JSON output should suppress service command stdout. */
 export function createNullWriter(): Writable {
   return new Writable({
     write(_chunk, _encoding, callback) {
@@ -98,6 +106,7 @@ export function createNullWriter(): Writable {
   });
 }
 
+/** Create stdout/warning/emit/fail helpers for one daemon lifecycle action. */
 export function createDaemonActionContext(params: { action: DaemonAction; json: boolean }): {
   stdout: Writable;
   warnings: string[];
@@ -149,6 +158,7 @@ async function buildInstallFailureHints(error: unknown): Promise<string[] | unde
   });
 }
 
+/** Install a service, convert platform install failures to hints, and emit the final response. */
 export async function installDaemonServiceAndEmit(params: {
   serviceNoun: string;
   service: GatewayService;

@@ -1,3 +1,4 @@
+// Compiles plugin manifest schemas for validation without runtime loading.
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -25,6 +26,10 @@ type CachedValidator = {
   schemaFingerprint: string;
 };
 
+/**
+ * JSON Schema document accepted by plugin config and SDK runtime validation.
+ * Boolean schemas are valid draft-style schemas and must remain accepted here.
+ */
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
@@ -152,6 +157,10 @@ function isDefaultActivatedConditionalFailure(params: {
   return checkSchema(originalValidator, params.originalValue) === null;
 }
 
+/**
+ * Sanitized validation error surfaced to config diagnostics, gateway hooks, and SDK callers.
+ * `path`/`message` stay raw for programmatic handling; `text` is terminal-safe display text.
+ */
 export type JsonSchemaValidationError = {
   path: string;
   message: string;
@@ -317,6 +326,10 @@ function formatValidationErrors(
   });
 }
 
+/**
+ * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
+ * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
   cacheKey: string;
@@ -349,6 +362,8 @@ export function validateJsonSchemaValue(params: {
         defaultedValue: value,
       })
     ) {
+      // Defaults can select a conditional branch that requires the defaulted property;
+      // keep the hydrated value when the original input was valid before hydration.
       return { ok: true, value };
     }
     return { ok: false, errors: formatValidationErrors(errors) };
@@ -391,6 +406,7 @@ export function validateJsonSchemaValue(params: {
       defaultedValue: value,
     })
   ) {
+    // Same conditional-default exception as the uncached path; cache only changes validator reuse.
     return { ok: true, value };
   }
   return { ok: false, errors: formatValidationErrors(errors) };

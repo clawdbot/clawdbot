@@ -17,6 +17,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
 } from "./auth-profiles/store.js";
 
+/** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
   externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
@@ -25,6 +26,7 @@ export type DiscoverAuthStorageOptions = {
   syntheticAuthProviderRefs?: Iterable<string>;
 } & AgentDiscoveryAuthLookupOptions;
 
+/** Resolves agent credentials from auth profiles, env, and synthetic auth hooks. */
 export function resolveAgentCredentialsForDiscovery(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
@@ -62,6 +64,8 @@ export function resolveAgentCredentialsForDiscovery(
     if (credentials[provider]) {
       continue;
     }
+    // Synthetic auth is a plugin/runtime fallback. Only fill empty providers so
+    // persisted profiles and env-backed credentials remain authoritative.
     const resolved = resolveProviderSyntheticAuthWithPlugin({
       provider,
       context: {
@@ -82,7 +86,4 @@ export function resolveAgentCredentialsForDiscovery(
   return credentials;
 }
 
-export {
-  addEnvBackedAgentCredentials,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./agent-auth-discovery-core.js";
+export { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";

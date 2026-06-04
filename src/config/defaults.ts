@@ -1,3 +1,4 @@
+// Provides canonical default config values and model/provider defaults.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,

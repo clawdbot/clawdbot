@@ -45,6 +45,11 @@ type LogLike = {
   warn(message: string): void;
 };
 
+/**
+ * Coordinates auth profile selection, runtime auth preparation/refresh, and
+ * profile failover for one embedded run. State is injected through accessors so
+ * the runner can keep provider/model/auth snapshots in sync across retries.
+ */
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
@@ -99,6 +104,8 @@ export function createEmbeddedRunAuthController(params: {
       capability: "llm",
       transport: "stream",
     });
+    // Runtime auth plugins may override baseUrl and safe request auth headers,
+    // but sanitizeRuntimeProviderRequestOverrides strips privileged transport knobs.
     params.setRuntimeModel({
       ...paramsForApply.runtimeModel,
       ...(paramsForApply.preparedAuth.baseUrl
@@ -171,6 +178,8 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
+    // Generation/profile/source checks below discard refreshes that complete
+    // after another profile or credential has already become active.
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
     const refreshPromise: Promise<void> = (async () => {

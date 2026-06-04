@@ -1,3 +1,9 @@
+/**
+ * Google simple-completion stream adapter.
+ *
+ * This registers a patched Google stream API that keeps the normal Google
+ * backend but sanitizes unsupported thinking payload options for simple models.
+ */
 import { streamSimple } from "../llm/stream.js";
 import type { Api, Model } from "../llm/types.js";
 import {
@@ -8,6 +14,7 @@ import {
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import type { StreamFn } from "./runtime/index.js";
 
+/** Custom API id for the Google simple-completion stream adapter. */
 export const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple";
 
 const SOURCE_API: Api = "google-generative-ai";
@@ -51,6 +58,7 @@ function buildGoogleSimpleCompletionStreamFn(): StreamFn {
   };
 }
 
+/** Rewrites Google generative-ai models to the simple-completion adapter when needed. */
 export function prepareGoogleSimpleCompletionModel<TApi extends Api>(model: Model<TApi>): Model {
   if (model.api !== SOURCE_API) {
     return model;

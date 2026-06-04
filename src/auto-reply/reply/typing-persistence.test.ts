@@ -1,3 +1,4 @@
+// Tests typing mode persistence across session updates and reply turns.
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { createTypingController } from "./typing.js";

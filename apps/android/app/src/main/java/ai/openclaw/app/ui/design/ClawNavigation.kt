@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.design
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,27 +92,29 @@ internal fun ClawBottomNav(
 ) {
   val safeInsets = WindowInsets.navigationBars.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom)
 
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    color = ClawTheme.colors.surface.copy(alpha = 0.96f),
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-    shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-  ) {
-    Row(
-      modifier =
-        Modifier
-          .windowInsetsPadding(safeInsets)
-          .padding(horizontal = 8.dp, vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
+  Box(modifier = modifier.fillMaxWidth().background(ClawTheme.colors.canvas)) {
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      color = ClawTheme.colors.surface.copy(alpha = 0.96f),
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
+      shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
     ) {
-      items.forEach { item ->
-        ClawBottomNavItem(
-          item = item,
-          selected = item.key == selectedKey,
-          onClick = { onSelect(item.key) },
-          modifier = Modifier.weight(1f),
-        )
+      Row(
+        modifier =
+          Modifier
+            .windowInsetsPadding(safeInsets)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        items.forEach { item ->
+          ClawBottomNavItem(
+            item = item,
+            selected = item.key == selectedKey,
+            onClick = { onSelect(item.key) },
+            modifier = Modifier.weight(1f),
+          )
+        }
       }
     }
   }
@@ -129,7 +132,7 @@ private fun ClawBottomNavItem(
     modifier = modifier.heightIn(min = 48.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = if (selected) ClawTheme.colors.primary else Color.Transparent,
-    contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
+    contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
   ) {
     Column(
       modifier = Modifier.padding(horizontal = 5.dp, vertical = 6.dp),

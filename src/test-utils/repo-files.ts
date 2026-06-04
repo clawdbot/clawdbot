@@ -1,8 +1,10 @@
+// Test helpers for reading repository files through git-aware paths.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 const gitTrackedFilesCache = new Map<string, string[] | null>();
 
+/** Normalizes file paths to repo-style forward slash separators. */
 export function toRepoPath(filePath: string): string {
   return filePath.replaceAll("\\", "/");
 }

@@ -1,3 +1,4 @@
+// Tests heartbeat runner behavior when defaults are unset.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

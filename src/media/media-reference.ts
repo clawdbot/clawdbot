@@ -6,6 +6,7 @@ import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
+/** Error raised when a media reference cannot be mapped to an allowed local media file. */
 export class MediaReferenceError extends Error {
   code: MediaReferenceErrorCode;
 
@@ -28,6 +29,7 @@ type InboundMediaUri = {
   normalizedSource: string;
 };
 
+/** Strips legacy MEDIA: prefixes while preserving canonical media:// references. */
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -46,6 +48,7 @@ type MediaReferenceSourceInfo = {
   looksLikeWindowsDrivePath: boolean;
 };
 
+/** Classifies media reference schemes before local resolution or sandbox rewriting. */
 export function classifyMediaReferenceSource(
   source: string,
   options?: { allowDataUrl?: boolean },
@@ -109,6 +112,7 @@ async function resolvePathForContainment(candidate: string): Promise<string> {
   }
 }
 
+/** Parses canonical inbound media-store URIs and rejects nested or cross-bucket references. */
 export function parseInboundMediaUri(source: string): InboundMediaUri | null {
   const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
@@ -164,6 +168,7 @@ async function resolveInboundMediaUri(
   };
 }
 
+/** Rewrites inbound media-store URIs to sandbox-relative paths for staged agent inputs. */
 export function resolveMediaReferenceSandboxPath(
   source: string,
   inboundDir = "media/inbound",
@@ -179,6 +184,7 @@ export function resolveMediaReferenceSandboxPath(
   };
 }
 
+/** Resolves inbound media:// URIs or first-level inbound file paths to concrete store files. */
 export async function resolveInboundMediaReference(
   source: string,
 ): Promise<InboundMediaReference | null> {
@@ -200,6 +206,7 @@ export async function resolveInboundMediaReference(
   const rawInboundDir = path.resolve(getMediaDir(), "inbound");
   const rawResolvedPath = path.resolve(localPath);
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  // Realpath fallback catches symlinks and moved state dirs before accepting direct paths.
   const rel =
     rawRel && !relativePathEscapesBase(rawRel)
       ? rawRel
@@ -219,6 +226,7 @@ export async function resolveInboundMediaReference(
   };
 }
 
+/** Converts inbound media references for callers that need a direct local file path. */
 export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
   const normalizedSource = normalizeMediaReferenceSource(source);
   return (await resolveInboundMediaReference(normalizedSource))?.physicalPath ?? normalizedSource;

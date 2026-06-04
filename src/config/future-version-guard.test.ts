@@ -1,3 +1,4 @@
+// Verifies config loading rejects unsupported future versions.
 import { describe, expect, it } from "vitest";
 import {
   ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV,

@@ -1,3 +1,4 @@
+// Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@earendil-works/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";

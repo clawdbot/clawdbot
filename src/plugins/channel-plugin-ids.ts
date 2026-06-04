@@ -1,3 +1,4 @@
+/** Channel presence and gateway startup plugin id helpers. */
 export {
   hasConfiguredChannelsForReadOnlyScope,
   hasExplicitChannelConfig,

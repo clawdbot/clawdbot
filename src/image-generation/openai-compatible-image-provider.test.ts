@@ -1,3 +1,4 @@
+/** Tests OpenAI-compatible image provider request building and response handling. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createOpenAiCompatibleImageGenerationProvider,

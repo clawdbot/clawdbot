@@ -12,6 +12,7 @@ coverage:
 objective: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
 successCriteria:
   - Agent replies in DM without channel routing mistakes.
+  - Agent visible reply contains the scenario marker.
   - Agent explains the QA lab and message bus correctly.
   - Agent keeps the dev C-3PO personality.
 docsRefs:
@@ -24,7 +25,8 @@ execution:
   kind: flow
   summary: Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.
   config:
-    prompt: "Hello there, who are you?"
+    expectedMarker: QA-DM-BASELINE-OK
+    prompt: "DM baseline marker check. Include exact marker: `QA-DM-BASELINE-OK` and briefly identify the QA lab message bus."
 ```
 
 ```yaml qa-flow
@@ -47,7 +49,14 @@ steps:
           - ref: state
           - lambda:
               params: [candidate]
-              expr: "candidate.conversation.id === 'alice'"
+              expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
           - expr: liveTurnTimeoutMs(env, 45000)
+      - set: matchingOutbound
+        value:
+          expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker))"
+      - assert:
+          expr: matchingOutbound.length === 1
+          message:
+            expr: "`expected exactly one DM baseline marker reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'alice' })}`"
     detailsExpr: outbound.text
 ```

@@ -189,6 +189,28 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a pending shared app-server alive when another acquire still owns startup", async () => {
+    const harness = createClientHarness();
+    const abandonController = new AbortController();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const abandonedAcquire = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      abandonSignal: abandonController.signal,
+    });
+    const activeAcquire = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+
+    abandonController.abort();
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(abandonedAcquire).resolves.toBe(harness.client);
+    await expect(activeAcquire).resolves.toBe(harness.client);
+    expect(harness.process.stdin.destroyed).toBe(false);
+  });
+
   it("does not wait for isolated initialize after a timeout closes the client", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);

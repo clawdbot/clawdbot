@@ -1,3 +1,4 @@
+// Tests reply routing policy decisions for direct, group, and private routes.
 import { describe, expect, it } from "vitest";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 

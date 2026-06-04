@@ -1,3 +1,4 @@
+// Verifies secret resolution config types and defaults.
 import { describe, expect, it } from "vitest";
 import {
   normalizeResolvedSecretInputString,

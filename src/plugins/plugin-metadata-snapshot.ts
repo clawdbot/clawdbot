@@ -1,3 +1,4 @@
+// Builds plugin metadata snapshots for gateway and diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";

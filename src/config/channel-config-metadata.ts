@@ -1,3 +1,7 @@
+/**
+ * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
+ * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
+ */
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -7,12 +11,14 @@ type ChannelMetadataRecord = ChannelUiMetadata & {
 };
 
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
+  // Lower ranks are closer to the operator and should override farther bundled/global metadata.
   config: 0,
   workspace: 1,
   global: 2,
   bundled: 3,
 };
 
+/** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
   const deduped = new Map<
     string,
@@ -24,6 +30,7 @@ export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): P
   for (const record of registry.plugins) {
     const current = deduped.get(record.id);
     const nextRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    // Prefer the closest install origin when the same plugin id appears in multiple registries.
     if (current && current.originRank <= nextRank) {
       continue;
     }
@@ -42,6 +49,7 @@ export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): P
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
+/** Collects per-channel config UI metadata from plugin manifests and channel config blocks. */
 export function collectChannelSchemaMetadata(
   registry: PluginManifestRegistry,
 ): ChannelUiMetadata[] {
@@ -54,6 +62,8 @@ export function collectChannelSchemaMetadata(
 
     for (const channelId of record.channels) {
       const current = byChannelId.get(channelId);
+      // Root channel catalog metadata can fill labels/descriptions before a channel-specific
+      // config block appears, but it must not overwrite a closer-origin channel entry.
       if (!current || originRank <= current.originRank) {
         byChannelId.set(channelId, {
           id: channelId,
@@ -73,6 +83,8 @@ export function collectChannelSchemaMetadata(
         current.originRank < originRank &&
         (current.configSchema !== undefined || current.configUiHints !== undefined)
       ) {
+        // A closer-origin channel config owns schema/UI hints even if a farther plugin also
+        // advertises the same channel id.
         continue;
       }
       byChannelId.set(channelId, {

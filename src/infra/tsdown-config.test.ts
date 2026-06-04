@@ -1,3 +1,4 @@
+// Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 

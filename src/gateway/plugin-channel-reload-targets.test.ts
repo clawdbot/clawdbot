@@ -1,3 +1,6 @@
+/**
+ * Plugin channel reload target tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   listChannelPluginConfigTargetIds,

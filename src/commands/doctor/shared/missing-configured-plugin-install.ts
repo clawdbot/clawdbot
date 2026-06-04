@@ -37,7 +37,10 @@ import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
-import { buildNpmResolutionInstallFields } from "../../../plugins/installs.js";
+import {
+  buildNpmResolutionInstallFields,
+  resolveNpmInstallRecordSpec,
+} from "../../../plugins/installs.js";
 import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
@@ -1028,7 +1031,11 @@ async function installCandidate(params: {
       ...params.records,
       [pluginId]: {
         source: "npm",
-        spec: npmSpecs?.recordSpec ?? npmInstallSpec,
+        spec: resolveNpmInstallRecordSpec({
+          requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+          resolution: result.npmResolution,
+          pinResolvedRegistrySpec: candidate.trustedSourceLinkedOfficialInstall === true,
+        }),
         installPath: result.targetDir,
         version: result.version,
         installedAt: new Date().toISOString(),
@@ -1113,18 +1120,29 @@ async function adoptExistingNpmPackage(params: {
   warnings: string[];
 }> {
   const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
+  const npmResolution = npmName
+    ? {
+        name: npmName,
+        version: params.version,
+        resolvedSpec: `${npmName}@${params.version}`,
+      }
+    : undefined;
   return {
     records: {
       ...params.records,
       [params.candidate.pluginId]: {
         source: "npm",
-        spec: params.npmRecordSpec,
+        spec: resolveNpmInstallRecordSpec({
+          requestedSpec: params.npmRecordSpec,
+          resolution: npmResolution,
+          pinResolvedRegistrySpec: params.candidate.trustedSourceLinkedOfficialInstall === true,
+        }),
         installPath: params.packagePath,
         installedAt: new Date().toISOString(),
         version: params.version,
         resolvedVersion: params.version,
         ...(npmName ? { resolvedName: npmName } : {}),
-        ...(npmName ? { resolvedSpec: `${npmName}@${params.version}` } : {}),
+        ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
       },
     },
     changes: [

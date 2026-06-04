@@ -1,3 +1,4 @@
+// Tests get-reply message hooks before and after agent execution.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../globals.js";
 import type { MsgContext } from "../templating.js";

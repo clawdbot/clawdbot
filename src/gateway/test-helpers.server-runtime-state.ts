@@ -1,8 +1,12 @@
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 
+/**
+ * Runtime-state fixture factory for gateway server tests.
+ */
 type GatewayRuntimeStateParams = Parameters<typeof createGatewayRuntimeState>[0];
 
+/** Creates a minimal gateway runtime state with optional plugin registry fixture. */
 export async function createGatewayRuntimeStateForTest(
   pluginRegistry: GatewayRuntimeStateParams["pluginRegistry"] = createEmptyPluginRegistry(),
 ) {

@@ -38,8 +38,10 @@ export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
+/** Why a registry run can no longer be matched to a live child session. */
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
 
+/** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
   if (!trimmed) {
@@ -58,6 +60,7 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
+/** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
   // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
@@ -71,6 +74,7 @@ function formatAnnounceGiveUpLogField(value: string): string {
   return JSON.stringify(normalized.length > 2_000 ? `${normalized.slice(0, 2_000)}…` : normalized);
 }
 
+/** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
   const retryCount = getDeliveryAttemptCount(entry);
   const endedAgoMs =
@@ -85,6 +89,8 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
+// Session keys may differ only by casing after legacy writes. Prefer exact
+// matches, then fall back to normalized lookup for recovery paths.
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
   if (direct) {
@@ -99,6 +105,7 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   return undefined;
 }
 
+/** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey) {
@@ -149,6 +156,7 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   });
 }
 
+/** Resolves whether a registry row is orphaned from its child session entry. */
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
@@ -189,6 +197,8 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
+// Attachment cleanup must stay within the recorded root even if paths were
+// symlinks. Compare real paths before removing anything recursively.
 function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
   const rootWithSep = params.rootPath.endsWith(path.sep)
     ? params.rootPath
@@ -196,6 +206,7 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
   return params.childPath.startsWith(rootWithSep);
 }
 
+/** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return;
@@ -265,6 +276,7 @@ function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
   }
 }
 
+/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
 export function reconcileOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -321,6 +333,7 @@ export function reconcileOrphanedRun(params: {
   return true;
 }
 
+/** Reconciles orphaned runs found when restoring persisted subagent registry state. */
 export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -354,6 +367,7 @@ export function reconcileOrphanedRestoredRuns(params: {
   return changed;
 }
 
+/** Resolves the completed subagent archive delay from config. */
 export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =

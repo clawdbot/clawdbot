@@ -1,3 +1,4 @@
+// Verifies plugin source display formatting.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withPathResolutionEnv } from "../test-utils/env.js";

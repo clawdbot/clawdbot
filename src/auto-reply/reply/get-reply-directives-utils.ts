@@ -1,3 +1,4 @@
+// Utility helpers for applying parsed directives to get-reply execution state.
 import type { InlineDirectives } from "./directive-handling.js";
 
 const CLEARED_EXEC_FIELDS = {
@@ -17,6 +18,7 @@ const CLEARED_EXEC_FIELDS = {
   invalidExecNode: false,
 } satisfies Partial<InlineDirectives>;
 
+/** Clears all inline directive state while preserving cleaned text. */
 export function clearInlineDirectives(cleaned: string): InlineDirectives {
   return {
     cleaned,
@@ -58,6 +60,7 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
   };
 }
 
+/** Clears only exec-related directive state after execution policy is consumed. */
 export function clearExecInlineDirectives(directives: InlineDirectives): InlineDirectives {
   return {
     ...directives,

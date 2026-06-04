@@ -2,6 +2,7 @@ import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
 import type { OAuthCredential } from "./types.js";
 
+/** Resolves the effective OAuth credential, optionally reading external CLI bootstrap state. */
 export function resolveEffectiveOAuthCredential(params: {
   profileId: string;
   credential: OAuthCredential;

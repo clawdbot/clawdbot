@@ -4,12 +4,18 @@ type TokenSourcedAccount = {
   tokenSource?: string | null;
 };
 
+/**
+ * Filters out accounts explicitly marked as tokenless.
+ */
 export function listTokenSourcedAccounts<TAccount extends TokenSourcedAccount>(
   accounts: readonly TAccount[],
 ): TAccount[] {
   return accounts.filter((account) => account.tokenSource !== "none");
 }
 
+/**
+ * Creates an action gate that is enabled when any account-level gate enables the action.
+ */
 export function createUnionActionGate<TAccount, TKey extends string>(
   accounts: readonly TAccount[],
   createGate: (account: TAccount) => OptionalDefaultGate<TKey>,

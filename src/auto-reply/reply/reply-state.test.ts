@@ -1,3 +1,4 @@
+// Tests reply state persistence and recovery across process restarts.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

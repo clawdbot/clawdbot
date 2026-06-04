@@ -1,3 +1,4 @@
+/** Verifies Docker packaging prunes plugin dist artifacts to the supported runtime surface. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

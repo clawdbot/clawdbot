@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for command and help status message rendering.
+ */
 export {
   buildCommandsMessage,
   buildCommandsMessagePaginated,

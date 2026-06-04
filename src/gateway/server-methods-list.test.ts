@@ -1,3 +1,6 @@
+/**
+ * Tests the registered gateway server method list and exported method names.
+ */
 import { describe, expect, it } from "vitest";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 

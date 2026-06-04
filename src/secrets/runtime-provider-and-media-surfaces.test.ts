@@ -1,3 +1,4 @@
+/** Tests provider and media-model SecretRef handling in runtime snapshots. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

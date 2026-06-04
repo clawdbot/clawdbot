@@ -450,6 +450,14 @@ export const vi: TranslationMap = {
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "Hoạt động",
     subtitle: "Hoạt động công cụ tạm thời được lấy từ các sự kiện phiên trực tiếp.",

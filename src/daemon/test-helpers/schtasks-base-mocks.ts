@@ -6,6 +6,7 @@ import {
   schtasksResponses,
 } from "./schtasks-fixtures.js";
 
+// Shared Windows schtasks mocks for daemon tests.
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);

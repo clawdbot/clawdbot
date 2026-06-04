@@ -299,8 +299,6 @@ class InvokeDispatcherTest {
         A2UIHandler(
           canvas = canvas,
           json = Json { ignoreUnknownKeys = true },
-          getNodeCanvasHostUrl = { null },
-          getOperatorCanvasHostUrl = { null },
         ),
       debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
@@ -317,7 +315,6 @@ class InvokeDispatcherTest {
       debugBuild = { debugBuild },
       onCanvasA2uiPush = {},
       onCanvasA2uiReset = {},
-      refreshCanvasHostUrl = { null },
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
     )

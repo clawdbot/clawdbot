@@ -1,3 +1,5 @@
+// Public Bash/process tool barrel. Implementation lives in focused exec,
+// process, schema, and description modules to keep host policy seams local.
 export type {
   BashSandboxConfig,
   ExecElevatedDefaults,

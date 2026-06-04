@@ -1,9 +1,13 @@
+/**
+ * Assertion helpers for gateway method response envelopes.
+ */
 import { expect } from "vitest";
 
 type MockCallSource = {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
 };
 
+/** Verifies that a mocked respond callback emitted the expected gateway error. */
 export function expectGatewayErrorResponse(
   respond: MockCallSource,
   expected: { code: string; message: string },

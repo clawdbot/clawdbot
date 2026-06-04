@@ -2,6 +2,7 @@ import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMedia } from "./web-media.js";
 
+/** Loads a remote/local media URL and stages it into the outbound media store. */
 export async function resolveOutboundAttachmentFromUrl(
   mediaUrl: string,
   maxBytes: number,
@@ -20,6 +21,7 @@ export async function resolveOutboundAttachmentFromUrl(
       mediaReadFile: options?.readFile,
     }),
   );
+  // Preserve source file names so outbound attachments keep useful names after UUID staging.
   const saved = await saveMediaBuffer(
     media.buffer,
     media.contentType ?? undefined,

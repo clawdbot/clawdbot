@@ -1,3 +1,6 @@
+/**
+ * Shared gateway-token hot-reload tests.
+ */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";

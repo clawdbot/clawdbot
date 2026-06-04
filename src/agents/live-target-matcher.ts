@@ -63,6 +63,7 @@ function parseModelTarget(raw: string): ModelTarget | null {
   };
 }
 
+/** Creates provider/model predicates for live test target filters. */
 export function createLiveTargetMatcher(params: {
   providerFilter: Set<string> | null;
   modelFilter: Set<string> | null;

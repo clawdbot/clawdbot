@@ -1,3 +1,4 @@
+// Covers update channel and npm tag normalization.
 import { describe, expect, it } from "vitest";
 import {
   channelToNpmTag,

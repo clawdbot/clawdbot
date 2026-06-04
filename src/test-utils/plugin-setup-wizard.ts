@@ -1,9 +1,11 @@
+// Mocks plugin setup wizard flows for command and installer tests.
 import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createRuntimeEnv } from "./plugin-runtime-env.js";
 
+/** Wizard prompt doubles shared by plugin setup flow tests. */
 export type { WizardPrompter } from "../wizard/prompts.js";
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -101,6 +103,7 @@ type SetupWizardTestPlugin = {
   config: Record<string, unknown>;
 } & Record<string, unknown>;
 
+// Tests pass plugin-like stubs; require the declarative wizard shape before adapting.
 function isDeclarativeSetupWizard(
   setupWizard: ChannelPlugin["setupWizard"],
 ): setupWizard is SetupWizard {

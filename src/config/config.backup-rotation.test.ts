@@ -1,3 +1,4 @@
+// Covers config backup rotation limits and cleanup behavior.
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {

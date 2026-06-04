@@ -4,6 +4,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry, GroupKeyResolution } from "./types.js";
 
+/** Runtime hook for reading a session store entry timestamp. */
 export type ReadSessionUpdatedAt = (params: {
   storePath: string;
   sessionKey: string;

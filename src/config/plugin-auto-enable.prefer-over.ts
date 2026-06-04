@@ -1,3 +1,4 @@
+// Resolves plugin auto-enable preference ordering across candidate plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

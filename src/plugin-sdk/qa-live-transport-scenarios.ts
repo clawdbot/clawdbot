@@ -1,3 +1,4 @@
+/** Standard live-transport behavior buckets used to compare channel QA suites. */
 export type LiveTransportStandardScenarioId =
   | "canary"
   | "mention-gating"
@@ -9,10 +10,15 @@ export type LiveTransportStandardScenarioId =
   | "reaction-observation"
   | "help-command";
 
+/** Transport-specific live QA scenario with optional mapping to a standard behavior bucket. */
 export type LiveTransportScenarioDefinition<TId extends string = string> = {
+  /** Transport-specific scenario id accepted by CLI scenario filters. */
   id: TId;
+  /** Optional standard coverage bucket this transport-specific scenario proves. */
   standardId?: LiveTransportStandardScenarioId;
+  /** Per-scenario timeout for live transport execution. */
   timeoutMs: number;
+  /** Human-readable label used in QA output. */
   title: string;
 };
 
@@ -70,6 +76,7 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
   },
 ] as const;
 
+/** Minimum standard scenarios expected from baseline live transport suites. */
 export const LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS: readonly LiveTransportStandardScenarioId[] =
   [
     "canary",
@@ -85,12 +92,15 @@ const LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET = new Set(
 
 function assertKnownStandardScenarioIds(ids: readonly LiveTransportStandardScenarioId[]) {
   for (const id of ids) {
+    // Keep typoed standard ids failing at suite-definition time instead of
+    // silently weakening baseline coverage comparisons.
     if (!LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET.has(id)) {
       throw new Error(`unknown live transport standard scenario id: ${id}`);
     }
   }
 }
 
+/** Selects requested live transport scenarios and fails fast on unknown ids. */
 export function selectLiveTransportScenarios<TDefinition extends { id: string }>(params: {
   ids?: string[];
   laneLabel: string;
@@ -110,6 +120,7 @@ export function selectLiveTransportScenarios<TDefinition extends { id: string }>
   return selected;
 }
 
+/** Collects unique standard coverage ids from always-on coverage and scenario metadata. */
 export function collectLiveTransportStandardScenarioCoverage<TId extends string>(params: {
   alwaysOnStandardScenarioIds?: readonly LiveTransportStandardScenarioId[];
   scenarios: readonly LiveTransportScenarioDefinition<TId>[];
@@ -137,6 +148,7 @@ export function collectLiveTransportStandardScenarioCoverage<TId extends string>
   return coverage;
 }
 
+/** Returns expected standard scenario ids that are not covered by the supplied suite. */
 export function findMissingLiveTransportStandardScenarios(params: {
   coveredStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
   expectedStandardScenarioIds: readonly LiveTransportStandardScenarioId[];

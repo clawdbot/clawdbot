@@ -1,3 +1,6 @@
+/**
+ * Node pairing auto-approval tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveNodePairingClientIpSource,

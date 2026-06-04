@@ -1,3 +1,4 @@
+// Extracts web content public artifacts from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
@@ -10,6 +11,7 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor-api.js",
 ] as const;
 
+/** Checks public artifact exports before adding them to runtime extractor registration. */
 function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
   return (
     isRecord(value) &&
@@ -42,6 +44,7 @@ function tryLoadBundledPublicArtifactModule(params: {
   return null;
 }
 
+/** Collects zero-arg factory exports in deterministic order for prompt-cache stability. */
 function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtractorPlugin[] {
   const extractors: WebContentExtractorPlugin[] = [];
   for (const [name, exported] of Object.entries(mod).toSorted(([left], [right]) =>
@@ -63,6 +66,7 @@ function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtr
   return extractors;
 }
 
+/** Loads bundled web content extractor entries from public plugin artifacts. */
 export function loadBundledWebContentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;

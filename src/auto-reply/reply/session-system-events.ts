@@ -1,3 +1,4 @@
+// Records system-level session events for restarts, forks, and resets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

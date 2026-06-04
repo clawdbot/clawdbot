@@ -18,6 +18,8 @@ import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.j
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+// Shared Vitest harness for overflow, compaction, failover, and hook tests.
+// Tests import these mocks directly so each scenario can override one seam.
 type MockCompactionResult =
   | {
       ok: true;
@@ -258,6 +260,7 @@ export const overflowBaseRunParams = {
   runId: "run-1",
 } as const;
 
+/** Reset every mocked runner dependency to the default successful no-op state. */
 export function resetRunOverflowCompactionHarnessMocks(): void {
   clearAgentHarnesses();
   registerAgentHarness({
@@ -443,6 +446,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
 }
 
+/** Install module mocks, import the runner, and return the mocked entrypoint. */
 export async function loadRunOverflowCompactionHarness(): Promise<{
   runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 }> {

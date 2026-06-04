@@ -1,3 +1,4 @@
+// Verifies shared provider registry helper behavior.
 import { describe, expect, it } from "vitest";
 import { buildCapabilityProviderMaps } from "./provider-registry-shared.js";
 

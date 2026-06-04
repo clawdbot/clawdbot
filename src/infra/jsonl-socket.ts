@@ -1,3 +1,4 @@
+// Sends one-shot JSONL requests over Unix domain sockets.
 import net from "node:net";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";

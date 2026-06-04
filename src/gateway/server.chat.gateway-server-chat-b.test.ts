@@ -66,9 +66,10 @@ function createDeferred<T>() {
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
+  options?: { headers?: Record<string, string> },
 ) {
   const tempDirs: string[] = [];
-  const ws = await harness.openWs();
+  const ws = await harness.openWs(options?.headers);
   const createSessionDir = async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     tempDirs.push(sessionDir);
@@ -783,7 +784,7 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.send reuses an active internal run for duplicate WebChat text sends", async () => {
+  test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
     try {
@@ -826,7 +827,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string) =>
+      const callSend = (id: string, idempotencyKey: string, systemProvenanceReceipt?: string) =>
         chatHandlers["chat.send"]({
           req: {
             type: "req",
@@ -836,12 +837,14 @@ describe("gateway server chat", () => {
               sessionKey: "main",
               message: "?",
               idempotencyKey,
+              ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
             },
           },
           params: {
             sessionKey: "main",
             message: "?",
             idempotencyKey,
+            ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
           },
           client: {
             connect: {
@@ -849,7 +852,7 @@ describe("gateway server chat", () => {
                 id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
                 mode: GATEWAY_CLIENT_MODES.WEBCHAT,
               },
-              scopes: ["operator.write"],
+              scopes: ["operator.write", "operator.admin"],
             },
           } as never,
           isWebchatConnect: () => true,
@@ -860,16 +863,26 @@ describe("gateway server chat", () => {
         });
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
-      await vi.waitFor(() => {
-        expect(responses).toEqual([
-          {
-            id: "first",
-            ok: true,
-            payload: { runId: "idem-active-a", status: "started" },
-            error: undefined,
-          },
-        ]);
-      }, FAST_WAIT_OPTS);
+      await vi.waitFor(
+        () => {
+          expect(responses).toEqual([
+            {
+              id: "first",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-a",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+          ]);
+        },
+        { timeout: 2_000, interval: 5 },
+      );
 
       await callSend("duplicate", "idem-active-b");
 
@@ -877,7 +890,14 @@ describe("gateway server chat", () => {
         {
           id: "first",
           ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-active-a",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
         {
@@ -890,13 +910,174 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
+      const withSystemContext = Promise.resolve(
+        callSend("system-context", "idem-active-c", "proposal=support-file-sampler-b"),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(responses).toEqual([
+            {
+              id: "first",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-a",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+            {
+              id: "duplicate",
+              ok: true,
+              payload: { runId: "idem-active-a", status: "in_flight" },
+              error: undefined,
+            },
+            {
+              id: "system-context",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-c",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+          ]);
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(context.addChatRun).toHaveBeenCalledTimes(2);
+
       dispatchRelease.resolve();
-      await first;
+      await Promise.all([first, withSystemContext]);
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send can suppress command interpretation for slash-prefixed system turns", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue({});
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "suppressed-command",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "/reset examples",
+            suppressCommandInterpretation: true,
+            idempotencyKey: "idem-suppressed-command",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "/reset examples",
+          suppressCommandInterpretation: true,
+          idempotencyKey: "idem-suppressed-command",
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ id: "suppressed-command", ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          id: "suppressed-command",
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-suppressed-command",
+            status: "started",
+          }),
+          error: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const dispatchContext = (
+        dispatchInboundMessageMock.mock.calls[0]?.[0] as { ctx?: Record<string, unknown> }
+      )?.ctx;
+      expect(dispatchContext).toMatchObject({
+        Body: "/reset examples",
+        BodyForCommands: "/reset examples",
+        CommandAuthorized: false,
+        CommandTurn: {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: "/reset examples",
+        },
+        RawBody: "/reset examples",
+      });
+      expect(dispatchContext).not.toHaveProperty("CommandSource");
       await vi.waitFor(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
     } finally {
-      dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
@@ -993,13 +1174,27 @@ describe("gateway server chat", () => {
         {
           id: "first",
           ok: true,
-          payload: { runId: "idem-sequential-a", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-sequential-a",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
         {
           id: "second",
           ok: true,
-          payload: { runId: "idem-sequential-b", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-sequential-b",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
       ]);
@@ -1016,6 +1211,157 @@ describe("gateway server chat", () => {
       expect(dispatchOptions[0]?.promptCacheKey).not.toContain("main");
       expect(dispatchOptions[0]?.promptCacheKey).not.toContain("sess-main");
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send emits operator-only post-ACK server timing milestones", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        broadcastToConnIds,
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const replyOptions = (args as { replyOptions?: GetReplyOptions }).replyOptions;
+        replyOptions?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.5",
+          thinkLevel: undefined,
+        });
+        replyOptions?.onAgentRunStart?.("agent-run-1");
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "operator-timing",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "measure",
+            idempotencyKey: "idem-server-timing",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "measure",
+          idempotencyKey: "idem-server-timing",
+        },
+        client: {
+          connId: "conn-control-ui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-server-timing",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
+          error: undefined,
+        },
+      ]);
+      await vi.waitFor(
+        () => {
+          const phases = broadcastToConnIds.mock.calls
+            .filter(([event]) => event === "chat.send_timing")
+            .map(([, payload]) => (payload as { phase?: unknown }).phase);
+          expect(phases).toEqual(
+            expect.arrayContaining([
+              "dispatch-started",
+              "model-selected",
+              "agent-run-started",
+              "dispatch-completed",
+              "post-dispatch-completed",
+            ]),
+          );
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      for (const [event, payload, connIds, opts] of broadcastToConnIds.mock.calls) {
+        expect(event).toBe("chat.send_timing");
+        expect(connIds).toEqual(new Set(["conn-control-ui"]));
+        expect(opts).toEqual({ dropIfSlow: true });
+        expect(payload).toMatchObject({
+          runId: "idem-server-timing",
+          sessionKey: "agent:main:main",
+          ackToPhaseMs: expect.any(Number),
+          receivedToPhaseMs: expect.any(Number),
+        });
+      }
+      const timingPayloads = broadcastToConnIds.mock.calls.map(([, payload]) => payload);
+      expect(timingPayloads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "model-selected",
+            provider: "openai",
+            model: "gpt-5.5",
+          }),
+          expect.objectContaining({
+            phase: "agent-run-started",
+            agentRunId: "agent-run-1",
+            dispatchStartedToPhaseMs: expect.any(Number),
+          }),
+        ]),
+      );
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
@@ -1326,47 +1672,70 @@ describe("gateway server chat", () => {
     process.env.OPENCLAW_DIAGNOSTICS = "timeline";
     process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
     try {
-      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
-        await connectOk(ws);
-
-        await createSessionDir();
-        await writeMainSessionStore();
-        mockGetReplyFromConfigOnce(async () => undefined);
-
-        const sendRes = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-timeline",
-        });
-        expect(sendRes.ok).toBe(true);
-
-        await vi.waitFor(() => {
-          expect(spy.mock.calls.length).toBeGreaterThan(0);
-        }, FAST_WAIT_OPTS);
-        await vi.waitFor(async () => {
-          const events = await readTimelineEvents(timelinePath);
-          const ackReady = events.find(
-            (event) =>
-              event.type === "mark" &&
-              event.name === "gateway.chat_send.ack_ready" &&
-              (event.attributes as Record<string, unknown> | undefined)?.runId === "idem-timeline",
-          );
-          expect(ackReady?.attributes).toMatchObject({
-            runId: "idem-timeline",
-            ackStatus: "started",
+      await withGatewayChatHarness(
+        async ({ ws, createSessionDir }) => {
+          const spy = getReplyFromConfig;
+          await connectOk(ws, {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              version: "1.0.0",
+              platform: "web",
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
           });
-          expect(
-            events.some(
+
+          await createSessionDir();
+          await writeMainSessionStore();
+          mockGetReplyFromConfigOnce(async () => undefined);
+
+          const sendRes = await rpcReq(ws, "chat.send", {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-timeline",
+          });
+          expect(sendRes.ok).toBe(true);
+          expect(sendRes.payload).toMatchObject({
+            runId: "idem-timeline",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          });
+
+          await vi.waitFor(() => {
+            expect(spy.mock.calls.length).toBeGreaterThan(0);
+          }, FAST_WAIT_OPTS);
+          await vi.waitFor(async () => {
+            const events = await readTimelineEvents(timelinePath);
+            const ackReady = events.find(
               (event) =>
-                event.type === "span.end" &&
-                event.name === "gateway.chat_send.dispatch_inbound" &&
+                event.type === "mark" &&
+                event.name === "gateway.chat_send.ack_ready" &&
                 (event.attributes as Record<string, unknown> | undefined)?.runId ===
                   "idem-timeline",
-            ),
-          ).toBe(true);
-        }, FAST_WAIT_OPTS);
-      });
+            );
+            expect(ackReady?.attributes).toMatchObject({
+              runId: "idem-timeline",
+              ackStatus: "started",
+              serverReceivedToAckMs: expect.any(Number),
+              serverLoadSessionMs: expect.any(Number),
+            });
+            expect(
+              events.some(
+                (event) =>
+                  event.type === "span.end" &&
+                  event.name === "gateway.chat_send.dispatch_inbound" &&
+                  (event.attributes as Record<string, unknown> | undefined)?.runId ===
+                    "idem-timeline",
+              ),
+            ).toBe(true);
+          }, FAST_WAIT_OPTS);
+        },
+        {
+          headers: { origin: `http://127.0.0.1:${harness.port}` },
+        },
+      );
     } finally {
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
@@ -1380,6 +1749,43 @@ describe("gateway server chat", () => {
       }
       await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
+  });
+
+  test("chat.send omits ACK server timing for public WebChat clients", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        mockGetReplyFromConfigOnce(async () => undefined);
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-public-webchat",
+        });
+
+        expect(sendRes.ok).toBe(true);
+        expect(sendRes.payload).toMatchObject({
+          runId: "idem-public-webchat",
+          status: "started",
+        });
+        expect(
+          (sendRes.payload as { serverTiming?: unknown } | undefined)?.serverTiming,
+        ).toBeUndefined();
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {

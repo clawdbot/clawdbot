@@ -1,3 +1,4 @@
+// Shared session-store helpers for command handlers that mutate sessions.
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";

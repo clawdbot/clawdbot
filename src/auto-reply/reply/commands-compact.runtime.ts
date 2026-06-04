@@ -1,3 +1,4 @@
+/** Runtime facade for compact command dependencies. */
 export {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,

@@ -17,6 +17,7 @@ type OutboundThreadContext = {
   resolveAutoThreadId?: AutoThreadResolver;
 };
 
+// Mutate actionParams like the real outbound path so tests assert forwarded thread ids.
 function resolveOutboundThreadId(
   actionParams: Record<string, unknown>,
   context: OutboundThreadContext,
@@ -38,6 +39,7 @@ function resolveOutboundThreadId(
   return resolved ?? undefined;
 }
 
+/** Creates mocks for reply/thread resolution used by outbound message action tests. */
 export function createOutboundThreadingMock() {
   const resolveOutboundReplyToId = vi.fn(
     (

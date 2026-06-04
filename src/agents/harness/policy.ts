@@ -4,11 +4,15 @@ import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import { openAIProviderUsesCodexRuntimeByDefault } from "../openai-routing.js";
 
+/**
+ * Effective runtime policy for selecting the agent harness that should execute a turn.
+ */
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
 };
 
+/** Resolves model/provider/runtime config into the canonical harness runtime id. */
 export function resolveAgentHarnessPolicy(params: {
   provider?: string;
   modelId?: string;

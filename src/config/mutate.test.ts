@@ -1,3 +1,4 @@
+// Covers config mutation helpers and persisted write behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

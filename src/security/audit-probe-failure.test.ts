@@ -1,3 +1,4 @@
+// Verifies probe failure audit reporting.
 import { describe, expect, it } from "vitest";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 

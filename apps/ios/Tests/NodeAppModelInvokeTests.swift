@@ -623,13 +623,13 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel.screen.urlString.isEmpty)
     }
 
-    @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
+    @Test @MainActor func handleInvokeA2UICommandsFailWhenLocalHostUnavailable() async throws {
         let appModel = NodeAppModel()
 
         let reset = BridgeInvokeRequest(id: "reset", command: OpenClawCanvasA2UICommand.reset.rawValue)
         let resetRes = await appModel._test_handleInvoke(reset)
         #expect(resetRes.ok == false)
-        #expect(resetRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
+        #expect(resetRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
 
         let jsonl = "{\"beginRendering\":{}}"
         let pushParams = OpenClawCanvasA2UIPushJSONLParams(jsonl: jsonl)
@@ -641,7 +641,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             paramsJSON: pushJSON)
         let pushRes = await appModel._test_handleInvoke(push)
         #expect(pushRes.ok == false)
-        #expect(pushRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
+        #expect(pushRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
     }
 
     @Test @MainActor func handleInvokeUnknownCommandReturnsInvalidRequest() async {

@@ -1,9 +1,18 @@
+/**
+ * Static TypeScript types derived from the canonical gateway protocol schemas.
+ *
+ * Keep aliases wired through `ProtocolSchemas` so validators, runtime schemas,
+ * and exported compile-time types cannot drift apart.
+ */
 import type { Static } from "typebox";
 import { ProtocolSchemas } from "./protocol-schemas.js";
 
+/** Stable schema names registered in the protocol schema registry. */
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
+/** Inferred TypeScript type for a named TypeBox protocol schema. */
 type SchemaType<TName extends ProtocolSchemaName> = Static<(typeof ProtocolSchemas)[TName]>;
 
+/** Connection handshake, envelope, snapshot, and shared error wire types. */
 export type ConnectParams = SchemaType<"ConnectParams">;
 export type HelloOk = SchemaType<"HelloOk">;
 export type RequestFrame = SchemaType<"RequestFrame">;
@@ -14,12 +23,16 @@ export type Snapshot = SchemaType<"Snapshot">;
 export type PresenceEntry = SchemaType<"PresenceEntry">;
 export type ErrorShape = SchemaType<"ErrorShape">;
 export type StateVersion = SchemaType<"StateVersion">;
+
+/** Environment status RPC payloads used by CLI and Control UI surfaces. */
 export type EnvironmentStatus = SchemaType<"EnvironmentStatus">;
 export type EnvironmentSummary = SchemaType<"EnvironmentSummary">;
 export type EnvironmentsListParams = SchemaType<"EnvironmentsListParams">;
 export type EnvironmentsListResult = SchemaType<"EnvironmentsListResult">;
 export type EnvironmentsStatusParams = SchemaType<"EnvironmentsStatusParams">;
 export type EnvironmentsStatusResult = SchemaType<"EnvironmentsStatusResult">;
+
+/** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
 export type AgentIdentityParams = SchemaType<"AgentIdentityParams">;
 export type AgentIdentityResult = SchemaType<"AgentIdentityResult">;
@@ -27,6 +40,8 @@ export type MessageActionParams = SchemaType<"MessageActionParams">;
 export type PollParams = SchemaType<"PollParams">;
 export type AgentWaitParams = SchemaType<"AgentWaitParams">;
 export type WakeParams = SchemaType<"WakeParams">;
+
+/** Node pairing, presence, invoke, and pending-queue protocol payloads. */
 export type NodePairRequestParams = SchemaType<"NodePairRequestParams">;
 export type NodePairListParams = SchemaType<"NodePairListParams">;
 export type NodePairApproveParams = SchemaType<"NodePairApproveParams">;
@@ -47,8 +62,12 @@ export type NodePendingDrainParams = SchemaType<"NodePendingDrainParams">;
 export type NodePendingDrainResult = SchemaType<"NodePendingDrainResult">;
 export type NodePendingEnqueueParams = SchemaType<"NodePendingEnqueueParams">;
 export type NodePendingEnqueueResult = SchemaType<"NodePendingEnqueueResult">;
+
+/** Push notification test result contracts exposed through gateway RPC. */
 export type PushTestParams = SchemaType<"PushTestParams">;
 export type PushTestResult = SchemaType<"PushTestResult">;
+
+/** Session lifecycle, message routing, compaction, patch, and usage payloads. */
 export type SessionsListParams = SchemaType<"SessionsListParams">;
 export type SessionsCleanupParams = SchemaType<"SessionsCleanupParams">;
 export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
@@ -76,6 +95,8 @@ export type SessionsResetParams = SchemaType<"SessionsResetParams">;
 export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
 export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
 export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
+
+/** Task ledger query and cancellation payloads. */
 export type TaskSummary = SchemaType<"TaskSummary">;
 export type TasksListParams = SchemaType<"TasksListParams">;
 export type TasksListResult = SchemaType<"TasksListResult">;
@@ -83,6 +104,8 @@ export type TasksGetParams = SchemaType<"TasksGetParams">;
 export type TasksGetResult = SchemaType<"TasksGetResult">;
 export type TasksCancelParams = SchemaType<"TasksCancelParams">;
 export type TasksCancelResult = SchemaType<"TasksCancelResult">;
+
+/** Config read/write/schema payloads plus update status and run controls. */
 export type ConfigGetParams = SchemaType<"ConfigGetParams">;
 export type ConfigSetParams = SchemaType<"ConfigSetParams">;
 export type ConfigApplyParams = SchemaType<"ConfigApplyParams">;
@@ -92,6 +115,8 @@ export type ConfigSchemaLookupParams = SchemaType<"ConfigSchemaLookupParams">;
 export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
 export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
 export type UpdateStatusParams = SchemaType<"UpdateStatusParams">;
+
+/** Wizard setup flow payloads exchanged by CLI, UI, and gateway. */
 export type WizardStartParams = SchemaType<"WizardStartParams">;
 export type WizardNextParams = SchemaType<"WizardNextParams">;
 export type WizardCancelParams = SchemaType<"WizardCancelParams">;
@@ -100,6 +125,8 @@ export type WizardStep = SchemaType<"WizardStep">;
 export type WizardNextResult = SchemaType<"WizardNextResult">;
 export type WizardStartResult = SchemaType<"WizardStartResult">;
 export type WizardStatusResult = SchemaType<"WizardStatusResult">;
+
+/** Realtime Talk client/session/event payloads. */
 export type TalkEvent = SchemaType<"TalkEvent">;
 export type TalkModeParams = SchemaType<"TalkModeParams">;
 export type TalkCatalogParams = SchemaType<"TalkCatalogParams">;
@@ -127,6 +154,8 @@ export type TalkSessionCloseParams = SchemaType<"TalkSessionCloseParams">;
 export type TalkSessionOkResult = SchemaType<"TalkSessionOkResult">;
 export type TalkSpeakParams = SchemaType<"TalkSpeakParams">;
 export type TalkSpeakResult = SchemaType<"TalkSpeakResult">;
+
+/** Channel control and web-login payloads. */
 export type ChannelsStatusParams = SchemaType<"ChannelsStatusParams">;
 export type ChannelsStatusResult = SchemaType<"ChannelsStatusResult">;
 export type ChannelsStartParams = SchemaType<"ChannelsStartParams">;
@@ -134,6 +163,8 @@ export type ChannelsStopParams = SchemaType<"ChannelsStopParams">;
 export type ChannelsLogoutParams = SchemaType<"ChannelsLogoutParams">;
 export type WebLoginStartParams = SchemaType<"WebLoginStartParams">;
 export type WebLoginWaitParams = SchemaType<"WebLoginWaitParams">;
+
+/** Agent config-file CRUD and artifact download/list payloads. */
 export type AgentSummary = SchemaType<"AgentSummary">;
 export type AgentsFileEntry = SchemaType<"AgentsFileEntry">;
 export type AgentsCreateParams = SchemaType<"AgentsCreateParams">;
@@ -155,6 +186,8 @@ export type ArtifactsGetParams = SchemaType<"ArtifactsGetParams">;
 export type ArtifactsGetResult = SchemaType<"ArtifactsGetResult">;
 export type ArtifactsDownloadParams = SchemaType<"ArtifactsDownloadParams">;
 export type ArtifactsDownloadResult = SchemaType<"ArtifactsDownloadResult">;
+
+/** Model, command, plugin UI action, tool catalog, and skill workshop payloads. */
 export type AgentsListParams = SchemaType<"AgentsListParams">;
 export type AgentsListResult = SchemaType<"AgentsListResult">;
 export type ModelChoice = SchemaType<"ModelChoice">;
@@ -195,6 +228,8 @@ export type SkillsProposalInspectResult = SchemaType<"SkillsProposalInspectResul
 export type SkillsProposalCreateParams = SchemaType<"SkillsProposalCreateParams">;
 export type SkillsProposalUpdateParams = SchemaType<"SkillsProposalUpdateParams">;
 export type SkillsProposalReviseParams = SchemaType<"SkillsProposalReviseParams">;
+export type SkillsProposalRequestRevisionParams = SchemaType<"SkillsProposalRequestRevisionParams">;
+export type SkillsProposalRequestRevisionResult = SchemaType<"SkillsProposalRequestRevisionResult">;
 export type SkillsProposalActionParams = SchemaType<"SkillsProposalActionParams">;
 export type SkillsProposalApplyResult = SchemaType<"SkillsProposalApplyResult">;
 export type SkillsProposalRecordResult = SchemaType<"SkillsProposalRecordResult">;
@@ -207,6 +242,8 @@ export type SkillsUploadChunkParams = SchemaType<"SkillsUploadChunkParams">;
 export type SkillsUploadCommitParams = SchemaType<"SkillsUploadCommitParams">;
 export type SkillsInstallParams = SchemaType<"SkillsInstallParams">;
 export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
+
+/** Cron scheduler and run-log payloads. */
 export type CronJob = SchemaType<"CronJob">;
 export type CronListParams = SchemaType<"CronListParams">;
 export type CronStatusParams = SchemaType<"CronStatusParams">;
@@ -217,6 +254,8 @@ export type CronRemoveParams = SchemaType<"CronRemoveParams">;
 export type CronRunParams = SchemaType<"CronRunParams">;
 export type CronRunsParams = SchemaType<"CronRunsParams">;
 export type CronRunLogEntry = SchemaType<"CronRunLogEntry">;
+
+/** Logs and approval payloads for chat, exec commands, plugins, and devices. */
 export type LogsTailParams = SchemaType<"LogsTailParams">;
 export type LogsTailResult = SchemaType<"LogsTailResult">;
 export type ExecApprovalsGetParams = SchemaType<"ExecApprovalsGetParams">;
@@ -238,6 +277,8 @@ export type DeviceTokenRevokeParams = SchemaType<"DeviceTokenRevokeParams">;
 export type ChatAbortParams = SchemaType<"ChatAbortParams">;
 export type ChatInjectParams = SchemaType<"ChatInjectParams">;
 export type ChatEvent = SchemaType<"ChatEvent">;
+
+/** Gateway update and process lifecycle event payloads. */
 export type UpdateRunParams = SchemaType<"UpdateRunParams">;
 export type TickEvent = SchemaType<"TickEvent">;
 export type ShutdownEvent = SchemaType<"ShutdownEvent">;

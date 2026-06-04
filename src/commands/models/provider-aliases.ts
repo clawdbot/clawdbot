@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../../plugins/manifest-registry.js";
+import { loadPluginManifest, type PluginManifestModelCatalog } from "../../plugins/manifest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 
 type ProviderAliasSource = {
@@ -11,21 +14,85 @@ type ProviderAliasSource = {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
 };
 
+const sourcePeerModelCatalogCache = new Map<string, PluginManifestModelCatalog | null>();
+
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
-  return params.metadataSnapshot?.manifestRegistry.plugins ?? loadPluginManifestRegistry({
-    config: params.cfg,
-  }).plugins;
+  return (
+    params.metadataSnapshot?.manifestRegistry.plugins ??
+    loadPluginManifestRegistry({
+      config: params.cfg,
+    }).plugins
+  );
+}
+
+function resolveSourcePeerPluginRoot(
+  plugin: Pick<PluginManifestRecord, "id" | "origin" | "rootDir">,
+): string | undefined {
+  if (plugin.origin !== "bundled") {
+    return undefined;
+  }
+  const parts = path.resolve(plugin.rootDir).split(path.sep);
+  const pluginDirName = parts.at(-1);
+  const extensionsDirName = parts.at(-2);
+  const buildDirName = parts.at(-3);
+  if (
+    pluginDirName !== plugin.id ||
+    extensionsDirName !== "extensions" ||
+    (buildDirName !== "dist" && buildDirName !== "dist-runtime")
+  ) {
+    return undefined;
+  }
+  const packageRoot = parts.slice(0, -3).join(path.sep) || path.sep;
+  const sourceRoot = path.join(packageRoot, "extensions", plugin.id);
+  return fs.existsSync(path.join(sourceRoot, "openclaw.plugin.json")) ? sourceRoot : undefined;
+}
+
+function loadSourcePeerModelCatalog(
+  plugin: Pick<PluginManifestRecord, "id" | "origin" | "rootDir">,
+): PluginManifestModelCatalog | undefined {
+  const cacheKey = path.resolve(plugin.rootDir);
+  const cached = sourcePeerModelCatalogCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached ?? undefined;
+  }
+  const sourceRoot = resolveSourcePeerPluginRoot(plugin);
+  if (!sourceRoot) {
+    sourcePeerModelCatalogCache.set(cacheKey, null);
+    return undefined;
+  }
+  const loaded = loadPluginManifest(sourceRoot, false);
+  if (!loaded.ok || loaded.manifest.id !== plugin.id) {
+    sourcePeerModelCatalogCache.set(cacheKey, null);
+    return undefined;
+  }
+  const modelCatalog = loaded.manifest.modelCatalog ?? null;
+  sourcePeerModelCatalogCache.set(cacheKey, modelCatalog);
+  return modelCatalog ?? undefined;
+}
+
+function hasModelCatalogAliases(modelCatalog: PluginManifestModelCatalog | undefined): boolean {
+  return Object.keys(modelCatalog?.aliases ?? {}).length > 0;
+}
+
+function collectModelCatalogAliases(
+  aliases: Map<string, string>,
+  modelCatalog: PluginManifestModelCatalog | undefined,
+): void {
+  for (const [aliasProvider, target] of Object.entries(modelCatalog?.aliases ?? {})) {
+    const alias = normalizeProviderId(aliasProvider);
+    const provider = normalizeProviderId(target.provider);
+    if (alias && provider) {
+      aliases.set(alias, provider);
+    }
+  }
 }
 
 function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string, string> {
   const aliases = new Map<string, string>();
   for (const plugin of listManifestPlugins(params)) {
-    for (const [aliasProvider, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-      const alias = normalizeProviderId(aliasProvider);
-      const provider = normalizeProviderId(target.provider);
-      if (alias && provider) {
-        aliases.set(alias, provider);
-      }
+    collectModelCatalogAliases(aliases, plugin.modelCatalog);
+    if (!hasModelCatalogAliases(plugin.modelCatalog) && plugin.origin === "bundled") {
+      collectModelCatalogAliases(aliases, loadSourcePeerModelCatalog(plugin));
     }
   }
   return aliases;

@@ -1,3 +1,4 @@
+// Covers platform browser-open command resolution.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

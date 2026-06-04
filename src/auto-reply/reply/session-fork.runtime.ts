@@ -1,3 +1,4 @@
+/** Runtime implementation for forking sessions from parent transcripts. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -65,6 +66,7 @@ async function estimateParentTranscriptTokensFromBytes(params: {
   }
 }
 
+/** Resolves the best available token count for a parent session before forking. */
 export async function resolveParentForkTokenCountRuntime(params: {
   parentEntry: StoreSessionEntry;
   storePath: string;
@@ -282,6 +284,7 @@ async function writeBranchedSession(params: {
   return { sessionId, sessionFile };
 }
 
+/** Creates a child session transcript from a parent session branch. */
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;

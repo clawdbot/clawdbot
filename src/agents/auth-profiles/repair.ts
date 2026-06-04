@@ -8,6 +8,8 @@ import { resolveAuthProfileMetadata } from "./identity.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
+// Legacy OAuth setup used provider:default profile ids. Repair prefers a
+// matching email/lastGood/current OAuth profile instead of guessing broadly.
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
   if (idx < 0) {
@@ -24,6 +26,7 @@ function isEmailLike(value: string): boolean {
   return trimmed.includes("@") && trimmed.includes(".");
 }
 
+/** Suggests a modern OAuth profile id for a legacy provider:default profile. */
 export function suggestOAuthProfileIdForLegacyDefault(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -85,6 +88,7 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   return null;
 }
 
+/** Migrates config auth profile references away from a legacy OAuth default id. */
 export function repairOAuthProfileIdMismatch(params: {
   cfg: OpenClawConfig;
   store: AuthProfileStore;

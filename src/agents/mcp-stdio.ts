@@ -1,5 +1,7 @@
 import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
+// Stdio MCP launch config normalization. Raw bundle config can use OpenClaw or
+// upstream field names; this keeps only command/args/env/cwd needed to spawn.
 export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];
@@ -11,6 +13,7 @@ type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
+/** Resolve raw MCP server config into a stdio launch config. */
 export function resolveStdioMcpServerLaunchConfig(
   raw: unknown,
   options?: { onDroppedEnv?: (key: string, value: unknown) => void },
@@ -44,6 +47,7 @@ export function resolveStdioMcpServerLaunchConfig(
   };
 }
 
+/** Describe a stdio MCP launch config for diagnostics. */
 export function describeStdioMcpServerLaunchConfig(config: StdioMcpServerLaunchConfig): string {
   const args =
     Array.isArray(config.args) && config.args.length > 0 ? ` ${config.args.join(" ")}` : "";

@@ -1,3 +1,4 @@
+/** Tests ACP turn terminal results and detached-task progress outcomes. */
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,

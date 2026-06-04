@@ -1,3 +1,4 @@
+// Stores and validates wide-area DNS discovery settings.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

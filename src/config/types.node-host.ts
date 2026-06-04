@@ -1,3 +1,4 @@
+// Defines node-host browser proxy configuration types.
 export type NodeHostBrowserProxyConfig = {
   /** Enable the browser proxy on the node host (default: true). */
   enabled?: boolean;

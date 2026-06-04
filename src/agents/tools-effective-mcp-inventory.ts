@@ -20,6 +20,8 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
+// MCP tools often expose low-signal labels identical to their names. Prefer the
+// display resolver in that case so inventory output stays readable.
 function resolveMcpToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (
@@ -42,6 +44,8 @@ function summarizeToolDescription(tool: AnyAgentTool): string {
   });
 }
 
+// Runtime schema diagnostics become operator-facing notices on the effective
+// inventory screen instead of silently hiding quarantined MCP tools.
 function buildMcpUnsupportedToolSchemaNotice(
   diagnostic: RuntimeToolSchemaDiagnostic,
 ): EffectiveToolInventoryNotice {
@@ -52,6 +56,8 @@ function buildMcpUnsupportedToolSchemaNotice(
   };
 }
 
+// Duplicate labels are ambiguous in inventory UIs; add the plugin/id only where
+// needed so unique entries keep their concise display names.
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -85,6 +91,7 @@ function buildMcpToolInventoryEntries(
   );
 }
 
+/** Builds the runtime-compatible MCP tool inventory and quarantine notices. */
 export function buildRuntimeCompatibleMcpToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;

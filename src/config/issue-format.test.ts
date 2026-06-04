@@ -1,3 +1,4 @@
+// Covers config validation issue formatting for user-facing output.
 import { describe, expect, it } from "vitest";
 import {
   formatConfigIssueLine,

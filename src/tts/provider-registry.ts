@@ -11,6 +11,7 @@ import {
   type SpeechProviderRegistryResolver,
 } from "./provider-registry-core.js";
 
+/** Resolve speech providers from configured plugin capabilities. */
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
   return resolvePluginCapabilityProviders({
     key: "speechProviders",
@@ -32,10 +33,12 @@ const defaultSpeechProviderRegistryResolver: SpeechProviderRegistryResolver = {
   listProviders: resolveSpeechProviderPluginEntries,
 };
 
+/** Config-aware registry used by setup/status/runtime paths before plugins are loaded. */
 const defaultSpeechProviderRegistry = createSpeechProviderRegistry(
   defaultSpeechProviderRegistryResolver,
 );
 
+/** Loaded-only registry for runtime paths that must not rediscover plugin manifests. */
 const loadedSpeechProviderRegistry = createSpeechProviderRegistry({
   getProvider: (providerId) =>
     resolveLoadedSpeechProviderPluginEntries().find((provider) => {
@@ -47,8 +50,12 @@ const loadedSpeechProviderRegistry = createSpeechProviderRegistry({
   listProviders: () => resolveLoadedSpeechProviderPluginEntries(),
 });
 
+/** List configured speech providers using manifest/capability discovery. */
 export const listSpeechProviders = defaultSpeechProviderRegistry.listSpeechProviders;
+/** List currently loaded speech providers from the active runtime registry. */
 export const listLoadedSpeechProviders = loadedSpeechProviderRegistry.listSpeechProviders;
+/** Resolve a configured speech provider by canonical ID or alias. */
 export const getSpeechProvider = defaultSpeechProviderRegistry.getSpeechProvider;
+/** Resolve an input provider ID or alias to the provider's canonical ID. */
 export const canonicalizeSpeechProviderId =
   defaultSpeechProviderRegistry.canonicalizeSpeechProviderId;

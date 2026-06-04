@@ -1,3 +1,4 @@
+/** Base persisted install record shared by plugin and skill install tracking. */
 export type InstallRecordBase = {
   source: "npm" | "archive" | "path" | "clawhub" | "git";
   spec?: string;

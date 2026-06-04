@@ -8,6 +8,7 @@ import {
   restoreFastTestEnv,
 } from "./run.test-harness.js";
 
+/** Installs the common before/after hooks for isolated-agent run suites. */
 export function setupRunCronIsolatedAgentTurnSuite(options?: { fast?: boolean }) {
   let previousFastTestEnv: string | undefined;
   beforeEach(() => {

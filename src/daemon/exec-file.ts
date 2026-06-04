@@ -2,6 +2,7 @@ import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_pro
 
 type ExecResult = { stdout: string; stderr: string; code: number };
 
+/** Runs a child process as UTF-8 and returns exit data instead of throwing on nonzero exit. */
 export async function execFileUtf8(
   command: string,
   args: string[],

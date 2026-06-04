@@ -1,3 +1,4 @@
+// Clears active subagent focus for a session or scoped target.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";

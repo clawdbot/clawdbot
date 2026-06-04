@@ -1,3 +1,4 @@
+/** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -212,6 +213,7 @@ function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
 }
 
+/** Builds a sanitized execution environment with controlled PATH and approved overrides. */
 export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
   return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
@@ -483,6 +485,7 @@ async function sendInvalidRequestResult(
   await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
 }
 
+/** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,

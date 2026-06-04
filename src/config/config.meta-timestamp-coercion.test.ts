@@ -1,3 +1,4 @@
+// Verifies config metadata timestamp coercion behavior.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 

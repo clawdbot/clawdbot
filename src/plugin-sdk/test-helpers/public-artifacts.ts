@@ -1,3 +1,6 @@
+/**
+ * Shared public artifact basename helpers for bundled plugin contracts.
+ */
 import { uniqueStrings } from "../../../packages/normalization-core/src/string-normalization.js";
 import {
   assertUniqueValues,

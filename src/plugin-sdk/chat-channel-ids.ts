@@ -21,6 +21,7 @@ function pushUniquePrefix(target: string[], seen: Set<string>, raw: string | und
   if (!value) {
     return;
   }
+  // Envelope matching is case-insensitive; keep the first catalog spelling for display/tests.
   const key = value.toLocaleLowerCase("en-US");
   if (seen.has(key)) {
     return;
@@ -29,10 +30,15 @@ function pushUniquePrefix(target: string[], seen: Set<string>, raw: string | und
   target.push(value);
 }
 
+/** Bundled chat-channel ids from the official channel catalog. */
 export const BUNDLED_CHAT_CHANNEL_IDS = Object.freeze(
   BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id),
 );
 
+/**
+ * Channel ids, labels, and aliases that can appear as inbound-envelope prefixes.
+ * Consumers should use this for envelope cleanup instead of hardcoding channel names.
+ */
 export const BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES = Object.freeze(
   (() => {
     const seen = new Set<string>();

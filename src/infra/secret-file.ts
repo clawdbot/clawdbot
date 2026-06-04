@@ -1,3 +1,4 @@
+// Exposes private secret file helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 import { readSecretFileSync as readSecretFileSyncImpl } from "@openclaw/fs-safe/secret";
 import { resolveUserPath } from "../utils.js";

@@ -1,3 +1,6 @@
+/**
+ * Tests agent harness runtime helpers and task dispatch behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   classifyAgentHarnessTerminalOutcome,

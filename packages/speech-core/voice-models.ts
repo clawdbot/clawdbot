@@ -1,13 +1,17 @@
+// Voice model catalog helpers shared by TTS and realtime voice plugins.
 export type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
 
+/** Capability flags advertised by a voice model catalog entry. */
 export type VoiceModelCapabilities = Partial<Record<VoiceModelCapability, true>>;
 
+/** Provider/model override parsed from config. */
 export type VoiceModelRef = {
   provider: string;
   model: string;
   timeoutMs?: number;
 };
 
+/** Static provider metadata used to validate configured voice model refs. */
 export type VoiceModelProvider = {
   id: string;
   aliases?: readonly string[];
@@ -16,6 +20,7 @@ export type VoiceModelProvider = {
   models?: readonly string[];
 };
 
+/** Synthesized voice model catalog row exposed to provider/model selection. */
 export type VoiceModelCatalogEntry = {
   kind: "voice";
   provider: string;
@@ -27,6 +32,7 @@ export type VoiceModelCatalogEntry = {
   modes?: readonly string[];
 };
 
+/** Ordered provider candidate, optionally with a concrete voice model override. */
 export type VoiceProviderCandidate = {
   provider: string;
   voiceModel?: VoiceModelRef;
@@ -73,6 +79,7 @@ function sameProvider(left: string | undefined, right: string | undefined): bool
   return Boolean(normalizedLeft && normalizedLeft === normalizeLowercaseString(right));
 }
 
+/** Match provider ids case-insensitively across canonical id and aliases. */
 export function providerMatchesId(provider: VoiceModelProvider, providerId?: string): boolean {
   return (
     sameProvider(provider.id, providerId) ||
@@ -80,6 +87,7 @@ export function providerMatchesId(provider: VoiceModelProvider, providerId?: str
   );
 }
 
+/** Find the provider metadata for a configured provider id or alias. */
 export function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
   providers: readonly T[];
   providerId?: string;
@@ -87,6 +95,7 @@ export function findVoiceModelProvider<T extends VoiceModelProvider>(params: {
   return params.providers.find((provider) => providerMatchesId(provider, params.providerId));
 }
 
+/** Return true when a provider advertises the requested model. */
 export function voiceProviderSupportsModel(
   provider: VoiceModelProvider | undefined,
   model: unknown,
@@ -100,6 +109,7 @@ export function voiceProviderSupportsModel(
   );
 }
 
+/** Parse primary/fallback voice model refs from config. */
 export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   const voiceModel = config as VoiceModelConfig | undefined;
   if (typeof voiceModel === "string") {
@@ -126,6 +136,7 @@ export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
   return refs;
 }
 
+/** Resolve configured voice model refs that are supported by known providers. */
 export function resolveSupportedVoiceModelRefs(params: {
   config: unknown;
   providers: readonly VoiceModelProvider[];
@@ -145,6 +156,7 @@ export function resolveSupportedVoiceModelRefs(params: {
   });
 }
 
+/** Build ordered provider candidates from primary provider plus voice-model fallbacks. */
 export function resolveVoiceProviderCandidates(params: {
   primaryProvider: string;
   providers: readonly VoiceModelProvider[];
@@ -183,6 +195,7 @@ export function resolveVoiceProviderCandidates(params: {
   return candidates;
 }
 
+/** Resolve only the primary provider candidate for direct synthesis paths. */
 export function resolvePrimaryVoiceProviderCandidate(params: {
   primaryProvider: string;
   providers: readonly VoiceModelProvider[];
@@ -199,6 +212,7 @@ export function resolvePrimaryVoiceProviderCandidate(params: {
   return voiceModel ? { provider, voiceModel } : { provider };
 }
 
+/** Read provider config by configured id, canonical id, or alias. */
 export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(params: {
   providerConfigs: Record<string, TConfig | undefined>;
   provider: VoiceModelProvider;
@@ -225,6 +239,7 @@ export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(
   return {} as TConfig;
 }
 
+/** Convert provider metadata into static voice catalog entries. */
 export function synthesizeVoiceModelCatalogEntries(params: {
   provider: VoiceModelProvider;
   capabilities: VoiceModelCapabilities;

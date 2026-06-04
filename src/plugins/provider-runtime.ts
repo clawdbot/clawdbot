@@ -1,3 +1,4 @@
+// Composes provider plugin runtime hooks with shared provider policy.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

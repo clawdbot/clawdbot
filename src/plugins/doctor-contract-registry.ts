@@ -1,3 +1,4 @@
+// Loads plugin doctor contracts from manifest-owned metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

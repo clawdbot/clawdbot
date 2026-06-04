@@ -1,3 +1,6 @@
+/**
+ * Tests memory host event log helpers and persisted event behavior.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

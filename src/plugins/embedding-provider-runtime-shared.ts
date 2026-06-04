@@ -1,3 +1,4 @@
+/** Shared runtime helpers for embedding provider lookup across core and plugin capabilities. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -30,6 +31,7 @@ function resolveConfiguredProviderConfig(
   );
 }
 
+/** Reads a configured provider's backing API id when runtime lookup should follow an alias. */
 export function readConfiguredProviderApiId(params: {
   providerId: string;
   cfg?: OpenClawConfig;
@@ -48,6 +50,7 @@ export function readConfiguredProviderApiId(params: {
   return resolvedProviderId && resolvedProviderId !== normalized ? resolvedProviderId : undefined;
 }
 
+/** Builds lookup ids for embedding providers, including configured API aliases. */
 export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   id: string;
   cfg?: OpenClawConfig;
@@ -64,6 +67,7 @@ export function resolveRuntimeEmbeddingProviderLookupIds(params: {
   return ids;
 }
 
+/** Lists registered and plugin-contributed embedding provider adapters for a capability key. */
 export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;
@@ -82,6 +86,7 @@ export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: stri
   return [...merged.values()];
 }
 
+/** Resolves one embedding provider adapter from registered providers before plugin capabilities. */
 export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string }>(params: {
   key: EmbeddingProviderCapabilityKey;
   cfg?: OpenClawConfig;

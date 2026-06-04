@@ -1,5 +1,7 @@
+// Shared CLI timeout parsers for millisecond flags and config-backed fallbacks.
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
+/** Parse a positive millisecond timeout, returning undefined for absent or invalid input. */
 export function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -26,6 +28,7 @@ function invalidTimeout(value?: string): Error {
   );
 }
 
+/** Parse a positive timeout or return the supplied fallback for missing values. */
 export function parseTimeoutMsWithFallback(
   raw: unknown,
   fallbackMs: number,

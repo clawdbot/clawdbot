@@ -1,3 +1,4 @@
+/** Plugin-local re-export of shared path safety helpers for plugin install/runtime code. */
 export {
   isNotFoundPathError,
   hasNodeErrorCode,

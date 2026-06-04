@@ -35,6 +35,9 @@ import {
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
 
+// Discovers implicit model providers from plugin catalogs and merges them with
+// configured provider state. Discovery is scoped for live lanes and can fall
+// back to static catalogs when runtime catalog calls are unavailable.
 const log = createSubsystemLogger("agents/model-providers");
 
 const PROVIDER_IMPLICIT_MERGERS: Partial<
@@ -228,6 +231,7 @@ function appendNormalizedPluginMetadataOwners(
   }
 }
 
+/** Resolve the plugin discovery filter used by implicit provider discovery tests. */
 export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -238,6 +242,7 @@ export function resolveProviderDiscoveryFilterForTest(params: {
   return resolveProviderDiscoveryFilter(params);
 }
 
+/** Resolve provider owner plugin IDs from a preloaded metadata snapshot for tests. */
 export function resolvePluginMetadataProviderOwnersForTest(
   pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
   provider: string,
@@ -272,6 +277,8 @@ function mergeImplicitProviderConfig(params: {
     return merge({ existing, implicit });
   }
   if (params.dynamicProviderModels) {
+    // Wildcard-visible providers preserve discovered catalog updates while
+    // keeping explicit user config authoritative for non-model fields.
     return mergeProviderModels(implicit, existing);
   }
   return {
@@ -383,6 +390,8 @@ async function resolvePluginImplicitProviders(
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
+    // Static catalogs are preferred for entries-only discovery and as a fallback
+    // when runtime discovery produces no usable provider config.
     let result = useStaticCatalog
       ? await runProviderStaticCatalog({
           provider,
@@ -470,6 +479,8 @@ async function runProviderCatalogWithTimeout(
     return await catalogRun;
   }
 
+  // Live discovery should not hang startup; timeout means skip this provider,
+  // while non-timeout catalog failures still surface to the caller.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -497,6 +508,7 @@ async function runProviderCatalogWithTimeout(
   }
 }
 
+/** Resolve all implicit provider configs contributed by runtime plugin discovery. */
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {

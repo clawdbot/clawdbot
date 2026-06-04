@@ -1,3 +1,6 @@
+/**
+ * Tests fs-safe compatibility exports used by plugin SDK callers.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";

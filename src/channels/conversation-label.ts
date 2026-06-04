@@ -5,6 +5,8 @@ import {
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
+// Many channel ids are compound strings such as channel:thread:id. The label suffix only
+// needs the final stable id segment when the friendly name alone may be ambiguous.
 function extractConversationId(from?: string): string | undefined {
   const trimmed = normalizeOptionalString(from);
   if (!trimmed) {
@@ -14,6 +16,8 @@ function extractConversationId(from?: string): string | undefined {
   return parts.length > 0 ? parts[parts.length - 1] : trimmed;
 }
 
+// Numeric ids and address-like ids are useful disambiguators. Human labels, hashtags,
+// and handles are already readable enough and should not get redundant "id:" suffixes.
 function shouldAppendId(id: string): boolean {
   if (/^[0-9]+$/.test(id)) {
     return true;
@@ -24,6 +28,9 @@ function shouldAppendId(id: string): boolean {
   return false;
 }
 
+/**
+ * Resolves the most readable conversation label from normalized inbound message context.
+ */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {

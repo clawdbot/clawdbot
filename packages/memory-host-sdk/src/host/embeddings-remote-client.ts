@@ -5,8 +5,12 @@ import { resolveMemorySecretInputString } from "./secret-input.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
+// Builds authenticated remote embedding HTTP clients from agent memory config.
+
+/** Provider id used for remote embedding auth and config lookup. */
 export type RemoteEmbeddingProviderId = string;
 
+/** Attribution headers for native OpenAI embedding calls. */
 function resolveOpenClawAttributionHeaders(): Record<string, string> {
   const version = typeof process !== "undefined" ? process.env.OPENCLAW_VERSION?.trim() : undefined;
   return {
@@ -16,6 +20,7 @@ function resolveOpenClawAttributionHeaders(): Record<string, string> {
   };
 }
 
+/** Detect the native OpenAI embeddings API route that accepts attribution headers. */
 function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolean {
   if (provider !== "openai") {
     return false;
@@ -27,6 +32,7 @@ function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolea
   }
 }
 
+/** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;

@@ -1,8 +1,11 @@
+/**
+ * Tests core plugin SDK exports and channel plugin construction.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
-import { defineChannelPluginEntry } from "./core.js";
+import { createChannelPluginBase, defineChannelPluginEntry } from "./core.js";
 
 function createChannelPlugin(id: string): ChannelPlugin {
   return {
@@ -117,5 +120,22 @@ describe("defineChannelPluginEntry", () => {
     expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+  });
+});
+
+describe("createChannelPluginBase", () => {
+  it("keeps meta id aligned with the channel id", () => {
+    const plugin = createChannelPluginBase({
+      id: "metadata-id-channel",
+      meta: {
+        label: "Metadata ID Channel",
+        selectionLabel: "Metadata ID Channel",
+        docsPath: "/channels/metadata-id-channel",
+        blurb: "metadata id channel",
+      },
+      setup: {} as NonNullable<ChannelPlugin["setup"]>,
+    });
+
+    expect(plugin.meta.id).toBe("metadata-id-channel");
   });
 });

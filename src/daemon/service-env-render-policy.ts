@@ -4,6 +4,7 @@ import {
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
 
+// LaunchAgent plists need selected dotenv values inlined so launchd receives them.
 function isLaunchAgentServiceEnvironment(params: {
   platform: NodeJS.Platform;
   serviceEnvironment: Record<string, string | undefined>;

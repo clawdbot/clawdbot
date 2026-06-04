@@ -9,6 +9,8 @@ function normalizePosixAbsolutePath(value: string): string | undefined {
   if (!trimmed || trimmed.includes("\0")) {
     return undefined;
   }
+  // Compare all roots as POSIX-style absolute paths so channel configs can use
+  // stable patterns even when a source reports Windows separators.
   const normalized = path.posix.normalize(trimmed.replaceAll("\\", "/"));
   const isAbsolute = normalized.startsWith("/") || WINDOWS_DRIVE_ABS_RE.test(normalized);
   if (!isAbsolute || normalized === "/") {
@@ -44,6 +46,7 @@ function matchesRootPattern(params: { candidatePath: string; rootPattern: string
   return true;
 }
 
+/** Validates an absolute inbound root pattern with whole-segment wildcards only. */
 export function isValidInboundPathRootPattern(value: string): boolean {
   const normalized = normalizePosixAbsolutePath(value);
   if (!normalized) {
@@ -56,6 +59,7 @@ export function isValidInboundPathRootPattern(value: string): boolean {
   return segments.every((segment) => segment === WILDCARD_SEGMENT || !segment.includes("*"));
 }
 
+/** Normalizes configured inbound attachment roots, dropping invalid or duplicate patterns. */
 export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
@@ -76,6 +80,7 @@ export function normalizeInboundPathRoots(roots?: readonly string[]): string[] {
   return normalized;
 }
 
+/** Merges inbound attachment root lists while preserving first-seen priority. */
 export function mergeInboundPathRoots(
   ...rootsLists: Array<readonly string[] | undefined>
 ): string[] {
@@ -94,6 +99,7 @@ export function mergeInboundPathRoots(
   return merged;
 }
 
+/** Checks whether a candidate inbound media path is covered by configured or fallback roots. */
 export function isInboundPathAllowed(params: {
   filePath: string;
   roots: readonly string[];

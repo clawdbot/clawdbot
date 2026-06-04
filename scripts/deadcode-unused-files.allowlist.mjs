@@ -6,9 +6,6 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   // The pending SQLite session/runtime branch wires these files into production.
   "src/agents/cache/agent-cache-store.sqlite.ts",
   "src/agents/cache/agent-cache-store.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
 ];
 
 // Knip can disagree across supported local/CI platforms for files that are

@@ -13,6 +13,9 @@ import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/**
+ * Hoisted mutable state shared by gateway Vitest module mocks.
+ */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -140,6 +143,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
   return created;
 });
 
+/** Returns the singleton state object used by gateway test module mocks. */
 export function getGatewayTestHoistedState(): GatewayTestHoistedState {
   return gatewayTestHoisted;
 }
@@ -165,6 +169,7 @@ export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KE
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 
+/** Updates the config root used by gateway config-module mocks. */
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");

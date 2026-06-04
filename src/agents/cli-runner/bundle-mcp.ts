@@ -14,6 +14,8 @@ import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
 
+// Prepares bundle MCP configuration for CLI backends. Each backend receives MCP
+// config in its native form while OpenClaw records stable hashes for resume checks.
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
@@ -54,6 +56,8 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
 }
 
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+  // The OpenClaw loopback MCP port changes across runs. Replace it before
+  // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
       if (name !== "openclaw" || typeof server.url !== "string") {
@@ -131,11 +135,13 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     mcpResumeHash,
     env: params.env,
     cleanup: async () => {
+      // Claude config files are generated per run and should not survive cleanup.
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   };
 }
 
+/** Prepare backend args/env/cleanup for bundle MCP injection into a CLI run. */
 export async function prepareCliBundleMcpConfig(params: {
   enabled: boolean;
   mode?: CliBundleMcpMode;
@@ -159,6 +165,8 @@ export async function prepareCliBundleMcpConfig(params: {
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
 
   if (existingMcpConfigPath) {
+    // Merge any user-provided Claude MCP config first so bundle/plugin config can
+    // override intentionally managed server entries.
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)
       ? existingMcpConfigPath
       : path.resolve(params.workspaceDir, existingMcpConfigPath);

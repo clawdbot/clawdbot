@@ -1,5 +1,3 @@
-// Public auth/onboarding helpers for provider plugins.
-
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -134,9 +132,13 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export type CachedCopilotToken = {
+  /** Copilot API token returned by GitHub's internal exchange endpoint. */
   token: string;
+  /** Absolute epoch milliseconds when the Copilot API token expires. */
   expiresAt: number;
+  /** Absolute epoch milliseconds when this cache entry was written. */
   updatedAt: number;
+  /** Copilot integration id that produced this cached token. */
   integrationId?: string;
 };
 
@@ -216,7 +218,10 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
 }
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
+export function deriveCopilotApiBaseUrlFromToken(
+  /** Copilot API token text that may contain a `proxy-ep` attribute. */
+  token: string,
+): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
     return null;
@@ -238,18 +243,30 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
+/**
+ * @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins.
+ */
 export async function resolveCopilotApiToken(params: {
+  /** GitHub OAuth token exchanged for a Copilot API token. */
   githubToken: string;
+  /** Environment used to resolve the default token cache path. */
   env?: NodeJS.ProcessEnv;
+  /** Fetch implementation used for the Copilot token exchange. */
   fetchImpl?: typeof fetch;
+  /** Explicit cache file path for the exchanged Copilot token. */
   cachePath?: string;
+  /** Cache reader override for tests and alternate storage backends. */
   loadJsonFileImpl?: (path: string) => unknown;
+  /** Cache writer override for tests and alternate storage backends. */
   saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
 }): Promise<{
+  /** Copilot API token, from cache or fresh exchange. */
   token: string;
+  /** Absolute epoch milliseconds when the Copilot API token expires. */
   expiresAt: number;
+  /** Source marker identifying cache path or exchange endpoint. */
   source: string;
+  /** Copilot API base URL derived from token metadata or default endpoint. */
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
@@ -258,6 +275,8 @@ export async function resolveCopilotApiToken(params: {
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
+    // Token cache entries are scoped to the current Copilot integration id so
+    // stale tokens from older editor identities are exchanged again.
     if (isCopilotTokenUsable(cached)) {
       return {
         token: cached.token,
@@ -300,9 +319,15 @@ export async function resolveCopilotApiToken(params: {
   };
 }
 
+/**
+ * Checks whether a provider has either env auth or matching local auth profiles configured.
+ */
 export function isProviderApiKeyConfigured(params: {
+  /** Provider id to check for env auth or local auth profiles. */
   provider: string;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Optional allowed profile credential types. */
   profileTypes?: readonly AuthProfileCredential["type"][];
 }): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
@@ -326,11 +351,19 @@ export function isProviderApiKeyConfigured(params: {
   });
 }
 
+/**
+ * Lists auth profile ids usable for a provider without throwing on missing stores or keychain access.
+ */
 export function listUsableProviderAuthProfileIds(params: {
+  /** Provider id whose usable auth profiles should be listed. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and default agent dir. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
@@ -341,21 +374,37 @@ export function listUsableProviderAuthProfileIds(params: {
   }
 }
 
+/**
+ * Checks whether any usable auth profile exists for a provider.
+ */
 export function isProviderAuthProfileConfigured(params: {
+  /** Provider id to check for usable auth profiles. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and default agent dir. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
 
+/**
+ * Resolves the first usable auth-profile API key for a provider in configured profile order.
+ */
 export async function resolveProviderAuthProfileApiKey(params: {
+  /** Provider id whose first usable auth profile should resolve to an API key. */
   provider: string;
+  /** Optional runtime config used to resolve auth profile order and secret refs. */
   cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
   agentDir?: string;
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
   allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);

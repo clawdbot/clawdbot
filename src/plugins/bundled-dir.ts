@@ -1,3 +1,4 @@
+/** Resolves the bundled plugin directory for source checkouts, dist builds, and tests. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,11 +14,13 @@ const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_
 let bundledPluginsDirOverrideForTest: string | undefined;
 const bundledPluginsDirCache = new Map<string, string | undefined>();
 
+/** Diagnostic emitted when source-checkout bundled plugins lack dependency installs. */
 export type SourceCheckoutDependencyDiagnostic = {
   source: string;
   message: string;
 };
 
+/** Returns true when env disables bundled plugin discovery. */
 export function areBundledPluginsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";

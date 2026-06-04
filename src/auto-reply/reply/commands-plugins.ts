@@ -1,3 +1,4 @@
+// Implements plugin command listing, install, and configuration helpers.
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";

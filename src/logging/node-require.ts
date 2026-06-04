@@ -1,3 +1,4 @@
+/** Resolves createRequire from process.getBuiltinModule without static CommonJS imports. */
 export function resolveNodeRequireFromMeta(metaUrl: string): NodeJS.Require | null {
   const getBuiltinModule = (
     process as NodeJS.Process & {

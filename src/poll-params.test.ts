@@ -1,3 +1,4 @@
+// Tests poll parameter parsing and numeric bounds.
 import { describe, expect, it } from "vitest";
 import { hasPollCreationParams } from "./poll-params.js";
 

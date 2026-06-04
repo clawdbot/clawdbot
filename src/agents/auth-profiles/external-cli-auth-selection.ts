@@ -8,8 +8,12 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
+// Resolves which external CLI auth overlays are relevant for the currently
+// selected provider/model/profile. This keeps runtime discovery scoped to the
+// selected auth path instead of scanning every CLI profile.
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
+/** Resolve external CLI overlay scope from the user's auth/model selection. */
 export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -49,6 +53,8 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   return {
     ...(providerIds.length > 0 ? { providerIds } : {}),
     ignoreAutoPreferredProfile:
+      // Claude CLI should not auto-prefer a profile when runtime selection has
+      // already chosen Claude CLI and the user did not lock a profile.
       !params.userLockedAuthProfileId && selectedProvider === CLAUDE_CLI_PROVIDER_ID,
   };
 }
@@ -64,6 +70,8 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
   selectedProviderId?: string;
 } {
   if (params.userLockedAuthProfileId) {
+    // Locked profile id means discovery should be scoped to that exact profile's
+    // compatible external CLI provider, if any.
     const providerId = resolveExternalCliProviderIdForCompatibleAuthProfile({
       ...params,
       profileId: params.userLockedAuthProfileId,
@@ -124,7 +132,8 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
   return {
     providerIds: uniqueProviderIds,
     ...(compatibleProfileCount === 1 && uniqueProviderIds[0]
-      ? { selectedProviderId: uniqueProviderIds[0] }
+      ? // Without explicit order, select only when compatibility is unambiguous.
+        { selectedProviderId: uniqueProviderIds[0] }
       : {}),
   };
 }

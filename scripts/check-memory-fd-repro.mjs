@@ -469,19 +469,16 @@ export async function stopGateway({ child, port }) {
 
 export async function stopGatewayWithRuntime({
   child,
+  childExitPollIntervalMs = 100,
+  childExitPolls = 50,
   port,
   findGatewayPidFn,
   killProcess,
   listenerSettleDelayMs = 500,
 }) {
   if (!hasChildExited(child)) {
-    child.kill("SIGINT");
-    for (let i = 0; i < 50; i += 1) {
-      if (hasChildExited(child)) {
-        break;
-      }
-      await sleep(100);
-    }
+    signalChild(child, "SIGINT");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
   }
   const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
@@ -496,9 +493,29 @@ export async function stopGatewayWithRuntime({
       } catch {}
     }
   }
+  if (!hasChildExited(child)) {
+    signalChild(child, "SIGKILL");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
+  }
 }
 
 export { readBoundedResponseText };
+
+function signalChild(child, signal) {
+  try {
+    child.kill(signal);
+  } catch {}
+}
+
+async function waitForChildExit(child, { intervalMs, polls }) {
+  for (let i = 0; i < polls; i += 1) {
+    if (hasChildExited(child)) {
+      return true;
+    }
+    await sleep(intervalMs);
+  }
+  return hasChildExited(child);
+}
 
 function parseJsonValue(text) {
   try {

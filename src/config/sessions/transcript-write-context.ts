@@ -12,6 +12,7 @@ type OwnedSessionTranscriptWriteContext = {
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
 
+// Compare resolved paths when available; fall back to session keys for lock reuse.
 function normalizePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? path.resolve(trimmed) : undefined;
@@ -33,6 +34,7 @@ function contextMatches(params: {
   return Boolean(contextSessionKey && sessionKey && contextSessionKey === sessionKey);
 }
 
+/** Runs transcript writes with an owned write-lock context. */
 export async function withOwnedSessionTranscriptWrites<T>(
   context: OwnedSessionTranscriptWriteContext,
   run: () => Promise<T>,

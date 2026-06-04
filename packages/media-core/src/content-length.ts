@@ -1,3 +1,4 @@
+/** Parses a Content-Length header as a safe integer or rejects malformed values. */
 export function parseMediaContentLength(raw: string | null): number | null {
   if (raw === null) {
     return null;

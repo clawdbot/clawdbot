@@ -1,3 +1,4 @@
+/** Caches plugin tool descriptors by plugin source, contract names, and runtime context. */
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
@@ -8,6 +9,7 @@ import type { OpenClawPluginToolContext } from "./types.js";
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 1;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
+/** Cached display descriptor for one plugin-created tool. */
 export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
@@ -20,6 +22,7 @@ let nextDescriptorCacheObjectId = 1;
 
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
+/** Creates a memo table for config cache keys reused across descriptor cache calls. */
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
 }

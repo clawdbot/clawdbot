@@ -7,6 +7,11 @@ export type ChatAttachment = {
   sizeBytes?: number;
 };
 
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+};
+
 export type ChatQueueItem = {
   id: string;
   text: string;
@@ -25,6 +30,7 @@ export type ChatQueueItem = {
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 export type ChatSessionRefreshTarget = {

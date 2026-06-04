@@ -1,3 +1,4 @@
+// Tests heartbeat messages do not reset active session routing.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";

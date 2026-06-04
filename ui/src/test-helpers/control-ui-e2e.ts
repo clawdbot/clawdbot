@@ -1,10 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import {
@@ -83,7 +84,7 @@ export type MockGatewayControls = {
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
-const systemChromiumExecutableCandidates = [
+export const systemChromiumExecutableCandidates = [
   "/snap/bin/chromium",
   "/usr/bin/chromium-browser",
   "/usr/bin/chromium",
@@ -99,25 +100,30 @@ function resolveRepoRoot(): string {
 export function resolvePlaywrightChromiumExecutablePath(
   defaultExecutablePath: string,
   env: NodeJS.ProcessEnv = process.env,
+  canRun: (chromiumExecutablePath: string) => boolean = canRunPlaywrightChromium,
 ): string {
   const executableOverride = env[chromiumExecutableOverrideEnvKey]?.trim();
   if (executableOverride) {
     return executableOverride;
   }
-  if (existsSync(defaultExecutablePath)) {
+  if (canRun(defaultExecutablePath)) {
     return defaultExecutablePath;
   }
   return (
-    systemChromiumExecutableCandidates.find((candidate) => existsSync(candidate)) ??
+    systemChromiumExecutableCandidates.find((candidate) => canRun(candidate)) ??
     defaultExecutablePath
   );
 }
 
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
-  return existsSync(chromiumExecutablePath);
+  if (!existsSync(chromiumExecutablePath)) {
+    return false;
+  }
+  return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
 export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
+  const { createServer } = await import("vite");
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();

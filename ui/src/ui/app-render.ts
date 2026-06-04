@@ -22,6 +22,7 @@ import {
   createChatSession,
   dismissChatError,
   switchChatSession,
+  switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -119,6 +120,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   parseSessionsFilterInteger,
@@ -218,6 +220,8 @@ function runUiTask<Args extends unknown[]>(
 }
 
 const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
+const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
+  "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
 
 export function loadSkillWorkshopMode(): "board" | "today" {
   try {
@@ -225,6 +229,23 @@ export function loadSkillWorkshopMode(): "board" | "today" {
     return raw === "board" ? "board" : "today";
   } catch {
     return "today";
+  }
+}
+
+export function loadSkillWorkshopUseCurrentChatForRevisions(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
+  state.skillWorkshopUseCurrentChatForRevisions = enabled;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY, String(enabled));
+  } catch {
+    // Preference persistence is optional; the active toggle still controls this handoff.
   }
 }
 
@@ -241,8 +262,26 @@ function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): voi
 }
 
 function renderSkillWorkshopHeaderControls(state: AppViewState) {
+  const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
   return html`
     <div class="sw-header-controls">
+      <label
+        class="sw-revision-session-toggle"
+        title=${t("skillWorkshop.header.useCurrentChatTooltip")}
+      >
+        <input
+          type="checkbox"
+          aria-label=${t("skillWorkshop.header.useCurrentChatAria")}
+          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
+          @change=${(event: Event) =>
+            setSkillWorkshopUseCurrentChatForRevisions(
+              state,
+              (event.currentTarget as HTMLInputElement).checked,
+            )}
+        />
+        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
+        <span class="sw-revision-session-toggle__label">${useCurrentChatLabel}</span>
+      </label>
       <div
         class="sw-mode-switch"
         role="tablist"
@@ -284,6 +323,108 @@ function renderSkillWorkshopHeaderControls(state: AppViewState) {
       </div>
     </div>
   `;
+}
+
+function findSkillWorkshopRevisionSessionRow(
+  state: AppViewState,
+  sessionKey: string | undefined,
+): GatewaySessionRow | null {
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return null;
+  }
+  const current = state.sessionsResult?.sessions.find((row) => row.key === key);
+  if (current) {
+    return current;
+  }
+  for (const rows of Object.values(state.chatAgentSessionRowsByAgent ?? {})) {
+    const cached = rows.find((row) => row.key === key);
+    if (cached) {
+      return cached;
+    }
+  }
+  return null;
+}
+
+function isUsableSkillWorkshopRevisionSession(
+  row: GatewaySessionRow | null,
+): row is GatewaySessionRow {
+  return Boolean(row && !row.archived && !row.hasActiveRun);
+}
+
+async function ensureSkillWorkshopRevisionSessionsLoaded(
+  state: AppViewState,
+  agentId: string,
+): Promise<void> {
+  const resultAgentId = normalizeOptionalString(state.sessionsResultAgentId);
+  if (resultAgentId === agentId && state.sessionsResult?.sessions.length) {
+    return;
+  }
+  await loadSessions(state, {
+    ...createChatSessionsLoadOverrides(state),
+    agentId,
+  });
+}
+
+async function resolveSkillWorkshopRevisionSessionKey(
+  state: AppViewState,
+  proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
+): Promise<string | null> {
+  if (state.skillWorkshopUseCurrentChatForRevisions) {
+    return normalizeOptionalString(state.sessionKey) ?? null;
+  }
+
+  const agentId = normalizeAgentId(
+    proposal.origin?.agentId ?? resolveSidebarSelectedAgentId(state),
+  );
+  await ensureSkillWorkshopRevisionSessionsLoaded(state, agentId);
+
+  const originRow = findSkillWorkshopRevisionSessionRow(state, proposal.origin?.sessionKey);
+  if (isUsableSkillWorkshopRevisionSession(originRow)) {
+    return originRow.key;
+  }
+
+  return createSessionAndRefresh(
+    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+    {
+      agentId,
+      label: `Skill Workshop: ${proposal.slug || proposal.key}`.slice(0, 80),
+    },
+    {
+      ...createChatSessionsLoadOverrides(state),
+      agentId,
+    },
+  );
+}
+
+async function sendSkillWorkshopRevisionRequest(
+  state: AppViewState,
+  instructions: string,
+  proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    throw new Error("Gateway is not connected.");
+  }
+  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal);
+  if (!sessionKey) {
+    throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
+  }
+  if (state.tab !== "chat") {
+    state.setTab("chat" as Tab);
+  }
+  if (state.sessionKey === sessionKey) {
+    await loadChatHistory(state);
+  } else {
+    await switchChatSessionAndWait(state, sessionKey);
+  }
+  const proposalAgentId = proposal.origin?.agentId?.trim();
+  await state.handleSendChat(instructions, {
+    restoreDraft: true,
+    skillWorkshopRevision: {
+      proposalId: proposal.key,
+      ...(proposalAgentId ? { agentId: proposalAgentId } : {}),
+    },
+  });
 }
 
 function renderSettingsSectionNav(state: AppViewState) {
@@ -3242,10 +3383,9 @@ export function renderApp(state: AppViewState) {
                   state.skillWorkshopRevisionDraft = "";
                 },
                 onRevisionSubmit: (key) =>
-                  void requestSkillWorkshopRevision(state, key, async (message) => {
-                    state.setTab("chat" as Tab);
-                    await state.handleSendChat(message, { restoreDraft: true });
-                  }),
+                  void requestSkillWorkshopRevision(state, key, (message, proposal) =>
+                    sendSkillWorkshopRevisionRequest(state, message, proposal),
+                  ),
                 onPreviewFile: (key, path) => {
                   state.skillWorkshopSelectedKey = key;
                   state.skillWorkshopFilePreviewKey = path;

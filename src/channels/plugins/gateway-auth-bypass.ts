@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 
+/**
+ * Lightweight public artifact contract for channel gateway auth bypass paths.
+ */
 type GatewayAuthBypassApi = {
   resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => readonly unknown[];
 };
@@ -15,6 +18,8 @@ function loadBundledChannelGatewayAuthApi(channelId: string): GatewayAuthBypassA
       artifactBasename: GATEWAY_AUTH_API_ARTIFACT_BASENAME,
     });
   } catch (error) {
+    // Missing gateway auth artifacts are optional. Any other load failure means
+    // the artifact exists but cannot be trusted, so propagate it to callers.
     if (error instanceof Error && error.message.startsWith(MISSING_PUBLIC_SURFACE_PREFIX)) {
       return undefined;
     }
@@ -22,6 +27,9 @@ function loadBundledChannelGatewayAuthApi(channelId: string): GatewayAuthBypassA
   }
 }
 
+/**
+ * Resolves configured gateway auth bypass paths from a bundled channel artifact.
+ */
 export function resolveBundledChannelGatewayAuthBypassPaths(params: {
   channelId: string;
   cfg: OpenClawConfig;

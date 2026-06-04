@@ -1,3 +1,4 @@
+// Recovers queued session deliveries after process crashes.
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -13,6 +14,8 @@ import {
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
 
+// Session delivery recovery replays persisted messages after crashes while
+// bounding retry count, backoff, and concurrent drain work.
 type SessionDeliveryRecoverySummary = {
   recovered: number;
   failed: number;
@@ -136,6 +139,7 @@ async function drainQueuedEntry(opts: {
   }
 }
 
+/** Drain matching queued session deliveries with retry/backoff protection. */
 export async function drainPendingSessionDeliveries(opts: {
   drainKey: string;
   logLabel: string;
@@ -211,6 +215,7 @@ export async function drainPendingSessionDeliveries(opts: {
   }
 }
 
+/** Replay pending session deliveries until the recovery budget is exhausted. */
 export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;

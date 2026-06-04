@@ -1,3 +1,6 @@
+/**
+ * Tests talk realtime relay event forwarding and connection cleanup.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,

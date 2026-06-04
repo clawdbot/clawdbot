@@ -1,3 +1,6 @@
+/**
+ * Channel health monitor regression tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";

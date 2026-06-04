@@ -1,6 +1,8 @@
+// Tests isolated OpenClaw test-state setup and cleanup behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -143,13 +145,10 @@ describe("openclaw test state", () => {
           },
         });
 
-        expect(profilePath).toBe(path.join(state.agentDir(), "auth-profiles.json"));
-        const profiles = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
-          version?: unknown;
-          profiles?: Record<string, { provider?: unknown }>;
-        };
-        expect(profiles.version).toBe(1);
-        expect(profiles.profiles?.["openai:test"]?.provider).toBe("openai");
+        expect(profilePath).toBe(path.join(state.agentDir(), "openclaw-agent.sqlite"));
+        const profiles = loadPersistedAuthProfileStore(state.agentDir());
+        expect(profiles?.version).toBe(1);
+        expect(profiles?.profiles["openai:test"]?.provider).toBe("openai");
       },
     );
   });

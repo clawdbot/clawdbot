@@ -4,6 +4,7 @@ import {
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 
+// Shared Vitest module mocks for isolated-agent cron tests.
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),

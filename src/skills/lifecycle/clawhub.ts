@@ -1,8 +1,10 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubSkillArchive,
   fetchClawHubSkillDetail,
+  isDefaultClawHubBaseUrl,
   resolveClawHubBaseUrl,
   searchClawHubSkills,
   type ClawHubSkillDetail,
@@ -130,6 +132,7 @@ type ClawHubInstallParams = {
   baseUrl?: string;
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 };
 
 type TrackedUpdateTarget =
@@ -762,6 +765,8 @@ async function performClawHubSkillInstall(
       baseUrl: params.baseUrl,
     });
     const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+    const registry = resolveClawHubBaseUrl(params.baseUrl);
+    const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
     if (!params.force && (await pathExists(targetDir))) {
       return {
         ok: false,
@@ -788,7 +793,23 @@ async function performClawHubSkillInstall(
             extractedRoot: rootDir,
             mode: params.force ? "update" : "install",
             logger: params.logger,
-            scan: false,
+            policy: {
+              config: params.config,
+              installId: "clawhub",
+              origin: {
+                type: "clawhub",
+                registry,
+                slug: params.slug,
+                version,
+              },
+              source: {
+                kind: "clawhub",
+                authority: clawhubAuthority,
+                mutable: false,
+                network: true,
+              },
+              requestedSpecifier: `clawhub:${params.slug}@${version}`,
+            },
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
           }),
       });
@@ -892,6 +913,7 @@ export async function installSkillFromClawHub(params: {
   baseUrl?: string;
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<InstallClawHubSkillResult> {
   return await installRequestedSkillFromClawHub(params);
 }
@@ -901,6 +923,7 @@ export async function updateSkillsFromClawHub(params: {
   slug?: string;
   baseUrl?: string;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   const slugs = params.slug
@@ -933,6 +956,7 @@ export async function updateSkillsFromClawHub(params: {
       baseUrl: tracked.baseUrl,
       force: true,
       logger: params.logger,
+      config: params.config,
     });
     if (!install.ok) {
       results.push(install);

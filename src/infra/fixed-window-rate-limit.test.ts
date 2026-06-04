@@ -1,3 +1,4 @@
+// Covers fixed-window rate limiter boundaries.
 import { describe, expect, it } from "vitest";
 import { createFixedWindowRateLimiter } from "./fixed-window-rate-limit.js";
 

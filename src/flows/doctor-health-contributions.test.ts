@@ -81,7 +81,8 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "2026.5.2-test",
 }));
 

@@ -4,12 +4,27 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import {
+  resolveAuthStatePath,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "../agents/auth-profiles/paths.js";
+import {
+  applyLegacyAuthStore,
+  coercePersistedAuthProfileStore,
+  loadLegacyAuthProfileStore,
+  loadPersistedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
+import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileState,
+  AuthProfileStore,
+} from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
@@ -30,6 +45,11 @@ type LegacyFlatAuthProfileStore = {
   store: AuthProfileStore;
 };
 
+type AuthProfileSqliteMigrationCandidate = AuthProfileRepairCandidate & {
+  statePath: string;
+  legacyPath: string;
+};
+
 type AwsSdkProfileMarker = {
   profileId: string;
   provider: string;
@@ -47,6 +67,7 @@ type AwsSdkAuthProfileMarkerStore = {
 export type LegacyFlatAuthProfileRepairResult = {
   detected: string[];
   changes: string[];
+  configChanged?: boolean;
   warnings: string[];
 };
 
@@ -214,6 +235,433 @@ function listAuthProfileRepairCandidates(
   return [...candidates.values()];
 }
 
+function listAuthProfileSqliteMigrationCandidates(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): AuthProfileSqliteMigrationCandidate[] {
+  const candidates: AuthProfileSqliteMigrationCandidate[] = [];
+  for (const candidate of listAuthProfileRepairCandidates(cfg, env)) {
+    candidates.push({
+      agentDir: candidate.agentDir,
+      authPath: candidate.authPath,
+      statePath: resolveAuthStatePath(candidate.agentDir),
+      legacyPath: resolveLegacyAuthStorePath(candidate.agentDir),
+    });
+  }
+  return candidates;
+}
+
+function hasAuthProfileState(state: AuthProfileState): boolean {
+  return Boolean(state.order || state.lastGood || state.usageStats);
+}
+
+function normalizeLegacyApiKeyAliasesForImport(raw: unknown): void {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return;
+  }
+  for (const profile of Object.values(raw.profiles)) {
+    if (!isRecord(profile)) {
+      continue;
+    }
+    const type = readNonEmptyString(profile.type) ?? readNonEmptyString(profile.mode);
+    if (type !== "api_key") {
+      continue;
+    }
+    const hasCanonicalCredential =
+      readNonEmptyString(profile.key) !== undefined || coerceSecretRef(profile.keyRef) !== null;
+    if (hasCanonicalCredential || profile["api_key"] === undefined) {
+      continue;
+    }
+    profile.key = profile["api_key"];
+  }
+}
+
+function collectAuthProfileStateProfileIds(state: AuthProfileState): string[] {
+  const profileIds = new Set<string>();
+  for (const entries of Object.values(state.order ?? {})) {
+    for (const profileId of entries) {
+      profileIds.add(profileId);
+    }
+  }
+  for (const profileId of Object.values(state.lastGood ?? {})) {
+    profileIds.add(profileId);
+  }
+  for (const profileId of Object.keys(state.usageStats ?? {})) {
+    profileIds.add(profileId);
+  }
+  return [...profileIds];
+}
+
+function mergeImportedAuthProfiles(params: {
+  store: AuthProfileStore;
+  profiles: AuthProfileStore["profiles"];
+  existingProfileIds: ReadonlySet<string>;
+}): AuthProfileStore {
+  const profiles = { ...params.store.profiles };
+  for (const [profileId, credential] of Object.entries(params.profiles)) {
+    if (!params.existingProfileIds.has(profileId)) {
+      profiles[profileId] = credential;
+    }
+  }
+  return { ...params.store, profiles };
+}
+
+function mergeImportedAuthProfileState(params: {
+  store: AuthProfileStore;
+  state: AuthProfileState;
+  existingState: AuthProfileState;
+}): AuthProfileStore {
+  return {
+    ...params.store,
+    ...(params.state.order
+      ? {
+          order: {
+            ...params.store.order,
+            ...Object.fromEntries(
+              Object.entries(params.state.order).filter(
+                ([provider]) => !params.existingState.order?.[provider],
+              ),
+            ),
+          },
+        }
+      : {}),
+    ...(params.state.lastGood
+      ? {
+          lastGood: {
+            ...params.store.lastGood,
+            ...Object.fromEntries(
+              Object.entries(params.state.lastGood).filter(
+                ([provider]) => !params.existingState.lastGood?.[provider],
+              ),
+            ),
+          },
+        }
+      : {}),
+    ...(params.state.usageStats
+      ? {
+          usageStats: {
+            ...params.store.usageStats,
+            ...Object.fromEntries(
+              Object.entries(params.state.usageStats).filter(
+                ([profileId]) => !params.existingState.usageStats?.[profileId],
+              ),
+            ),
+          },
+        }
+      : {}),
+  };
+}
+
+function filterRawAuthProfileState(
+  raw: Record<string, unknown>,
+  shouldKeepProfileId: (profileId: string) => boolean,
+): void {
+  if (isRecord(raw.order)) {
+    for (const [provider, profileIds] of Object.entries(raw.order)) {
+      if (!Array.isArray(profileIds)) {
+        continue;
+      }
+      const kept = profileIds.filter(
+        (profileId): profileId is string =>
+          typeof profileId === "string" && shouldKeepProfileId(profileId),
+      );
+      if (kept.length > 0) {
+        raw.order[provider] = kept;
+      } else {
+        delete raw.order[provider];
+      }
+    }
+    if (Object.keys(raw.order).length === 0) {
+      delete raw.order;
+    }
+  }
+  if (isRecord(raw.lastGood)) {
+    for (const [provider, profileId] of Object.entries(raw.lastGood)) {
+      if (typeof profileId !== "string" || !shouldKeepProfileId(profileId)) {
+        delete raw.lastGood[provider];
+      }
+    }
+    if (Object.keys(raw.lastGood).length === 0) {
+      delete raw.lastGood;
+    }
+  }
+  if (isRecord(raw.usageStats)) {
+    for (const profileId of Object.keys(raw.usageStats)) {
+      if (!shouldKeepProfileId(profileId)) {
+        delete raw.usageStats[profileId];
+      }
+    }
+    if (Object.keys(raw.usageStats).length === 0) {
+      delete raw.usageStats;
+    }
+  }
+}
+
+function pruneRawAuthProfileIds(raw: unknown, profileIds: ReadonlySet<string>): void {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return;
+  }
+  for (const profileId of profileIds) {
+    delete raw.profiles[profileId];
+  }
+  filterRawAuthProfileState(raw, (profileId) => !profileIds.has(profileId));
+}
+
+function pickRawAuthProfileIds(
+  raw: unknown,
+  profileIds: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return null;
+  }
+  const profiles = Object.fromEntries(
+    Object.entries(raw.profiles).filter(([profileId]) => profileIds.has(profileId)),
+  );
+  if (Object.keys(profiles).length === 0) {
+    return null;
+  }
+  const next = structuredClone(raw);
+  next.profiles = profiles;
+  filterRawAuthProfileState(next, (profileId) => profileIds.has(profileId));
+  return next;
+}
+
+function collectUnresolvedLegacyOAuthSidecarProfileIds(raw: unknown): string[] {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return [];
+  }
+  const profileIds: string[] = [];
+  for (const [profileId, profile] of Object.entries(raw.profiles)) {
+    if (!isRecord(profile) || profile.type !== "oauth" || !isRecord(profile.oauthRef)) {
+      continue;
+    }
+    if (
+      readNonEmptyString(profile.oauthRef.id) &&
+      readNonEmptyString(profile.oauthRef.provider) &&
+      (!readNonEmptyString(profile.access) || !readNonEmptyString(profile.refresh))
+    ) {
+      profileIds.push(profileId);
+    }
+  }
+  return profileIds;
+}
+
+function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is AuthProfileStore {
+  return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
+}
+
+function backupAuthProfileJson(pathname: string, suffix: string, now: () => number): string {
+  const backupPath = `${pathname}.${suffix}.${now()}.bak`;
+  fs.copyFileSync(pathname, backupPath);
+  return backupPath;
+}
+
+function backupAndRemoveAuthProfileJson(
+  pathname: string,
+  suffix: string,
+  now: () => number,
+): string {
+  const backupPath = backupAuthProfileJson(pathname, suffix, now);
+  fs.unlinkSync(pathname);
+  return backupPath;
+}
+
+function writeJsonFile(pathname: string, value: unknown): void {
+  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<DoctorPrompter, "confirmAutoFix">;
+  now?: () => number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<LegacyFlatAuthProfileRepairResult> {
+  const now = params.now ?? Date.now;
+  const env = params.env ?? process.env;
+  const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
+  const detected = candidates.filter(
+    (candidate) =>
+      fs.existsSync(candidate.authPath) ||
+      fs.existsSync(candidate.statePath) ||
+      fs.existsSync(candidate.legacyPath),
+  );
+  const result: LegacyFlatAuthProfileRepairResult = {
+    detected: detected.flatMap((candidate) =>
+      [candidate.authPath, candidate.statePath, candidate.legacyPath].filter((pathname) =>
+        fs.existsSync(pathname),
+      ),
+    ),
+    changes: [],
+    warnings: [],
+  };
+  if (detected.length === 0) {
+    return result;
+  }
+
+  note(
+    [
+      ...detected.map(
+        (candidate) =>
+          `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}`,
+      ),
+      `- ${formatCliCommand("openclaw doctor --fix")} imports legacy auth profile JSON into the per-agent SQLite database and removes the old files after backup.`,
+    ].join("\n"),
+    "Auth profile SQLite migration",
+  );
+
+  const shouldRepair = await params.prompter.confirmAutoFix({
+    message: "Migrate auth profile JSON files into SQLite now?",
+    initialValue: true,
+  });
+  if (!shouldRepair) {
+    return result;
+  }
+
+  for (const candidate of detected) {
+    try {
+      const rawStore = fs.existsSync(candidate.authPath) ? loadJsonFile(candidate.authPath) : null;
+      const unresolvedSidecarProfileIds = new Set(
+        collectUnresolvedLegacyOAuthSidecarProfileIds(rawStore),
+      );
+      const unresolvedSidecarRawStore =
+        unresolvedSidecarProfileIds.size > 0
+          ? pickRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds)
+          : null;
+      if (unresolvedSidecarProfileIds.size > 0) {
+        pruneRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds);
+        result.warnings.push(
+          `Left ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} in ${shortenHomePath(candidate.authPath)}; rerun ${formatCliCommand("openclaw doctor --fix")} after sidecar migration or re-authenticate those profiles.`,
+        );
+      }
+      const awsSdkMarkerStore =
+        isRecord(rawStore) && isRecord(rawStore.profiles)
+          ? resolveAwsSdkAuthProfileMarkerStore(candidate)
+          : null;
+      if (awsSdkMarkerStore && isRecord(rawStore)) {
+        const configProfiles = ensureConfigAuthProfiles(params.cfg);
+        for (const marker of awsSdkMarkerStore.profiles) {
+          configProfiles[marker.profileId] = {
+            provider: marker.provider,
+            mode: "aws-sdk",
+            ...(marker.email ? { email: marker.email } : {}),
+            ...(marker.displayName ? { displayName: marker.displayName } : {}),
+          };
+        }
+        removeAwsSdkProfileMarkers(
+          rawStore,
+          awsSdkMarkerStore.profiles.map((profile) => profile.profileId),
+        );
+        result.configChanged = true;
+      }
+      normalizeLegacyApiKeyAliasesForImport(rawStore);
+      const maybeCanonicalStore =
+        coercePersistedAuthProfileStore(rawStore) ??
+        coerceLegacyFlatAuthProfileStore(rawStore) ??
+        null;
+      const canonicalStore = hasImportableAuthProfileStore(maybeCanonicalStore)
+        ? maybeCanonicalStore
+        : null;
+      const legacyStore = loadLegacyAuthProfileStore(candidate.agentDir);
+      const rawState = fs.existsSync(candidate.statePath)
+        ? loadJsonFile(candidate.statePath)
+        : null;
+      const state = coerceAuthProfileState(rawState);
+      if (!canonicalStore && !legacyStore && !hasAuthProfileState(state) && !awsSdkMarkerStore) {
+        result.warnings.push(
+          `Left auth profile JSON in place for ${shortenHomePath(candidate.authPath)} because no importable auth profiles or state were found.`,
+        );
+        continue;
+      }
+
+      const existing = loadPersistedAuthProfileStore(candidate.agentDir) ?? {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      };
+      const existingProfileIds = new Set(Object.keys(existing.profiles));
+      const existingState = coerceAuthProfileState(existing);
+      let next: AuthProfileStore = { ...existing };
+      if (legacyStore) {
+        const legacyAsStore: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
+        applyLegacyAuthStore(legacyAsStore, legacyStore);
+        next = mergeImportedAuthProfiles({
+          store: next,
+          profiles: legacyAsStore.profiles,
+          existingProfileIds,
+        });
+      }
+      if (canonicalStore) {
+        next = {
+          ...next,
+          version: Math.max(next.version, canonicalStore.version),
+        };
+        next = mergeImportedAuthProfiles({
+          store: next,
+          profiles: canonicalStore.profiles,
+          existingProfileIds,
+        });
+        next = mergeImportedAuthProfileState({
+          store: next,
+          state: coerceAuthProfileState(canonicalStore),
+          existingState,
+        });
+      }
+      if (hasAuthProfileState(state)) {
+        next = mergeImportedAuthProfileState({ store: next, state, existingState });
+      }
+
+      if (canonicalStore || legacyStore || hasAuthProfileState(state)) {
+        const stateProfileIds = [
+          ...collectAuthProfileStateProfileIds(state),
+          ...(canonicalStore
+            ? collectAuthProfileStateProfileIds(coerceAuthProfileState(canonicalStore))
+            : []),
+        ];
+        saveAuthProfileStore(next, candidate.agentDir, {
+          filterExternalAuthProfiles: false,
+          preserveStateProfileIds: stateProfileIds,
+          syncExternalCli: false,
+        });
+      }
+
+      const backups: string[] = [];
+      if (fs.existsSync(candidate.authPath)) {
+        if (unresolvedSidecarRawStore) {
+          backups.push(backupAuthProfileJson(candidate.authPath, "sqlite-import", now));
+          writeJsonFile(candidate.authPath, unresolvedSidecarRawStore);
+        } else {
+          backups.push(backupAndRemoveAuthProfileJson(candidate.authPath, "sqlite-import", now));
+        }
+      }
+      if (fs.existsSync(candidate.statePath)) {
+        backups.push(backupAndRemoveAuthProfileJson(candidate.statePath, "sqlite-import", now));
+      }
+      if (fs.existsSync(candidate.legacyPath)) {
+        backups.push(backupAndRemoveAuthProfileJson(candidate.legacyPath, "sqlite-import", now));
+      }
+      result.changes.push(
+        `Migrated auth profile JSON for ${shortenHomePath(candidate.authPath)} into SQLite (backup${backups.length === 1 ? "" : "s"}: ${backups.map(shortenHomePath).join(", ")}).`,
+      );
+      if (awsSdkMarkerStore) {
+        result.changes.push(
+          `Moved aws-sdk profile metadata from ${shortenHomePath(candidate.authPath)} to auth.profiles before removing the legacy auth profile JSON.`,
+        );
+      }
+    } catch (err) {
+      result.warnings.push(
+        `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)}`,
+      );
+    }
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
+  if (result.changes.length > 0) {
+    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+  }
+  return result;
+}
+
 function resolveLegacyFlatStore(
   candidate: AuthProfileRepairCandidate,
 ): LegacyFlatAuthProfileStore | null {
@@ -368,8 +816,9 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
     try {
       const backupPath = backupAuthProfileStore(entry.authPath, now);
       saveAuthProfileStore(entry.store, entry.agentDir, { syncExternalCli: false });
+      fs.unlinkSync(entry.authPath);
       result.changes.push(
-        `Rewrote ${shortenHomePath(entry.authPath)} to the canonical auth profile format (backup: ${shortenHomePath(backupPath)}).`,
+        `Migrated ${shortenHomePath(entry.authPath)} to the SQLite auth profile store (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
       result.warnings.push(`Failed to rewrite ${shortenHomePath(entry.authPath)}: ${String(err)}`);

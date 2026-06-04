@@ -1,3 +1,4 @@
+// Verifies typing-mode schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { SessionSchema } from "./zod-schema.session.js";

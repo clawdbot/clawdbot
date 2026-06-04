@@ -8,6 +8,7 @@ const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
   Record<string, SessionEntry | undefined>
 >;
 
+/** Reads a session store without mutating it and drops malformed entries. */
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {

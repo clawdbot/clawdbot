@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
+/**
+ * Config snapshot builders shared by gateway tests.
+ */
 function hashConfigRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -8,6 +11,7 @@ function hashConfigRaw(raw: string | null): string {
     .digest("hex");
 }
 
+/** Builds a fully-populated config snapshot for config-module mocks. */
 export function buildTestConfigSnapshot(params: {
   path: string;
   exists: boolean;

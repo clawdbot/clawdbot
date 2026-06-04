@@ -1,3 +1,4 @@
+// Provides shared replay-policy helpers for provider plugins.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { isGemma4ModelId } from "../shared/google-models.js";

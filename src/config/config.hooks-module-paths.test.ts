@@ -1,3 +1,4 @@
+// Covers hook module path config validation.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 

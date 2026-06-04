@@ -1,3 +1,4 @@
+/** Tests exec SecretRef id validation parity with provider contract helpers. */
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { SecretRefSchema as GatewaySecretRefSchema } from "../../packages/gateway-protocol/src/schema.js";

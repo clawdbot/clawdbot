@@ -125,7 +125,10 @@ let maxCpuTicks = 0;
 let timedOut = false;
 let finished = false;
 let parentSignalInFlight = false;
+let forwardedParentSignal = null;
 let killTimer;
+let parentSignalTimer;
+let parentSignalPollTimer;
 const updateMetrics = () => {
   if (!child.pid) {
     return;
@@ -164,6 +167,21 @@ function terminateChildGroup(signal) {
   } catch {}
 }
 
+function childGroupExists() {
+  if (!child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
 function clearRuntimeTimers() {
   clearInterval(interval);
   if (timeoutTimer) {
@@ -172,9 +190,16 @@ function clearRuntimeTimers() {
   if (killTimer) {
     clearTimeout(killTimer);
   }
+  if (parentSignalTimer) {
+    clearTimeout(parentSignalTimer);
+  }
+  if (parentSignalPollTimer) {
+    clearInterval(parentSignalPollTimer);
+  }
 }
 
 function rethrowParentSignal(signal) {
+  clearRuntimeTimers();
   process.removeAllListeners(signal);
   process.kill(process.pid, signal);
   process.exit(128);
@@ -192,12 +217,18 @@ function handleParentSignal(signal) {
     return;
   }
   finished = true;
+  forwardedParentSignal = signal;
   clearRuntimeTimers();
   terminateChildGroup(signal);
-  setTimeout(() => {
+  parentSignalTimer = setTimeout(() => {
     terminateChildGroup("SIGKILL");
     rethrowParentSignal(signal);
   }, timeoutKillGraceMs);
+  parentSignalPollTimer = setInterval(() => {
+    if (!childGroupExists()) {
+      rethrowParentSignal(signal);
+    }
+  }, Math.min(50, timeoutKillGraceMs));
 }
 
 for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
@@ -248,6 +279,12 @@ child.on("error", (error) => {
 });
 
 child.on("exit", (code, signal) => {
+  if (parentSignalInFlight && forwardedParentSignal) {
+    if (!childGroupExists()) {
+      rethrowParentSignal(forwardedParentSignal);
+    }
+    return;
+  }
   if (timedOut && killTimer) {
     return;
   }

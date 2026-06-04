@@ -1,3 +1,4 @@
+// Session picker limits shared by TUI list and lookup flows.
 export const TUI_RECENT_SESSIONS_ACTIVE_MINUTES = 7 * 24 * 60;
 export const TUI_SESSION_PICKER_LIMIT = 50;
 export const TUI_SESSION_LOOKUP_LIMIT = 5;

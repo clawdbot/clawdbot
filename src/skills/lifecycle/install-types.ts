@@ -1,3 +1,4 @@
+/** Normalized output returned by skill install flows and command wrappers. */
 export type SkillInstallResult = {
   ok: boolean;
   message: string;

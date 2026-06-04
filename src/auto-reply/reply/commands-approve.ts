@@ -1,3 +1,4 @@
+// Implements approval commands for pending tool and execution requests.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   getChannelPlugin,

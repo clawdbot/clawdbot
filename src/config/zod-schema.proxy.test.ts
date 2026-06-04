@@ -1,3 +1,4 @@
+// Covers proxy schema parsing and validation behavior.
 import { describe, it, expect } from "vitest";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 

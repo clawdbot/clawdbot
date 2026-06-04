@@ -1,3 +1,6 @@
+/**
+ * Tests for live-probe helpers that validate the CLI MCP loopback backend.
+ */
 import {
   createServer as createHttpServer,
   type IncomingMessage,

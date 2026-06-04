@@ -1,3 +1,4 @@
+/** Formats plugin source paths for user-facing status output. */
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import { shortenHomeInString } from "../utils.js";
@@ -18,6 +19,7 @@ function tryRelative(root: string, filePath: string): string | null {
   return rel.replaceAll("\\", "/");
 }
 
+/** Formats a plugin source path for status tables using known source roots. */
 export function formatPluginSourceForTable(
   plugin: Pick<PluginRecord, "source" | "origin">,
   roots: PluginSourceRoots,

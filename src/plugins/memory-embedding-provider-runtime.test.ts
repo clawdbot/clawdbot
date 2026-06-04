@@ -1,3 +1,4 @@
+// Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders,

@@ -4,6 +4,8 @@ import type { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.j
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 
+// Test runtime for subagent announce delivery. It maps gateway calls, session
+// store reads, and queue outcomes onto caller-provided mocks.
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
   getRuntimeConfig: () => OpenClawConfig;
@@ -51,6 +53,7 @@ function resolveQueueSettings(params: {
   };
 }
 
+/** Create a mocked announce delivery runtime for focused subagent tests. */
 export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRuntimeMockOptions) {
   return {
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>

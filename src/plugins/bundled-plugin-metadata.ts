@@ -1,3 +1,4 @@
+// Loads bundled plugin metadata without activating plugin runtime code.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +38,7 @@ type BundledPluginPathPair = {
   built: string;
 };
 
+/** Metadata collected from a bundled plugin package and manifest. */
 export type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
@@ -168,6 +170,7 @@ function collectBundledPluginMetadata(
   return entries;
 }
 
+/** Lists bundled plugin metadata from source or built package layouts. */
 export function listBundledPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -190,6 +193,7 @@ export function listBundledPluginMetadata(params?: {
   return metadata;
 }
 
+/** Finds bundled plugin metadata by manifest id. */
 export function findBundledPluginMetadataById(
   pluginId: string,
   params?: {
@@ -202,6 +206,7 @@ export function findBundledPluginMetadataById(
   return listBundledPluginMetadata(params).find((entry) => entry.manifest.id === pluginId);
 }
 
+/** Resolves the source directory for a bundled plugin in the current workspace. */
 export function resolveBundledPluginWorkspaceSourcePath(params: {
   rootDir: string;
   scanDir?: string;
@@ -296,6 +301,7 @@ function listBundledPluginEntrySearchPaths(
   return uniqueStrings(paths);
 }
 
+/** Resolves a generated runtime path for a bundled plugin entry. */
 export function resolveBundledPluginGeneratedPath(
   rootDir: string,
   entry: BundledPluginPathPair | undefined,
@@ -345,6 +351,7 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
   return candidate;
 }
 
+/** Resolves the repo entry path for a bundled plugin, preferring source unless requested. */
 export function resolveBundledPluginRepoEntryPath(params: {
   rootDir: string;
   pluginId: string;

@@ -1,3 +1,6 @@
+/**
+ * Tests gateway talk runtime wiring for speech provider execution.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   invokeTalkSpeakDirect,

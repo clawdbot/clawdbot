@@ -1,3 +1,4 @@
+// Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,

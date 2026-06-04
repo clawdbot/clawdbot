@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Parses command output key-value lines using a caller-supplied separator. */
 export function parseKeyValueOutput(output: string, separator: string): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const rawLine of output.split(/\r?\n/)) {

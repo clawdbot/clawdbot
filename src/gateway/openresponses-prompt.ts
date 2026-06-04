@@ -1,3 +1,4 @@
+// Prompt adapter from OpenAI Responses input items to OpenClaw agent messages.
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
@@ -22,6 +23,7 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
+/** Build the user message and optional system prompt from Responses API input. */
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
@@ -58,7 +60,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         entry: { sender: `Tool:${item.call_id}`, body: item.output },
       });
     }
-    // Skip reasoning and item_reference for prompt building (Phase 1)
+    // Reasoning and item references are not user-visible prompt text in this adapter.
   }
 
   const message = buildAgentMessageFromConversationEntries(conversationEntries);

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -234,9 +235,8 @@ describe("runCapability local no-auth audio providers", () => {
   it("prefers stored auth profile credentials over plugin-only media no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
-        await fs.writeFile(
-          path.join(agentDir, "auth-profiles.json"),
-          JSON.stringify({
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "local-audio:default": {
@@ -245,7 +245,9 @@ describe("runCapability local no-auth audio providers", () => {
                 key: "stored-local-audio-key",
               },
             },
-          }),
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         await withAudioFixture(
           "openclaw-local-audio-stored-profile",

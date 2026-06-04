@@ -1,8 +1,10 @@
+/** Heartbeat prompt defaults, token stripping, task parsing, and due-time helpers. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+/** YAML-like task entry parsed from HEARTBEAT.md. */
 export type HeartbeatTask = {
   name: string;
   interval: string;
@@ -13,6 +15,7 @@ export type HeartbeatTask = {
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 const HEARTBEAT_CONTEXT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.";
+/** Default prompt for heartbeat turns when config does not override it. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
@@ -71,6 +74,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   return true;
 }
 
+/** Resolves configured heartbeat prompt text with the built-in default fallback. */
 export function resolveHeartbeatPrompt(raw?: string): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed || HEARTBEAT_PROMPT;
@@ -87,6 +91,7 @@ function appendHeartbeatResponseToolInstructions(prompt: string): string {
   return `${trimmed}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
 }
 
+/** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
 export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed
@@ -144,6 +149,7 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   return { text: collapsed, didStrip };
 }
 
+/** Strips HEARTBEAT_OK acknowledgements and decides whether visible notification is needed. */
 export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
@@ -225,7 +231,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Detect tasks block start
+    // Detect tasks block start.
     if (trimmed === "tasks:") {
       inTasksBlock = true;
       continue;
@@ -235,8 +241,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       continue;
     }
 
-    // End of tasks block (either empty line or new top-level content)
-    // Don't exit for task fields (interval:, prompt:, - name:)
+    // End of tasks block is any new top-level content that is not a task field.
     const isTaskField =
       trimmed.startsWith("interval:") ||
       trimmed.startsWith("prompt:") ||
@@ -252,7 +257,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       continue;
     }
 
-    // Parse task entry
+    // Parse a task entry and scan following indented fields.
     if (trimmed.startsWith("- name:")) {
       const name = trimmed
         .replace("- name:", "")

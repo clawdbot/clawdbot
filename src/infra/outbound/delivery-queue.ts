@@ -1,3 +1,4 @@
+// Public outbound delivery queue facade for storage and recovery operations.
 export {
   ackDelivery,
   enqueueDelivery,

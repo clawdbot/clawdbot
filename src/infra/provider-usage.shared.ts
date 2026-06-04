@@ -1,7 +1,9 @@
+// Shared provider usage labels, ids, and timeout helpers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
+/** Default timeout for provider usage collection. */
 export const DEFAULT_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
@@ -28,10 +30,12 @@ export const usageProviders: UsageProviderId[] = [
   "zai",
 ];
 
+/** Returns true for providers whose usage endpoint is only meaningful with OAuth/token auth. */
 export function isOAuthOnlyUsageProvider(provider: UsageProviderId): boolean {
   return provider === "openai";
 }
 
+/** Maps model/provider ids and credential type into supported usage provider ids. */
 export function resolveUsageProviderId(
   provider?: string | null,
   options?: { credentialType?: string | null },
@@ -72,6 +76,7 @@ export const ignoredErrors = new Set([
 export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
+/** Resolves a promise with a fallback when usage collection exceeds the timeout. */
 export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveTimerTimeoutMs(ms, 1);

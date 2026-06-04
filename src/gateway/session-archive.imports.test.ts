@@ -1,3 +1,6 @@
+/**
+ * Session archive import-boundary tests.
+ */
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 

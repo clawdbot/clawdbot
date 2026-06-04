@@ -1,3 +1,4 @@
+// Gateway RPC handlers for channel lifecycle, status, and account operations.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -245,6 +246,7 @@ function resolveChannelGatewayAccountId(params: {
   );
 }
 
+/** Log out one channel account through its owning channel plugin. */
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -279,6 +281,7 @@ export async function logoutChannelAccount(params: {
   };
 }
 
+/** Start one channel account through its owning channel plugin. */
 export async function startChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -305,6 +308,7 @@ export async function startChannelAccount(params: {
   };
 }
 
+/** Stop one channel account through its owning channel plugin. */
 export async function stopChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -328,6 +332,7 @@ export async function stopChannelAccount(params: {
   };
 }
 
+/** Gateway request handlers for channel list, status, start, stop, and logout. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
     if (!validateChannelsStatusParams(params)) {

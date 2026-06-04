@@ -5,6 +5,13 @@ import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
 
+/**
+ * Rendering helpers for session tool output in the TUI.
+ *
+ * These helpers normalize paths/text/image fallbacks before tool results are
+ * styled or truncated by higher-level renderers.
+ */
+/** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
   if (typeof path !== "string") {
     return "";
@@ -16,6 +23,7 @@ export function shortenPath(path: unknown): string {
   return path;
 }
 
+/** Returns a display string for string/nullish values, or null for unsupported values. */
 export function str(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -26,14 +34,17 @@ export function str(value: unknown): string | null {
   return null;
 }
 
+/** Replaces tabs with stable spaces so terminal layout does not shift by tab stop. */
 export function replaceTabs(text: string): string {
   return text.replace(/\t/g, "   ");
 }
 
+/** Normalizes raw terminal output before display. */
 export function normalizeDisplayText(text: string): string {
   return text.replace(/\r/g, "");
 }
 
+/** Extracts text output and image placeholders from a tool result. */
 export function getTextOutput(
   result:
     | { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }
@@ -53,6 +64,7 @@ export function getTextOutput(
 
   const caps = getCapabilities();
   if (imageBlocks.length > 0 && (!caps.images || !showImages)) {
+    // When inline images are unavailable, preserve visible evidence that media was returned.
     const imageIndicators = imageBlocks
       .map((img) => {
         const mimeType = img.mimeType ?? "image/unknown";
@@ -69,11 +81,13 @@ export function getTextOutput(
   return output;
 }
 
+/** Minimal shape shared by renderers that carry typed tool details. */
 export type ToolRenderResultLike<TDetails> = {
   content: (TextContent | ImageContent)[];
   details: TDetails;
 };
 
+/** Formats the invalid-argument marker with the active theme. */
 export function invalidArgText(theme: Pick<Theme, "fg">): string {
   return theme.fg("error", "[invalid arg]");
 }

@@ -1,3 +1,4 @@
+// Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
@@ -26,6 +27,7 @@ function unwrapMatchingLiteralQuotes(value: string): string {
   return value;
 }
 
+/** Returns true when a dotenv value is only a shell reference, not an expanded secret. */
 export function isUnresolvedShellReference(value: string): boolean {
   const candidate = unwrapMatchingLiteralQuotes(value.trim());
   // Match only values whose entire content is a shell variable reference:
@@ -81,6 +83,7 @@ function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
   return { entries, skippedShellReferenceKeys };
 }
 
+/** Reads a specific state directory `.env` as managed service env vars. */
 export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
   return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
@@ -112,12 +115,14 @@ export function readStateDirDotEnvVars(
   return readStateDirDotEnvVarsFromStateDir(stateDir);
 }
 
+/** Split view of durable gateway service env sources before precedence is applied. */
 export type DurableServiceEnvVarSources = {
   stateDirDotEnvEnvironment: Record<string, string>;
   configEnvironment: Record<string, string>;
   durableEnvironment: Record<string, string>;
 };
 
+/** Collects durable service env vars from state-dir `.env` and config, preserving each source. */
 export function collectDurableServiceEnvVarSources(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;

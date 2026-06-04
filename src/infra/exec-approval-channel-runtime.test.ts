@@ -1,3 +1,4 @@
+// Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";

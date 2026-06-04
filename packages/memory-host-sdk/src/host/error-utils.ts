@@ -20,6 +20,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b(\d{6,}:[A-Za-z0-9_-]{20,})\b/g,
 ];
 
+// Redact common token/key shapes before errors leave memory host internals.
 function maskToken(token: string): string {
   if (token.length < 18) {
     return "***";
@@ -54,6 +55,7 @@ function redactSensitiveText(text: string): string {
   return next;
 }
 
+/** Format unknown errors with causes while redacting likely secrets. */
 export function formatErrorMessage(err: unknown): string {
   let formatted: string;
   if (err instanceof Error) {

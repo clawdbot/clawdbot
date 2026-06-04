@@ -1,3 +1,4 @@
+// Covers synchronous SQLite transaction helpers.
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";

@@ -1,5 +1,6 @@
 type LooseRecord = Record<string, unknown>;
 
+/** Builds a loose cron job fixture for isolated-agent unit tests. */
 export function makeIsolatedAgentJobFixture(overrides?: LooseRecord) {
   return {
     id: "test-job",

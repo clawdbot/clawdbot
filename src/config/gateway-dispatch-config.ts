@@ -1,3 +1,4 @@
+// Loads gateway dispatch config from runtime state and files.
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -21,6 +22,7 @@ const GATEWAY_DISPATCH_TOP_LEVEL_KEYS = [
   "session",
 ] as const;
 
+/** Options for reading the reduced config surface used by Gateway dispatch. */
 type GatewayDispatchConfigReadOptions = {
   configPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -58,6 +60,7 @@ function projectGatewayDispatchConfig(value: unknown): OpenClawConfig {
   return projected as OpenClawConfig;
 }
 
+// Main session keys are process-local; Gateway dispatch always sees the canonical main key.
 function applyGatewayDispatchSessionDefaults(config: OpenClawConfig): OpenClawConfig {
   if (config.session?.mainKey === undefined) {
     return config;

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 
+/** Signal forwarding options for a child process bridge. */
 export type ChildProcessBridgeOptions = {
   signals?: NodeJS.Signals[];
   onSignal?: (signal: NodeJS.Signals) => void;
@@ -11,6 +12,7 @@ const defaultSignals: NodeJS.Signals[] =
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 
+/** Forwards process termination signals to a child and detaches on child exit/error. */
 export function attachChildProcessBridge(
   child: ChildProcess,
   { signals = defaultSignals, onSignal }: ChildProcessBridgeOptions = {},

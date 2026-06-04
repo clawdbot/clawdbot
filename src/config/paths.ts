@@ -1,3 +1,4 @@
+// Resolves config, state, cache, and runtime filesystem paths.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

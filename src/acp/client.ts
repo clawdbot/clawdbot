@@ -1,3 +1,4 @@
+/** Interactive stdio ACP client used to connect a terminal session to an OpenClaw ACP server. */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -189,6 +190,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   };
 }
 
+/** Starts the terminal prompt loop for a local ACP client session. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<void> {
   const { client, agent, sessionId } = await createAcpClient(opts);
 

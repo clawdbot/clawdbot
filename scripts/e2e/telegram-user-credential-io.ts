@@ -20,7 +20,7 @@ type RunCommandOptions = {
 
 const DEFAULT_OUTPUT_LIMIT = 128 * 1024;
 const DEFAULT_FETCH_BODY_LIMIT = 1024 * 1024;
-const KILL_GRACE_MS = 5_000;
+const KILL_GRACE_MS = readKillGraceMs();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
   SIGINT: 130,
@@ -30,11 +30,38 @@ const ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
 let forwardedSignalExitCode: number | undefined;
 let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
 
+function readKillGraceMs() {
+  const raw = process.env.OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS?.trim();
+  if (!raw) {
+    return 5_000;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`);
+  }
+  return parsed;
+}
+
+function finishForwardedSignalIfIdle() {
+  if (forwardedSignalExitCode === undefined || ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
 for (const signal of Object.keys(SIGNAL_EXIT_CODES) as Array<keyof typeof SIGNAL_EXIT_CODES>) {
   process.on(signal, () => {
     forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
     if (ACTIVE_CHILD_TREE_KILLERS.size === 0) {
-      process.exit(forwardedSignalExitCode);
+      finishForwardedSignalIfIdle();
+      return;
     }
     const activeKillers = Array.from(ACTIVE_CHILD_TREE_KILLERS);
     for (const killChildTree of activeKillers) {
@@ -156,7 +183,7 @@ export function runCommand(
         return;
       }
       if (forwardedSignalExitCode !== undefined) {
-        activeChildTree.unregister();
+        activeChildTree.unregister({ finishForwardedSignal: !childProcessTreeMayStillExist(child) });
         return;
       }
       if (timedOutError && killTimer && childProcessTreeMayStillExist(child)) {
@@ -218,8 +245,11 @@ function registerActiveChildProcessTree(child: ReturnType<typeof spawn>) {
   ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
   return {
     killChildTree,
-    unregister: () => {
+    unregister: (options: { finishForwardedSignal?: boolean } = {}) => {
       ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+      if (options.finishForwardedSignal ?? true) {
+        finishForwardedSignalIfIdle();
+      }
     },
   };
 }

@@ -1,3 +1,6 @@
+/**
+ * Session lifecycle state derivation tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   deriveGatewaySessionLifecycleSnapshot,

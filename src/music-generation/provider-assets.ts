@@ -1,3 +1,4 @@
+// Validates and normalizes provider asset attachments for music generation.
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
@@ -6,6 +7,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
+/**
+ * Asset extraction and download helpers for music generation providers.
+ *
+ * Providers may return audio as URLs, file objects, or base64 payloads; these
+ * helpers normalize those shapes into bounded in-memory GeneratedMusicAsset values.
+ */
+/** Candidate audio file returned by a provider before download. */
 export type GeneratedMusicFileCandidate = {
   url: string;
   mimeType?: string;
@@ -14,6 +22,7 @@ export type GeneratedMusicFileCandidate = {
 
 function normalizeSpecificAudioMimeType(value: unknown): string | undefined {
   const mimeType = normalizeOptionalString(value)?.split(";")[0]?.trim().toLowerCase();
+  // Generic binary types are less useful than known audio fallbacks for saved track names.
   if (!mimeType || mimeType === "application/octet-stream" || mimeType === "binary/octet-stream") {
     return undefined;
   }
@@ -49,6 +58,7 @@ function pushGeneratedMusicFileCandidate(
   });
 }
 
+/** Extract URL/file candidates from common provider response keys. */
 export function extractGeneratedMusicFileCandidates(
   payload: unknown,
   keys: readonly string[] = ["audio", "audio_file"],
@@ -63,6 +73,7 @@ export function extractGeneratedMusicFileCandidates(
   return candidates;
 }
 
+/** Convert a base64 provider payload into a generated music asset. */
 export function generatedMusicAssetFromBase64(params: {
   base64: string;
   mimeType: string;
@@ -77,6 +88,7 @@ export function generatedMusicAssetFromBase64(params: {
   };
 }
 
+/** Download a generated music URL with size limits and inferred audio metadata. */
 export async function downloadGeneratedMusicAsset(params: {
   candidate: GeneratedMusicFileCandidate;
   timeoutMs: number;

@@ -1,3 +1,4 @@
+// Verifies Docker sandbox config security audit findings.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

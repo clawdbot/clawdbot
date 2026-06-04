@@ -1,3 +1,4 @@
+// Lazily resolves optional service modules without eager runtime imports.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { toSafeImportPath } from "./import-specifier.js";
 

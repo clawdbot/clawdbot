@@ -1,3 +1,4 @@
+/** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";

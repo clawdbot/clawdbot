@@ -1,3 +1,4 @@
+// Reparse support for lazy commands after their placeholder has been replaced.
 import type { Command } from "commander";
 import { buildParseArgv } from "../argv.js";
 import { resolveActionArgs, resolveCommandOptionArgs } from "./helpers.js";
@@ -11,6 +12,7 @@ function buildFallbackArgv(program: Command, actionCommand: Command | undefined)
     : [...parentOptionArgs, ...actionArgsList];
 }
 
+/** Rebuild argv from Commander action args and re-run parsing after lazy registration. */
 export async function reparseProgramFromActionArgs(
   program: Command,
   actionArgs: unknown[],

@@ -5,8 +5,18 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 
+/**
+ * Shared parsing helpers for chat ids, chat guids, and service-prefixed targets.
+ */
+
+/**
+ * Prefix mapping for service-qualified target strings.
+ */
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
+/**
+ * Normalized input used by chat target prefix parsers.
+ */
 export type ChatTargetPrefixesParams = {
   trimmed: string;
   lower: string;
@@ -15,13 +25,22 @@ export type ChatTargetPrefixesParams = {
   chatIdentifierPrefixes: string[];
 };
 
+/**
+ * Parsed conversation target forms accepted by channel allowlists and target resolvers.
+ */
 export type ParsedChatTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string };
 
+/**
+ * Parsed allowlist target, including sender handles.
+ */
 export type ParsedChatAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
+/**
+ * Sender metadata used for chat-aware allowlist checks.
+ */
 export type ChatSenderAllowParams = {
   allowFrom: Array<string | number>;
   sender: string;
@@ -31,6 +50,9 @@ export type ChatSenderAllowParams = {
   allowConversationTargets?: boolean | null;
 };
 
+/**
+ * Checks whether a sender or current conversation matches an allowlist entry.
+ */
 export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
@@ -51,6 +73,8 @@ export function isAllowedParsedChatSender(params: {
 
   const senderNormalized = params.normalizeSender(params.sender);
   const allowConversationTargets = params.allowConversationTargets === true;
+  // Conversation ids are only considered when the channel opts in; otherwise
+  // allowlists stay sender-handle based for compatibility with older configs.
   const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
   const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
   const chatIdentifier = allowConversationTargets
@@ -91,6 +115,9 @@ function startsWithAnyPrefix(value: string, prefixes: readonly string[]): boolea
   return prefixes.some((prefix) => value.startsWith(prefix));
 }
 
+/**
+ * Resolves service-prefixed handle targets, delegating chat-shaped remainders.
+ */
 export function resolveServicePrefixedTarget<TService extends string, TTarget>(params: {
   trimmed: string;
   lower: string;
@@ -115,6 +142,9 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
   return null;
 }
 
+/**
+ * Resolves service-prefixed targets where chat ids should bypass handle parsing.
+ */
 export function resolveServicePrefixedChatTarget<TService extends string, TTarget>(params: {
   trimmed: string;
   lower: string;
@@ -140,6 +170,9 @@ export function resolveServicePrefixedChatTarget<TService extends string, TTarge
   });
 }
 
+/**
+ * Parses chat target prefixes and throws for malformed prefixed values.
+ */
 export function parseChatTargetPrefixesOrThrow(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {
@@ -177,6 +210,9 @@ export function parseChatTargetPrefixesOrThrow(
   return null;
 }
 
+/**
+ * Resolves service-prefixed allowlist targets.
+ */
 export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   trimmed: string;
   lower: string;
@@ -196,6 +232,9 @@ export function resolveServicePrefixedAllowTarget<TAllowTarget>(params: {
   return null;
 }
 
+/**
+ * Resolves service-prefixed allow targets before falling back to chat prefixes.
+ */
 export function resolveServicePrefixedOrChatAllowTarget<
   TAllowTarget extends ParsedChatAllowTarget,
 >(params: {
@@ -230,6 +269,9 @@ export function resolveServicePrefixedOrChatAllowTarget<
   return null;
 }
 
+/**
+ * Creates a reusable sender matcher for chat-aware channel allowlists.
+ */
 export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
@@ -249,6 +291,9 @@ export function createAllowedChatSenderMatcher(params: {
     });
 }
 
+/**
+ * Parses chat target prefixes for allowlist entries, ignoring malformed values.
+ */
 export function parseChatAllowTargetPrefixes(
   params: ChatTargetPrefixesParams,
 ): ParsedChatTarget | null {

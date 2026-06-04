@@ -22,6 +22,15 @@ export function createClientHarness() {
   const stdout = new PassThrough();
   const writes: string[] = [];
   let stdinDestroyed = false;
+  let exitEmitted = false;
+  let emitProcessExit: () => void = () => undefined;
+  type HarnessProcess = EventEmitter & {
+    stdin: Writable;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill: (signal?: NodeJS.Signals) => unknown;
+  };
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
@@ -31,17 +40,27 @@ export function createClientHarness() {
   const destroyStdin = stdin.destroy.bind(stdin);
   stdin.destroy = ((error?: Error) => {
     stdinDestroyed = true;
-    return destroyStdin(error);
+    const result = destroyStdin(error);
+    if (!exitEmitted) {
+      exitEmitted = true;
+      // Let stdin surface pipe errors before the harness emits the fake child exit.
+      // Otherwise close-reason tests can race EPIPE against a synthetic clean exit.
+      setImmediate(emitProcessExit);
+    }
+    return result;
   }) as typeof stdin.destroy;
-  const process = Object.assign(new EventEmitter(), {
+  const process: HarnessProcess = Object.assign(new EventEmitter(), {
     stdin,
     stdout,
     stderr: new PassThrough(),
     killed: false,
-    kill: vi.fn(() => {
+    kill: vi.fn((_signal?: NodeJS.Signals) => {
       process.killed = true;
     }),
   });
+  emitProcessExit = () => {
+    process.emit("exit", 0, null);
+  };
   const client = CodexAppServerClient.fromTransportForTests(process);
   return {
     client,

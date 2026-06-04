@@ -7,25 +7,37 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 type PersistentDedupeData = Record<string, number>;
 
 export type PersistentDedupeOptions = {
+  /** Milliseconds a recorded key remains recent; `0` keeps keys until cache pruning. */
   ttlMs: number;
+  /** Maximum process-local cache entries used before consulting disk. */
   memoryMaxSize: number;
+  /** Maximum persisted entries retained per namespace file. */
   fileMaxEntries: number;
+  /** Maps a namespace to the JSON file that stores its persisted dedupe timestamps. */
   resolveFilePath: (namespace: string) => string;
   lockOptions?: Partial<FileLockOptions>;
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupeCheckOptions = {
+  /** Logical bucket for the key; omitted/blank values use `global`. */
   namespace?: string;
+  /** Test or replay timestamp override used for TTL checks and writes. */
   now?: number;
+  /** Per-call disk error hook, overriding the helper-level hook. */
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupe = {
+  /** Returns true only when the key was not recently seen and was recorded for future checks. */
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Checks memory/disk recency without recording a new timestamp. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Loads recent disk entries into memory for one namespace and returns the loaded count. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
+  /** Clears only process-local memory; persisted namespace files are left intact. */
   clearMemory: () => void;
+  /** Returns the current process-local cache size. */
   memorySize: () => number;
 };
 
@@ -53,11 +65,14 @@ export type ClaimableDedupeOptions =
     };
 
 export type ClaimableDedupe = {
+  /** Starts ownership of a key, reports duplicates, or returns the active claim's pending result. */
   claim: (
     key: string,
     options?: PersistentDedupeCheckOptions,
   ) => Promise<ClaimableDedupeClaimResult>;
+  /** Records a claimed key as handled and resolves any waiters with the recorded result. */
   commit: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Releases an active claim without recording it, rejecting waiters with the supplied error. */
   release: (
     key: string,
     options?: {
@@ -65,9 +80,13 @@ export type ClaimableDedupe = {
       error?: unknown;
     },
   ) => void;
+  /** Checks whether the key is recent without claiming or committing it. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Warms persistent storage into memory when configured; memory-only guards return zero. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
+  /** Clears process-local caches and in-memory persistent state. */
   clearMemory: () => void;
+  /** Returns the current process-local cache size. */
   memorySize: () => number;
 };
 

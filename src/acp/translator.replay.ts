@@ -1,3 +1,4 @@
+/** Gateway transcript message shape accepted by ACP replay extraction. */
 export type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;

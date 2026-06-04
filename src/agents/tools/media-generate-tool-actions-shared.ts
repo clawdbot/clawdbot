@@ -8,6 +8,12 @@ import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
 
+/**
+ * Shared list/status action builders for media generation tools.
+ *
+ * The image, video, and music tools share provider list output plus active-task
+ * status/duplicate-guard responses.
+ */
 type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
@@ -36,8 +42,10 @@ type MediaGenerateListProviderDetails<TProvider extends MediaGenerateProvider> =
   catalog: ReturnType<typeof synthesizeMediaGenerationCatalogEntries<TProvider["capabilities"]>>;
 };
 
+/** Common tool result shape for media generation list/status actions. */
 export type { MediaGenerateActionResult };
 
+/** Builds a provider list result with config/auth status and synthetic catalog entries. */
 export function createMediaGenerateProviderListActionResult<
   TProvider extends MediaGenerateProvider,
 >(params: {
@@ -79,6 +87,7 @@ export function createMediaGenerateProviderListActionResult<
         }),
         authEnvVars: getProviderEnvVars(provider.id),
         capabilities: provider.capabilities,
+        // Catalog entries are generated for model browser/search without invoking provider code.
         catalog: synthesizeMediaGenerationCatalogEntries({
           kind: params.kind,
           provider,
@@ -115,6 +124,7 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
+/** Creates status and duplicate-guard action helpers for a media generation task type. */
 export function createMediaGenerateTaskStatusActions<Task>(params: {
   inactiveText: string;
   findActiveTask: (sessionKey?: string) => Task | undefined;
@@ -179,6 +189,7 @@ function createMediaGenerateDuplicateGuardResult<Task>(params: {
   if (!activeTask) {
     return undefined;
   }
+  // Duplicate guard returns the active status payload so callers can show current progress.
   return {
     content: [
       {

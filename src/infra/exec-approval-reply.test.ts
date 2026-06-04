@@ -1,3 +1,4 @@
+// Tests execution approval reply text and decision formatting.
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 

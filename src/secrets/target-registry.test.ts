@@ -1,3 +1,4 @@
+/** Tests secret target registry matching and docs coverage. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

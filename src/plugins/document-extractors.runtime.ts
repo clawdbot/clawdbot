@@ -1,3 +1,4 @@
+/** Resolves bundled document extractor providers from enabled manifest contracts. */
 import {
   normalizeStringEntries,
   sortUniqueStrings,
@@ -39,6 +40,7 @@ function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   );
 }
 
+/** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

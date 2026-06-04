@@ -1,3 +1,4 @@
+// Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
@@ -11,9 +12,11 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
+/** Provider id for OpenAI-compatible remote embedding servers. */
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
+/** Normalized OpenAI-compatible embedding client configuration. */
 export type OpenAICompatibleEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
@@ -326,6 +329,7 @@ async function postEmbeddingRequest(params: {
   }
 }
 
+/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
 export async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
@@ -362,6 +366,7 @@ export async function createOpenAICompatibleEmbeddingClient(
   };
 }
 
+/** Creates an OpenAI-compatible embedding provider and its backing client. */
 export async function createOpenAICompatibleEmbeddingProvider(
   options: EmbeddingProviderCreateOptions,
 ): Promise<{
@@ -398,6 +403,7 @@ export async function createOpenAICompatibleEmbeddingProvider(
   };
 }
 
+/** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",

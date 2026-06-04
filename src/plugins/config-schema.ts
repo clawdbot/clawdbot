@@ -1,3 +1,4 @@
+// Builds plugin config schemas from manifest metadata.
 import { z, type ZodTypeAny } from "zod";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
@@ -119,6 +120,7 @@ function safeParseJsonSchema(
   };
 }
 
+/** Build a plugin config schema from JSON Schema with runtime validation/default support. */
 export function buildJsonPluginConfigSchema(
   schema: JsonSchemaObject,
   options?: BuildJsonPluginConfigSchemaOptions,
@@ -134,6 +136,7 @@ export function buildJsonPluginConfigSchema(
   };
 }
 
+/** Build a plugin config schema from Zod, exporting JSON Schema when the Zod runtime supports it. */
 export function buildPluginConfigSchema(
   schema: ZodTypeAny,
   options?: BuildPluginConfigSchemaOptions,
@@ -144,6 +147,7 @@ export function buildPluginConfigSchema(
     return {
       safeParse,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+      // Normalize generated schema so plugin consumers see a stable draft-07-ish shape.
       jsonSchema: normalizeJsonSchema(
         schemaWithJson.toJSONSchema({
           target: "draft-07",
@@ -164,6 +168,7 @@ export function buildPluginConfigSchema(
   };
 }
 
+/** Return a schema for plugins that intentionally accept no config keys. */
 export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {

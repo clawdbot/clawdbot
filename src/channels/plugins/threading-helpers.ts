@@ -2,12 +2,22 @@ import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelThreadingAdapter } from "./types.core.js";
 
+/**
+ * Shared reply-threading resolver helpers for channel plugins.
+ */
+
 type ReplyToModeResolver = NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
 
+/**
+ * Creates a reply-to-mode resolver that always returns one mode.
+ */
 export function createStaticReplyToModeResolver(mode: ReplyToMode): ReplyToModeResolver {
   return () => mode;
 }
 
+/**
+ * Creates a resolver that reads reply-to mode from top-level channel config.
+ */
 export function createTopLevelChannelReplyToModeResolver(channelId: string): ReplyToModeResolver {
   return ({ cfg }) => {
     const channelConfig = (
@@ -17,6 +27,9 @@ export function createTopLevelChannelReplyToModeResolver(channelId: string): Rep
   };
 }
 
+/**
+ * Creates a resolver that reads reply-to mode from account-scoped config.
+ */
 export function createScopedAccountReplyToModeResolver<TAccount>(params: {
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => TAccount;
   resolveReplyToMode: (

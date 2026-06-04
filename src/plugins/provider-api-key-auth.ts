@@ -1,3 +1,4 @@
+/** Builds API-key provider auth methods that write profiles and config updates. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
@@ -90,6 +91,7 @@ async function applyApiKeyConfig(params: {
   return params.defaultModel ? applyPrimaryModel(next, params.defaultModel) : next;
 }
 
+/** Creates a provider auth method that captures, stores, and configures API-key credentials. */
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {

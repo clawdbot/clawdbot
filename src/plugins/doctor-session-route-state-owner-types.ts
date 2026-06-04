@@ -1,3 +1,4 @@
+// Defines doctor session route state ownership types for plugin repairs.
 export type DoctorSessionRouteStateOwner = {
   id: string;
   label: string;

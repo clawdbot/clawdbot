@@ -1,3 +1,4 @@
+/** Verifies ClawHub plugin spec parsing and install metadata handling. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -172,6 +173,11 @@ type PackageLookupCall = {
 type ArchiveInstallCall = {
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  installPolicyRequest?: {
+    kind?: string;
+    requestedSpecifier?: string;
+    source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
+  };
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
@@ -323,12 +329,36 @@ describe("installPluginFromClawHub", () => {
       archivePath: "/tmp/clawhub-demo/archive.zip",
     });
     expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toEqual({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+    });
     expect(logger.info).toHaveBeenCalledWith("ClawHub code-plugin demo@2026.3.22 channel=official");
     expect(logger.info).toHaveBeenCalledWith(
       "Compatibility: pluginApi=>=2026.3.22 minGateway=2026.3.0",
     );
     expect(logger.warn).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks custom ClawHub registries as third-party install policy authority", async () => {
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.internal.example",
+    });
+
+    expectClawHubInstallFlow({
+      baseUrl: "https://clawhub.internal.example",
+      version: "2026.3.22",
+      archivePath: "/tmp/clawhub-demo/archive.zip",
+    });
+    expectSuccessfulClawHubInstall(result);
+    expect(archiveInstallCall().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: "clawhub:demo",
+      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
+    });
   });
 
   it("marks official source-linked OpenClaw packages as trusted for install scanning", async () => {

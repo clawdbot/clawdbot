@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
+const DEFAULT_PROTOCOL_GENERATION_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
 
 export const selectedCodexAppServerJsonSchemas = [
   "DynamicToolCallParams.json",
@@ -65,6 +66,69 @@ export function resolveCodexProtocolPnpmCommand(
   return command;
 }
 
+export function buildCodexProtocolExportArgs(manifestPath: string, outDir: string): string[] {
+  return [
+    "run",
+    "--manifest-path",
+    manifestPath,
+    "-p",
+    "codex-app-server-protocol",
+    "--bin",
+    "export",
+    "--",
+    "--out",
+    outDir,
+    "--experimental",
+  ];
+}
+
+export function resolveCodexProtocolMinFreeBytes(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES;
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_PROTOCOL_GENERATION_MIN_FREE_BYTES;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(
+      `OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES must be a non-negative byte count, got ${raw}`,
+    );
+  }
+  return Math.floor(parsed);
+}
+
+export function resolveCodexProtocolCargoTargetDir(
+  codexRepo: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const targetDir = env.CARGO_TARGET_DIR ?? env.CARGO_BUILD_TARGET_DIR;
+  if (targetDir !== undefined && targetDir.trim() !== "") {
+    return path.isAbsolute(targetDir) ? path.resolve(targetDir) : path.resolve(codexRepo, targetDir);
+  }
+  return path.join(codexRepo, "codex-rs", "target");
+}
+
+export function validateCodexProtocolGenerationHeadroom(params: {
+  freeBytes: number;
+  minFreeBytes: number;
+  pathLabel: string;
+}): void {
+  if (params.minFreeBytes <= 0 || params.freeBytes >= params.minFreeBytes) {
+    return;
+  }
+
+  throw new Error(
+    [
+      "Codex app-server protocol generation needs Rust build headroom before running cargo.",
+      `${params.pathLabel} has ${formatBytes(params.freeBytes)} free; requires at least ${formatBytes(
+        params.minFreeBytes,
+      )}.`,
+      "Run this check on Crabbox/Testbox, free local disk, or set OPENCLAW_CODEX_PROTOCOL_MIN_FREE_BYTES=0 to override intentionally.",
+    ].join("\n"),
+  );
+}
+
 export async function resolveCodexAppServerProtocolSource(repoRoot: string): Promise<{
   codexRepo: string;
   sourceRoot: string;
@@ -98,6 +162,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
+  const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
   const jsonRoot = path.join(root, "json");
   const manifestPath = path.join(codexRepo, "codex-rs/Cargo.toml");
@@ -106,32 +171,9 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   };
 
   try {
-    runCargoProtocolGenerator(codexRepo, [
-      "run",
-      "--manifest-path",
-      manifestPath,
-      "-p",
-      "codex-cli",
-      "--",
-      "app-server",
-      "generate-ts",
-      "--out",
-      typescriptRoot,
-      "--experimental",
-    ]);
-    runCargoProtocolGenerator(codexRepo, [
-      "run",
-      "--manifest-path",
-      manifestPath,
-      "-p",
-      "codex-cli",
-      "--",
-      "app-server",
-      "generate-json-schema",
-      "--out",
-      jsonRoot,
-      "--experimental",
-    ]);
+    await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot });
+    runCargoProtocolGenerator(codexRepo, buildCodexProtocolExportArgs(manifestPath, generatedRoot));
+    await splitGeneratedProtocolOutput(generatedRoot, { jsonRoot, typescriptRoot });
     await rewriteTypeScriptImports(typescriptRoot);
     formatGeneratedTypeScript(repoRoot, typescriptRoot);
   } catch (error) {
@@ -188,6 +230,98 @@ async function isDirectory(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function assertCodexProtocolGenerationHeadroom(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const minFreeBytes = resolveCodexProtocolMinFreeBytes();
+  if (minFreeBytes <= 0) {
+    return;
+  }
+
+  const checks = [
+    { path: params.repoRoot, label: "protocol output checkout" },
+    {
+      path: resolveCodexProtocolCargoTargetDir(params.codexRepo),
+      label: "Cargo target directory",
+    },
+  ];
+  for (const check of checks) {
+    const statsPath = await resolveExistingStatfsPath(check.path);
+    const stats = await fs.statfs(statsPath);
+    validateCodexProtocolGenerationHeadroom({
+      freeBytes: stats.bavail * stats.bsize,
+      minFreeBytes,
+      pathLabel: check.label,
+    });
+  }
+}
+
+function formatBytes(bytes: number): string {
+  const gib = bytes / (1024 * 1024 * 1024);
+  if (gib >= 1) {
+    return `${gib.toFixed(1)} GiB`;
+  }
+  return `${Math.floor(bytes / (1024 * 1024))} MiB`;
+}
+
+async function resolveExistingStatfsPath(targetPath: string): Promise<string> {
+  let currentPath = path.resolve(targetPath);
+  while (true) {
+    try {
+      await fs.stat(currentPath);
+      return currentPath;
+    } catch {
+      const parent = path.dirname(currentPath);
+      if (parent === currentPath) {
+        throw new Error(`Cannot find an existing parent directory for ${targetPath}`);
+      }
+      currentPath = parent;
+    }
+  }
+}
+
+async function splitGeneratedProtocolOutput(
+  sourceRoot: string,
+  roots: { jsonRoot: string; typescriptRoot: string },
+): Promise<void> {
+  await copyGeneratedProtocolFiles(sourceRoot, sourceRoot, roots);
+}
+
+async function copyGeneratedProtocolFiles(
+  sourceRoot: string,
+  currentRoot: string,
+  roots: { jsonRoot: string; typescriptRoot: string },
+): Promise<void> {
+  const entries = await fs.readdir(currentRoot, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      const sourcePath = path.join(currentRoot, entry.name);
+      if (entry.isDirectory()) {
+        await copyGeneratedProtocolFiles(sourceRoot, sourcePath, roots);
+        return;
+      }
+      if (!entry.isFile()) {
+        return;
+      }
+
+      const relativePath = path.relative(sourceRoot, sourcePath);
+      const targetRoot = entry.name.endsWith(".ts")
+        ? roots.typescriptRoot
+        : entry.name.endsWith(".json")
+          ? roots.jsonRoot
+          : null;
+      if (targetRoot === null) {
+        return;
+      }
+
+      const targetPath = path.join(targetRoot, relativePath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.copyFile(sourcePath, targetPath);
+    }),
+  );
 }
 
 function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {

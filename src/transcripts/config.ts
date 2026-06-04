@@ -1,5 +1,13 @@
+// Resolves transcript source configuration from OpenClaw config.
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Configuration normalization for transcript capture/import.
+ *
+ * Raw config can contain optional auto-start provider locators; resolution
+ * returns bounded defaults and drops malformed entries before runtime startup.
+ */
+/** Raw auto-start transcript source entry from config. */
 export type TranscriptsAutoStartConfig = {
   providerId: string;
   sessionId?: string;
@@ -10,6 +18,7 @@ export type TranscriptsAutoStartConfig = {
   meetingUrl?: string;
 };
 
+/** Normalized auto-start source entry consumed by transcript runtime code. */
 export type ResolvedTranscriptsAutoStartConfig = {
   providerId: string;
   sessionId?: string;
@@ -20,12 +29,14 @@ export type ResolvedTranscriptsAutoStartConfig = {
   meetingUrl?: string;
 };
 
+/** Raw transcripts config block. */
 export type TranscriptsConfig = {
   enabled?: boolean;
   maxUtterances?: number;
   autoStart?: TranscriptsAutoStartConfig[];
 };
 
+/** Resolved transcripts config with defaults applied. */
 export type ResolvedTranscriptsConfig = {
   enabled: boolean;
   maxUtterances: number;
@@ -56,6 +67,7 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
     .filter((entry): entry is ResolvedTranscriptsAutoStartConfig => entry !== undefined);
 }
 
+/** Normalize raw transcripts config into runtime settings. */
 export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
   const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const maxUtterances =

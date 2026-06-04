@@ -4,6 +4,9 @@ import {
   type AttachGatewayWsConnectionHandlerParams,
 } from "./server/ws-connection.js";
 
+// Websocket runtime adapter wires the already-built GatewayRequestContext into
+// the lower-level connection handler. This keeps startup context construction
+// separate from per-connection websocket plumbing.
 type GatewayWsRuntimeParams = Omit<
   AttachGatewayWsConnectionHandlerParams,
   "buildRequestContext" | "refreshHealthSnapshot"
@@ -11,6 +14,7 @@ type GatewayWsRuntimeParams = Omit<
   context: GatewayRequestContext;
 };
 
+/** Attaches websocket handlers for an already-created gateway request context. */
 export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
   attachGatewayWsConnectionHandler({
     wss: params.wss,

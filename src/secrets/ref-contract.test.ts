@@ -1,3 +1,4 @@
+/** Tests secret ref id validation, labels, and provider alias contracts. */
 import { describe, expect, it } from "vitest";
 import {
   INVALID_FILE_SECRET_REF_IDS,

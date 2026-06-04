@@ -1,3 +1,6 @@
+/**
+ * Tests agent directory compatibility helpers.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 

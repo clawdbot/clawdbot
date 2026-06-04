@@ -1,3 +1,4 @@
+// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "./types.js";
 

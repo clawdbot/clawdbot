@@ -8,8 +8,11 @@ import type { Model } from "../llm/types.js";
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
 export type OAuthCredentials = {
+  /** Refresh token or provider-equivalent long-lived credential. */
   refresh: string;
+  /** Access token or provider-equivalent bearer credential. */
   access: string;
+  /** Absolute epoch milliseconds when the access token should be considered expired. */
   expires: number;
   [key: string]: unknown;
 };
@@ -20,43 +23,61 @@ export type OAuthProviderId = string;
 export type OAuthProvider = OAuthProviderId;
 
 export type OAuthPrompt = {
+  /** Prompt text shown to the operator. */
   message: string;
+  /** Optional placeholder for manual text entry. */
   placeholder?: string;
+  /** Whether empty input should be accepted instead of reprompting. */
   allowEmpty?: boolean;
 };
 
 export type OAuthAuthorizationInput = {
+  /** Authorization code parsed from a callback URL, query string, or pasted code. */
   code?: string;
+  /** Optional OAuth state parsed from callback URL, query string, or `code#state` input. */
   state?: string;
 };
 
 export type OAuthAuthInfo = {
+  /** Provider authorization URL shown to the user. */
   url: string;
+  /** Optional provider-specific instruction text for manual flows. */
   instructions?: string;
 };
 
 export type OAuthSelectOption = {
+  /** Stable option id returned when the operator selects this entry. */
   id: string;
+  /** Human-readable option label shown in the selector. */
   label: string;
 };
 
 export type OAuthSelectPrompt = {
+  /** Prompt text shown above the selectable options. */
   message: string;
+  /** Options available for the operator to choose from. */
   options: OAuthSelectOption[];
 };
 
 export interface OAuthLoginCallbacks {
+  /** Emits authorization URL/instructions to the UI before waiting for completion. */
   onAuth: (info: OAuthAuthInfo) => void;
+  /** Prompts for manual input such as pasted callback URLs or authorization codes. */
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
+  /** Reports human-readable login progress without exposing secrets. */
   onProgress?: (message: string) => void;
+  /** Optional direct manual-code entry hook used when callback-server flows cannot complete. */
   onManualCodeInput?: () => Promise<string>;
   /** Show an interactive selector and return the selected option id, or undefined on cancel. */
   onSelect?: (prompt: OAuthSelectPrompt) => Promise<string | undefined>;
+  /** Cancels pending OAuth waits and prompts when aborted. */
   signal?: AbortSignal;
 }
 
 export interface OAuthProviderInterface {
+  /** Stable provider id used for credential and config routing. */
   readonly id: OAuthProviderId;
+  /** Human-readable provider name shown in login flows. */
   readonly name: string;
 
   /** Run the login flow and return credentials to persist. */
@@ -77,8 +98,11 @@ export interface OAuthProviderInterface {
 
 /** @deprecated Use OAuthProviderInterface instead. */
 export interface OAuthProviderInfo {
+  /** Stable provider id used for credential and config routing. */
   id: OAuthProviderId;
+  /** Human-readable provider name shown in login flows. */
   name: string;
+  /** Whether this provider can currently start OAuth login. */
   available: boolean;
 }
 
@@ -178,7 +202,13 @@ function renderOAuthPage(options: {
 </html>`;
 }
 
-export function oauthSuccessHtml(message: string): string {
+/**
+ * Renders the local OAuth callback success page after provider authentication completes.
+ */
+export function oauthSuccessHtml(
+  /** Success message rendered in the local OAuth completion page. */
+  message: string,
+): string {
   return renderOAuthPage({
     title: "Authentication successful",
     heading: "Authentication successful",
@@ -186,7 +216,15 @@ export function oauthSuccessHtml(message: string): string {
   });
 }
 
-export function oauthErrorHtml(message: string, details?: string): string {
+/**
+ * Renders the local OAuth callback error page without exposing raw credential material.
+ */
+export function oauthErrorHtml(
+  /** Error message rendered in the local OAuth completion page. */
+  message: string,
+  /** Optional provider-specific error details rendered below the message. */
+  details?: string,
+): string {
   return renderOAuthPage({
     title: "Authentication failed",
     heading: "Authentication failed",
@@ -203,6 +241,7 @@ function base64urlEncode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/[=]/g, "");
 }
 
+/** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
 export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
   const verifierBytes = new Uint8Array(32);
   crypto.getRandomValues(verifierBytes);
@@ -216,13 +255,21 @@ export async function generatePKCE(): Promise<{ verifier: string; challenge: str
   return { verifier, challenge };
 }
 
+/** Generates a random base64url OAuth state value for CSRF protection. */
 export function generateOAuthState(): string {
   const stateBytes = new Uint8Array(32);
   crypto.getRandomValues(stateBytes);
   return base64urlEncode(stateBytes);
 }
 
-export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
+/**
+ * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
+ * Empty input returns an empty object so callers can keep prompting.
+ */
+export function parseOAuthAuthorizationInput(
+  /** Raw callback URL, query string, `code#state`, or pasted code. */
+  input: string,
+): OAuthAuthorizationInput {
   const value = input.trim();
   if (!value) {
     return {};
@@ -254,13 +301,24 @@ export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationI
   return { code: value };
 }
 
-export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined {
+/** Converts provider `expires_in` seconds into safe positive milliseconds. */
+export function resolveOAuthTokenLifetimeMs(
+  /** Provider `expires_in` value in seconds. */
+  value: unknown,
+): number | undefined {
   return positiveSecondsToSafeMilliseconds(value);
 }
 
+/** Resolves provider token lifetime into an absolute expiry timestamp with optional refresh skew. */
 export function resolveOAuthTokenExpiresAt(
+  /** Provider `expires_in` value in seconds. */
   value: unknown,
-  options: { nowMs?: number; refreshSkewMs?: number } = {},
+  options: {
+    /** Current timestamp override for deterministic expiry calculations. */
+    nowMs?: number;
+    /** Milliseconds to subtract so refresh happens before provider expiry. */
+    refreshSkewMs?: number;
+  } = {},
 ): number | undefined {
   const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
   return lifetimeMs === undefined
@@ -271,19 +329,30 @@ export function resolveOAuthTokenExpiresAt(
       });
 }
 
+/**
+ * Creates the shared cancellation error used by abortable OAuth login flows.
+ */
 export function createOAuthLoginCancelledError(): Error {
   return new Error("Login cancelled");
 }
 
-export function throwIfOAuthLoginAborted(signal?: AbortSignal): void {
+/** Throws the shared OAuth cancellation error when a login signal is already aborted. */
+export function throwIfOAuthLoginAborted(
+  /** Abort signal attached to the OAuth login flow. */
+  signal?: AbortSignal,
+): void {
   if (signal?.aborted) {
     throw createOAuthLoginCancelledError();
   }
 }
 
+/** Races a pending OAuth login step against the login abort signal and normalizes rejections. */
 export function withOAuthLoginAbort<T>(
+  /** Pending OAuth login operation to race against abort. */
   promise: Promise<T>,
+  /** Abort signal attached to the OAuth login flow. */
   signal?: AbortSignal,
+  /** Optional cleanup hook called when the login is aborted. */
   onAbort?: () => void,
 ): Promise<T> {
   if (!signal) {
@@ -308,10 +377,12 @@ export function withOAuthLoginAbort<T>(
     signal.addEventListener("abort", abort, { once: true });
     promise.then(
       (value) => {
+        // The login step won the race; remove abort listeners so long-lived prompts do not leak.
         cleanup();
         resolve(value);
       },
       (error: unknown) => {
+        // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
         cleanup();
         reject(toLintErrorObject(error, "Non-Error rejection"));
       },
@@ -319,8 +390,11 @@ export function withOAuthLoginAbort<T>(
   });
 }
 
+/** Combines a caller abort signal with a bounded timeout signal for OAuth HTTP requests. */
 export function buildOAuthRequestSignal(options: {
+  /** Optional caller-provided signal to combine with the timeout signal. */
   signal?: AbortSignal;
+  /** Request timeout in milliseconds before the generated signal aborts. */
   timeoutMs: number;
 }): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 0, 0));

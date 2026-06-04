@@ -1,3 +1,4 @@
+// Gateway auth option parser: supports direct values and file-backed secrets with CLI warnings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readSecretFromFile } from "../acp/secret-file.js";
 import { defaultRuntime } from "../runtime.js";
@@ -26,6 +27,7 @@ function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
   );
 }
 
+/** Normalize gateway token/password options and reject ambiguous direct+file pairs. */
 export function resolveGatewayAuthOptions(opts: {
   token?: unknown;
   tokenFile?: unknown;

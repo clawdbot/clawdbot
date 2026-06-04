@@ -1,9 +1,11 @@
+// Maintenance command registration: doctor, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
+/** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
   program
     .command("doctor")

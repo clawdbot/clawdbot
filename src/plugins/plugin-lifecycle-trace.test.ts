@@ -1,3 +1,4 @@
+// Covers plugin lifecycle trace formatting and sanitization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   tracePluginLifecyclePhase,

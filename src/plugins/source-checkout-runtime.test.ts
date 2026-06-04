@@ -1,3 +1,4 @@
+/** Verifies source-checkout plugin runtime resolution and dependency diagnostics. */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setBundledPluginsDirOverrideForTest } from "./bundled-dir.js";

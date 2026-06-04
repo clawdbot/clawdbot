@@ -1,3 +1,6 @@
+/**
+ * Tests gateway method runtime wrappers exposed to plugins.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { dispatchGatewayMethod } from "./gateway-method-runtime.js";

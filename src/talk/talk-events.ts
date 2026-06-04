@@ -1,3 +1,6 @@
+/**
+ * Canonical event names emitted by Talk sessions across realtime and STT/TTS flows.
+ */
 export const TALK_EVENT_TYPES = [
   "session.started",
   "session.ready",
@@ -29,14 +32,29 @@ export const TALK_EVENT_TYPES = [
   "health.changed",
 ] as const;
 
+/**
+ * Talk event name accepted by the event sequencer.
+ */
 export type TalkEventType = (typeof TALK_EVENT_TYPES)[number];
 
+/**
+ * High-level media mode used to group Talk session telemetry.
+ */
 export type TalkMode = "realtime" | "stt-tts" | "transcription";
 
+/**
+ * Transport family carrying Talk audio and session control.
+ */
 export type TalkTransport = "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
 
+/**
+ * Brain mode that explains whether Talk output is agent-mediated, tool-only, or passive.
+ */
 export type TalkBrain = "agent-consult" | "direct-tools" | "none";
 
+/**
+ * Session-level correlation fields copied onto every Talk event.
+ */
 export type TalkEventContext = {
   sessionId: string;
   mode: TalkMode;
@@ -45,6 +63,9 @@ export type TalkEventContext = {
   provider?: string;
 };
 
+/**
+ * Sequenced Talk event envelope delivered to observers and gateway clients.
+ */
 export type TalkEvent<TPayload = unknown> = TalkEventContext & {
   id: string;
   type: TalkEventType;
@@ -59,6 +80,9 @@ export type TalkEvent<TPayload = unknown> = TalkEventContext & {
   payload: TPayload;
 };
 
+/**
+ * Caller-supplied event payload before session context, id, sequence, and timestamp are attached.
+ */
 export type TalkEventInput<TPayload = unknown> = {
   type: TalkEventType;
   payload: TPayload;
@@ -71,10 +95,15 @@ export type TalkEventInput<TPayload = unknown> = {
   parentId?: string;
 };
 
+/**
+ * Per-session event sequencer that enforces correlation ids before emitting events.
+ */
 export type TalkEventSequencer = {
   next<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
 };
 
+// Turn-scoped event names must carry turnId so mixed audio/text/tool streams can be
+// reconstructed without guessing from sequence order alone.
 const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "turn.started",
   "turn.ended",
@@ -94,6 +123,7 @@ const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "tool.error",
 ]);
 
+// Capture-scoped events describe microphone capture lifecycle, which can overlap turns.
 const CAPTURE_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
   "capture.started",
   "capture.stopped",
@@ -110,6 +140,9 @@ function assertTalkEventCorrelation(input: TalkEventInput): void {
   }
 }
 
+/**
+ * Creates a sequencer that stamps Talk events with stable session context and monotonic ids.
+ */
 export function createTalkEventSequencer(
   context: TalkEventContext,
   options: { now?: () => Date | string } = {},

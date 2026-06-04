@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
+import { requireRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -29,13 +30,6 @@ async function openPermissionClient(client: Pick<PermissionClient, "id" | "mode"
       mode: client.mode,
     },
   });
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected record");
-  }
-  return value as Record<string, unknown>;
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
@@ -144,16 +138,19 @@ test("session:patch hook fires with correct context", async () => {
   });
 
   expect(patched.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
+  );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
   expect(event.sessionKey).toBe("agent:main:main");
-  const context = requireRecord(event.context);
-  const sessionEntry = requireRecord(context.sessionEntry);
+  const context = requireRecord(event.context, "internal hook context");
+  const sessionEntry = requireRecord(context.sessionEntry, "session entry");
   expect(sessionEntry.sessionId).toBe("sess-hook-test");
   expect(sessionEntry.label).toBe("updated-label");
-  expect(requireRecord(context.patch).label).toBe("updated-label");
-  requireRecord(context.cfg);
+  expect(requireRecord(context.patch, "session patch").label).toBe("updated-label");
+  requireRecord(context.cfg, "config");
 
   ws.close();
 });
@@ -218,7 +215,10 @@ test("session:patch hook only fires after successful patch", async () => {
   });
 
   expect(validPatch.ok).toBe(true);
-  const event = requireRecord(requireFirstCallArg(sessionHookMocks.triggerInternalHook));
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
+  );
   expect(event.type).toBe("session");
   expect(event.action).toBe("patch");
 

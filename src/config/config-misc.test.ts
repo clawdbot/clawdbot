@@ -1,3 +1,4 @@
+// Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,

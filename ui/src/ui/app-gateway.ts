@@ -9,6 +9,7 @@ import {
   flushChatQueueForEvent,
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
+  recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
   scopedAgentListParamsForRefreshTarget,
@@ -1219,6 +1220,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.send_timing") {
+    recordChatSendServerTiming(
+      host as unknown as Parameters<typeof recordChatSendServerTiming>[0],
+      evt.payload,
+    );
     return;
   }
 

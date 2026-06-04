@@ -1,3 +1,4 @@
+/** Loads plugin CLI registrations lazily for the command tree and plugin-owned subcommands. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
@@ -22,6 +23,7 @@ import type {
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
+/** Public CLI loader options passed from command bootstrap surfaces. */
 export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -44,6 +46,7 @@ export type PluginCliCommandGroupEntry = {
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
 
+/** Creates the default plugin CLI logger shared with runtime loading. */
 export function createPluginCliLogger(): PluginLogger {
   return createPluginRuntimeLoaderLogger();
 }
@@ -127,6 +130,7 @@ async function resolvePrimaryCommandPluginIds(
   return listPluginCliRootOwnerIds(registry, normalizedPrimary);
 }
 
+/** Builds the runtime load context used for CLI-only plugin registry loading. */
 export function resolvePluginCliLoadContext(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

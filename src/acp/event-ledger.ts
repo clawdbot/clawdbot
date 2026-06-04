@@ -1,3 +1,4 @@
+/** Persistent/replayable ACP event ledger implementations for session rehydration. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -44,6 +45,7 @@ export type AcpEventLedgerReplay = {
   events: AcpEventLedgerEntry[];
 };
 
+/** Storage interface for recording ACP session prompts/updates and reading replay state. */
 export type AcpEventLedger = {
   startSession: (params: {
     sessionId: string;
@@ -423,6 +425,7 @@ function createLedgerApi(params: {
   };
 }
 
+/** Creates an in-memory ACP event ledger for tests and ephemeral runtimes. */
 export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEventLedger {
   const normalized = normalizeLedgerOptions(options);
   const state: MutableLedgerState = {
@@ -438,6 +441,7 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
   });
 }
 
+/** Resolves the legacy file-backed ACP ledger path under the OpenClaw state directory. */
 export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "acp", "event-ledger.json");
 }
@@ -451,6 +455,7 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/** Creates a file-backed ACP event ledger protected by a process/file lock. */
 export function createFileAcpEventLedger(
   params: { filePath: string } & LedgerOptions,
 ): AcpEventLedger {
@@ -502,6 +507,7 @@ export function createFileAcpEventLedger(
   });
 }
 
+/** Migrates a legacy file ledger into the SQLite state database, preserving replay order. */
 export async function migrateFileAcpEventLedgerToSqlite(
   params: { filePath: string; archiveSource?: boolean } & OpenClawStateDatabaseOptions,
 ): Promise<{ importedSessions: number; importedEvents: number; archived?: boolean }> {
@@ -881,6 +887,7 @@ function buildSqliteReplay(session: LedgerSession | undefined): AcpEventLedgerRe
   };
 }
 
+/** Creates the SQLite-backed ACP event ledger used by the state database. */
 export function createSqliteAcpEventLedger(
   params: OpenClawStateDatabaseOptions & LedgerOptions = {},
 ): AcpEventLedger {

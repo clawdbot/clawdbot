@@ -1,3 +1,4 @@
+// Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
 import {
   isSystemEventProvider,

@@ -1,6 +1,8 @@
 import { explainShellCommand, formatCommandSpans } from "../infra/command-explainer/index.js";
 import type { ExecApprovalCommandSpan } from "../infra/exec-approvals.js";
 
+// Runtime wrapper for shell command highlighting in exec approval requests.
+/** Resolve command spans used to highlight exec approval prompts. */
 export async function resolveExecApprovalCommandSpans(
   command: string,
 ): Promise<ExecApprovalCommandSpan[] | undefined> {

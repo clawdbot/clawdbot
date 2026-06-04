@@ -1,3 +1,4 @@
+// Verifies schema hint metadata and sensitive path handling.
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

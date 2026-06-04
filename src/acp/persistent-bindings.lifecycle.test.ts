@@ -1,3 +1,4 @@
+/** Tests configured ACP binding lifecycle and in-place reset behavior. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

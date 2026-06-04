@@ -18,6 +18,7 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import {
@@ -62,9 +63,9 @@ async function buildModelsJsonFingerprint(params: {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }): Promise<string> {
-  const authProfilesMtimeMs = await readFileMtimeMs(
-    path.join(params.agentDir, "auth-profiles.json"),
-  );
+  const authProfilesSqlitePath = resolveAuthProfileDatabasePath(params.agentDir);
+  const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
+  const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
   const pluginCatalogMtimes = await readPluginCatalogMtimes(params.agentDir);
   const envShape = createConfigRuntimeEnv(params.config, {});
@@ -76,6 +77,7 @@ async function buildModelsJsonFingerprint(params: {
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
     authProfilesMtimeMs,
+    authProfilesWalMtimeMs,
     modelsFileMtimeMs,
     pluginCatalogMtimes,
     workspaceDir: params.workspaceDir,

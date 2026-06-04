@@ -1,3 +1,6 @@
+/**
+ * Tests group access policy helpers and SDK-visible access decisions.
+ */
 import { describe, expect, it } from "vitest";
 import {
   evaluateGroupRouteAccessForPolicy,

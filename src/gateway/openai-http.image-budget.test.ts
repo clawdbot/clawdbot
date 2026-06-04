@@ -1,3 +1,6 @@
+/**
+ * Tests image budget handling for OpenAI HTTP gateway requests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const extractImageContentFromSourceMock = vi.fn();

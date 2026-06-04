@@ -18,6 +18,7 @@ type RuntimeContextPromptParts = {
   runtimeSystemContext?: string;
 };
 
+/** Hidden custom transcript message that carries runtime context into model conversion. */
 export type RuntimeContextCustomMessage = {
   role: "custom";
   customType: string;
@@ -29,6 +30,7 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
+/** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
 export function buildCurrentInboundPromptContextPrefix(
   context: CurrentInboundPromptContext | undefined,
   options?: { preferResumableText?: boolean },
@@ -40,6 +42,7 @@ export function buildCurrentInboundPromptContextPrefix(
   return text?.trim() ?? "";
 }
 
+/** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
@@ -70,6 +73,11 @@ function removeLastPromptOccurrence(text: string, prompt: string): string | null
     .trim();
 }
 
+/**
+ * Separates user-authored prompt text from hidden runtime context. Transcript
+ * prompt stays user-visible; model prompt may carry runtime-only additions that
+ * should be delivered as hidden context instead of persisted as user text.
+ */
 export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
@@ -106,6 +114,8 @@ export function resolveRuntimeContextPromptParts(params: {
     : transcriptPrompt
       ? removeLastPromptOccurrence(extracted.text, transcriptPrompt)?.trim()
       : undefined;
+  // The hidden context is whatever remains after removing the last visible
+  // prompt occurrence, plus any explicit internal runtime-context block.
   const runtimeContext =
     [hiddenRuntimeContext, extracted.runtimeContext]
       .filter((value): value is string => Boolean(value?.trim()))
@@ -150,14 +160,17 @@ function buildRuntimeContextMessageContent(params: {
   ].join("\n");
 }
 
+/** Builds the hidden next-turn system context payload for model conversion. */
 export function buildRuntimeContextSystemContext(runtimeContext: string): string {
   return buildRuntimeContextMessageContent({ runtimeContext, kind: "next-turn" });
 }
 
+/** Builds the hidden runtime-event system context payload for empty runtime-only turns. */
 export function buildRuntimeEventSystemContext(runtimeContext: string): string {
   return buildRuntimeContextMessageContent({ runtimeContext, kind: "runtime-event" });
 }
 
+/** Creates a non-displayed custom transcript message for runtime context, if any exists. */
 export function buildRuntimeContextCustomMessage(
   runtimeContext: string | undefined,
 ): RuntimeContextCustomMessage | undefined {

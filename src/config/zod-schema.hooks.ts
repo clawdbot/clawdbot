@@ -1,3 +1,4 @@
+// Defines hook-related Zod schema fragments for config parsing.
 import path from "node:path";
 import { z } from "zod";
 import { InstallRecordShape } from "./zod-schema.installs.js";

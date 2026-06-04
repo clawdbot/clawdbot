@@ -38,6 +38,7 @@ function resolveRuntimeThinkingCatalog(
   return configuredCatalog.length > 0 ? configuredCatalog : undefined;
 }
 
+/** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: {

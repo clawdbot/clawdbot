@@ -10,7 +10,7 @@ import {
   createAllowlistProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -150,7 +150,13 @@ export function createWhatsAppPluginBase(params: {
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
-      ...getChatChannelMeta(WHATSAPP_CHANNEL),
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp (QR link)",
+      detailLabel: "WhatsApp Web",
+      docsPath: "/channels/whatsapp",
+      docsLabel: "whatsapp",
+      blurb: "works with your own number; recommend a separate phone + eSIM.",
+      systemImage: "message",
       showConfigured: false,
       quickstartAllowFrom: true,
       forceAccountBinding: true,
@@ -169,7 +175,14 @@ export function createWhatsAppPluginBase(params: {
         },
       },
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    // `channels.whatsapp.accounts.*` (account add/remove, and `enabled` flips)
+    // must restart the channel so a disabled account's provider is torn down;
+    // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
+    // hot no-op and leaves the account connected until a full restart.
+    reload: {
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      noopPrefixes: ["channels.whatsapp"],
+    },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {

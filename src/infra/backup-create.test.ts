@@ -1,10 +1,13 @@
+// Covers backup archive creation and verification filtering.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -491,6 +494,73 @@ describe("createBackupArchive", () => {
           });
         } finally {
           closeOpenClawStateDatabase();
+        }
+      },
+    );
+  });
+
+  it("snapshots per-agent SQLite auth stores into the archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-backup",
+              },
+            },
+          },
+          state.agentDir(),
+          { syncExternalCli: false },
+        );
+        closeOpenClawAgentDatabasesForTest();
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 31, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const archivedDbEntry = entries.find((entry) =>
+          entry.endsWith("/state/agents/main/agent/openclaw-agent.sqlite"),
+        );
+        expect(archivedDbEntry).toBeDefined();
+        expect(
+          entries.some((entry) =>
+            entry.endsWith("/state/agents/main/agent/openclaw-agent.sqlite-wal"),
+          ),
+        ).toBe(false);
+
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        const extractedPath = path.join(extractDir, archivedDbEntry!);
+        expect((await fs.stat(extractedPath)).mode & 0o777).toBe(0o600);
+        const sqlite = requireNodeSqlite();
+        const archivedDb = new sqlite.DatabaseSync(extractedPath, {
+          readOnly: true,
+        });
+        try {
+          const row = archivedDb
+            .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
+            .get() as { store_json: string };
+          expect(JSON.parse(row.store_json).profiles["openai:default"]).toMatchObject({
+            type: "api_key",
+            provider: "openai",
+            key: "sk-backup",
+          });
+        } finally {
+          archivedDb.close();
         }
       },
     );

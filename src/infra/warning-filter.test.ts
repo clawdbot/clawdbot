@@ -1,3 +1,4 @@
+// Covers process warning filtering and install idempotence.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
 

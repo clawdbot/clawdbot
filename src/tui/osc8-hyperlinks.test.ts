@@ -1,3 +1,4 @@
+// Verifies OSC8 hyperlink formatting for TUI terminal output.
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls, wrapOsc8 } from "./osc8-hyperlinks.js";
 

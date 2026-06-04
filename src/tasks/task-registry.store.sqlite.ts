@@ -1,3 +1,4 @@
+// Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -43,6 +44,7 @@ type TaskRegistryDatabase = {
   path: string;
 };
 
+// SQLite-backed task store mirrors task records and delivery state into openclaw-state.db.
 const TASK_RUN_SELECT_COLUMNS = [
   "task_id",
   "runtime",
@@ -92,6 +94,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const cleanupAfter = normalizeNumber(row.cleanup_after);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
+  // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {

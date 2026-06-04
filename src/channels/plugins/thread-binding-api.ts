@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 
+/**
+ * Lightweight thread-binding public artifact loader for bundled channels.
+ */
+
 type ThreadBindingPlacement = "current" | "child";
 
 type ThreadBindingInboundConversationParams = {
@@ -35,6 +39,8 @@ function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi
       artifactBasename: THREAD_BINDING_API_ARTIFACT_BASENAME,
     });
   } catch (error) {
+    // Missing artifacts are optional; broken artifacts should surface so
+    // bundled thread-binding contracts do not fail silently.
     if (error instanceof Error && error.message.startsWith(MISSING_PUBLIC_SURFACE_PREFIX)) {
       return undefined;
     }
@@ -47,6 +53,9 @@ function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement
   return normalized === "current" || normalized === "child" ? normalized : undefined;
 }
 
+/**
+ * Resolves the default top-level thread-binding placement for a bundled channel.
+ */
 export function resolveBundledChannelThreadBindingDefaultPlacement(
   channelId: string,
 ): ThreadBindingPlacement | undefined {
@@ -55,6 +64,9 @@ export function resolveBundledChannelThreadBindingDefaultPlacement(
   );
 }
 
+/**
+ * Resolves inbound conversation refs from a bundled channel thread-binding artifact.
+ */
 export function resolveBundledChannelThreadBindingInboundConversation(
   params: ThreadBindingInboundConversationParams & { channelId: string },
 ): ThreadBindingConversationRef | null | undefined {

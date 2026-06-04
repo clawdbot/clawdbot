@@ -1,3 +1,6 @@
+/**
+ * Gateway config reload handler tests.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

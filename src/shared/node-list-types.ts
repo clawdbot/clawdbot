@@ -1,3 +1,4 @@
+/** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
   nodeId: string;
   displayName?: string;
@@ -22,6 +23,7 @@ export type NodeListNode = {
   approvedAtMs?: number;
 };
 
+/** Pending pairing/access request shown to operators. */
 export type PendingRequest = {
   requestId: string;
   nodeId: string;
@@ -36,6 +38,7 @@ export type PendingRequest = {
   requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
+/** Persisted paired node entry with optional token and permission metadata. */
 export type PairedNode = {
   nodeId: string;
   token?: string;
@@ -53,6 +56,7 @@ export type PairedNode = {
   lastSeenReason?: string;
 };
 
+/** Combined pairing list result used by CLI/UI node approval surfaces. */
 export type PairingList = {
   pending: PendingRequest[];
   paired: PairedNode[];

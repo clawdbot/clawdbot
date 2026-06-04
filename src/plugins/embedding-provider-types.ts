@@ -1,6 +1,8 @@
+/** Type contracts for plugin-contributed embedding providers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 
+/** Input accepted by embedding providers, including multimodal inline-data parts. */
 export type EmbeddingInput =
   | string
   | {
@@ -10,11 +12,13 @@ export type EmbeddingInput =
       >;
     };
 
+/** Per-call options passed to embedding provider calls. */
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
 };
 
+/** Runtime metadata returned with a created embedding provider. */
 export type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
@@ -22,6 +26,7 @@ export type EmbeddingProviderRuntime = {
   inlineBatchTimeoutMs?: number;
 };
 
+/** Created embedding provider instance used by memory/search callers. */
 export type EmbeddingProvider = {
   id: string;
   model: string;
@@ -35,6 +40,7 @@ export type EmbeddingProvider = {
   close?: () => Promise<void> | void;
 };
 
+/** Options passed to embedding provider adapters when creating providers. */
 export type EmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
@@ -56,11 +62,13 @@ export type EmbeddingProviderCreateOptions = {
   taskType?: string;
 };
 
+/** Result returned by an embedding provider adapter create call. */
 export type EmbeddingProviderCreateResult = {
   provider: EmbeddingProvider | null;
   runtime?: EmbeddingProviderRuntime;
 };
 
+/** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
   defaultModel?: string;
@@ -70,6 +78,7 @@ export type EmbeddingProviderAdapter = {
   formatSetupError?: (err: unknown) => string;
 };
 
+/** Registered embedding provider with optional owning plugin metadata. */
 export type RegisteredEmbeddingProvider = {
   adapter: EmbeddingProviderAdapter;
   ownerPluginId?: string;

@@ -1,3 +1,4 @@
+// Sub-CLI registration: core subcommands plus lazily imported command groups.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import {
@@ -56,10 +57,12 @@ function resolveSubCliCommandGroups(
   );
 }
 
+/** Return visible sub-CLI descriptors after private QA filtering. */
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
+/** Register one sub-CLI by name, including lazy command groups. */
 export async function registerSubCliByName(
   program: Command,
   name: string,
@@ -72,6 +75,7 @@ export async function registerSubCliByName(
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
+/** Register sub-CLI commands according to eager/lazy startup policy. */
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
   registerSubCliCommandsCore(program, argv);
   const { primary } = resolveCliArgvInvocation(argv);

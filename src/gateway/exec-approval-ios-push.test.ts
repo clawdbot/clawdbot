@@ -1,3 +1,6 @@
+/**
+ * Tests iOS push notification dispatch for exec approval requests.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import { createDeferred } from "./test-helpers.deferred.js";

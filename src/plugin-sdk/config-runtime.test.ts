@@ -1,3 +1,6 @@
+/**
+ * Tests config runtime exports and snapshot/cache behavior exposed through the SDK.
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveLivePluginConfigObject,

@@ -1,3 +1,6 @@
+/**
+ * Tests that session abort requests stay scoped to the targeted agent.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 

@@ -1,3 +1,4 @@
+// Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";

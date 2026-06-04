@@ -1,3 +1,4 @@
+// Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,

@@ -1,3 +1,4 @@
+// Creates channel-native approval runtimes and delivery flows.
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -34,6 +35,7 @@ type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   deliveredTargets: ChannelApprovalNativePlannedTarget[];
 };
 
+/** Delivers an approval request to the adapter-planned native targets and returns pending entries. */
 export async function deliverApprovalRequestViaChannelNativePlan<
   TPreparedTarget,
   TPendingEntry,
@@ -93,6 +95,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
       if (!preparedTarget) {
         continue;
       }
+      // Dedupe after preparation because different surfaces can converge on the same message target.
       if (deliveredKeys.has(preparedTarget.dedupeKey)) {
         params.onDuplicateSkipped?.({
           plannedTarget,
@@ -170,6 +173,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     onStopped?: () => Promise<void> | void;
   };
 
+/** Creates the shared gateway approval runtime backed by channel-native delivery hooks. */
 export function createChannelNativeApprovalRuntime<
   TPendingEntry,
   TPreparedTarget,

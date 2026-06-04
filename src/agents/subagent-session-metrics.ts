@@ -1,6 +1,12 @@
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+/**
+ * Derives display/runtime metrics from persisted subagent run records.
+ *
+ * These helpers tolerate partial records because registry views can include
+ * archived, live, or recovered sessions with different timestamp coverage.
+ */
 function resolveSubagentSessionStartedAtInternal(
   entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt">,
 ): number | undefined {
@@ -15,12 +21,14 @@ function resolveSubagentSessionStartedAtInternal(
     : undefined;
 }
 
+/** Returns the best available session start timestamp for a run record. */
 export function getSubagentSessionStartedAt(
   entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt"> | null | undefined,
 ): number | undefined {
   return entry ? resolveSubagentSessionStartedAtInternal(entry) : undefined;
 }
 
+/** Computes accumulated runtime including the current live run when still active. */
 export function getSubagentSessionRuntimeMs(
   entry:
     | Pick<SubagentRunRecord, "startedAt" | "endedAt" | "accumulatedRuntimeMs">
@@ -38,6 +46,7 @@ export function getSubagentSessionRuntimeMs(
       : 0;
 
   if (typeof entry.startedAt !== "number" || !Number.isFinite(entry.startedAt)) {
+    // Archived/recovered rows may only have an accumulated duration.
     return entry.accumulatedRuntimeMs != null ? accumulatedRuntimeMs : undefined;
   }
 
@@ -46,6 +55,7 @@ export function getSubagentSessionRuntimeMs(
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - entry.startedAt));
 }
 
+/** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: Pick<SubagentRunRecord, "endedAt" | "endedReason" | "outcome"> | null | undefined,
 ): "running" | "killed" | "failed" | "timeout" | "done" | undefined {

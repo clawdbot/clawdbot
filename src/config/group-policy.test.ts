@@ -1,3 +1,4 @@
+// Verifies group-policy normalization and runtime resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import {

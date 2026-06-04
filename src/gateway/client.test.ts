@@ -797,6 +797,7 @@ describe("GatewayClient close handling", () => {
 
       client.start();
       const ws = getLatestWs();
+      ws.autoCloseOnClose = false;
 
       client.stop();
 
@@ -806,6 +807,27 @@ describe("GatewayClient close handling", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not force-terminate a socket that closes during stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+
+      client.stop();
+
+      expect(ws.closeCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(ws.terminateCalls).toBe(0);
     } finally {
       vi.useRealTimers();
     }

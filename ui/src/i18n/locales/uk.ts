@@ -451,6 +451,14 @@ export const uk: TranslationMap = {
     logs: "Журнали шлюзу в реальному часі.",
     dreams: "Консолідація пам’яті під час сну.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "Активність",
     subtitle: "Тимчасова активність інструментів, отримана з подій поточного сеансу.",

@@ -1,3 +1,4 @@
+// Coordinates managed task-flow creation, updates, ownership, and snapshots.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";

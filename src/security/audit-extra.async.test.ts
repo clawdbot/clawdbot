@@ -1,3 +1,4 @@
+// Covers asynchronous extra security audit checks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import * as skillScanner from "../skills/security/scanner.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
+  collectStateDeepFilesystemFindings,
 } from "./audit-extra.async.js";
 
 vi.mock("../skills/loading/workspace.js", () => ({
@@ -269,5 +271,34 @@ description: test skill
     } finally {
       scanSpy.mockRestore();
     }
+  });
+
+  it("audits canonical auth profile SQLite store permissions", async () => {
+    const stateDir = await makeTmpDir("audit-auth-sqlite-perms");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    for (const targetPath of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+      await fs.writeFile(targetPath, "sqlite\n", "utf-8");
+      await fs.chmod(targetPath, 0o644);
+    }
+
+    const findings = await collectStateDeepFilesystemFindings({
+      cfg: {} as OpenClawConfig,
+      env: {},
+      stateDir,
+      platform: "linux",
+    });
+
+    const readableAuthTargets = findings
+      .filter((finding) => finding.checkId === "fs.auth_profiles.perms_readable")
+      .map((finding) => finding.detail);
+    expect(readableAuthTargets).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("openclaw-agent.sqlite"),
+        expect.stringContaining("openclaw-agent.sqlite-wal"),
+        expect.stringContaining("openclaw-agent.sqlite-shm"),
+      ]),
+    );
   });
 });

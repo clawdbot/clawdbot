@@ -1,3 +1,4 @@
+// Tests session maintenance warning formatting and suppression.
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

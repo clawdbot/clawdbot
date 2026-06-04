@@ -2,6 +2,7 @@ import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import type { SkillEntry } from "../types.js";
 
+/** Indexed skill metadata used for runtime visibility and command lookup. */
 export type SkillIndexEntry = {
   entry: SkillEntry;
   name: string;
@@ -30,6 +31,7 @@ export type BuildSkillIndexOptions = {
   agentSkillFilter?: readonly string[];
 };
 
+/** Normalizes a skill name to the comparable key used by filters and commands. */
 export function normalizeSkillIndexName(value: string): string {
   return value
     .trim()

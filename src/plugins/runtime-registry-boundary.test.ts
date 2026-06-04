@@ -1,3 +1,4 @@
+/** Ensures runtime registry access stays inside plugin boundary and activation rules. */
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";

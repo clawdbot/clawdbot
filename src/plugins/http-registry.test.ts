@@ -1,3 +1,4 @@
+/** Verifies plugin HTTP route registration, collision detection, and metadata capture. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";

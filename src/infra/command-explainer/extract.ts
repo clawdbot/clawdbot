@@ -63,6 +63,7 @@ const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
 const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
 
+// Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
   startIndex: number;
   startPosition: SourceSpan["startPosition"];
@@ -74,6 +75,7 @@ const ROOT_SPAN_BASE: SpanBase = {
   startPosition: { row: 0, column: 0 },
 };
 
+// Tree-sitter exposes nullable children; normalize once for the walkers below.
 function children(node: TreeSitterNode): TreeSitterNode[] {
   return Array.from({ length: node.childCount }, (_, index) => node.child(index)).filter(
     (child): child is TreeSitterNode => child !== null,
@@ -1121,6 +1123,7 @@ async function walk(
   }
 }
 
+/** Parses a shell command into command steps, shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

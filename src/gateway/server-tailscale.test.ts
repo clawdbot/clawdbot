@@ -149,24 +149,12 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
   });
 
-  it("does not derive a Service URL when Tailscale only reports an IP", async () => {
+  it.each([
+    ["only reports an IP", "100.64.0.8"],
+    ["omits the DNS suffix", "node"],
+  ])("does not derive a Service URL when Tailscale %s", async (_name, hostname) => {
     const logTailscale = createLogger();
-    mocks.getTailnetHostname.mockResolvedValue("100.64.0.8");
-
-    await startGatewayTailscaleExposure({
-      tailscaleMode: "serve",
-      port: 18789,
-      serviceName: "svc:openclaw",
-      logTailscale,
-    });
-
-    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
-    expect(logTailscale.info).toHaveBeenCalledWith("serve enabled");
-  });
-
-  it("does not derive a Service URL when Tailscale omits the DNS suffix", async () => {
-    const logTailscale = createLogger();
-    mocks.getTailnetHostname.mockResolvedValue("node");
+    mocks.getTailnetHostname.mockResolvedValue(hostname);
 
     await startGatewayTailscaleExposure({
       tailscaleMode: "serve",

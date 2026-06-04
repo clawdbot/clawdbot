@@ -6,7 +6,6 @@ import {
   resolveDefaultAgentDir,
   listAgentEntries,
 } from "../../../agents/agent-scope.js";
-import { AUTH_STORE_LOCK_OPTIONS } from "../../../agents/auth-profiles/constants.js";
 import {
   isLegacyOAuthRef,
   LEGACY_OAUTH_REF_PROVIDER,
@@ -18,11 +17,10 @@ import {
 } from "../../../agents/auth-profiles/oauth-shared.js";
 import { resolveAuthStorePath } from "../../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
-import { saveAuthProfileStore } from "../../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { withFileLock } from "../../../infra/file-lock.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type StaleOAuthProfileShadow = {
@@ -55,15 +53,6 @@ function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId
     profile.provider === LEGACY_OAUTH_REF_PROVIDER &&
     isLegacyOAuthRef(profile.oauthRef)
   );
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.lstat(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function collectStateAgentDirs(env: NodeJS.ProcessEnv): Promise<string[]> {
@@ -133,7 +122,7 @@ export async function scanStaleOAuthProfileShadows(params: {
   const hits: StaleOAuthProfileShadow[] = [];
   for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
-    if (authPath === mainAuthPath || !(await pathExists(authPath))) {
+    if (authPath === mainAuthPath) {
       continue;
     }
     const rawLocalStore = await loadRawAuthProfileStore(authPath);
@@ -172,6 +161,8 @@ function removeStaleProfilesFromStore(params: {
   const removedProfileIds: string[] = [];
   const profiles = { ...params.store.profiles };
   const usageStats = params.store.usageStats ? { ...params.store.usageStats } : undefined;
+  const order = params.store.order ? { ...params.store.order } : undefined;
+  const lastGood = params.store.lastGood ? { ...params.store.lastGood } : undefined;
   for (const profileId of params.profileIds) {
     const local = profiles[profileId];
     const main = params.mainStore.profiles[profileId];
@@ -189,6 +180,23 @@ function removeStaleProfilesFromStore(params: {
     if (usageStats) {
       delete usageStats[profileId];
     }
+    if (lastGood) {
+      for (const [provider, lastGoodProfileId] of Object.entries(lastGood)) {
+        if (lastGoodProfileId === profileId) {
+          delete lastGood[provider];
+        }
+      }
+    }
+    if (order) {
+      for (const [provider, profileIds] of Object.entries(order)) {
+        const nextProfileIds = profileIds.filter((entry) => entry !== profileId);
+        if (nextProfileIds.length > 0) {
+          order[provider] = nextProfileIds;
+        } else {
+          delete order[provider];
+        }
+      }
+    }
     removedProfileIds.push(profileId);
   }
   return {
@@ -198,6 +206,8 @@ function removeStaleProfilesFromStore(params: {
       ...(usageStats && Object.keys(usageStats).length > 0
         ? { usageStats }
         : { usageStats: undefined }),
+      ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
+      ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
     },
     removedProfileIds,
   };
@@ -215,23 +225,22 @@ async function repairStaleOAuthProfilesForAgent(params: {
 }): Promise<
   { status: "changed"; removedProfileIds: string[] } | { status: "missing" | "unchanged" }
 > {
-  return await withFileLock(
-    resolveAuthStorePath(params.agentDir),
-    AUTH_STORE_LOCK_OPTIONS,
-    async () => {
-      const store = loadPersistedAuthProfileStore(params.agentDir);
-      if (!store) {
-        return { status: "missing" };
-      }
-      const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
-      const profileIds = new Set(
-        [...params.profileIds].filter(
-          (profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId),
-        ),
-      );
-      if (profileIds.size === 0) {
-        return { status: "unchanged" };
-      }
+  const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
+  const profileIds = new Set(
+    [...params.profileIds].filter((profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId)),
+  );
+  if (profileIds.size === 0) {
+    return { status: "unchanged" };
+  }
+  if (!loadPersistedAuthProfileStore(params.agentDir)) {
+    return { status: "missing" };
+  }
+  let sawStore = false;
+  let removedProfileIds: string[] = [];
+  await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      sawStore = true;
       const result = removeStaleProfilesFromStore({
         store,
         mainStore: params.mainStore,
@@ -239,17 +248,19 @@ async function repairStaleOAuthProfilesForAgent(params: {
         now: params.now,
       });
       if (result.removedProfileIds.length === 0) {
-        return { status: "unchanged" };
+        return false;
       }
-      saveAuthProfileStore(result.store, params.agentDir, {
-        pruneOrderProfileIds: result.removedProfileIds,
-      });
-      return {
-        status: "changed",
-        removedProfileIds: result.removedProfileIds,
-      };
+      removedProfileIds = result.removedProfileIds;
+      Object.assign(store, result.store);
+      return true;
     },
-  );
+  });
+  if (!sawStore) {
+    return { status: "missing" };
+  }
+  return removedProfileIds.length > 0
+    ? { status: "changed", removedProfileIds }
+    : { status: "unchanged" };
 }
 
 export function collectStaleOAuthProfileShadowWarnings(params: {

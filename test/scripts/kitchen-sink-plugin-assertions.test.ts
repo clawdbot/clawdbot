@@ -276,6 +276,28 @@ describe("kitchen-sink plugin assertions", () => {
     }
   });
 
+  it("does not allow dirty error lines just because they mention zero errors", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(
+        path.join(scratchRoot, "dirty.log"),
+        "[ERROR] 0 errors reported but fatal state remained\n",
+      );
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("unexpected error-like log lines");
+      expect(`${result.stdout}\n${result.stderr}`).toContain("fatal state remained");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
   it("bounds repeated kitchen-sink log scan findings", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
     const home = path.join(parent, "home");

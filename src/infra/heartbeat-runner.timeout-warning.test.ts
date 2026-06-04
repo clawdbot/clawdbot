@@ -1,3 +1,4 @@
+// Covers heartbeat timeout warning emission and suppression behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 

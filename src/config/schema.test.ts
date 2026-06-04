@@ -1,3 +1,4 @@
+// Covers canonical config schema defaults, validation, and sensitive redaction.
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
@@ -110,6 +111,7 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
@@ -644,6 +646,38 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts install policy exec config in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      security: {
+        installPolicy: {
+          enabled: true,
+          targets: ["skill", "plugin"],
+          exec: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-install-policy",
+            args: ["--json"],
+            timeoutMs: 5000,
+            noOutputTimeoutMs: 2500,
+            maxOutputBytes: 65536,
+            env: {
+              POLICY_MODE: "strict",
+            },
+            passEnv: ["OPENCLAW_STATE_DIR"],
+            trustedDirs: ["/usr/local/bin"],
+            allowInsecurePath: false,
+            allowSymlinkCommand: false,
+          },
+        },
+      },
+    });
+
+    expect(parsed.security?.installPolicy?.targets).toEqual(["skill", "plugin"]);
+    expect(parsed.security?.installPolicy?.exec?.source).toBe("exec");
+    expect(parsed.security?.installPolicy?.exec?.command).toBe(
+      "/usr/local/bin/openclaw-install-policy",
+    );
   });
 
   it("accepts Code Mode config in the runtime zod schema", () => {

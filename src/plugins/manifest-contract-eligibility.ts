@@ -1,3 +1,4 @@
+// Determines which manifest contracts are eligible for plugin activation.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";

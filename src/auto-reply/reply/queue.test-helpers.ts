@@ -1,8 +1,10 @@
+/** Test helpers for queued follow-up reply runs. */
 import { afterAll, beforeAll } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun } from "./queue.js";
 
+/** Creates an externally resolved promise for queue-order tests. */
 export function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -13,6 +15,7 @@ export function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+/** Builds a minimal queued follow-up run fixture. */
 export function createQueueTestRun(params: {
   prompt: string;
   messageId?: string;
@@ -46,6 +49,7 @@ export function createQueueTestRun(params: {
   };
 }
 
+/** Suppresses runtime error logging while queue tests intentionally trigger failures. */
 export function installQueueRuntimeErrorSilencer(): void {
   let previousRuntimeError: typeof defaultRuntime.error;
 

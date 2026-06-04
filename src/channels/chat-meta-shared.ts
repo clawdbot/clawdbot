@@ -5,6 +5,9 @@ import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 import { buildManifestChannelMeta } from "./plugins/channel-meta.js";
 import type { ChannelMeta } from "./plugins/types.core.js";
 
+/**
+ * Metadata shown for built-in chat channels in setup, status, and selection UIs.
+ */
 export type ChatChannelMeta = ChannelMeta;
 
 const CHAT_CHANNEL_ID_SET = new Set<string>(CHAT_CHANNEL_ORDER);
@@ -37,6 +40,8 @@ export function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMet
   const entries = new Map<ChatChannelId, ChatChannelMeta>();
 
   for (const entry of listBundledChannelCatalogEntries()) {
+    // The catalog can contain non-chat bundled channels. Keep this map restricted to the
+    // generated chat-channel order so setup/status views stay stable.
     const rawId = normalizeOptionalString(entry.id);
     if (!rawId || !CHAT_CHANNEL_ID_SET.has(rawId)) {
       continue;

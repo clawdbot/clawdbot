@@ -1,3 +1,4 @@
+// Covers safe-regex checks for risky user-supplied patterns.
 import { describe, expect, it } from "vitest";
 import {
   compileSafeRegex,

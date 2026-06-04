@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
+import { onceFrame } from "./ws-frames.mjs";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -23,25 +24,6 @@ async function openSocket(timeoutMs = 10_000) {
   return ws;
 }
 
-function onceFrame(ws, filter, timeoutMs = 10_000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.off("message", handler);
-      reject(new Error("timeout"));
-    }, timeoutMs);
-    const handler = (data) => {
-      const obj = JSON.parse(String(data));
-      if (!filter(obj)) {
-        return;
-      }
-      clearTimeout(timer);
-      ws.off("message", handler);
-      resolve(obj);
-    };
-    ws.on("message", handler);
-  });
-}
-
 function responseError(method, response) {
   const message = response.error?.message ?? "unknown";
   return new Error(`${method} failed: ${message}`);
@@ -50,6 +32,7 @@ function responseError(method, response) {
 function isRetryableStartupError(message) {
   return (
     message.includes("gateway starting") ||
+    message.includes("closed before frame") ||
     message.includes("closed before open") ||
     message.includes("ws open timeout") ||
     message.includes("ECONNREFUSED") ||

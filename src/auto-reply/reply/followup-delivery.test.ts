@@ -1,3 +1,4 @@
+// Tests follow-up reply delivery and route preservation.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";

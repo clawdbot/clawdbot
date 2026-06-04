@@ -1,3 +1,4 @@
+/** Tests thinking, reasoning, verbosity, and usage directive normalization. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({

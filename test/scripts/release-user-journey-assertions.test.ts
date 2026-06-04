@@ -87,6 +87,55 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
 }
 
 describe("release user journey assertions", () => {
+  it("scans large files when checking release user journey output text", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const outputPath = path.join(root, "output.log");
+
+    try {
+      const needlePrefix = "journey-plugin";
+      writeFileSync(
+        outputPath,
+        `${"x".repeat(64 * 1024 - needlePrefix.length)}${needlePrefix}-a:pong\n`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, [
+        "assert-file-contains",
+        outputPath,
+        "journey-plugin-a:pong",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds release user journey output assertion diagnostics", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const outputPath = path.join(root, "output.log");
+
+    try {
+      writeFileSync(
+        outputPath,
+        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Output tail:");
+      expect(result.stderr).toContain("recent output tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("fails when uninstall leaves the managed plugin directory behind", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");

@@ -10,6 +10,18 @@ export type Generated<T> =
     ? ColumnType<S, I | undefined, U>
     : ColumnType<T, T | undefined, T>;
 
+export interface AuthProfileState {
+  state_json: string;
+  state_key: string;
+  updated_at: number;
+}
+
+export interface AuthProfileStore {
+  store_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
 export interface CacheEntries {
   blob: Uint8Array | null;
   expires_at: number | null;
@@ -30,6 +42,8 @@ export interface SchemaMeta {
 }
 
 export interface DB {
+  auth_profile_state: AuthProfileState;
+  auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
   schema_meta: SchemaMeta;
 }

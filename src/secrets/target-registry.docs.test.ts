@@ -1,3 +1,4 @@
+/** Verifies docs stay aligned with the secret target registry. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

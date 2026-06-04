@@ -1,3 +1,4 @@
+// Covers local tailnet address detection and primary selection.
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";

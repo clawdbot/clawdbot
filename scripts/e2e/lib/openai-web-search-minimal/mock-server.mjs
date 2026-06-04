@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
   readBody,
+  writeRequestLogEntryOrFail,
   writeJson,
   writeSse,
 } from "../mock-openai-http.mjs";
@@ -118,14 +118,20 @@ const server = http.createServer((req, res) => {
     } catch {
       body = {};
     }
-    fs.appendFileSync(
-      requestLog,
-      `${JSON.stringify({
-        method: req.method,
-        path: url.pathname,
-        body: boundedRequestLogBody(body, bodyText),
-      })}\n`,
-    );
+    if (
+      writeRequestLogEntryOrFail(res, {
+        requestLog,
+        required: true,
+        label: "mock-openai-web-search",
+        entry: {
+          method: req.method,
+          path: url.pathname,
+          body: boundedRequestLogBody(body, bodyText),
+        },
+      })
+    ) {
+      return;
+    }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
       if (bodyContainsForceReject(body)) {
@@ -143,7 +149,15 @@ const server = http.createServer((req, res) => {
     writeJson(res, 404, {
       error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
     });
-  })();
+  })().catch((/** @type {unknown} */ error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`mock-openai-web-search request handler failed: ${message}`);
+    if (!res.headersSent) {
+      writeJson(res, 500, { error: { message: `mock OpenAI handler failed: ${message}` } });
+      return;
+    }
+    res.destroy(error instanceof Error ? error : new Error(message));
+  });
 });
 
 server.listen(port, "127.0.0.1", () => {

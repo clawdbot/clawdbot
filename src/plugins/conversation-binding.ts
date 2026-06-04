@@ -1,3 +1,4 @@
+// Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

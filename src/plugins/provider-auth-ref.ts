@@ -1,3 +1,4 @@
+/** Resolves provider auth secret refs from env, file, and exec-backed secret providers. */
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -26,6 +27,7 @@ const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
 type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
 
+/** Copy overrides used while prompting for provider secret-ref setup. */
 export type SecretRefSetupPromptCopy = {
   sourceMessage?: string;
   envVarMessage?: string;
@@ -37,6 +39,7 @@ export type SecretRefSetupPromptCopy = {
   providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
 };
 
+/** Extracts a trailing env var name from a human-facing secret source label. */
 export function extractEnvVarFromSourceLabel(source: string): string | undefined {
   const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
   return match?.[1];

@@ -14,6 +14,7 @@ import {
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
+// Template-backed stores need per-agent scans before they can be merged for Gateway views.
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }

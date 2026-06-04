@@ -1,3 +1,4 @@
+// Covers restoring redacted config snapshots into writable config values.
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import {

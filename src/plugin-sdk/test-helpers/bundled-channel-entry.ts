@@ -1,3 +1,6 @@
+/**
+ * Contract helper for bundled channel public entrypoint assertions.
+ */
 import { expect, it } from "vitest";
 
 type BundledChannelEntry = {

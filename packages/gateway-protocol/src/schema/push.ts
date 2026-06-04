@@ -1,8 +1,15 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Push-notification protocol schemas.
+ *
+ * APNS test schemas exercise native push routing; Web Push schemas describe the
+ * browser subscription lifecycle exposed by the gateway.
+ */
 const ApnsEnvironmentSchema = Type.String({ enum: ["sandbox", "production"] });
 
+/** Request payload for sending a test APNS notification to one node. */
 export const PushTestParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
@@ -13,6 +20,7 @@ export const PushTestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result payload from an APNS push test, including provider status and transport. */
 export const PushTestResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
@@ -37,8 +45,10 @@ const WebPushKeysSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for fetching the Web Push VAPID public key. */
 export const WebPushVapidPublicKeyParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Browser Web Push subscription payload registered with the gateway. */
 export const WebPushSubscribeParamsSchema = Type.Object(
   {
     endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
@@ -47,6 +57,7 @@ export const WebPushSubscribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Browser Web Push endpoint removal payload. */
 export const WebPushUnsubscribeParamsSchema = Type.Object(
   {
     endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
@@ -54,6 +65,7 @@ export const WebPushUnsubscribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Request payload for sending a test Web Push notification to current subscriptions. */
 export const WebPushTestParamsSchema = Type.Object(
   {
     title: Type.Optional(Type.String()),
@@ -62,14 +74,18 @@ export const WebPushTestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request type for fetching the Web Push VAPID public key. */
 export type WebPushVapidPublicKeyParams = Record<string, never>;
+/** Browser PushSubscription subset persisted by the gateway. */
 export type WebPushSubscribeParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 };
+/** Browser PushSubscription endpoint removal request. */
 export type WebPushUnsubscribeParams = {
   endpoint: string;
 };
+/** Optional title/body overrides for a Web Push test notification. */
 export type WebPushTestParams = {
   title?: string;
   body?: string;

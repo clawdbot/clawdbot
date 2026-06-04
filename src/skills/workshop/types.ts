@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillScanFinding } from "../security/scanner.js";
 
+/** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
 export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
   "openclaw.skill-workshop.proposals-manifest.v1" as const;

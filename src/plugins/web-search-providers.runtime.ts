@@ -1,3 +1,4 @@
+// Runtime bridge for web-search providers supplied by plugins.
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";

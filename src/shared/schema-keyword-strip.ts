@@ -1,3 +1,4 @@
+/** Recursively remove schema keywords unsupported by a target provider/tool surface. */
 export function stripUnsupportedSchemaKeywords(
   schema: unknown,
   unsupportedKeywords: ReadonlySet<string>,
@@ -14,6 +15,8 @@ export function stripUnsupportedSchemaKeywords(
     if (unsupportedKeywords.has(key)) {
       continue;
     }
+    // Schema containers hold nested schemas under different shapes. Recurse
+    // through each known container while preserving unrelated metadata fields.
     if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
       cleaned[key] = Object.fromEntries(
         Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [

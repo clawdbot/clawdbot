@@ -1,3 +1,4 @@
+/** Runtime-only dispatch dependencies shared by config-driven reply delivery. */
 export { resolveStorePath } from "../../config/sessions/paths.js";
 export {
   loadSessionStore,

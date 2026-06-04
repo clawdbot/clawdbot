@@ -22,7 +22,10 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
-import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
+import {
+  connectTestGatewayClient,
+  getFreeGatewayPort,
+} from "./gateway-cli-backend.live-helpers.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -93,14 +96,6 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
       },
     },
   ]);
-}
-
-async function getFreeGatewayPort(): Promise<number> {
-  const { getFreePortBlockWithPermissionFallback } = await import("../test-utils/ports.js");
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0, 1, 2, 4],
-    fallbackBase: 42_000,
-  });
 }
 
 function extractAssistantTexts(messages: unknown[]): string[] {

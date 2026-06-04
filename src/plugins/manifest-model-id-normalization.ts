@@ -1,3 +1,4 @@
+/** Applies manifest-declared model-id normalization policies to provider model refs. */
 import {
   collectManifestModelIdNormalizationPolicies,
   normalizeProviderModelIdWithPolicies,
@@ -77,6 +78,7 @@ function loadManifestModelIdNormalizationPolicies(
   return policies;
 }
 
+/** Normalizes a provider model id using plugin manifest-declared model-id policies. */
 export function normalizeProviderModelIdWithManifest(params: {
   provider: string;
   config?: OpenClawConfig;

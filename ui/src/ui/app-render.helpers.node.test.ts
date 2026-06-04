@@ -78,6 +78,7 @@ import {
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
+  switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -964,6 +965,80 @@ describe("createChatSession", () => {
 });
 
 describe("switchChatSession", () => {
+  it("waits for the initial history and message subscription when requested", async () => {
+    let resolveHistory!: () => void;
+    let resolveSubscription!: () => void;
+    const historyLoaded = new Promise<void>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const subscriptionSynced = new Promise<void>((resolve) => {
+      resolveSubscription = resolve;
+    });
+    const settings = createSettings();
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "main" }), row({ key: "agent:main:review" })],
+      },
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockReturnValue(historyLoaded);
+    syncSelectedSessionMessageSubscriptionMock.mockReturnValue(subscriptionSynced);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    const switched = switchChatSessionAndWait(state, "agent:main:review");
+    let settled = false;
+    void switched.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveHistory();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveSubscription();
+    await switched;
+
+    expect(settled).toBe(true);
+    expect(state.sessionKey).toBe("agent:main:review");
+  });
+
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
     const settings = createSettings();
     const state = {

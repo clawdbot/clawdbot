@@ -1,5 +1,6 @@
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
+/** Strip provider-formatted Reasoning/Thinking preambles from visible text. */
 export function stripFormattedReasoningMessage(text: string): string {
   const stripped = stripReasoningTagsFromText(text);
   const lines = stripped.split(/\r?\n/u);
@@ -22,6 +23,8 @@ export function stripFormattedReasoningMessage(text: string): string {
     }
   }
 
+  // Remove blank/italic summary preamble lines but preserve the substantive
+  // answer body exactly after the first non-preamble line.
   let index = 1;
   while (index < lines.length) {
     const trimmed = lines[index]?.trim() ?? "";

@@ -1,3 +1,4 @@
+/** Formats /help and /commands output for text and native command-list surfaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

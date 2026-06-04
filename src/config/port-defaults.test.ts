@@ -1,3 +1,4 @@
+// Verifies default port config values and overrides.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BROWSER_CDP_PORT_RANGE_END,

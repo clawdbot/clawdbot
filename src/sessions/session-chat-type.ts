@@ -11,6 +11,8 @@ export {
   type SessionKeyChatType,
 } from "./session-chat-type-shared.js";
 
+// Session chat-type derivation first uses generic key parsing, then falls back
+// to bootstrap channel plugins for legacy platform-specific session keys.
 type LegacySessionChatTypeDeriver = NonNullable<
   NonNullable<ReturnType<typeof getBootstrapChannelPlugin>>["messaging"]
 >["deriveLegacySessionChatType"];
@@ -29,6 +31,7 @@ function collectLegacyChatTypeCandidatePluginIds(scopedSessionKey: string): stri
   if (firstToken) {
     ids.add(firstToken);
   }
+  // Historical WhatsApp group keys can be bare JIDs without a channel prefix.
   if (scopedSessionKey.includes("@g.us")) {
     ids.add("whatsapp");
   }

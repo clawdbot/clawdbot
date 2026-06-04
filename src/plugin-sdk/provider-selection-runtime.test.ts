@@ -1,3 +1,6 @@
+/**
+ * Tests provider selection runtime helper behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredCapabilityProvider,

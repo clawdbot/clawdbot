@@ -1,3 +1,4 @@
+// Covers plugin activation context construction and lazy boundaries.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRegistry } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

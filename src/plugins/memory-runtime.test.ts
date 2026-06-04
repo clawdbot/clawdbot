@@ -1,3 +1,4 @@
+/** Covers plugin memory provider runtime loading and registration contracts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock =

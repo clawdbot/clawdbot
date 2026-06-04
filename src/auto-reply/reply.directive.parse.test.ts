@@ -1,3 +1,4 @@
+/** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {

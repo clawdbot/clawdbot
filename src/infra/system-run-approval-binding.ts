@@ -1,3 +1,4 @@
+// Binds system-run approval requests to stable command identities.
 import crypto from "node:crypto";
 import type {
   SystemRunApprovalBinding,

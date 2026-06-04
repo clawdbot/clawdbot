@@ -9,6 +9,9 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
+// Registry for connected Gateway nodes plus invoke and system.run authorization state.
+
+/** Connected node session advertised over Gateway websocket. */
 export type NodeSession = {
   nodeId: string;
   connId: string;
@@ -33,6 +36,7 @@ export type NodeSession = {
   connectedAtMs: number;
 };
 
+/** Pending invoke awaiting a node.invoke.response. */
 type PendingInvoke = {
   nodeId: string;
   connId: string;
@@ -43,18 +47,21 @@ type PendingInvoke = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+/** system.run metadata remembered while waiting for node events. */
 type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
   timeoutMs?: number | null;
 };
 
+/** Authorized system.run event window bound to one node connection. */
 type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   nodeId: string;
   connId: string;
   expiresAtMs: number | null;
 };
 
+/** Result payload returned from node.invoke. */
 type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
@@ -62,10 +69,12 @@ type NodeInvokeResult = {
   error?: { code?: string; message?: string } | null;
 };
 
+/** Connectivity probe result for a registered node. */
 type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
 
+/** Minimal websocket ping/pong surface used by connectivity checks. */
 type PingableSocket = {
   readyState?: number;
   ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
@@ -87,6 +96,7 @@ export type SerializedEventPayload = {
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
 };
 
+/** Serialize an event payload once so fanout can reuse the same JSON string. */
 export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
   if (payload === undefined) {
     return null;
@@ -95,6 +105,7 @@ export function serializeEventPayload(payload: unknown): SerializedEventPayload 
   return typeof json === "string" ? { json, [SERIALIZED_EVENT_PAYLOAD]: true } : null;
 }
 
+/** Narrow values created by serializeEventPayload. */
 function isSerializedEventPayload(value: unknown): value is SerializedEventPayload {
   return (
     typeof value === "object" &&
@@ -104,10 +115,12 @@ function isSerializedEventPayload(value: unknown): value is SerializedEventPaylo
   );
 }
 
+/** Normalize optional string-ish websocket fields. */
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** Normalize system.run timeout values, preserving null for no expiry. */
 function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
   if (value === undefined) {
     return undefined;
@@ -119,6 +132,7 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
   return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
+/** Extract system.run event auth metadata from invoke params. */
 function resolvePendingSystemRunEvent(params: {
   command: string;
   params?: unknown;
@@ -140,6 +154,7 @@ function resolvePendingSystemRunEvent(params: {
   };
 }
 
+/** Ensure system.run requests have a runId before they are sent to a node. */
 function withSystemRunEventRunId(params: { command: string; params?: unknown }): unknown {
   if (
     params.command !== "system.run" ||
@@ -156,12 +171,14 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
   return { ...obj, runId: randomUUID() };
 }
 
+/** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  /** Register a websocket client as the current connection for its node id. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
@@ -219,6 +236,7 @@ export class NodeRegistry {
     return session;
   }
 
+  /** Unregister one connection and reject invokes tied to that connection. */
   unregister(connId: string): string | null {
     const nodeId = this.nodesByConn.get(connId);
     if (!nodeId) {
@@ -245,14 +263,17 @@ export class NodeRegistry {
     return unregistersCurrentNode ? nodeId : null;
   }
 
+  /** List connected node sessions. */
   listConnected(): NodeSession[] {
     return [...this.nodesById.values()];
   }
 
+  /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
   }
 
+  /** Probe websocket liveness with ping/pong when the socket supports it. */
   async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
     const node = this.nodesById.get(nodeId);
     if (!node) {
@@ -340,6 +361,7 @@ export class NodeRegistry {
     });
   }
 
+  /** Update command list while keeping it within the node's declared command surface. */
   updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
     return this.updateSurface(nodeId, { commands });
   }
@@ -357,6 +379,7 @@ export class NodeRegistry {
       return null;
     }
 
+    // Runtime approvals can only narrow capabilities/commands/permissions declared at connect.
     const declaredCommands = new Set(node.declaredCommands);
     const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
     node.commands = nextCommands;
@@ -467,6 +490,7 @@ export class NodeRegistry {
     });
   }
 
+  /** Authorize an inbound system.run event against a recently issued node invoke. */
   authorizeSystemRunEvent(params: {
     nodeId: string;
     connId?: string;

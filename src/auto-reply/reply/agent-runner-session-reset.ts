@@ -1,3 +1,4 @@
+// Handles session reset requests produced during agent runner execution.
 import fs from "node:fs";
 import type { SessionEntry } from "../../config/sessions.js";
 import {

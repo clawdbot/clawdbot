@@ -1,3 +1,4 @@
+/** Resolves webhook numeric options to finite integers with a minimum bound. */
 export function resolveWebhookIntegerOption(
   value: number | undefined,
   fallback: number,

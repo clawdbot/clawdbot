@@ -8,6 +8,9 @@ import type {
   ResolvedIngressAllowlist,
 } from "./types.js";
 
+/**
+ * Returns the first access-group related failure reason for an allowlist.
+ */
 export function allowlistFailureReason(
   allowlist: ResolvedIngressAllowlist,
 ): IngressReasonCode | null {
@@ -23,6 +26,9 @@ export function allowlistFailureReason(
   return null;
 }
 
+/**
+ * Projects an allowlist into redacted diagnostics safe for ingress access graphs.
+ */
 export function redactedAllowlistDiagnostics(
   allowlist: ResolvedIngressAllowlist,
   reasonCode: IngressReasonCode,
@@ -72,6 +78,9 @@ function mergeResolvedAllowlists(
   };
 }
 
+/**
+ * Applies mutable identifier matching policy to an already-resolved allowlist.
+ */
 export function applyMutableIdentifierPolicy(
   allowlist: ResolvedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
@@ -87,6 +96,8 @@ export function applyMutableIdentifierPolicy(
   if (dangerousEntryIds.size === 0) {
     return allowlist;
   }
+  // Username-like mutable identifiers can be present for diagnostics, but when the policy
+  // disables them they must not authorize a sender.
   const matchedEntryIds = allowlist.matchedEntryIds.filter((id) => !dangerousEntryIds.has(id));
   const disabledEntries: RedactedIngressEntryDiagnostic[] = [
     ...allowlist.disabledEntries,
@@ -109,6 +120,9 @@ export function applyMutableIdentifierPolicy(
   };
 }
 
+/**
+ * Resolves the sender allowlist used for group/channel ingress after route overrides.
+ */
 export function effectiveGroupSenderAllowlist(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -126,6 +140,7 @@ export function effectiveGroupSenderAllowlist(params: {
       effective = mergeResolvedAllowlists([effective, route.senderAllowlist]);
       continue;
     }
+    // Route sender policies other than inherit replace the channel-level sender allowlist.
     effective = route.senderAllowlist;
   }
   return applyMutableIdentifierPolicy(effective, params.policy);

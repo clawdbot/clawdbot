@@ -1,3 +1,4 @@
+// Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
@@ -22,10 +23,12 @@ type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
+// Clone config fragments before patching so mutation preparation never aliases callers.
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** Builds an RFC-7396-style merge patch between source and target config values. */
 export function createMergePatch(base: unknown, target: unknown): unknown {
   if (!isRecord(base) || !isRecord(target)) {
     return cloneUnknown(target);

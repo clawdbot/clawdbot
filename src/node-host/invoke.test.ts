@@ -1,3 +1,4 @@
+/** Tests node-host invoke command routing and event emission. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

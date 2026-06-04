@@ -1,3 +1,4 @@
+// Covers logging max-file-size config validation.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 

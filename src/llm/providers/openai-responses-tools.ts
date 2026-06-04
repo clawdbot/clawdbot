@@ -9,6 +9,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Model, Tool } from "../types.js";
 
+/** Options for converting internal tool schemas to OpenAI Responses function tools. */
 export interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
@@ -24,16 +25,19 @@ type ResponsesFunctionTool = {
   strict?: boolean | null;
 };
 
+// Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
 const log = createSubsystemLogger("llm/openai-responses");
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
 const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
+/** Converts tools to deterministic OpenAI Responses function tool definitions. */
 export function convertResponsesTools(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
 ): OpenAITool[] {
   const strictSetting = resolveResponsesStrictToolSetting(options);
   const strict = resolveResponsesStrictToolFlag(tools, strictSetting, options?.model);
+  // Sort tools before request construction so prompt-cache bytes stay deterministic.
   return sortResponsesToolsByName(tools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
@@ -100,6 +104,7 @@ function shouldLogStrictToolDowngradeDiagnostic(
   diagnostics: ReturnType<typeof findOpenAIStrictToolSchemaDiagnostics>,
   model: Model,
 ): boolean {
+  // Strict downgrade diagnostics can repeat per turn; hash details and cap memory.
   const key = createHash("sha256")
     .update(
       JSON.stringify({

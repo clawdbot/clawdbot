@@ -1,3 +1,4 @@
+// Verifies session maintenance extension schema parsing.
 import { describe, expect, it } from "vitest";
 import { SessionSchema } from "./zod-schema.session.js";
 

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for LLM provider registration, streaming, model utils, and validation.
+ */
 export {
   getApiProvider,
   getApiProviders,

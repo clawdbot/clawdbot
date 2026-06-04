@@ -1,3 +1,6 @@
+/**
+ * Tests channel route helpers and session route resolution.
+ */
 import { describe, expect, it } from "vitest";
 import {
   channelRouteCompactKey,

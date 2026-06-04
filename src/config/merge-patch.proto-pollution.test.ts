@@ -1,3 +1,4 @@
+// Verifies config merge patches reject prototype pollution inputs.
 import { describe, it, expect } from "vitest";
 import { applyMergePatch } from "./merge-patch.js";
 

@@ -7,6 +7,8 @@ import type {
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
 
+// Generic websocket-backed realtime transcription session. Providers supply URL,
+// protocol messages, and audio framing while core owns reconnection and queues.
 export type RealtimeTranscriptionWebSocketTransport = {
   readonly callbacks: RealtimeTranscriptionSessionCallbacks;
   closeNow(): void;
@@ -18,6 +20,7 @@ export type RealtimeTranscriptionWebSocketTransport = {
   sendJson(payload: unknown): boolean;
 };
 
+/** Provider-specific hooks for creating a websocket transcription session. */
 export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   callbacks: RealtimeTranscriptionSessionCallbacks;
   connectClosedBeforeReadyMessage?: string;
@@ -115,6 +118,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       this.options.sendAudio(audio, this.transport);
       return;
     }
+    // Audio may arrive before provider-specific readiness. Queue bounded bytes
+    // instead of dropping early microphone frames during connect/reconnect.
     this.queueAudio(audio);
   }
 
@@ -370,6 +375,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.queuedAudio.push(Buffer.from(audio));
     this.queuedBytes += audio.byteLength;
     while (this.queuedBytes > this.maxQueuedBytes && this.queuedAudio.length > 0) {
+      // Keep the most recent audio when reconnects stall; old buffered audio is
+      // less useful than avoiding unbounded memory growth.
       const dropped = this.queuedAudio.shift();
       this.queuedBytes -= dropped?.byteLength ?? 0;
     }
@@ -467,6 +474,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 }
 
+/** Creates a reusable websocket session wrapper for a provider implementation. */
 export function createRealtimeTranscriptionWebSocketSession<Event = unknown>(
   options: RealtimeTranscriptionWebSocketSessionOptions<Event>,
 ): RealtimeTranscriptionSession {

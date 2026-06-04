@@ -1,3 +1,4 @@
+// Covers gateway process discovery across platform process listings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 

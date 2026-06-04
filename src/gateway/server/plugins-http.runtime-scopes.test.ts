@@ -1,3 +1,6 @@
+/**
+ * Plugin HTTP runtime-scope integration tests.
+ */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";

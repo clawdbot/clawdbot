@@ -1,3 +1,4 @@
+// Provides synchronous SQLite transaction helpers with nested savepoints.
 import type { DatabaseSync } from "node:sqlite";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();

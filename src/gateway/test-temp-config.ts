@@ -9,6 +9,9 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 
+/**
+ * Temporary gateway config helper for tests that need isolated config files.
+ */
 function withStableOwnerDisplaySecretForTest(cfg: unknown): unknown {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
     return cfg;
@@ -30,6 +33,7 @@ function withStableOwnerDisplaySecretForTest(cfg: unknown): unknown {
   };
 }
 
+/** Writes a temp OpenClaw config, installs it as runtime state, then restores globals. */
 export async function withTempConfig(params: {
   cfg: unknown;
   run: () => Promise<void>;

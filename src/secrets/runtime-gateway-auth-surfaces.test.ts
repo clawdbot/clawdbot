@@ -1,3 +1,4 @@
+/** Tests active/inactive decisions for gateway authentication SecretRef surfaces. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";

@@ -1,3 +1,4 @@
+/** Tests command-scoped secret resolution from active runtime snapshots. */
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";

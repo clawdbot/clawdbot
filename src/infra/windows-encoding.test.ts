@@ -1,3 +1,4 @@
+// Covers Windows command-output code page parsing and decoding.
 import { describe, expect, it } from "vitest";
 import {
   createWindowsOutputDecoder,

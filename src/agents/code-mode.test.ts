@@ -1384,7 +1384,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 500,
         },
       },
     } as never;

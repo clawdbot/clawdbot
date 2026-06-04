@@ -1,3 +1,6 @@
+/**
+ * Channel health policy regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
 

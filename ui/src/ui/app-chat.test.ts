@@ -52,6 +52,7 @@ let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQue
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
+let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -66,6 +67,7 @@ async function loadChatHelpers(): Promise<void> {
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
+    recordChatSendServerTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -1335,7 +1337,14 @@ describe("handleSendChat", () => {
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started" };
+        return {
+          status: "started",
+          serverTiming: {
+            receivedToAckMs: 17,
+            loadSessionMs: 4,
+            prepareAttachmentsMs: 0.5,
+          },
+        };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1360,6 +1369,62 @@ describe("handleSendChat", () => {
     });
     expect(ack?.durationMs).toEqual(expect.any(Number));
     expect(ack?.requestDurationMs).toEqual(expect.any(Number));
+    expect(ack).toMatchObject({
+      serverReceivedToAckMs: 17,
+      serverLoadSessionMs: 4,
+      serverPrepareAttachmentsMs: 0.5,
+    });
+  });
+
+  it("records Gateway post-ACK server timing milestones for a chat send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure server milestone",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    const ack = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "ack",
+    );
+    const runId = typeof ack?.runId === "string" ? ack.runId : "";
+    expect(runId).toMatch(uuidPattern);
+
+    recordChatSendServerTiming(host, {
+      phase: "agent-run-started",
+      runId,
+      sessionKey: "agent:main",
+      agentId: "main",
+      ackToPhaseMs: 12,
+      receivedToPhaseMs: 25,
+      dispatchStartedToPhaseMs: 8,
+      agentRunId: "agent-run-1",
+    });
+
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "server-agent-run-started",
+          runId,
+          sessionKey: "agent:main",
+          agentId: "main",
+          ackStatus: "started",
+          serverPhase: "agent-run-started",
+          serverAckToPhaseMs: 12,
+          serverReceivedToPhaseMs: 25,
+          serverDispatchStartedToPhaseMs: 8,
+          agentRunId: "agent-run-1",
+        }),
+      ]),
+    );
   });
 
   it("records pending send paint timing before a delayed chat.send ACK", async () => {
@@ -2118,6 +2183,109 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toHaveLength(1);
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
+  });
+
+  it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep my draft",
+    });
+    (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-current";
+
+    const send = handleSendChat(host, "Make the support files 5", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "Make the support files 5",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision request payload",
+    );
+    expect(payload).toMatchObject({
+      agentId: "proposal-owner",
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      sessionKey: "agent:main",
+      sessionId: "session-current",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(payload).not.toHaveProperty("targetAgentId");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
+  });
+
+  it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const send = handleSendChat(host, "/reset examples", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+    await Promise.resolve();
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision slash payload",
+    );
+    expect(payload).toMatchObject({
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "/reset examples",
+      sessionKey: "agent:main",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(host.chatQueue[0]).toMatchObject({
+      refreshSessions: false,
+      text: "/reset examples",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "/reset examples" }],
+    });
   });
 
   it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {

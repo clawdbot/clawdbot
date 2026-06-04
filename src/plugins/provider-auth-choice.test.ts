@@ -1,3 +1,4 @@
+// Covers provider auth choice selection for plugin-owned providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -1,3 +1,9 @@
+/**
+ * Shared realtime voice controls for active OpenClaw agent runs.
+ *
+ * This module owns the provider-facing control tool, conservative intent
+ * classifier, and user-visible status/queue/cancel messages used by Talk.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -5,6 +11,7 @@ import {
 import type { RealtimeVoiceTool } from "./provider-types.js";
 import type { TalkEvent } from "./talk-events.js";
 
+/** Provider-facing control modes for status, steering, cancellation, and follow-up work. */
 export const REALTIME_VOICE_AGENT_CONTROL_MODES = [
   "status",
   "steer",
@@ -12,15 +19,19 @@ export const REALTIME_VOICE_AGENT_CONTROL_MODES = [
   "followup",
 ] as const;
 
+/** Closed set of realtime voice agent-control modes. */
 export type RealtimeVoiceAgentControlMode = (typeof REALTIME_VOICE_AGENT_CONTROL_MODES)[number];
 
+/** Provider return shape for control calls that cancel active work immediately. */
 export type RealtimeVoiceAgentControlProviderResult = {
   status: "cancelled";
   message: string;
 };
 
+/** Stable provider-facing tool name for active-run voice control. */
 export const REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME = "openclaw_agent_control";
 
+/** Realtime function-tool descriptor projected to voice providers. */
 export const REALTIME_VOICE_AGENT_CONTROL_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -44,6 +55,7 @@ export const REALTIME_VOICE_AGENT_CONTROL_TOOL: RealtimeVoiceTool = {
   },
 };
 
+/** Classified control intent plus whether automatic tool routing is safe. */
 export type RealtimeVoiceAgentControlIntent = {
   mode: RealtimeVoiceAgentControlMode;
   confidence: "high" | "medium" | "low";
@@ -57,6 +69,7 @@ export type RealtimeVoiceAgentControlIntent = {
   shouldAutoControl: boolean;
 };
 
+/** Snapshot of active work used when recent Talk events cannot describe status. */
 export type RealtimeVoiceAgentRunActivity = {
   activeWorkKind?: "tool_call" | "model_call" | "embedded_run";
   hasActiveEmbeddedRun?: boolean;
@@ -67,6 +80,7 @@ export type RealtimeVoiceAgentRunActivity = {
   lastProgressReason?: string;
 };
 
+/** Result returned after applying or reporting a voice control request. */
 export type RealtimeVoiceAgentControlResult = {
   ok: boolean;
   mode: RealtimeVoiceAgentControlMode;
@@ -86,6 +100,7 @@ export type RealtimeVoiceAgentControlResult = {
   deliveredAtMs?: number;
 };
 
+/** Normalize user/config/provider supplied control modes. */
 export function normalizeRealtimeVoiceAgentControlMode(
   value: unknown,
 ): RealtimeVoiceAgentControlMode | undefined {
@@ -139,6 +154,7 @@ function hasNegatedCancelIntent(text: string): boolean {
   );
 }
 
+/** Classify raw spoken control text with conservative auto-control gating. */
 export function resolveRealtimeVoiceAgentControlIntent(params: {
   text: string;
   mode?: unknown;
@@ -155,6 +171,8 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
 
   const text = params.text;
   const normalized = text.trim().toLowerCase();
+  // "Stop using X" redirects the active work; it must not be treated as an
+  // abort of the whole run just because it starts with "stop".
   if (matchesAnyPattern(normalized, STOP_REDIRECT_CONTROL_PATTERNS)) {
     return {
       mode: "steer",
@@ -206,14 +224,17 @@ export function resolveRealtimeVoiceAgentControlIntent(params: {
   };
 }
 
+/** Return the best control mode for a spoken utterance, even if auto-routing is unsafe. */
 export function classifyRealtimeVoiceAgentControlText(text: string): RealtimeVoiceAgentControlMode {
   return resolveRealtimeVoiceAgentControlIntent({ text }).mode;
 }
 
+/** Whether a spoken utterance is safe to route automatically to the control tool. */
 export function shouldAutoControlRealtimeVoiceAgentText(text: string): boolean {
   return resolveRealtimeVoiceAgentControlIntent({ text }).shouldAutoControl;
 }
 
+/** Parse provider-owned control tool args from JSON strings or object payloads. */
 export function parseRealtimeVoiceAgentControlToolArgs(args: unknown): {
   text: string;
   mode: RealtimeVoiceAgentControlMode;
@@ -249,6 +270,7 @@ function parseRealtimeVoiceAgentControlToolArgsRecord(args: unknown): unknown {
   }
 }
 
+/** Build the system-style instruction that forces exact spoken status output. */
 export function buildRealtimeVoiceAgentControlSpeechMessage(text: string): string {
   return [
     "Internal OpenClaw voice control result.",
@@ -258,6 +280,7 @@ export function buildRealtimeVoiceAgentControlSpeechMessage(text: string): strin
   ].join("\n");
 }
 
+/** Provider result payload used when the control tool cancels active work. */
 export function buildRealtimeVoiceAgentCancelProviderResult(
   message = "Cancelled the active OpenClaw run.",
 ): RealtimeVoiceAgentControlProviderResult {
@@ -267,6 +290,7 @@ export function buildRealtimeVoiceAgentCancelProviderResult(
   };
 }
 
+/** Wrap follow-up text so an active run treats it as deferred context. */
 export function buildRealtimeVoiceAgentFollowupSteeringText(text: string): string {
   return [
     "Spoken follow-up for the current voice call.",
@@ -276,6 +300,7 @@ export function buildRealtimeVoiceAgentFollowupSteeringText(text: string): strin
   ].join("\n");
 }
 
+/** User-facing message for queue failures while steering or adding follow-up work. */
 export function formatRealtimeVoiceAgentQueueRejection(
   mode: RealtimeVoiceAgentControlMode,
   reason: string,
@@ -302,6 +327,7 @@ function isRealtimeVoiceAgentControlToolEvent(event: TalkEvent): boolean {
   return normalizeOptionalString(payload.name) === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME;
 }
 
+/** Format a concise spoken status for the active or most recent voice run. */
 export function formatRealtimeVoiceAgentStatus(params: {
   active: boolean;
   recentEvents?: readonly TalkEvent[];

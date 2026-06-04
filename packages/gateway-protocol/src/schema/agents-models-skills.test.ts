@@ -6,6 +6,13 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 
+/**
+ * Schema regression tests for agent metadata, skill proposals, and effective
+ * tool catalogs. These payloads are UI-facing but also consumed by runtime
+ * guards, so the fixtures exercise strictness at the public gateway boundary.
+ */
+
+/** Minimal effective-tools result used by strict notice tests. */
 function toolsEffectiveResult() {
   return {
     agentId: "main",

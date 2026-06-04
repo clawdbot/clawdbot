@@ -1,3 +1,4 @@
+// Tests session usage command output and token accounting summaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {

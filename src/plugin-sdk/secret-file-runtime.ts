@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for private secret file reads and atomic writes.
+ */
 export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,

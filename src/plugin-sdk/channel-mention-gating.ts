@@ -1,3 +1,4 @@
+// Plugin SDK barrel for mention-gating policy helpers used by channel plugins.
 export type {
   InboundImplicitMentionKind,
   InboundMentionDecision,

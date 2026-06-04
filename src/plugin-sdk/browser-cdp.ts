@@ -1,5 +1,6 @@
 import { redactSensitiveText } from "../logging/redact.js";
 
+/** Detect an operator-supplied port before WHATWG URL normalization drops default ports. */
 function hasRawExplicitPort(raw: string): boolean {
   const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
   const hostPort = authority.includes("@")
@@ -13,7 +14,23 @@ function hasRawExplicitPort(raw: string): boolean {
   return /:\d+$/.test(hostPort);
 }
 
-export function parseBrowserHttpUrl(raw: string, label: string) {
+export type BrowserHttpUrlParseResult = {
+  /** Parsed URL object retained for callers that need protocol, host, path, or credentials. */
+  parsed: URL;
+  /** Effective TCP port, including inferred 80/443 defaults. */
+  port: number;
+  /** Whether the raw URL text included a port, even if URL normalization drops it. */
+  hasExplicitPort: boolean;
+  /** URL string normalized by WHATWG URL rules with a trailing slash removed. */
+  normalized: string;
+  /** Normalized URL string that preserves an explicitly supplied default port. */
+  normalizedWithPort: string;
+};
+
+/**
+ * Parses a browser/CDP endpoint and returns both URL semantics and display-safe normalized forms.
+ */
+export function parseBrowserHttpUrl(raw: string, label: string): BrowserHttpUrlParseResult {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
   const allowed = ["http:", "https:", "ws:", "wss:"];
@@ -38,6 +55,8 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   const normalized = parsed.toString().replace(/\/$/, "");
   let normalizedWithPort: string;
   if (hasExplicitPort && !parsed.port) {
+    // URL normalizes away default ports, but config diagnostics need to preserve
+    // whether the operator explicitly wrote `:80` or `:443`.
     const proto = parsed.protocol + "//";
     const rest = normalized.slice(proto.length);
     const atIdx = rest.indexOf("@");
@@ -64,6 +83,9 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   };
 }
 
+/**
+ * Redacts credentials and known sensitive tokens from CDP URLs before logs or diagnostics.
+ */
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
   if (typeof cdpUrl !== "string") {
     return cdpUrl;

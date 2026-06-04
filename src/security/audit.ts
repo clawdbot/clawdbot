@@ -1,3 +1,4 @@
+// Orchestrates security audit collection and report formatting.
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";

@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for media understanding, image description, and audio transcription.
+ */
 export {
   describeImageFile,
   describeImageFileWithModel,

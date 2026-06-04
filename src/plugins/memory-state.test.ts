@@ -1,3 +1,4 @@
+// Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resetMemoryPluginState,

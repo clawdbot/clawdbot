@@ -35,46 +35,6 @@ import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
 
-type SmsStatusSnapshotAccount = Partial<ResolvedSmsAccount> & {
-  configured?: boolean;
-  tokenStatus?: string;
-  webhookPath?: string;
-};
-
-function buildSmsAccountSnapshot(params: {
-  account: ResolvedSmsAccount;
-  runtime?: {
-    running?: boolean;
-    connected?: boolean;
-    lastConnectedAt?: number | null;
-    lastError?: string | null;
-    lastInboundAt?: number | null;
-    lastOutboundAt?: number | null;
-  };
-}) {
-  const account = params.account as SmsStatusSnapshotAccount;
-  const configured =
-    typeof account.configured === "boolean"
-      ? account.configured
-      : isSmsAccountConfigured(params.account);
-  return {
-    accountId: account.accountId ?? "",
-    name: account.fromNumber || account.messagingServiceSid || "SMS",
-    enabled: account.enabled,
-    configured,
-    statusState:
-      account.enabled === false ? "disabled" : configured ? "configured" : "unconfigured",
-    ...(account.tokenStatus ? { tokenStatus: account.tokenStatus } : {}),
-    ...(account.webhookPath ? { webhookPath: account.webhookPath } : {}),
-    running: params.runtime?.running ?? false,
-    ...(params.runtime?.connected !== undefined ? { connected: params.runtime.connected } : {}),
-    lastConnectedAt: params.runtime?.lastConnectedAt ?? null,
-    lastError: params.runtime?.lastError ?? null,
-    lastInboundAt: params.runtime?.lastInboundAt ?? null,
-    lastOutboundAt: params.runtime?.lastOutboundAt ?? null,
-  };
-}
-
 const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
   sectionKey: CHANNEL_ID,
   listAccountIds: listSmsAccountIds,
@@ -296,17 +256,18 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
       },
     },
     status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastConnectedAt: null,
-        lastError: null,
-        lastInboundAt: null,
-        lastOutboundAt: null,
+      buildAccountSnapshot: ({ account }) => {
+        const configured = isSmsAccountConfigured(account);
+        return {
+          accountId: account.accountId,
+          name: account.fromNumber || account.messagingServiceSid || "SMS",
+          enabled: account.enabled,
+          configured,
+          statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+        };
       },
       probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
       formatCapabilitiesProbe: ({ probe }) => formatSmsProbeLines(probe),
-      buildAccountSnapshot: buildSmsAccountSnapshot,
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),

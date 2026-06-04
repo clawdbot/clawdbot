@@ -1,3 +1,4 @@
+// Covers prototype-pollution key blocking.
 import { describe, expect, it } from "vitest";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 

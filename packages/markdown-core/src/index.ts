@@ -1,3 +1,4 @@
+/** Public Markdown parsing, rendering, chunking, and table-conversion utilities. */
 export * from "./code-spans.js";
 export * from "./fences.js";
 export * from "./frontmatter.js";

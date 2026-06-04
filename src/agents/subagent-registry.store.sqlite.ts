@@ -26,6 +26,7 @@ type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type SubagentRunSqliteInsert = Insertable<SubagentRunsTable>;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 
+/** Converts undefined to null so optional record fields round-trip through sqlite columns. */
 function jsonStringify(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -57,6 +58,8 @@ function createDeliveryFromTypedColumns(
   row: SubagentRunSqliteRow,
   fallback: SubagentCompletionDeliveryState | undefined,
 ): SubagentCompletionDeliveryState | undefined {
+  // Typed delivery columns are authoritative for retry/delivered state while
+  // payload_json keeps compatibility with older fields during migration.
   const delivery = fallback ? { ...fallback } : undefined;
   const payload = parseJson(row.pending_final_delivery_payload_json) as
     | PendingFinalDeliveryPayload
@@ -96,6 +99,7 @@ function createDeliveryFromTypedColumns(
   };
 }
 
+/** Rehydrates one sqlite row into the normalized subagent run record shape. */
 function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
   const payload = (parseJson(row.payload_json) as Partial<SubagentRunRecord> | undefined) ?? {};
   const requesterOrigin =
@@ -181,6 +185,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
 
+/** Flattens a normalized subagent run into typed sqlite columns plus payload_json. */
 function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunSqliteInsert {
   const normalized = normalizeSubagentRunState(structuredClone(entry));
   const delivery = normalized.delivery;
@@ -275,6 +280,7 @@ function loadSubagentRegistryFromSqliteOnly(): Map<string, SubagentRunRecord> {
   return runs;
 }
 
+/** Loads subagent runs from sqlite, importing and deleting the legacy JSON store when needed. */
 export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
   const runs = loadSubagentRegistryFromSqliteOnly();
   if (runs.size > 0) {
@@ -289,6 +295,7 @@ export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord>
   return loadSubagentRegistryFromSqliteOnly();
 }
 
+/** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
 export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);

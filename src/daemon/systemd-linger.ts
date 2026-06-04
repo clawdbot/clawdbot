@@ -23,6 +23,7 @@ type SystemdUserLingerStatus = {
   linger: "yes" | "no";
 };
 
+/** Reads systemd user linger status through loginctl when available. */
 export async function readSystemdUserLingerStatus(
   env: Record<string, string | undefined>,
 ): Promise<SystemdUserLingerStatus | null> {
@@ -48,6 +49,7 @@ export async function readSystemdUserLingerStatus(
   return null;
 }
 
+/** Enables systemd user linger through loginctl, with optional sudo mode. */
 export async function enableSystemdUserLinger(params: {
   env: Record<string, string | undefined>;
   user?: string;

@@ -1,3 +1,4 @@
+// Tests status command defaults for thinking and reasoning display.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 

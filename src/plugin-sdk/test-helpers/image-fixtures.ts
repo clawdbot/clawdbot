@@ -1,3 +1,4 @@
+// Deterministic image buffers for plugin SDK media tests.
 import { deflateSync } from "node:zlib";
 import { encodePngRgb, encodePngRgba } from "../../media/png-encode.js";
 
@@ -9,6 +10,7 @@ type Rgba = {
 };
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// Minimal valid JPEG used when tests only need container detection.
 const TINY_JPEG = Buffer.from(
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
   "base64",
@@ -63,6 +65,7 @@ function fillSolidRgb(width: number, height: number, color: Rgba): Buffer {
   return pixels;
 }
 
+/** Create a solid-color PNG buffer, preserving alpha only when needed. */
 export function createSolidPngBuffer(width: number, height: number, color: Rgba): Buffer {
   if (color.a === undefined || color.a === 255) {
     return encodePngRgb(fillSolidRgb(width, height, color), width, height);
@@ -70,6 +73,7 @@ export function createSolidPngBuffer(width: number, height: number, color: Rgba)
   return encodePngRgba(fillSolidRgba(width, height, color), width, height);
 }
 
+/** Create a deterministic RGB PNG with varied pixel values. */
 export function createNoisyPngBuffer(width: number, height: number): Buffer {
   const rgba = createNoisyRgbaBuffer(width, height);
   const rgb = Buffer.alloc(width * height * 3);
@@ -81,6 +85,7 @@ export function createNoisyPngBuffer(width: number, height: number): Buffer {
   return encodePngRgb(rgb, width, height);
 }
 
+/** Create a grayscale+alpha PNG for image paths that must handle non-RGB color types. */
 export function createGrayscaleAlphaPngBuffer(width: number, height: number): Buffer {
   const stride = width * 2;
   const raw = Buffer.alloc((stride + 1) * height);
@@ -112,10 +117,12 @@ export function createGrayscaleAlphaPngBuffer(width: number, height: number): Bu
   ]);
 }
 
+/** Return a tiny valid JPEG fixture buffer. */
 export function createTinyJpegBuffer(): Buffer {
   return Buffer.from(TINY_JPEG);
 }
 
+/** Create deterministic RGBA pixels for encoder and media conversion tests. */
 export function createNoisyRgbaBuffer(width: number, height: number): Buffer {
   const pixels = Buffer.alloc(width * height * 4);
   for (let offset = 0; offset < pixels.length; offset += 4) {

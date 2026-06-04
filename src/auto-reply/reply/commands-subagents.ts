@@ -1,3 +1,4 @@
+// Implements subagent commands for spawn, focus, routing, and status.
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {

@@ -1,3 +1,4 @@
+// Verifies tool planner filtering, ordering, and unsupported-tool reporting.
 import { describe, expect, it } from "vitest";
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";

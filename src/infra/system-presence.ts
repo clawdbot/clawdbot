@@ -1,3 +1,4 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import {

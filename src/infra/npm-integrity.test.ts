@@ -1,3 +1,4 @@
+// Tests npm integrity parsing and drift detection.
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveNpmIntegrityDrift,

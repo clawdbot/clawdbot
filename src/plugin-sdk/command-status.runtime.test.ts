@@ -1,3 +1,6 @@
+/**
+ * Tests command status runtime lazy loading and direct status reply behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);

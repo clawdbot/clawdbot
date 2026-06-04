@@ -1,3 +1,4 @@
+// Tests mixed inline directives in user text and command bodies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";

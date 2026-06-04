@@ -1,3 +1,4 @@
+/** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
@@ -39,6 +40,7 @@ export type ProviderEnvVarLookupParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
+/** Manifest-provided evidence that a provider auth credential exists outside config. */
 export type ProviderAuthEvidence = {
   type: "local-file-with-env";
   fileEnvVar?: string;
@@ -49,6 +51,7 @@ export type ProviderAuthEvidence = {
   source?: string;
 };
 
+/** Provider auth lookup maps resolved from plugin metadata and core fallback rules. */
 export type ProviderAuthLookupMaps = {
   aliasMap: Readonly<Record<string, string>>;
   envCandidateMap: Readonly<Record<string, readonly string[]>>;
@@ -76,6 +79,8 @@ function shouldUsePluginProviderEnvVars(
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins !== false) {
     return true;
   }
+  // Env-var candidates are hints for lookup/scrubbing, but callers can opt into the same
+  // workspace trust filter used for stronger auth evidence when probing scoped workspaces.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
@@ -86,6 +91,8 @@ function shouldUsePluginProviderAuthEvidence(
   if (plugin.origin !== "workspace") {
     return true;
   }
+  // Auth evidence can point at local credential files, so workspace plugins must be explicitly
+  // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
@@ -166,6 +173,8 @@ function resolveProviderMetadataSnapshot(
     return current;
   }
   if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+    // Configs without explicit load paths can reuse the process-scoped snapshot; plugin-scoped
+    // configs need fresh metadata so workspace allow/deny decisions are not bypassed.
     const unscopedCurrent = getCurrentPluginMetadataSnapshot({
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -285,6 +294,7 @@ function resolveManifestSetupProviderFallbackRefsFromSnapshot(
     if (plugin.setup?.requiresRuntime === false) {
       continue;
     }
+    // Setup fallback refs are only useful for providers that may be reached at runtime.
     if (plugin.setup?.providers === undefined && plugin.providers === undefined) {
       continue;
     }
@@ -300,6 +310,8 @@ function resolveManifestSetupProviderFallbackRefsFromSnapshot(
   return [...refs].toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Resolves provider env-var candidates used by generic auth lookup. */
+/** Resolves provider auth env-var candidates from core fallbacks and plugin metadata. */
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -309,12 +321,14 @@ export function resolveProviderAuthEnvVarCandidates(
   };
 }
 
+/** Resolves non-env evidence that provider auth may already be configured. */
 export function resolveProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly ProviderAuthEvidence[]> {
   return resolveManifestProviderAuthEvidence(params);
 }
 
+/** Resolves all provider auth lookup maps from a single metadata snapshot. */
 export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
 ): ProviderAuthLookupMaps {
@@ -339,6 +353,7 @@ export function resolveProviderAuthLookupMaps(
   };
 }
 
+/** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
 export function resolveProviderEnvVars(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -423,6 +438,7 @@ export const testing = {
   },
 };
 
+/** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,
@@ -436,6 +452,7 @@ export function getProviderEnvVars(
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
+/** Lists known provider auth env vars without bridge-only env vars. */
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings([
     ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
@@ -443,10 +460,12 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
   ]);
 }
 
+/** Lists env vars that may contain provider secrets for broad scrubbing. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
 }
 
+/** Returns a copy of an env object with denied keys removed case-insensitively. */
 export function omitEnvKeysCaseInsensitive(
   baseEnv: NodeJS.ProcessEnv,
   keys: Iterable<string>,

@@ -58,8 +58,8 @@ function expectAllowedApply(
 
 describe("gateway config mutation guard coverage", () => {
   it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.promptOverlays");
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.model");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.promptOverlays");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.model");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].model");
@@ -69,6 +69,20 @@ describe("gateway config mutation guard coverage", () => {
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
       "messages.groupChat.unmentionedInbound",
+    );
+  });
+
+  it("blocks global prompt overlay edits via config.patch", () => {
+    expectBlocked(
+      { agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } } },
+      { agents: { defaults: { promptOverlays: { gpt5: { personality: "best" } } } } },
+    );
+  });
+
+  it("blocks global default model edits via config.patch", () => {
+    expectBlocked(
+      { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
+      { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
     );
   });
 
@@ -539,6 +553,29 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: {
             sandbox: { mode: "off" },
+            reasoningDefault: "medium",
+          },
+        },
+      },
+    );
+  });
+
+  it("blocks config.apply replacing global prompt and model defaults", () => {
+    expectBlockedApply(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            promptOverlays: { gpt5: { personality: "off" } },
+            reasoningDefault: "low",
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            promptOverlays: { gpt5: { personality: "best" } },
             reasoningDefault: "medium",
           },
         },

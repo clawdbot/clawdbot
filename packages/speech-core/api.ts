@@ -1,3 +1,5 @@
+// Public speech-core plugin SDK facade. Re-export stable provider/config helpers
+// from the plugin-sdk alias so speech plugins do not import core internals.
 export {
   asBoolean,
   asFiniteNumber,

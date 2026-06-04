@@ -1,8 +1,11 @@
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
+// Curated internal channel-plugin type barrel. Keep this list explicit so core
+// imports do not accidentally expose helper-only implementation types.
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
 
+/** Stable message action name union derived from the registered action list. */
 export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 export type { ChannelMessageCapability } from "./message-capabilities.js";
 

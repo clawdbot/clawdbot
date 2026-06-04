@@ -1,3 +1,4 @@
+// Manages node pairing identities for gateway and remote device trust.
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";

@@ -20,10 +20,16 @@ import {
   type GatewaySessionRow,
 } from "./session-utils.js";
 
+// Session event broadcasting bridges transcript/lifecycle stores to live
+// Gateway websocket subscribers. Message updates go to session-specific
+// subscribers plus broad session listeners; non-display messages still trigger
+// sessions.changed so lists refresh.
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
+  // Global sessions can be subscribed through either the raw global key or the
+  // default-agent scoped key; non-default agent global sessions stay scoped.
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (sessionKey === "global") {
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
@@ -51,6 +57,8 @@ function buildGatewaySessionSnapshot(params: {
     return {};
   }
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  // The unscoped global row hides goal state to avoid presenting one agent's
+  // scoped goal as the global/default session goal.
   const session = params.includeSession ? { ...sessionRow } : undefined;
   if (session && omitUnscopedGlobalGoal) {
     delete session.goal;
@@ -111,6 +119,7 @@ function buildGatewaySessionSnapshot(params: {
   };
 }
 
+/** Creates a serialized transcript-update broadcaster for session websocket clients. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
@@ -118,6 +127,8 @@ export function createTranscriptUpdateBroadcastHandler(params: {
 }) {
   let broadcastQueue = Promise.resolve();
   return (update: SessionTranscriptUpdate): void => {
+    // Preserve transcript update order even when counting messages requires an
+    // async read from the session file.
     broadcastQueue = broadcastQueue
       .then(() => handleTranscriptUpdateBroadcast(params, update))
       .catch(() => undefined);
@@ -158,6 +169,8 @@ async function handleTranscriptUpdateBroadcast(
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
+    // Updates from raw transcript events may not carry seq; fall back to the
+    // current transcript line count for cursor-compatible live history.
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
@@ -195,6 +208,8 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
 
+  // Messages suppressed from display can still change transcript state, so
+  // notify broad session listeners even when no session.message is emitted.
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
   if (sessionEventConnIds.size === 0) {
     return;
@@ -215,6 +230,7 @@ async function handleTranscriptUpdateBroadcast(
   );
 }
 
+/** Creates a lifecycle-event broadcaster for session list refreshes. */
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;

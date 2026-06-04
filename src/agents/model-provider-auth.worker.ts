@@ -4,6 +4,10 @@ import { replaceRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "
 import type { RuntimeProviderAuthLookup } from "./model-auth.js";
 import { buildCurrentProviderAuthStateSnapshot } from "./model-provider-auth.js";
 
+/**
+ * Worker entrypoint for warming provider auth state without blocking the foreground
+ * model-selection path.
+ */
 type ProviderAuthWarmRuntimeAuthStore = {
   agentDir?: string;
   store: AuthProfileStore;
@@ -42,6 +46,7 @@ function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
   );
 }
 
+/** Validates worker input and returns a provider auth snapshot or a serializable failure. */
 export async function runProviderAuthWarmWorkerInput(
   input: unknown,
 ): Promise<ProviderAuthWarmWorkerResult> {
@@ -53,9 +58,11 @@ export async function runProviderAuthWarmWorkerInput(
   }
   try {
     if (input.runtimeAuthStores?.length) {
+      // Worker threads do not share module-local caches, so hydrate runtime stores explicitly.
       replaceRuntimeAuthProfileStoreSnapshots(input.runtimeAuthStores);
     }
     const snapshot = await buildCurrentProviderAuthStateSnapshot(input.cfg, {
+      // Warmup should inspect existing auth only; prompting or writing here would surprise CLI callers.
       readOnlyAuthStore: true,
       runtimeAuthLookups: new Map(
         input.runtimeAuthLookups?.map(({ agentId, lookup }) => [agentId, lookup]),

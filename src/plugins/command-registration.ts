@@ -1,3 +1,4 @@
+/** Validates and registers plugin command definitions into the global command registry. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -76,16 +77,19 @@ function getAgentPromptSurfaces(): Set<string> {
   return agentPromptSurfaces;
 }
 
+/** Result returned when a plugin command registration succeeds or fails validation. */
 export type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
+/** Returns true when a command name is owned by built-in OpenClaw command handling. */
 export function isReservedCommandName(name: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
   return Boolean(trimmed && getReservedCommands().has(trimmed));
 }
 
+/** Validates user-visible command names before plugin registration accepts them. */
 export function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },

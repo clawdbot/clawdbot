@@ -1,5 +1,7 @@
+// Test helpers for environment variable setup and restoration.
 import path from "node:path";
 
+/** Captures selected process.env keys so tests can restore exact prior state. */
 export function captureEnv(keys: string[]) {
   const snapshot = new Map<string, string | undefined>();
   for (const key of keys) {
@@ -40,6 +42,7 @@ const PATH_RESOLUTION_ENV_KEYS = [
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
 
+// Windows home resolution depends on split drive/path env vars, not only HOME.
 function resolveWindowsHomeParts(homeDir: string): { homeDrive?: string; homePath?: string } {
   if (process.platform !== "win32") {
     return {};

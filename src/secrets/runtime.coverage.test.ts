@@ -1,3 +1,4 @@
+/** Coverage tests for secrets runtime collector breadth and target surfaces. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";

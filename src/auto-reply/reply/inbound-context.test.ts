@@ -1,3 +1,4 @@
+// Tests inbound context text built from sender and conversation metadata.
 import { describe, expect, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
 import type { MsgContext } from "../templating.js";

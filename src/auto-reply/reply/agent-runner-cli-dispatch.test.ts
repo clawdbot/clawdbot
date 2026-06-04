@@ -1,3 +1,4 @@
+// Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { keepCliSessionBindingOnlyWhenReused } from "./agent-runner-cli-dispatch.js";

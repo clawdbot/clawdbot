@@ -1,3 +1,4 @@
+// Root-help config probe for plugin-sensitive help rendering.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
@@ -9,6 +10,7 @@ function hasListEntries(value: string[] | undefined): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+/** Detect config fields that can change which plugin help sections are rendered. */
 export function hasPluginHelpAffectingConfig(config: OpenClawConfig | null | undefined): boolean {
   const plugins = config?.plugins;
   if (!plugins) {
@@ -25,12 +27,14 @@ export function hasPluginHelpAffectingConfig(config: OpenClawConfig | null | und
   );
 }
 
+/** Detect env vars that can change bundled plugin availability in root help. */
 export function hasPluginHelpAffectingEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(
     env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() || env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim(),
   );
 }
 
+/** Load render options only when config/env can affect plugin help output. */
 export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RootHelpRenderOptions | null> {

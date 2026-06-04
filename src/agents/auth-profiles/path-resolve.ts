@@ -8,6 +8,7 @@ import {
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "./path-constants.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 export function resolveAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
@@ -25,12 +26,12 @@ export function resolveAuthStatePath(agentDir?: string): string {
 }
 
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStorePath(agentDir);
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStatePath(agentDir);
+  const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 

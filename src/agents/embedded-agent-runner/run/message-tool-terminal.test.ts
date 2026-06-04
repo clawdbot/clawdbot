@@ -160,9 +160,11 @@ describe("message-tool-only terminal sends", () => {
       details: { rewritten: true },
     }));
     const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
     installMessageToolOnlyTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
     });
 
     await expect(
@@ -178,6 +180,7 @@ describe("message-tool-only terminal sends", () => {
       terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
   it("leaves existing after-tool-call output alone when the send failed", async () => {
@@ -187,9 +190,11 @@ describe("message-tool-only terminal sends", () => {
       isError: true,
     }));
     const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
     installMessageToolOnlyTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
     });
 
     await expect(
@@ -205,6 +210,7 @@ describe("message-tool-only terminal sends", () => {
       isError: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(onDeliveredSourceReply).not.toHaveBeenCalled();
   });
 
   it("does not install a wrapper for non-message-tool-only delivery", async () => {

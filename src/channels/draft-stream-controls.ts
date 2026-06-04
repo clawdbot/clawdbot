@@ -1,6 +1,9 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
+/**
+ * Mutable finalization flags shared by draft stream controls and channel adapters.
+ */
 export type FinalizableDraftStreamState = {
   stopped: boolean;
   final: boolean;
@@ -29,6 +32,9 @@ type FinalizableDraftLifecycleParams<T> = Omit<
   sendOrEditStreamMessage: (text: string) => Promise<boolean>;
 };
 
+/**
+ * Creates controls for streaming preview messages that can be finalized, sealed, or cleared.
+ */
 export function createFinalizableDraftStreamControls(params: {
   throttleMs: number;
   isStopped: () => boolean;
@@ -44,6 +50,8 @@ export function createFinalizableDraftStreamControls(params: {
   });
 
   const update = (text: string) => {
+    // Finalized or stopped streams must ignore late model deltas so a deleted/posted draft is
+    // not recreated by an in-flight throttle tick.
     if (params.isStopped() || params.isFinal()) {
       return;
     }
@@ -51,17 +59,20 @@ export function createFinalizableDraftStreamControls(params: {
   };
 
   const stop = async (): Promise<void> => {
+    // stop finalizes by flushing the latest pending text into the preview message.
     params.markFinal();
     await loop.flush();
   };
 
   const stopForClear = async (): Promise<void> => {
+    // Clearing deletes the preview, so stop the loop without flushing another edit first.
     params.markStopped();
     loop.stop();
     await loop.waitForInFlight();
   };
 
   const seal = async (): Promise<void> => {
+    // Sealing keeps the preview id for callers that already own final delivery/deletion.
     params.markFinal();
     loop.stop();
     await loop.waitForInFlight();
@@ -77,6 +88,9 @@ export function createFinalizableDraftStreamControls(params: {
   };
 }
 
+/**
+ * Creates finalizable draft controls backed by a shared mutable state object.
+ */
 export function createFinalizableDraftStreamControlsForState(params: {
   throttleMs: number;
   state: FinalizableDraftStreamState;
@@ -96,6 +110,9 @@ export function createFinalizableDraftStreamControlsForState(params: {
   });
 }
 
+/**
+ * Stops a draft stream, reads the current preview message id, then clears the stored id.
+ */
 export async function takeMessageIdAfterStop<T>(
   params: StopAndClearMessageIdParams<T>,
 ): Promise<T | undefined> {
@@ -105,6 +122,9 @@ export async function takeMessageIdAfterStop<T>(
   return messageId;
 }
 
+/**
+ * Stops a draft stream and deletes its preview message when the stored id is valid.
+ */
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
@@ -124,6 +144,9 @@ export async function clearFinalizableDraftMessage<T>(
   }
 }
 
+/**
+ * Builds the standard draft lifecycle used by channel streaming preview implementations.
+ */
 export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifecycleParams<T>) {
   const controls = createFinalizableDraftStreamControlsForState({
     throttleMs: params.throttleMs,

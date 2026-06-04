@@ -1,3 +1,4 @@
+/** Tests that explicit channel secret target lookup avoids broad manifest rediscovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({

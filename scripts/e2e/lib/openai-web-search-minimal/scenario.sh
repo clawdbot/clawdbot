@@ -64,13 +64,7 @@ MOCK_PORT="$MOCK_PORT" \
   node scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs >"$MOCK_LOG" 2>&1 &
 mock_pid="$!"
 
-for _ in $(seq 1 80); do
-  if node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
-done
-node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null
+openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360

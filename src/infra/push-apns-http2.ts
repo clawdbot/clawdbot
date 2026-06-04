@@ -1,3 +1,4 @@
+// Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import http2 from "node:http2";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";

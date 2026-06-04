@@ -1,3 +1,4 @@
+// Covers safe base-dir and containment checks.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isWithinDir, resolveSafeBaseDir } from "./path-safety.js";

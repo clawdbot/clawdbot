@@ -1,3 +1,4 @@
+// Verifies PATH prepend normalization, merge, and removal helpers.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

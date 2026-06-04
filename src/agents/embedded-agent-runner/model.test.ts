@@ -7,6 +7,7 @@ import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
 } from "../auth-profiles.js";
 import {
   PLUGIN_MODEL_CATALOG_FILE,
@@ -355,9 +356,13 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
     });
-    fs.writeFileSync(
-      path.join(defaultAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+      },
+      defaultAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
       runtimeHooks: createRuntimeHooks(),
@@ -419,9 +424,13 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    fs.writeFileSync(
-      path.join(mainAgentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+      },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
     const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),

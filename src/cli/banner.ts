@@ -1,3 +1,4 @@
+// CLI banner formatter and one-shot emitter.
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -23,6 +24,7 @@ type BannerOptions = TaglineOptions & {
 
 let bannerEmitted = false;
 
+// Use grapheme segmentation so decorative emoji and block art split without corrupting clusters.
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -61,6 +63,7 @@ function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
   };
 }
 
+/** Format the compact one-line CLI banner, wrapping tagline when terminal width requires it. */
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
@@ -129,6 +132,7 @@ function formatCliBannerArtLines(options: BannerOptions): string[] {
   return [...LOBSTER_ASCII_BODY, centerText(title, width), " "];
 }
 
+/** Format the large decorative OpenClaw banner art. */
 export function formatCliBannerArt(options: BannerOptions = {}): string {
   const rich = options.richTty ?? isRich();
   const lines = formatCliBannerArtLines(options);
@@ -169,6 +173,7 @@ export function formatCliBannerArt(options: BannerOptions = {}): string {
   return colored.join("\n");
 }
 
+/** Emit the CLI banner once for interactive, non-JSON, non-version invocations. */
 export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) {
     return;
@@ -189,6 +194,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
   bannerEmitted = true;
 }
 
+/** Return whether the current process already emitted the CLI banner. */
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }

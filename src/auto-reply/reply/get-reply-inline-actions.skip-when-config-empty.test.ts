@@ -1,3 +1,4 @@
+// Tests inline action skipping when channel config does not define actions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

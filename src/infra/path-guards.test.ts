@@ -1,3 +1,4 @@
+// Covers path guard helpers for platform and symlink errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {

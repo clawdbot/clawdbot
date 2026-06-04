@@ -2,6 +2,15 @@ import { Type } from "typebox";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+/**
+ * Session protocol schemas.
+ *
+ * These requests and results cover transcript discovery, lifecycle control,
+ * compaction checkpoints, per-session plugin state, and usage reporting. The
+ * schemas are shared by dashboard, CLI, ACP, and gateway RPC callers.
+ */
+
+/** Reason a compaction checkpoint was created. */
 export const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("auto-threshold"),
@@ -9,6 +18,7 @@ export const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("timeout-retry"),
 ]);
 
+/** Start/end event emitted while a session compaction operation runs. */
 export const SessionOperationEventSchema = Type.Object(
   {
     operationId: NonEmptyString,
@@ -23,6 +33,7 @@ export const SessionOperationEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reference to the transcript location before or after compaction. */
 export const SessionCompactionTranscriptReferenceSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -33,6 +44,7 @@ export const SessionCompactionTranscriptReferenceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Stored compaction checkpoint metadata for branching or restoring a session. */
 export const SessionCompactionCheckpointSchema = Type.Object(
   {
     checkpointId: NonEmptyString,
@@ -50,6 +62,7 @@ export const SessionCompactionCheckpointSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = Type.Object(
   {
     /**
@@ -84,6 +97,7 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Repairs or removes invalid session records from the selected agent scope. */
 export const SessionsCleanupParamsSchema = Type.Object(
   {
     agent: Type.Optional(NonEmptyString),
@@ -96,6 +110,7 @@ export const SessionsCleanupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads short previews for selected session keys. */
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),
@@ -105,6 +120,7 @@ export const SessionsPreviewParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Describes one session and optional derived title/last-message previews. */
 export const SessionsDescribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -114,6 +130,7 @@ export const SessionsDescribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Resolves a session by key, raw session id, label, or parent/agent scope. */
 export const SessionsResolveParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
@@ -127,6 +144,7 @@ export const SessionsResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates or adopts a session with optional model, label, and parent linkage. */
 export const SessionsCreateParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
@@ -141,6 +159,7 @@ export const SessionsCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Sends one message into an existing session. */
 export const SessionsSendParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -154,6 +173,7 @@ export const SessionsSendParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Subscribes a client to live message updates for one session. */
 export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -162,6 +182,7 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Removes a live message subscription for one session. */
 export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -170,6 +191,7 @@ export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Aborts the active or named run for a session. */
 export const SessionsAbortParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
@@ -179,6 +201,7 @@ export const SessionsAbortParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -227,6 +250,7 @@ export const SessionsPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -238,6 +262,7 @@ export const SessionsPluginPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after patching session plugin state. */
 export const SessionsPluginPatchResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -247,6 +272,7 @@ export const SessionsPluginPatchResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Resets a session to a new or reset transcript state. */
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -256,6 +282,7 @@ export const SessionsResetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Deletes a session record and optionally its transcript. */
 export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -267,6 +294,7 @@ export const SessionsDeleteParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Requests manual compaction for a session transcript. */
 export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -276,6 +304,7 @@ export const SessionsCompactParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lists compaction checkpoints for one session. */
 export const SessionsCompactionListParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -284,6 +313,7 @@ export const SessionsCompactionListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads one compaction checkpoint by id. */
 export const SessionsCompactionGetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -293,6 +323,7 @@ export const SessionsCompactionGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates a new branch from a compaction checkpoint. */
 export const SessionsCompactionBranchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -302,6 +333,7 @@ export const SessionsCompactionBranchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Restores an existing session to a compaction checkpoint. */
 export const SessionsCompactionRestoreParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -311,6 +343,7 @@ export const SessionsCompactionRestoreParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** List response for session compaction checkpoints. */
 export const SessionsCompactionListResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -320,6 +353,7 @@ export const SessionsCompactionListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Get response for a single compaction checkpoint. */
 export const SessionsCompactionGetResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -329,6 +363,7 @@ export const SessionsCompactionGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Branch response with the newly created session key and entry metadata. */
 export const SessionsCompactionBranchResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -347,6 +382,7 @@ export const SessionsCompactionBranchResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Restore response with updated session entry metadata. */
 export const SessionsCompactionRestoreResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -364,6 +400,7 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Usage report query across one session, one agent, or all agent sessions. */
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns sessions for the effective agent. */

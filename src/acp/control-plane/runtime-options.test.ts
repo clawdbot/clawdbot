@@ -1,3 +1,4 @@
+/** Tests runtime config-option serialization against advertised backend keys. */
 import { describe, expect, it } from "vitest";
 import { buildRuntimeConfigOptionPairs } from "./runtime-options.js";
 

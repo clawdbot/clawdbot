@@ -502,6 +502,7 @@ type PendingStop = {
   ws: WebSocket;
   promise: Promise<void>;
   resolve: () => void;
+  terminateTimer?: NodeJS.Timeout;
 };
 
 export class GatewayClient {
@@ -783,8 +784,7 @@ export class GatewayClient {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
-      const stopPromise = this.createPendingStop(ws);
-      ws.close();
+      const pendingStop = this.createPendingStop(ws);
       const forceTerminateTimer = setTimeout(() => {
         try {
           ws.terminate();
@@ -792,30 +792,35 @@ export class GatewayClient {
         this.resolvePendingStop(ws);
       }, FORCE_STOP_TERMINATE_GRACE_MS);
       forceTerminateTimer.unref?.();
+      pendingStop.terminateTimer = forceTerminateTimer;
+      ws.close();
       this.flushPendingErrors(new Error("gateway client stopped"));
-      return stopPromise;
+      return pendingStop.promise;
     }
     this.flushPendingErrors(new Error("gateway client stopped"));
     return null;
   }
 
-  private createPendingStop(ws: WebSocket): Promise<void> {
+  private createPendingStop(ws: WebSocket): PendingStop {
     if (this.pendingStop?.ws === ws) {
-      return this.pendingStop.promise;
+      return this.pendingStop;
     }
     let resolve!: () => void;
     const promise = new Promise<void>((res) => {
       resolve = res;
     });
     this.pendingStop = { ws, promise, resolve };
-    return promise;
+    return this.pendingStop;
   }
 
   private resolvePendingStop(ws: WebSocket): void {
     if (this.pendingStop?.ws !== ws) {
       return;
     }
-    const { resolve } = this.pendingStop;
+    const { resolve, terminateTimer } = this.pendingStop;
+    if (terminateTimer) {
+      clearTimeout(terminateTimer);
+    }
     this.pendingStop = null;
     resolve();
   }

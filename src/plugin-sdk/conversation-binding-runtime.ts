@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for conversation binding routes and session binding records.
+ */
 export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,

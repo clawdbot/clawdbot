@@ -1,3 +1,4 @@
+// Verifies provider usage telemetry preserves plugin auth context.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

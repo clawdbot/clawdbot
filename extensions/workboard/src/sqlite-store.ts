@@ -26,7 +26,7 @@ import type {
 } from "./types.js";
 
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -118,6 +118,21 @@ function runTransaction<T>(db: DatabaseSync, run: () => T): T {
   }
 }
 
+function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${tableName})`).all() as Row[]).flatMap((row) =>
+      typeof row.name === "string" ? [row.name] : [],
+    ),
+  );
+}
+
+function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, definition: string) {
+  if (tableColumns(db, tableName).has(columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+}
+
 function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
@@ -171,6 +186,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       template_id TEXT,
       archived_at INTEGER,
       stale_json TEXT,
+      lifecycle_status_source_updated_at INTEGER,
       failure_count INTEGER
     );
     CREATE INDEX IF NOT EXISTS workboard_cards_board_status_idx
@@ -333,6 +349,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       updated_at INTEGER NOT NULL
     );
   `);
+  ensureColumn(
+    db,
+    "workboard_cards",
+    "lifecycle_status_source_updated_at",
+    "lifecycle_status_source_updated_at INTEGER",
+  );
   db.prepare(
     "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
   ).run(`schema-${SCHEMA_VERSION}`, Date.now());
@@ -630,6 +652,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
+  const lifecycleStatusSourceUpdatedAt = numberValue(row, "lifecycle_status_source_updated_at");
   return optional({
     ...(attempts.length > 0 ? { attempts } : {}),
     ...(comments.length > 0 ? { comments } : {}),
@@ -660,6 +683,7 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
       ? { archivedAt: numberValue(row, "archived_at") }
       : {}),
     ...(stale ? { stale } : {}),
+    ...(lifecycleStatusSourceUpdatedAt !== undefined ? { lifecycleStatusSourceUpdatedAt } : {}),
     ...(numberValue(row, "failure_count") !== undefined
       ? { failureCount: numberValue(row, "failure_count") }
       : {}),
@@ -738,14 +762,14 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         execution_id, execution_kind, execution_engine, execution_mode, execution_status,
         execution_model, execution_session_key, execution_run_id, execution_started_at,
         execution_updated_at, automation_json, claim_json, template_id, archived_at, stale_json,
-        failure_count
+        lifecycle_status_source_updated_at, failure_count
       ) VALUES (
         @id, @board_id, @title, @notes, @status, @priority, @agent_id, @session_key, @run_id,
         @task_id, @source_url, @position, @created_at, @updated_at, @started_at, @completed_at,
         @execution_id, @execution_kind, @execution_engine, @execution_mode, @execution_status,
         @execution_model, @execution_session_key, @execution_run_id, @execution_started_at,
         @execution_updated_at, @automation_json, @claim_json, @template_id, @archived_at,
-        @stale_json, @failure_count
+        @stale_json, @lifecycle_status_source_updated_at, @failure_count
       )
       ON CONFLICT(id) DO UPDATE SET
         board_id = excluded.board_id,
@@ -778,6 +802,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         template_id = excluded.template_id,
         archived_at = excluded.archived_at,
         stale_json = excluded.stale_json,
+        lifecycle_status_source_updated_at = excluded.lifecycle_status_source_updated_at,
         failure_count = excluded.failure_count
     `,
   ).run({
@@ -812,6 +837,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     template_id: bindNull(metadata?.templateId),
     archived_at: bindNull(metadata?.archivedAt),
     stale_json: jsonValue(metadata?.stale),
+    lifecycle_status_source_updated_at: bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
     failure_count: bindNull(metadata?.failureCount),
   });
 

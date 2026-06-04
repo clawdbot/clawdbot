@@ -451,6 +451,14 @@ export const nl: TranslationMap = {
     logs: "Live Gateway-logs.",
     dreams: "Geheugendromen, consolidatie en reflectie.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "Activiteit",
     subtitle: "Tijdelijke toolactiviteit afgeleid van live sessiegebeurtenissen.",

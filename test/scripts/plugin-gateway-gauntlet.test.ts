@@ -173,6 +173,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
     expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -381,6 +382,7 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
@@ -399,6 +401,7 @@ describe("plugin gateway gauntlet helpers", () => {
       EXISTING: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -416,6 +419,18 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+    });
+  });
+
+  it("preserves caller pnpm dependency verification overrides in gauntlet prebuilds", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1", PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true" },
+        { includePrivateQa: true },
+      ),
+    ).toMatchObject({
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true",
     });
   });
 
@@ -546,6 +561,28 @@ setInterval(() => {}, 1000);
     expect(row.status).toBe(0);
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+  });
+
+  it("returns a failed row when measured command log writing fails", async () => {
+    const logDir = path.join(repoRoot, "not-a-directory");
+    await fs.writeFile(logDir, "blocks log directory creation", "utf8");
+
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "console.log('live stdout')"],
+      label: "live-log-failure",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(1);
+    expect(row.diagnosticFailure).toBe("command-log-write-failure");
+    expect(row.logPath).toBeNull();
+    expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
   });
 
   it("cleans parent signal handlers after live measured commands settle", async () => {
@@ -768,7 +805,7 @@ setInterval(() => {}, 1000);
       [
         'const fs = require("node:fs");',
         'const path = require("node:path");',
-        'const stateDir = process.env.OPENCLAW_STATE_DIR ?? process.cwd();',
+        "const stateDir = process.env.OPENCLAW_STATE_DIR ?? process.cwd();",
         'const marker = path.join(stateDir, "workboard-enabled");',
         "const args = process.argv.slice(2);",
         'if (args[0] === "plugins") {',
@@ -815,8 +852,7 @@ setInterval(() => {}, 1000);
     );
     expect(summary.failures).toEqual([]);
     const slashHelpRow = summary.rows.find(
-      (row: { label?: string; logPath?: string }) =>
-        row.label === "workboard-slash-help:workboard",
+      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
     );
     expect(summary.rows).toEqual(
       expect.arrayContaining([

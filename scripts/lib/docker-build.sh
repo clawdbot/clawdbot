@@ -73,6 +73,15 @@ docker_build_timeout_required() {
   return 1
 }
 
+docker_build_signal_exit_status() {
+  case "$1" in
+    129 | 130 | 143)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 docker_build_heartbeat_seconds() {
   local configured="${OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS:-30}"
   if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$configured" -ge 1 ]; then
@@ -104,11 +113,76 @@ docker_build_run_logged() {
   local started_at="$SECONDS"
   local next_heartbeat=$heartbeat_seconds
   local build_status=0
+  local build_pid=""
+  local previous_int_trap
+  local previous_term_trap
+  local previous_hup_trap
+  local heartbeat_sleep_pid=""
+
+  previous_int_trap="$(trap -p INT || true)"
+  previous_term_trap="$(trap -p TERM || true)"
+  previous_hup_trap="$(trap -p HUP || true)"
+
+  docker_build_restore_signal_traps() {
+    if [ -n "$previous_int_trap" ]; then
+      eval "$previous_int_trap"
+    else
+      trap - INT
+    fi
+    if [ -n "$previous_term_trap" ]; then
+      eval "$previous_term_trap"
+    else
+      trap - TERM
+    fi
+    if [ -n "$previous_hup_trap" ]; then
+      eval "$previous_hup_trap"
+    else
+      trap - HUP
+    fi
+  }
+
+  docker_build_signal_process_tree() {
+    local signal="$1"
+    local process_id="$2"
+    local child_pid
+    if command -v pgrep >/dev/null 2>&1; then
+      while IFS= read -r child_pid; do
+        if [ -n "$child_pid" ]; then
+          docker_build_signal_process_tree "$signal" "$child_pid"
+        fi
+      done < <(pgrep -P "$process_id" 2>/dev/null || true)
+    fi
+    kill -s "$signal" -- "-$process_id" 2>/dev/null ||
+      kill -s "$signal" "$process_id" 2>/dev/null ||
+      true
+  }
+
+  docker_build_stop_tracked_build() {
+    local signal="$1"
+    local exit_code="$2"
+    if [ -n "$heartbeat_sleep_pid" ] && kill -0 "$heartbeat_sleep_pid" 2>/dev/null; then
+      kill "$heartbeat_sleep_pid" 2>/dev/null || true
+      wait "$heartbeat_sleep_pid" 2>/dev/null || true
+    fi
+    if [ -n "$build_pid" ] && kill -0 "$build_pid" 2>/dev/null; then
+      docker_build_signal_process_tree "$signal" "$build_pid"
+      wait "$build_pid" 2>/dev/null || true
+    fi
+    docker_build_restore_signal_traps
+    return "$exit_code"
+  }
+
+  trap 'docker_build_stop_tracked_build TERM 130; return 130' INT
+  trap 'docker_build_stop_tracked_build TERM 143; return 143' TERM
+  trap 'docker_build_stop_tracked_build HUP 129; return 129' HUP
 
   docker_build_run_command "$timeout_value" "$@" >"$log_file" 2>&1 &
-  local build_pid="$!"
+  build_pid="$!"
   while kill -0 "$build_pid" 2>/dev/null; do
-    /bin/sleep 1
+    /bin/sleep 1 &
+    heartbeat_sleep_pid="$!"
+    wait "$heartbeat_sleep_pid" 2>/dev/null || true
+    heartbeat_sleep_pid=""
     local elapsed_seconds=$((SECONDS - started_at))
     if [ "$elapsed_seconds" -ge "$next_heartbeat" ] && kill -0 "$build_pid" 2>/dev/null; then
       local log_bytes="0"
@@ -122,6 +196,7 @@ docker_build_run_logged() {
   done
 
   wait "$build_pid" || build_status="$?"
+  docker_build_restore_signal_traps
   return "$build_status"
 }
 
@@ -134,6 +209,7 @@ docker_build_with_retries() {
   local max_attempts=$((retries + 1))
   local log_file
   local command=()
+  local build_status=0
   while IFS= read -r -d '' part; do
     command+=("$part")
   done < <(docker_build_command "$@")
@@ -144,6 +220,13 @@ docker_build_with_retries() {
     if docker_build_run_logged "$label" "$timeout_value" "$log_file" "${command[@]}"; then
       rm -f "$log_file"
       return 0
+    else
+      build_status="$?"
+    fi
+
+    if docker_build_signal_exit_status "$build_status"; then
+      rm -f "$log_file"
+      return "$build_status"
     fi
 
     if [ "$attempt" -ge "$max_attempts" ] || ! docker_build_transient_failure "$log_file"; then

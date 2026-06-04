@@ -1,5 +1,7 @@
+/** Per-session async queue wrapper used by ACP manager operations. */
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
+/** Per-session async queue that serializes ACP runtime operations and exposes queue depth. */
 export class SessionActorQueue {
   private readonly queue = new KeyedAsyncQueue();
   private readonly pendingBySession = new Map<string, number>();
@@ -26,6 +28,7 @@ export class SessionActorQueue {
         this.pendingBySession.set(actorKey, (this.pendingBySession.get(actorKey) ?? 0) + 1);
       },
       onSettle: () => {
+        // Keep queue-depth accounting symmetric with enqueue even when operations reject.
         const pending = (this.pendingBySession.get(actorKey) ?? 1) - 1;
         if (pending <= 0) {
           this.pendingBySession.delete(actorKey);

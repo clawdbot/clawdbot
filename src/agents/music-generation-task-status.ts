@@ -7,10 +7,12 @@ import {
   findDuplicateGuardMediaGenerationTaskForSession,
 } from "./media-generation-task-status-shared.js";
 
+/** Task kind used for music generation task registry records. */
 export const MUSIC_GENERATION_TASK_KIND = "music_generation";
 const MUSIC_GENERATION_SOURCE_PREFIX = "music_generate";
 const RECENT_MUSIC_GENERATION_DUPLICATE_GUARD_MS = 2 * 60_000;
 
+/** Finds an active music generation task for a session. */
 export function findActiveMusicGenerationTaskForSession(
   sessionKey?: string,
 ): TaskRecord | undefined {
@@ -21,6 +23,7 @@ export function findActiveMusicGenerationTaskForSession(
   });
 }
 
+/** Finds a recent duplicate-guard music generation task for a session/request. */
 export function findDuplicateGuardMusicGenerationTaskForSession(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },
@@ -35,6 +38,7 @@ export function findDuplicateGuardMusicGenerationTaskForSession(
   });
 }
 
+/** Builds structured status details for a music generation task. */
 export function buildMusicGenerationTaskStatusDetails(task: TaskRecord): Record<string, unknown> {
   return buildMediaGenerationTaskStatusDetails({
     task,
@@ -42,6 +46,7 @@ export function buildMusicGenerationTaskStatusDetails(task: TaskRecord): Record<
   });
 }
 
+/** Builds user-facing status text for a music generation task. */
 export function buildMusicGenerationTaskStatusText(
   task: TaskRecord,
   params?: { duplicateGuard?: boolean },
@@ -56,6 +61,7 @@ export function buildMusicGenerationTaskStatusText(
   });
 }
 
+/** Builds prompt context describing an active music generation task for a session. */
 export function buildActiveMusicGenerationTaskPromptContextForSession(
   sessionKey?: string,
 ): string | undefined {

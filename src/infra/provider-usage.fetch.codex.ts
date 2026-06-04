@@ -1,3 +1,4 @@
+// Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { parseStrictFiniteNumber } from "./parse-finite-number.js";
 import {

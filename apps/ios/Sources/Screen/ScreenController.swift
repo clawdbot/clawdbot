@@ -7,7 +7,6 @@ import WebKit
 @Observable
 final class ScreenController {
     private weak var activeWebView: WKWebView?
-    private var trustedRemoteA2UIURL: URL?
 
     var urlString: String = ""
     var errorText: String?
@@ -27,11 +26,10 @@ final class ScreenController {
         self.reload()
     }
 
-    func navigate(to urlString: String, trustA2UIActions: Bool = false) {
+    func navigate(to urlString: String, trustA2UIActions _: Bool = false) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             self.urlString = ""
-            self.trustedRemoteA2UIURL = nil
             self.reload()
             return
         }
@@ -45,7 +43,6 @@ final class ScreenController {
             return
         }
         self.urlString = (trimmed == "/" ? "" : trimmed)
-        self.trustedRemoteA2UIURL = trustA2UIActions ? Self.normalizeTrustedRemoteA2UIURL(from: trimmed) : nil
         self.reload()
     }
 
@@ -75,8 +72,24 @@ final class ScreenController {
 
     func showDefaultCanvas() {
         self.urlString = ""
-        self.trustedRemoteA2UIURL = nil
         self.reload()
+    }
+
+    func showLocalA2UI() {
+        guard let url = Self.localA2UIURL else {
+            self.showDefaultCanvas()
+            return
+        }
+        self.urlString = url.absoluteString
+        self.reload()
+    }
+
+    func isShowingLocalA2UI() -> Bool {
+        guard let url = URL(string: self.urlString),
+              url.isFileURL,
+              let expected = Self.localA2UIURL
+        else { return false }
+        return url.standardizedFileURL == expected.standardizedFileURL
     }
 
     func setDebugStatusEnabled(_ enabled: Bool) {
@@ -239,6 +252,11 @@ final class ScreenController {
         ext: "html",
         subdirectory: "CanvasScaffold")
 
+    private static let localA2UIURL: URL? = ScreenController.bundledResourceURL(
+        name: "index",
+        ext: "html",
+        subdirectory: "CanvasA2UI")
+
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         if url.isFileURL {
             let std = url.standardizedFileURL
@@ -247,10 +265,14 @@ final class ScreenController {
             {
                 return true
             }
+            if let expected = Self.localA2UIURL,
+               std == expected.standardizedFileURL
+            {
+                return true
+            }
             return false
         }
-        guard let trusted = self.trustedRemoteA2UIURL else { return false }
-        return Self.normalizeTrustedRemoteA2UIURL(from: url) == trusted
+        return false
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
@@ -279,26 +301,6 @@ final class ScreenController {
         // Default canvas needs raw touch events; external pages should scroll.
         scrollView.isScrollEnabled = allowScroll
         scrollView.bounces = allowScroll
-    }
-
-    private static func normalizeTrustedRemoteA2UIURL(from raw: String) -> URL? {
-        guard let url = URL(string: raw) else { return nil }
-        return self.normalizeTrustedRemoteA2UIURL(from: url)
-    }
-
-    private static func normalizeTrustedRemoteA2UIURL(from url: URL) -> URL? {
-        guard !url.isFileURL else { return nil }
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return nil
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else {
-            return nil
-        }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        components?.scheme = scheme
-        components?.host = host.lowercased()
-        components?.fragment = nil
-        return components?.url
     }
 }
 

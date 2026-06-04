@@ -9,6 +9,8 @@ import type {
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
 
+// Shared threading/directory contract assertions for bundled channel plugins.
+// The runtime proxy fails fast if a directory helper unexpectedly needs IO.
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
     throw new Error(`Directory contract unexpectedly accessed runtime.${String(property)}`);
@@ -77,12 +79,14 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
+/** Asserts that a plugin declares the threading adapter under test. */
 export function expectChannelThreadingBaseContract(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
   expect(plugin.threading).toBeDefined();
 }
 
+/** Exercises optional threading hooks and checks normalized return shapes. */
 export function expectChannelThreadingReturnValuesNormalized(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
@@ -168,6 +172,7 @@ export function expectChannelThreadingReturnValuesNormalized(
   }
 }
 
+/** Exercises directory lookups and checks normalized entry shapes when possible. */
 export async function expectChannelDirectoryBaseContract(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
@@ -186,6 +191,8 @@ export async function expectChannelDirectoryBaseContract(params: {
   const accountId = params.accountId ?? "default";
 
   if (params.coverage === "presence") {
+    // Presence-only channels advertise a directory surface but cannot perform
+    // deterministic offline lookup calls in shared contract fixtures.
     return;
   }
   const self = await directory?.self?.({

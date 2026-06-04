@@ -1,3 +1,4 @@
+// Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

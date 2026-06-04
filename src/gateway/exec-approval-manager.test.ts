@@ -1,3 +1,6 @@
+/**
+ * Tests exec approval manager state transitions and timeout behavior.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";

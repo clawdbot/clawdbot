@@ -1,3 +1,4 @@
+// Runtime barrel for subagent announce registry helpers.
 export {
   countActiveDescendantRuns,
   countPendingDescendantRuns,

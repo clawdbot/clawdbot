@@ -1,3 +1,4 @@
+// Runtime dependency barrel for subagent spawning.
 export {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,

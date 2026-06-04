@@ -7,6 +7,7 @@ type WriteJsonlFileOptions = {
   mode?: number;
 };
 
+/** Serializes one JSONL entry and appends the newline terminator. */
 export function serializeJsonlEntry(entry: unknown): string {
   return `${serializeJsonlLine(entry)}\n`;
 }

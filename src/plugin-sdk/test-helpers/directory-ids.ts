@@ -1,3 +1,6 @@
+/**
+ * Shared assertions for channel directory id contract tests.
+ */
 import { expect } from "vitest";
 import type { ChannelDirectoryEntry } from "../channel-contract.js";
 import type { OpenClawConfig } from "../config-types.js";
@@ -9,6 +12,7 @@ export type DirectoryListFn = (params: {
   limit?: number | null;
 }) => Promise<ChannelDirectoryEntry[]>;
 
+/** Calls a directory lister and compares returned ids, optionally ignoring order. */
 export async function expectDirectoryIds(
   listFn: DirectoryListFn,
   cfg: OpenClawConfig,

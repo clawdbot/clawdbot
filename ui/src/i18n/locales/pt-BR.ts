@@ -449,6 +449,14 @@ export const pt_BR: TranslationMap = {
     logs: "Logs ao vivo do gateway.",
     dreams: "Consolidação de memória durante o sono.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "Atividade",
     subtitle: "Atividade efêmera de ferramentas derivada de eventos de sessão ao vivo.",

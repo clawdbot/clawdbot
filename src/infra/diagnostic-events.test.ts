@@ -1,3 +1,4 @@
+// Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,

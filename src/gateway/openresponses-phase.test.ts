@@ -1,3 +1,6 @@
+/**
+ * Tests OpenAI Responses phase tracking for gateway request processing.
+ */
 import { describe, expect, it } from "vitest";
 import { CreateResponseBodySchema, OutputItemSchema } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";

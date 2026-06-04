@@ -1,3 +1,4 @@
+// Defines Microsoft Teams channel configuration types.
 import type {
   BlockStreamingCoalesceConfig,
   ChannelPreviewStreamingConfig,

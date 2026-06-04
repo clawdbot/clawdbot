@@ -1,3 +1,4 @@
+// Defines session-related Zod schema fragments for config parsing.
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -16,6 +15,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -25,11 +25,6 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../agents/auth-profiles/paths.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -145,14 +140,6 @@ type AuthProfileHealthTarget = {
   agentDir: string;
   isDefault: boolean;
 };
-
-function hasLocalAuthProfileStoreSource(agentDir: string): boolean {
-  return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
-  );
-}
 
 function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
   return labelAgents ? `${title} (agent: ${agentId})` : title;

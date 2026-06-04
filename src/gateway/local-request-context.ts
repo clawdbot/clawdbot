@@ -11,6 +11,9 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
+// Embedded/local agent calls need enough GatewayRequestContext to reuse server
+// methods without starting the full gateway. Unsupported subsystems fail loudly
+// so local command paths do not silently enqueue cron/channel work.
 type LocalGatewayRequestContextParams = {
   deps: CliDeps;
   getRuntimeConfig: () => OpenClawConfig;
@@ -41,6 +44,7 @@ const unavailableCron: CronServiceContract = {
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
+/** Creates the minimal gateway context used by embedded local agent execution. */
 export function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
@@ -53,6 +57,8 @@ export function createLocalGatewayRequestContext(
   const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
   const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
   const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
+  // Clear every per-run buffer variant together; streamed assistant/thinking
+  // deltas share the client run id prefix but are tracked under separate keys.
   const clearChatRunState = (runId: string) => {
     chatRunBuffers.delete(runId);
     chatDeltaSentAt.delete(runId);
@@ -144,6 +150,7 @@ export function createLocalGatewayRequestContext(
   };
 }
 
+/** Runs code inside a local gateway request scope unless an outer scope already exists. */
 export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {

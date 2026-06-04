@@ -1,5 +1,7 @@
+/** Text phases used by OpenAI Responses subscribe test helpers. */
 export type OpenAiResponsesTextEventPhase = "commentary" | "final_answer";
 
+/** Builds a signed OpenAI Responses text block for subscribe tests. */
 export function createOpenAiResponsesTextBlock(params: {
   text: string;
   id: string;
@@ -16,6 +18,7 @@ export function createOpenAiResponsesTextBlock(params: {
   };
 }
 
+/** Builds an assistant partial update payload for OpenAI Responses subscribe tests. */
 export function createOpenAiResponsesPartial(params: {
   text: string;
   id: string;
@@ -41,6 +44,7 @@ export function createOpenAiResponsesPartial(params: {
   };
 }
 
+/** Builds a message-update event for OpenAI Responses subscribe tests. */
 export function createOpenAiResponsesTextEvent(params: {
   type: "text_delta" | "text_end";
   text: string;

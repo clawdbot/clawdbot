@@ -1,3 +1,4 @@
+// Covers document extractor public artifacts from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { publicArtifactModule } = vi.hoisted(() => ({

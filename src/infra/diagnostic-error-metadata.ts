@@ -1,3 +1,4 @@
+// Extracts provider diagnostic metadata from error objects and text.
 import crypto from "node:crypto";
 
 const HTTP_STATUS_MIN = 100;
@@ -31,6 +32,7 @@ function readOwnDataProperty(value: unknown, key: string): unknown {
     return undefined;
   }
   try {
+    // Read only own data properties; diagnostic extraction must not trigger userland getters.
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && "value" in descriptor ? descriptor.value : undefined;
   } catch {
@@ -126,6 +128,7 @@ function extractProviderRequestIdFromText(text: string | undefined): string | un
   return undefined;
 }
 
+/** Returns a low-cardinality error category without trusting mutable `Error.name`. */
 export function diagnosticErrorCategory(err: unknown): string {
   try {
     if (err instanceof TypeError) {
@@ -158,6 +161,7 @@ export function diagnosticErrorCategory(err: unknown): string {
   return typeof err;
 }
 
+/** Extracts a safe HTTP status code from own `status` or `statusCode` data properties. */
 export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   const status = readOwnDataProperty(err, "status");
   if (isHttpStatusCode(status)) {
@@ -170,6 +174,7 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
   return undefined;
 }
 
+/** Classifies transport-style failures without exposing raw error messages. */
 export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
   const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
   switch (code) {
@@ -211,6 +216,7 @@ export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailure
   return undefined;
 }
 
+/** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */
 export function diagnosticProviderRequestIdHash(err: unknown): string | undefined {
   const fromProperty = findDiagnosticErrorProperty(err, readDirectProviderRequestId);
   if (fromProperty) {

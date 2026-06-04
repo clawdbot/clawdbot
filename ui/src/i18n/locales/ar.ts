@@ -448,6 +448,14 @@ export const ar: TranslationMap = {
     logs: "سجلات Gateway المباشرة.",
     dreams: "حلم الذاكرة، والدمج، والتأمل.",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "النشاط",
     subtitle: "نشاط أدوات مؤقت مشتق من أحداث الجلسة المباشرة.",

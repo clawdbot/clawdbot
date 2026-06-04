@@ -1,3 +1,4 @@
+// Covers exec sandbox host audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectExecRuntimeFindings } from "./audit.js";

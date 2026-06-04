@@ -5,6 +5,9 @@ import {
 } from "./codex-native-web-search-core.js";
 import { resolveCodexNativeWebSearchConfig } from "./codex-native-web-search.shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
+
+// Public Codex native web-search facade. It exports the core activation helpers
+// and answers whether the feature is relevant for the configured agent model.
 export {
   buildCodexNativeWebSearchTool,
   patchCodexNativeWebSearchPayload,
@@ -36,6 +39,8 @@ export function isCodexNativeWebSearchRelevant(params: {
   const configuredModelApi = configuredProvider?.models?.find(
     (candidate) => candidate.id === defaultModel.model,
   )?.api;
+  // If explicit config/auth did not opt in, model API eligibility can still make
+  // native search relevant for Codex-routable defaults.
   return isCodexNativeSearchEligibleModel({
     modelProvider: defaultModel.provider,
     modelApi: configuredModelApi ?? configuredProvider?.api,

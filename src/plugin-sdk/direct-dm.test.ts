@@ -1,3 +1,6 @@
+/**
+ * Tests direct-message guard policy helpers exposed through the SDK.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

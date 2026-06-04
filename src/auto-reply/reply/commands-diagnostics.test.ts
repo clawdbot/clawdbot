@@ -1,3 +1,4 @@
+// Tests diagnostics command output and runtime diagnostic toggles.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";

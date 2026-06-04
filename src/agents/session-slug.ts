@@ -143,6 +143,7 @@ function createAvailableSlug(
   return undefined;
 }
 
+/** Creates a human-readable unique session slug with numbered and random fallbacks. */
 export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   const isIdTaken = isTaken ?? (() => false);
   const twoWord = createAvailableSlug(2, isIdTaken);

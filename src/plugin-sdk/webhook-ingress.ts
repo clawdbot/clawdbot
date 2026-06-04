@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for webhook ingress guards, targets, and request helpers.
+ */
 export {
   createBoundedCounter,
   createFixedWindowRateLimiter,

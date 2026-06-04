@@ -1,3 +1,4 @@
+// Covers MCP config normalization, validation, and serialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";

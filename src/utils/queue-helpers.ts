@@ -1,21 +1,32 @@
+/**
+ * Shared queue overflow, debounce, and collection helpers.
+ *
+ * Queue owners use these helpers to cap pending work, summarize dropped items,
+ * debounce drains, and force individual collection when cross-channel ordering matters.
+ */
+/** Mutable summary state for a capped queue. */
 export type QueueSummaryState = {
   dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
 };
 
+/** Queue overflow strategy. */
 export type QueueDropPolicy = QueueSummaryState["dropPolicy"];
 
+/** Generic capped queue state with shared overflow summary fields. */
 export type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
 };
 
+/** Clear accumulated overflow summary state after it has been emitted. */
 export function clearQueueSummaryState(state: QueueSummaryState): void {
   state.droppedCount = 0;
   state.summaryLines = [];
 }
 
+/** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -32,6 +43,7 @@ export function previewQueueSummaryPrompt(params: {
   });
 }
 
+/** Apply runtime queue settings while preserving previous values for omitted fields. */
 export function applyQueueRuntimeSettings<TMode extends string>(params: {
   target: {
     mode: TMode;
@@ -58,6 +70,7 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
+/** Trim queue summary text to a bounded single-line preview. */
 export function elideQueueText(text: string, limit = 140): string {
   if (text.length <= limit) {
     return text;
@@ -65,11 +78,13 @@ export function elideQueueText(text: string, limit = 140): string {
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+/** Normalize whitespace and elide one dropped item for queue summaries. */
 export function buildQueueSummaryLine(text: string, limit = 160): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   return elideQueueText(cleaned, limit);
 }
 
+/** Run optional duplicate detection before an item enters a queue. */
 export function shouldSkipQueueItem<T>(params: {
   item: T;
   items: T[];
@@ -81,6 +96,7 @@ export function shouldSkipQueueItem<T>(params: {
   return params.dedupe(params.item, params.items);
 }
 
+/** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
@@ -102,6 +118,7 @@ export function applyQueueDropPolicy<T>(params: {
       params.queue.droppedCount += 1;
       params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
     }
+    // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
     while (params.queue.summaryLines.length > limit) {
       params.queue.summaryLines.shift();
@@ -110,11 +127,13 @@ export function applyQueueDropPolicy<T>(params: {
   return true;
 }
 
+/** Wait until the queue has been quiet for its debounce window. */
 export function waitForQueueDebounce(queue: {
   debounceMs: number;
   lastEnqueuedAt: number;
 }): Promise<void> {
   if (process.env.OPENCLAW_TEST_FAST === "1") {
+    // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
   }
   const debounceMs = Math.max(0, queue.debounceMs);
@@ -134,6 +153,7 @@ export function waitForQueueDebounce(queue: {
   });
 }
 
+/** Mark one queue as draining unless another drain is already active. */
 export function beginQueueDrain<T extends { draining: boolean }>(
   map: Map<string, T>,
   key: string,
@@ -146,6 +166,7 @@ export function beginQueueDrain<T extends { draining: boolean }>(
   return queue;
 }
 
+/** Run and remove the next queued item, returning false when empty. */
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
@@ -159,6 +180,7 @@ export async function drainNextQueueItem<T>(
   return true;
 }
 
+/** Drain one item when collect mode requires individual processing. */
 export async function drainCollectItemIfNeeded<T>(params: {
   forceIndividualCollect: boolean;
   isCrossChannel: boolean;
@@ -170,12 +192,14 @@ export async function drainCollectItemIfNeeded<T>(params: {
     return "skipped";
   }
   if (params.isCrossChannel) {
+    // Once cross-channel items appear, future collection stays individual to preserve ordering.
     params.setForceIndividualCollect?.(true);
   }
   const drained = await drainNextQueueItem(params.items, params.run);
   return drained ? "drained" : "empty";
 }
 
+/** Drain one collect step using mutable queue collection state. */
 export async function drainCollectQueueStep<T>(params: {
   collectState: { forceIndividualCollect: boolean };
   isCrossChannel: boolean;
@@ -193,6 +217,7 @@ export async function drainCollectQueueStep<T>(params: {
   });
 }
 
+/** Build and consume the queue overflow summary prompt. */
 export function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
@@ -216,6 +241,7 @@ export function buildQueueSummaryPrompt(params: {
   return lines.join("\n");
 }
 
+/** Render a collect prompt from queued items and optional overflow summary. */
 export function buildCollectPrompt<T>(params: {
   title: string;
   items: T[];
@@ -232,6 +258,7 @@ export function buildCollectPrompt<T>(params: {
   return blocks.join("\n\n");
 }
 
+/** Return true when queued items span keys or explicitly mark cross-channel state. */
 export function hasCrossChannelItems<T>(
   items: T[],
   resolveKey: (item: T) => { key?: string; cross?: boolean },

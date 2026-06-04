@@ -1,3 +1,4 @@
+// Verifies plugin registry behavior with runtime config inputs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "./loader-records.js";

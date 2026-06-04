@@ -1,3 +1,4 @@
+// Handles abort requests and active reply run cancellation.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

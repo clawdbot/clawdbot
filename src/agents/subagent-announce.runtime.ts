@@ -1,3 +1,9 @@
+/**
+ * Runtime dependency barrel for subagent announcement/output collection.
+ *
+ * Keeping these imports behind one module lets tests replace gateway/session
+ * IO without changing the announce logic itself.
+ */
 export { getRuntimeConfig } from "../config/config.js";
 export {
   loadSessionStore,

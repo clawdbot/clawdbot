@@ -1,3 +1,4 @@
+/** Tests phase-scoped plugin hooks and hook registration ordering. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-helpers.js";

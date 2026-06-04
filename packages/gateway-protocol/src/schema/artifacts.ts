@@ -1,6 +1,12 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Artifact lookup and download protocol schemas.
+ *
+ * Artifacts are files or payloads produced by sessions, runs, tasks, or agents;
+ * these schemas keep lookup filters explicit and download results transport-safe.
+ */
 const ArtifactQueryParamsProperties = {
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
@@ -8,10 +14,12 @@ const ArtifactQueryParamsProperties = {
   agentId: Type.Optional(NonEmptyString),
 };
 
+/** Shared artifact filter payload used by list-style requests. */
 export const ArtifactQueryParamsSchema = Type.Object(ArtifactQueryParamsProperties, {
   additionalProperties: false,
 });
 
+/** Artifact lookup payload with a required artifact id plus optional scope filters. */
 export const ArtifactGetParamsSchema = Type.Object(
   {
     ...ArtifactQueryParamsProperties,
@@ -20,6 +28,7 @@ export const ArtifactGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Public artifact metadata returned before or alongside download data. */
 export const ArtifactSummarySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -42,8 +51,10 @@ export const ArtifactSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** List request payload for artifacts visible in the selected scope. */
 export const ArtifactsListParamsSchema = ArtifactQueryParamsSchema;
 
+/** List response containing artifact summaries only. */
 export const ArtifactsListResultSchema = Type.Object(
   {
     artifacts: Type.Array(ArtifactSummarySchema),
@@ -51,8 +62,10 @@ export const ArtifactsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Get request payload for one artifact summary. */
 export const ArtifactsGetParamsSchema = ArtifactGetParamsSchema;
 
+/** Get response containing one artifact summary. */
 export const ArtifactsGetResultSchema = Type.Object(
   {
     artifact: ArtifactSummarySchema,
@@ -60,8 +73,10 @@ export const ArtifactsGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Download request payload for one artifact. */
 export const ArtifactsDownloadParamsSchema = ArtifactGetParamsSchema;
 
+/** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */
 export const ArtifactsDownloadResultSchema = Type.Object(
   {
     artifact: ArtifactSummarySchema,

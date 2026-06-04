@@ -1,3 +1,4 @@
+// Reads and writes clipboard text through platform command helpers.
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isWSL2Sync } from "./wsl.js";
 

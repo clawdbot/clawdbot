@@ -1,3 +1,6 @@
+/**
+ * Tests that session send rejects sessions whose configured agent was deleted.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {

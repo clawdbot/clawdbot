@@ -1,3 +1,4 @@
+// Tests queue cleanup behavior for expired state and dedupe records.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing, clearSessionQueues } from "./cleanup.js";
 

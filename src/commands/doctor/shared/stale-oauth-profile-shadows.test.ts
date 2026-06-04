@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAuthStorePath } from "../../../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import {
+  coercePersistedAuthProfileStore,
+  loadPersistedAuthProfileStore,
+} from "../../../agents/auth-profiles/persisted.js";
+import { writePersistedAuthProfileStoreRaw } from "../../../agents/auth-profiles/sqlite.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
@@ -40,6 +44,13 @@ async function writeRawAuthStore(agentDir: string, store: unknown): Promise<void
   const authPath = resolveAuthStorePath(agentDir);
   await fs.mkdir(path.dirname(authPath), { recursive: true });
   await fs.writeFile(authPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  const canonical = coercePersistedAuthProfileStore(store);
+  if (canonical) {
+    saveAuthProfileStore(canonical, agentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+  }
 }
 
 describe("stale OAuth profile shadow doctor repair", () => {
@@ -102,6 +113,50 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(warnings[0]).toContain("stale OAuth auth profile anthropic:default");
     expect(warnings[0]).toContain("openclaw doctor --fix");
     expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeDefined();
+  });
+
+  it("scans sqlite-only child auth stores after JSON migration", async () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCredential({
+          access: "child-access",
+          refresh: "child-refresh",
+          expires: now - 60_000,
+          accountId: "acct-shared",
+        }),
+      ),
+      childAgentDir,
+    );
+    saveAuthProfileStore(
+      storeWith(
+        profileId,
+        oauthCredential({
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+    );
+
+    const hits = await scanStaleOAuthProfileShadows({
+      cfg: {} satisfies OpenClawConfig,
+      now,
+    });
+
+    expect(hits).toEqual([
+      expect.objectContaining({
+        authPath: resolveAuthStorePath(childAgentDir),
+        profileId,
+      }),
+    ]);
+    await expect(fs.access(resolveAuthStorePath(childAgentDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("uses the injected env for the main auth store", async () => {
@@ -229,25 +284,28 @@ describe("stale OAuth profile shadow doctor repair", () => {
       ),
       undefined,
     );
-    await writeRawAuthStore(childAgentDir, {
-      ...storeWith(
-        profileId,
-        oauthCredential({
-          access: "child-access",
-          refresh: "child-refresh",
-          expires: now - 60_000,
-          accountId: "acct-shared",
-        }),
-      ),
-      order: { anthropic: [profileId] },
-      lastGood: { anthropic: profileId },
-      usageStats: {
-        [profileId]: {
-          cooldownReason: "auth",
-          failureCounts: { auth: 2 },
+    writePersistedAuthProfileStoreRaw(
+      {
+        ...storeWith(
+          profileId,
+          oauthCredential({
+            access: "child-access",
+            refresh: "child-refresh",
+            expires: now - 60_000,
+            accountId: "acct-shared",
+          }),
+        ),
+        order: { anthropic: [profileId] },
+        lastGood: { anthropic: profileId },
+        usageStats: {
+          [profileId]: {
+            cooldownReason: "auth",
+            failureCounts: { auth: 2 },
+          },
         },
       },
-    });
+      childAgentDir,
+    );
 
     const result = await repairStaleOAuthProfileShadows({
       cfg: { agents: { list: [{ id: "telegram" }] } } satisfies OpenClawConfig,

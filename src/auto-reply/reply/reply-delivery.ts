@@ -1,3 +1,4 @@
+/** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
@@ -11,6 +12,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+/** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -74,6 +76,7 @@ async function sendDirectBlockReply(params: {
   await params.onBlockReply(params.payload);
 }
 
+/** Creates the handler used for assistant block replies during streaming/tool phases. */
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
@@ -98,6 +101,7 @@ export function createBlockReplyDeliveryHandler(params: {
         : payload.replyToCurrent === false
           ? false
           : params.replyThreading?.implicitCurrentMessage !== "deny";
+    // Reply-to-current is implicit for block replies unless per-turn threading disables it.
 
     const taggedPayload = applyReplyTagsToPayload(
       {

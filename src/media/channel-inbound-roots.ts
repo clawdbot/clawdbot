@@ -27,6 +27,7 @@ function loadChannelMediaContractApi(
   }
 
   try {
+    // Media-root resolution must stay a narrow artifact load, not full channel bootstrap.
     const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
       dirName: channelId,
       artifactBasename: "media-contract-api.js",
@@ -62,6 +63,7 @@ function findChannelMediaContractApi(
   return loadChannelMediaContractApi(normalized, resolver);
 }
 
+/** Resolves local inbound attachment roots from the channel named in a message context. */
 export function resolveChannelInboundAttachmentRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
@@ -73,6 +75,7 @@ export function resolveChannelInboundAttachmentRoots(params: {
   });
 }
 
+/** Resolves local inbound attachment roots for callers that already know the channel id. */
 export function resolveChannelInboundAttachmentRootsForChannel(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
@@ -91,6 +94,7 @@ export function resolveChannelInboundAttachmentRootsForChannel(params: {
   return undefined;
 }
 
+/** Resolves remote staging roots for inbound channel attachments without loading full channel code. */
 export function resolveChannelRemoteInboundAttachmentRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;

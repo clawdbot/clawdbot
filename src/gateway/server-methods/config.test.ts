@@ -1,3 +1,6 @@
+/**
+ * Tests for config gateway methods, writes, validation, and auth transitions.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearConfigSchemaResponseCacheForTests,

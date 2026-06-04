@@ -1,3 +1,4 @@
+// Coordinates gateway restart requests across supported supervisors.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

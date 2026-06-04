@@ -1,11 +1,16 @@
+/**
+ * Shared assertions for channel pairing reply text.
+ */
 import { expect } from "vitest";
 
+/** Extracts and asserts the pairing code block from a pairing reply. */
 export function extractPairingCode(text: string): string {
   const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
   expect(code).toBeDefined();
   return code ?? "";
 }
 
+/** Verifies the visible pairing reply contains the expected id and approve command. */
 export function expectPairingReplyText(
   text: string,
   params: {

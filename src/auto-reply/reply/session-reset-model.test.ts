@@ -1,3 +1,4 @@
+// Tests reset model selection and persisted model override cleanup.
 import { describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";

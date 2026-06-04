@@ -1,3 +1,4 @@
+// Exposes bundled runtime sidecar paths for plugin packaging checks.
 import bundledRuntimeSidecarPaths from "../../scripts/lib/bundled-runtime-sidecar-paths.json" with { type: "json" };
 
 // Keep this JSON as the root package's runtime sidecar inventory only. Official

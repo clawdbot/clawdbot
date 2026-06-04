@@ -1,3 +1,4 @@
+/** CLI runner for node-host stdin/stdout command dispatch. */
 import fs from "node:fs";
 import {
   GATEWAY_CLIENT_MODES,

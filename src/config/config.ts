@@ -1,3 +1,4 @@
+// Public config facade for IO, mutation, runtime snapshots, paths, and shared config types.
 export {
   clearConfigCache,
   ConfigRuntimeRefreshError,

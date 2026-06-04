@@ -6,9 +6,12 @@ import type { CoreConfig } from "./core-bridge.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./telephony-tts.js";
 
+// Async operation store for gateway continue-call requests that outlive one HTTP response.
+
 const VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS = 30000;
 const VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS = 5 * 60 * 1000;
 
+/** Internal lifecycle state for one continue-call operation. */
 type VoiceCallContinueOperation =
   | {
       operationId: string;
@@ -36,12 +39,14 @@ type VoiceCallContinueOperation =
       error: string;
     };
 
+/** Payload returned immediately when a continue operation starts. */
 type VoiceCallContinueOperationStartPayload = {
   operationId: string;
   status: "pending";
   pollTimeoutMs: number;
 };
 
+/** Payload returned while polling a continue operation. */
 type VoiceCallContinueOperationResultPayload =
   | {
       operationId: string;
@@ -59,12 +64,14 @@ type VoiceCallContinueOperationResultPayload =
       error: string;
     };
 
+/** Request needed to start a continue-call operation. */
 type VoiceCallContinueOperationRequest = {
   rt: VoiceCallRuntime;
   callId: string;
   message: string;
 };
 
+/** Create a process-local operation store for gateway continue-call polling. */
 export function createVoiceCallContinueOperationStore(params: {
   config: VoiceCallConfig;
   coreConfig: CoreConfig;
@@ -92,6 +99,7 @@ export function createVoiceCallContinueOperationStore(params: {
     timer.unref?.();
   };
 
+  // continueCall can wait for speech/TTS/transcript work; callers poll this in the meantime.
   const start = (
     request: VoiceCallContinueOperationRequest,
   ): VoiceCallContinueOperationStartPayload => {

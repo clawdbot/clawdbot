@@ -1,3 +1,4 @@
+// Collects runtime data needed to generate config documentation baselines.
 import { collectBundledChannelConfigs as collectBundledChannelConfigsImpl } from "../plugins/bundled-channel-config-metadata.js";
 import { loadPluginManifestRegistry as loadPluginManifestRegistryImpl } from "../plugins/manifest-registry.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./channel-config-metadata.js";
 import { buildConfigSchema as buildConfigSchemaImpl } from "./schema.js";
 
+/** Runtime facade used by docs baseline generation to keep imports narrow. */
 export const loadPluginManifestRegistry = loadPluginManifestRegistryImpl;
 export const collectBundledChannelConfigs = collectBundledChannelConfigsImpl;
 export const collectChannelSchemaMetadata = collectChannelSchemaMetadataImpl;

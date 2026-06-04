@@ -1,3 +1,4 @@
+// Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -189,6 +190,7 @@ function buildPluginGroups(params: {
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
+/** Build the merged core/plugin tool catalog for one agent. */
 export function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -216,6 +218,7 @@ export function buildToolsCatalogResult(params: {
   };
 }
 
+/** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
     if (!validateToolsCatalogParams(params)) {

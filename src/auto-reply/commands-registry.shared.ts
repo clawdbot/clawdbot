@@ -1,3 +1,4 @@
+/** Shared command registry builders used by browser-safe and runtime command lists. */
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
@@ -41,6 +42,7 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+/** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
   const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
     .map((alias) => alias.trim())
@@ -97,6 +99,7 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   }
 }
 
+/** Validates command registry uniqueness and text/native surface invariants. */
 export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   const keys = new Set<string>();
   const nativeNames = new Set<string>();
@@ -147,6 +150,7 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
+/** Builds the built-in command list with context-aware thinking choices. */
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
 ): ChatCommandDefinition[] {

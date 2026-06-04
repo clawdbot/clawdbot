@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
+// Summarizes verbose tool descriptions for compact tool listings. Long schema
+// sections are skipped so users see the human-facing intro first.
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -39,6 +41,7 @@ function isToolDocBlockStart(line: string): boolean {
   );
 }
 
+/** Build a short one-line summary from a tool description. */
 export function summarizeToolDescriptionText(params: {
   rawDescription?: string | null;
   displaySummary?: string | null;
@@ -84,6 +87,7 @@ export function summarizeToolDescriptionText(params: {
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
 
+/** Build a longer verbose description while excluding schema/action blocks. */
 export function describeToolForVerbose(params: {
   rawDescription?: string | null;
   fallback: string;

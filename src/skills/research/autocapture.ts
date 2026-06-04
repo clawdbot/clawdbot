@@ -17,12 +17,14 @@ type SkillResearchAgentContext = {
 
 const log = createSubsystemLogger("skills/research");
 
+// Captured updates append below existing skill text so learned context stays auditable.
 function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: string): string {
   return [existingSkill.trimEnd(), "", "## Captured Update", "", capturedContent.trim(), ""].join(
     "\n",
   );
 }
 
+/** Captures durable skill research signals from a session transcript when enabled. */
 export async function runSkillResearchAutoCapture(params: {
   event: SkillResearchAgentEndEvent;
   ctx: SkillResearchAgentContext;

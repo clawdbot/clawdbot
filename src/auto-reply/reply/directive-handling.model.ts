@@ -1,3 +1,4 @@
+// Handles model directives and persists provider/model selections.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

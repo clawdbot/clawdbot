@@ -1,3 +1,4 @@
+/** Integration tests for auth-profile secret runtime preparation. */
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

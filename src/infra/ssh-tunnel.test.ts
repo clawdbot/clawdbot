@@ -1,3 +1,4 @@
+// Covers SSH target parsing.
 import { describe, expect, it } from "vitest";
 import { parseSshTarget } from "./ssh-tunnel.js";
 

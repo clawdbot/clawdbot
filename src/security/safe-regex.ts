@@ -1,3 +1,4 @@
+// Performs lightweight safe-regex checks for user-supplied patterns.
 type QuantifierRead = {
   consumed: number;
   minRepeat: number;

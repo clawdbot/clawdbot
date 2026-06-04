@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../infra/net/undici-runtime.js";
 import {
   buildMcpHttpFetch,
@@ -8,17 +8,31 @@ import {
 } from "./mcp-http-fetch.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
+const { lookupMock } = vi.hoisted(() => ({
+  lookupMock: vi.fn(),
+}));
+
+vi.mock("node:dns/promises", () => ({
+  lookup: lookupMock,
+}));
 
 class TestAgent {
   constructor(readonly options: unknown) {}
 }
 
-function TestEnvHttpProxyAgent(): undefined {
-  return undefined;
+class TestEnvHttpProxyAgent {
+  constructor(readonly options: unknown) {}
 }
 
-function TestProxyAgent(): undefined {
-  return undefined;
+class TestProxyAgent {
+  constructor(readonly options: unknown) {}
+}
+
+function redirectResponse(location: string, status = 302): Response {
+  return new Response(null, {
+    status,
+    headers: { location },
+  });
 }
 
 function getDispatcher(init: unknown): unknown {
@@ -26,6 +40,15 @@ function getDispatcher(init: unknown): unknown {
     return undefined;
   }
   return (init as { dispatcher?: unknown }).dispatcher;
+}
+
+function getDispatcherConnectOptions(init: unknown): Record<string, unknown> | undefined {
+  const dispatcher = getDispatcher(init);
+  if (!(dispatcher instanceof TestAgent)) {
+    return undefined;
+  }
+  const options = dispatcher.options as { connect?: Record<string, unknown> };
+  return options.connect;
 }
 
 describe("MCP HTTP fetch helpers", () => {
@@ -36,6 +59,16 @@ describe("MCP HTTP fetch helpers", () => {
 
   beforeEach(() => {
     fetchCalls.length = 0;
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("all_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+    lookupMock.mockReset();
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: TestAgent,
       EnvHttpProxyAgent: TestEnvHttpProxyAgent,
@@ -48,6 +81,7 @@ describe("MCP HTTP fetch helpers", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
   });
 
@@ -61,7 +95,66 @@ describe("MCP HTTP fetch helpers", () => {
     await fetch("https://auth.example.com/token");
 
     expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestAgent);
-    expect(getDispatcher(fetchCalls[1]?.init)).toBeUndefined();
+    expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
+      rejectUnauthorized: false,
+    });
+    expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestAgent);
+    expect(
+      getDispatcherConnectOptions(fetchCalls[1]?.init)?.["rejectUnauthorized"],
+    ).toBeUndefined();
+  });
+
+  it("uses configured env proxy for ordinary MCP HTTP requests", async () => {
+    vi.stubEnv("https_proxy", "http://proxy.example:8080");
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await fetch("https://mcp.example.com/token");
+
+    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-origin TLS overrides ahead of configured env proxy", async () => {
+    vi.stubEnv("https_proxy", "http://proxy.example:8080");
+    const fetch = buildMcpHttpFetch({
+      sslVerify: false,
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await fetch("https://mcp.example.com/token");
+    await fetch("https://auth.example.com/token");
+
+    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestAgent);
+    expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
+      rejectUnauthorized: false,
+    });
+    expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
+  });
+
+  it("uses configured env proxy for redirected targets after a NO_PROXY first hop", async () => {
+    vi.stubEnv("https_proxy", "http://proxy.example:8080");
+    vi.stubEnv("no_proxy", "mcp.example.com");
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: unknown) => {
+        fetchCalls.push({ url, init });
+        return fetchCalls.length === 1
+          ? redirectResponse("https://auth.example.com/token")
+          : new Response("ok");
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await fetch("https://mcp.example.com/token");
+
+    expect(getDispatcher(fetchCalls[0]?.init)).toBeInstanceOf(TestAgent);
+    expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
   });
 
   it("removes static Authorization headers for OAuth-backed runtime requests", () => {

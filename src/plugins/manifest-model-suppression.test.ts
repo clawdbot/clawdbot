@@ -1,3 +1,4 @@
+// Verifies manifest-driven model suppression behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

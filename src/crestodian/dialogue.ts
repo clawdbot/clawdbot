@@ -7,19 +7,28 @@ import {
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 
+/**
+ * Dialogue helpers for turning user text into Crestodian operations.
+ *
+ * Direct command parsing wins; the assistant planner is only consulted for
+ * non-empty text that did not parse into a known operation.
+ */
 type CrestodianDialogueOptions = {
   loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
 };
 
+/** Format the interactive approval prompt for a persistent operation. */
 export function approvalQuestion(operation: CrestodianOperation): string {
   return `Apply this operation: ${describeCrestodianPersistentOperation(operation)}?`;
 }
 
+/** Parse affirmative approval text accepted by the interactive dialogue. */
 export function isYes(input: string): boolean {
   return /^(y|yes|apply|do it|approved?)$/i.test(input.trim());
 }
 
+/** Resolve user input to a Crestodian operation, optionally using the assistant planner. */
 export async function resolveCrestodianOperation(
   input: string,
   runtime: RuntimeEnv,
@@ -59,6 +68,7 @@ function logAssistantPlan(
   plan: CrestodianAssistantPlan,
   overview: CrestodianOverview,
 ): void {
+  // Assistant plans are echoed before execution so the user can see the interpreted command.
   const modelLabel = plan.modelLabel ?? overview.defaultModel ?? "configured model";
   runtime.log(`[crestodian] planner: ${modelLabel}`);
   if (plan.reply) {

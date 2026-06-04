@@ -2,6 +2,7 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
+// Shared config normalization for Codex native web search.
 export type CodexNativeSearchMode = "cached" | "live";
 export type CodexNativeSearchContextSize = "low" | "medium" | "high";
 
@@ -51,6 +52,7 @@ function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | 
     : undefined;
 }
 
+/** Resolve Codex native web-search config from OpenClaw tool settings. */
 export function resolveCodexNativeWebSearchConfig(
   config: OpenClawConfig | undefined,
 ): ResolvedCodexNativeWebSearchConfig {
@@ -64,6 +66,7 @@ export function resolveCodexNativeWebSearchConfig(
   };
 }
 
+/** Return concise prompt/status text for enabled Codex native search. */
 export function describeCodexNativeWebSearch(
   config: OpenClawConfig | undefined,
 ): string | undefined {

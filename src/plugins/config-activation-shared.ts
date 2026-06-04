@@ -1,3 +1,4 @@
+// Shares plugin activation state helpers across config and registry code.
 type EnableStateLike = {
   enabled: boolean;
   reason?: string;

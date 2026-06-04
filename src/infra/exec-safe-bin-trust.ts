@@ -1,3 +1,4 @@
+// Resolves trusted directories for safe-bin allowlist policy.
 import fs from "node:fs";
 import path from "node:path";
 import {

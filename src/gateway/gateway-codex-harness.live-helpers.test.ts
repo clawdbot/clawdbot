@@ -1,3 +1,6 @@
+/**
+ * Tests live helper utilities used by the Codex gateway harness.
+ */
 import { describe, expect, it } from "vitest";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,

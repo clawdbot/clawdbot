@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for memory host CLI runtime utilities and terminal helpers.
+ */
 export * from "../../packages/memory-host-sdk/src/runtime-cli.js";
 export { formatErrorMessage, withManager } from "../cli/cli-utils.js";
 export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";

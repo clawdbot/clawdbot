@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { throwIfOAuthLoginAborted, withOAuthLoginAbort } from "./abort.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
+// OAuth adapter for the bundled OpenAI/ChatGPT provider surface.
 const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 type OpenAICodexOAuthFacade = {
@@ -27,6 +28,7 @@ function createLegacyRuntime(callbacks: OAuthLoginCallbacks): RuntimeEnv {
   };
 }
 
+// Bridges generic OAuth callbacks into the wizard prompter expected by the provider login flow.
 function createLegacyPrompter(callbacks: OAuthLoginCallbacks): WizardPrompter {
   const progress = {
     update: (message: string) => callbacks.onProgress?.(message),
@@ -68,6 +70,7 @@ async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCre
     },
   });
   if (!refreshed) {
+    // Fallback keeps refresh working when the plugin runtime is unavailable but the facade is active.
     return await loadOpenAICodexOAuthFacade().refreshOpenAICodexToken(refreshToken);
   }
   const credentials: Record<string, unknown> = { ...refreshed };
@@ -76,6 +79,7 @@ async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCre
   return credentials as OAuthCredentials;
 }
 
+/** Runs the ChatGPT/Codex OAuth login flow and returns normalized credentials. */
 export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(callbacks.signal);
   const { loginOpenAICodexOAuth } =
@@ -104,10 +108,12 @@ export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<
   return credentials;
 }
 
+/** Refreshes a ChatGPT/Codex OAuth token through the provider runtime or bundled facade. */
 export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
   return await refreshViaProviderRuntime(refreshToken);
 }
 
+/** OAuth provider descriptor for ChatGPT subscription-backed OpenAI access. */
 export const openaiCodexOAuthProvider: OAuthProviderInterface = {
   id: OPENAI_CODEX_PROVIDER_ID,
   name: "ChatGPT Plus/Pro (Codex Subscription)",

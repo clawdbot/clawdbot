@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 
+/** User or automatic model/provider override selection for a session entry. */
 export type ModelOverrideSelection = {
   provider: string;
   model: string;
@@ -20,6 +21,7 @@ function clearFallbackOrigin(entry: SessionEntry): boolean {
   return updated;
 }
 
+/** Applies a model/auth-profile override to a session entry and clears stale runtime fields. */
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
@@ -158,6 +160,7 @@ function wrappedOverrideModel(provider: string, model: string): string {
   return `${provider}/${model}`;
 }
 
+/** Repairs overrides where legacy provider/model fields were stored as provider/model strings. */
 export function repairProviderWrappedModelOverride(params: {
   entry: SessionEntry;
   defaultProvider: string;

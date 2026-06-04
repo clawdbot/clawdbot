@@ -1,3 +1,4 @@
+// Covers Tailscale install, whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";

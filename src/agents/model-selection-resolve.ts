@@ -1,3 +1,9 @@
+/**
+ * Model selection resolution facade.
+ *
+ * This module exposes model-selection helpers that need default fallback model
+ * handling before checking aliases, allowlists, catalogs, and plugin manifests.
+ */
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -23,6 +29,7 @@ function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
 }
 
+/** Returns whether a normalized model ref is available, allowed, or fallback-backed. */
 export function getModelRefStatus(
   params: {
     cfg: OpenClawConfig;
@@ -44,6 +51,7 @@ export function getModelRefStatus(
   });
 }
 
+/** Resolves a raw model string into an allowed model ref or an explanatory error. */
 export function resolveAllowedModelRef(
   params: {
     cfg: OpenClawConfig;

@@ -14,6 +14,7 @@ type SenderToolPolicyParams = {
   senderE164?: string | null;
 };
 
+/** Resolves sender-scoped sandbox tool policy, preferring agent config over global config. */
 export function resolveSenderToolPolicy(
   params: SenderToolPolicyParams,
 ): SandboxToolPolicy | undefined {

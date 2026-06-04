@@ -298,21 +298,63 @@ openclaw_e2e_run_script_with_pty() {
     openclaw_e2e_maybe_timeout "$timeout_value" script -q -F "$log_path" /bin/bash -lc "$command"
   fi
 }
+openclaw_e2e_start_tracked_process() {
+  local log_path="${1:?missing OpenClaw E2E process log path}"
+  shift
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"$log_path" 2>&1 &
+    printf '%s\n' "$!"
+    return
+  fi
+  node --input-type=module - "$log_path" "$@" <<'NODE'
+import { closeSync, openSync } from "node:fs";
+import { spawn } from "node:child_process";
+
+const [logPath, command, ...args] = process.argv.slice(2);
+if (!command) {
+  console.error("missing command for OpenClaw E2E tracked process");
+  process.exit(1);
+}
+const logFd = openSync(logPath, "a");
+const child = spawn(command, args, {
+  detached: process.platform !== "win32",
+  env: process.env,
+  stdio: ["ignore", logFd, logFd],
+});
+closeSync(logFd);
+child.unref();
+console.log(child.pid);
+NODE
+}
+openclaw_e2e_signal_process() {
+  local pid="${1:-}" signal="${2:-TERM}"
+  [ -n "$pid" ] || return 0
+  if kill -0 -- "-$pid" >/dev/null 2>&1; then
+    kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
+    return 0
+  fi
+  kill "-$signal" "$pid" >/dev/null 2>&1 || true
+}
+openclaw_e2e_process_alive() {
+  local pid="${1:-}"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1
+}
 openclaw_e2e_stop_process() {
   local pid="${1:-}" _
   [ -n "$pid" ] || return 0
-  kill "$pid" >/dev/null 2>&1 || true
+  openclaw_e2e_signal_process "$pid" TERM
   for _ in $(seq 1 40); do
-    ! kill -0 "$pid" >/dev/null 2>&1 && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
+    ! openclaw_e2e_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
     sleep 0.25
   done
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  openclaw_e2e_signal_process "$pid" KILL
   wait "$pid" >/dev/null 2>&1 || true
 }
 openclaw_e2e_terminate_gateways() {
   openclaw_e2e_stop_process "${1:-}"
 }
-openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
+openclaw_e2e_start_mock_openai() { openclaw_e2e_start_tracked_process "$2" env "MOCK_PORT=$1" node scripts/e2e/mock-openai-server.mjs; }
 openclaw_e2e_wait_mock_openai() {
   local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
   for _ in $(seq 1 "$attempts"); do
@@ -321,7 +363,7 @@ openclaw_e2e_wait_mock_openai() {
   done
   openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
 }
-openclaw_e2e_start_gateway() { node "$1" gateway --port "$2" --bind loopback --allow-unconfigured >"$3" 2>&1 & printf '%s\n' "$!"; }
+openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" _

@@ -1,3 +1,4 @@
+/** Loads bundled channel plugin runtime entries and setup metadata. */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";
@@ -15,6 +16,7 @@ type BundledMetadataScope =
   | { kind: "empty" }
   | { kind: "env"; env: NodeJS.ProcessEnv };
 
+/** Bundled channel plugin metadata used by generators and runtime path resolvers. */
 export type BundledChannelPluginMetadata = {
   dirName: string;
   source: BundledChannelEntryPathPair;
@@ -92,6 +94,7 @@ function toBundledChannelPluginMetadata(
   };
 }
 
+/** Lists bundled channel plugin metadata from default or caller-provided scan roots. */
 export function listBundledChannelPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -108,6 +111,7 @@ export function listBundledChannelPluginMetadata(params?: {
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
 }
 
+/** Resolves a generated runtime path for a bundled channel entry. */
 export function resolveBundledChannelGeneratedPath(
   rootDir: string,
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"],
@@ -117,6 +121,7 @@ export function resolveBundledChannelGeneratedPath(
   return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
 }
 
+/** Resolves the source workspace path for a bundled channel plugin id. */
 export function resolveBundledChannelWorkspacePath(params: {
   rootDir: string;
   scanDir?: string;

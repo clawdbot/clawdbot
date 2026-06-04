@@ -1,3 +1,9 @@
+/**
+ * Runtime channel capability collector.
+ *
+ * Agent startup uses this to merge configured channel capabilities with prompt
+ * tools and thread-bound spawn features that depend on channel policy.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -30,6 +36,7 @@ function mergeRuntimeCapabilities(
   return merged.length > 0 ? merged : undefined;
 }
 
+/** Collects the effective runtime capabilities for a channel/account pair. */
 export function collectRuntimeChannelCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
@@ -51,6 +58,7 @@ export function collectRuntimeChannelCapabilities(params: {
         kind,
       });
       if (policy.enabled && policy.spawnEnabled) {
+        // Thread-bound spawn is only advertised when both policy gates are enabled.
         threadSpawnCapabilities.push(capability);
       }
     }

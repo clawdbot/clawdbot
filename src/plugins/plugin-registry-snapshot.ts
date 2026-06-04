@@ -1,3 +1,4 @@
+// Builds stable snapshots of plugin registry contributions.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

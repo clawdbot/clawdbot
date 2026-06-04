@@ -1,3 +1,4 @@
+// Node pairing commands: list, approve, reject, remove, and rename paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
@@ -57,12 +58,14 @@ async function resolveApproveScopesForRequest(
     if (scopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
       return scopes;
     }
+    // Older pending requests only list requested commands; derive approval scopes from them.
     return resolveNodePairApprovalScopes(request?.commands) as OperatorScope[];
   } catch {
     return [...DEFAULT_NODE_PAIR_APPROVE_SCOPES];
   }
 }
 
+/** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
     nodes

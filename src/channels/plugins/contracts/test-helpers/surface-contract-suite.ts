@@ -1,6 +1,9 @@
 import { expect } from "vitest";
 import type { ChannelPlugin } from "../../types.js";
 
+// Shape assertions for optional channel plugin surfaces. These tests validate
+// public adapter contracts without invoking channel-specific runtime behavior.
+/** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {
   plugin: Pick<
     ChannelPlugin,
@@ -77,6 +80,8 @@ export function expectChannelSurfaceContract(params: {
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     if (messaging?.targetResolver) {
+      // Target resolvers are optional but, when present, must expose either a
+      // callable resolver or stable hint metadata for tool UX.
       if (messaging.targetResolver.looksLikeId) {
         expect(typeof messaging.targetResolver.looksLikeId).toBe("function");
       }

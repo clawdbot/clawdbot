@@ -1,3 +1,10 @@
+/**
+ * Fast context lookup for realtime voice consults.
+ *
+ * When memory/session search can answer quickly, Talk can return concise
+ * context without launching a full agent consult; otherwise callers may fall
+ * back to the normal consult flow.
+ */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,14 +25,20 @@ type MemorySearchHit = {
   score: number;
 };
 
+/** Fast-context lookup policy for realtime voice consult shortcuts. */
 export type RealtimeVoiceFastContextConfig = {
   enabled: boolean;
+  /** Maximum memory/session hits to include in the spoken-context prompt. */
   maxResults: number;
+  /** Search backends allowed for the quick lookup. */
   sources: Array<"memory" | "sessions">;
+  /** Deadline before the quick lookup gives up. */
   timeoutMs: number;
+  /** Whether miss/unavailable/timeout should fall back to a full consult. */
   fallbackToConsult: boolean;
 };
 
+/** Human labels used in generated fast-context responses. */
 export type RealtimeVoiceFastContextLabels = {
   audienceLabel: string;
   contextName: string;
@@ -53,6 +66,8 @@ function normalizeSnippet(text: string): string {
   if (normalized.length <= MAX_SNIPPET_CHARS) {
     return normalized;
   }
+  // Keep individual memory snippets bounded so several hits still fit in a
+  // short realtime response prompt.
   return `${normalized.slice(0, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
 }
 
@@ -104,6 +119,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
     return await Promise.race([
       promise,
       new Promise<T>((_resolve, reject) => {
+        // resolveTimerTimeoutMs caps huge configured deadlines before they
+        // reach Node's timer APIs.
         timer = setTimeout(
           () => reject(new RealtimeFastContextTimeoutError(resolvedTimeoutMs)),
           resolvedTimeoutMs,
@@ -124,6 +141,8 @@ async function lookupFastContext(params: {
   config: RealtimeVoiceFastContextConfig;
   query: string;
 }): Promise<FastContextLookupResult> {
+  // The memory runtime owns whether memory/session search is active for this
+  // agent. Talk only consumes the current manager when it is already available.
   const memory = await getActiveMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -142,6 +161,7 @@ async function lookupFastContext(params: {
   return { status: "hits", hits };
 }
 
+/** Try to answer a realtime consult from fast memory/session context. */
 export async function resolveRealtimeVoiceFastContextConsult(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -170,12 +190,16 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);
+      // In fallback mode, let the normal agent consult decide. Otherwise produce
+      // a bounded "no context handy" result immediately for the voice call.
       return params.config.fallbackToConsult
         ? { handled: false }
         : { handled: true, result: { text: buildMissText(query, labels) } };
     }
     const { hits } = lookup;
     if (hits.length === 0) {
+      // Empty hits behave like unavailable context: either fall back to full
+      // agent work or answer quickly that nothing relevant was found.
       return params.config.fallbackToConsult
         ? { handled: false }
         : { handled: true, result: { text: buildMissText(query, labels) } };
@@ -187,6 +211,8 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
   } catch (error) {
     const message = formatErrorMessage(error);
     params.logger.debug?.(`[talk] fast context lookup failed: ${message}`);
+    // Timeouts and lookup failures are non-fatal because this is an optional
+    // acceleration path ahead of the normal consult runtime.
     return params.config.fallbackToConsult
       ? { handled: false }
       : { handled: true, result: { text: buildMissText(query, labels) } };

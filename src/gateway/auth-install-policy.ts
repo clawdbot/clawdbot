@@ -1,3 +1,4 @@
+// Gateway install auth policy used by service/install flows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +33,7 @@ function hasDurableGatewayPasswordEnvForInstall(
   );
 }
 
+/** Decide whether install should require token auth when no durable password source exists. */
 export function shouldRequireGatewayTokenForInstall(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,

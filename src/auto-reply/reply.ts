@@ -1,3 +1,4 @@
+// Public auto-reply API barrel for directives and reply execution.
 export {
   extractElevatedDirective,
   extractReasoningDirective,

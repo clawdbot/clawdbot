@@ -1,3 +1,4 @@
+/** Command authorization helpers for owner and allowlist checks. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

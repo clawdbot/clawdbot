@@ -1,3 +1,4 @@
+// Builds plugin registry inputs from installed plugin index records.
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   discoverOpenClawPlugins,
@@ -8,6 +9,7 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-i
 import type { LoadInstalledPluginIndexParams } from "./installed-plugin-index-types.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 
+/** Resolves discovery candidates and manifest registry for installed plugin index loading. */
 export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginIndexParams): {
   registry: PluginManifestRegistry;
   candidates: readonly PluginCandidate[];

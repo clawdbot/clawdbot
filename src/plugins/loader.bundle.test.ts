@@ -1,3 +1,4 @@
+/** Verifies bundle manifest loading and bundled plugin runtime resolution. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";

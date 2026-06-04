@@ -1,3 +1,6 @@
+/**
+ * Tests allow-from parsing and normalization helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   formatAllowFromLowercase,

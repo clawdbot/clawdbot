@@ -1,3 +1,6 @@
+/**
+ * Public barrel for gateway integration test helpers.
+ */
 export {
   agentCommand,
   cronIsolatedRun,

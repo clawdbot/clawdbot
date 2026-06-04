@@ -1,3 +1,4 @@
+// Loads global dotenv files into process environment when requested.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,8 @@ import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 
+// Global dotenv loading imports operator-level gateway env files without
+// overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
 
 type DotEnvEntry = {
@@ -69,6 +72,8 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       const previous = firstSeen.get(key);
       if (previous) {
         if (previous.value !== value) {
+          // First file wins for deterministic startup; conflicts are logged once
+          // after parsing so sensitive values are not printed.
           const conflictKey = `${previous.filePath}\u0000${file.filePath}`;
           const existing = conflicts.get(conflictKey);
           if (existing) {
@@ -102,6 +107,7 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
   }
 }
 
+/** Load global runtime dotenv files into `process.env` with first-wins precedence. */
 export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
   const quiet = opts?.quiet ?? true;
   const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");

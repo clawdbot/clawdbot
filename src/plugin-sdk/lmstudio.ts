@@ -1,3 +1,6 @@
+/**
+ * Public SDK facade for LM Studio provider config, discovery, and auth helpers.
+ */
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   ProviderAuthMethodNonInteractiveContext,
@@ -83,19 +86,23 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
+/** Prompts for LM Studio configuration through the activated bundled provider facade. */
 export const promptAndConfigureLmstudioInteractive: FacadeModule["promptAndConfigureLmstudioInteractive"] =
   ((...args) =>
     loadFacadeModule().promptAndConfigureLmstudioInteractive(
       ...args,
     )) as FacadeModule["promptAndConfigureLmstudioInteractive"];
+/** Applies non-interactive LM Studio auth/configuration through the provider facade. */
 export const configureLmstudioNonInteractive: FacadeModule["configureLmstudioNonInteractive"] = ((
   ...args
 ) =>
   loadFacadeModule().configureLmstudioNonInteractive(
     ...args,
   )) as FacadeModule["configureLmstudioNonInteractive"];
+/** Discovers LM Studio provider config through the activated provider facade. */
 export const discoverLmstudioProvider: FacadeModule["discoverLmstudioProvider"] = ((...args) =>
   loadFacadeModule().discoverLmstudioProvider(...args)) as FacadeModule["discoverLmstudioProvider"];
+/** Prepares dynamic LM Studio models through the activated provider facade. */
 export const prepareLmstudioDynamicModels: FacadeModule["prepareLmstudioDynamicModels"] = ((
   ...args
 ) =>

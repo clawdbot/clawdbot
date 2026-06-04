@@ -1,3 +1,4 @@
+// Verifies generated config documentation baselines stay stable.
 import { describe, expect, it } from "vitest";
 import {
   collectConfigDocBaselineEntries,

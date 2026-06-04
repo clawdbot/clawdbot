@@ -6,6 +6,12 @@ import {
   type ToolProfileId,
 } from "./tool-catalog.js";
 
+/**
+ * Shared normalization helpers for runtime tool policy.
+ *
+ * Aliases and groups live here so allowlist parsing, prefix matching, and
+ * profile expansion resolve names consistently.
+ */
 type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];
@@ -16,13 +22,16 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "apply-patch": "apply_patch",
 };
 
+/** Core tool groups exposed to allow/deny policy config. */
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
+/** Normalizes a tool name or alias to the policy id used for matching. */
 export function normalizeToolName(name: string) {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+/** Checks whether an in-progress prefix can still resolve to an allowed tool or alias. */
 export function couldNormalizeToolNamePrefixToAllowedTool(
   prefix: string,
   allowedToolNames: Set<string>,
@@ -67,6 +76,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
   return false;
 }
 
+/** Normalizes a configured allow/deny list while dropping blank entries. */
 export function normalizeToolList(list?: string[]) {
   if (!list) {
     return [];
@@ -74,6 +84,7 @@ export function normalizeToolList(list?: string[]) {
   return list.map(normalizeToolName).filter(Boolean);
 }
 
+/** Expands named tool groups into concrete tool ids. */
 export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];
@@ -88,6 +99,7 @@ export function expandToolGroups(list?: string[]) {
   return uniqueStrings(expanded);
 }
 
+/** Resolves a built-in tool profile policy by id. */
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   return resolveCoreToolProfilePolicy(profile);
 }

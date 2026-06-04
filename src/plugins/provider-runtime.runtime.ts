@@ -1,3 +1,4 @@
+/** Runtime-side provider discovery and provider registration resolution helpers. */
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
 type ProviderRuntimeModule = typeof import("./provider-runtime.js");
@@ -24,6 +25,7 @@ async function loadProviderRuntime(): Promise<ProviderRuntimeModule> {
   return await providerRuntimeLoader.load();
 }
 
+/** Lazily augments the model catalog with provider plugin metadata. */
 export async function augmentModelCatalogWithProviderPlugins(
   ...args: Parameters<AugmentModelCatalogWithProviderPlugins>
 ): Promise<Awaited<ReturnType<AugmentModelCatalogWithProviderPlugins>>> {
@@ -31,6 +33,7 @@ export async function augmentModelCatalogWithProviderPlugins(
   return runtime.augmentModelCatalogWithProviderPlugins(...args);
 }
 
+/** Lazily builds doctor hint text for provider auth problems. */
 export async function buildProviderAuthDoctorHintWithPlugin(
   ...args: Parameters<BuildProviderAuthDoctorHintWithPlugin>
 ): Promise<Awaited<ReturnType<BuildProviderAuthDoctorHintWithPlugin>>> {
@@ -38,6 +41,7 @@ export async function buildProviderAuthDoctorHintWithPlugin(
   return runtime.buildProviderAuthDoctorHintWithPlugin(...args);
 }
 
+/** Lazily builds missing-auth messages with provider plugin context. */
 export async function buildProviderMissingAuthMessageWithPlugin(
   ...args: Parameters<BuildProviderMissingAuthMessageWithPlugin>
 ): Promise<Awaited<ReturnType<BuildProviderMissingAuthMessageWithPlugin>>> {
@@ -45,6 +49,7 @@ export async function buildProviderMissingAuthMessageWithPlugin(
   return runtime.buildProviderMissingAuthMessageWithPlugin(...args);
 }
 
+/** Lazily formats API-key auth profile display text with provider plugin rules. */
 export async function formatProviderAuthProfileApiKeyWithPlugin(
   ...args: Parameters<FormatProviderAuthProfileApiKeyWithPlugin>
 ): Promise<Awaited<ReturnType<FormatProviderAuthProfileApiKeyWithPlugin>>> {
@@ -52,6 +57,7 @@ export async function formatProviderAuthProfileApiKeyWithPlugin(
   return runtime.formatProviderAuthProfileApiKeyWithPlugin(...args);
 }
 
+/** Lazily prepares provider runtime auth for model execution. */
 export async function prepareProviderRuntimeAuth(
   ...args: Parameters<PrepareProviderRuntimeAuth>
 ): Promise<Awaited<ReturnType<PrepareProviderRuntimeAuth>>> {
@@ -59,6 +65,7 @@ export async function prepareProviderRuntimeAuth(
   return runtime.prepareProviderRuntimeAuth(...args);
 }
 
+/** Lazily refreshes OAuth credentials through provider plugin runtime hooks. */
 export async function refreshProviderOAuthCredentialWithPlugin(
   ...args: Parameters<RefreshProviderOAuthCredentialWithPlugin>
 ): Promise<Awaited<ReturnType<RefreshProviderOAuthCredentialWithPlugin>>> {

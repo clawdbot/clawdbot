@@ -446,6 +446,14 @@ export const zh_TW: TranslationMap = {
     logs: "實時網關日誌。",
     dreams: "睡眠期間的記憶整合。",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "活動",
     subtitle: "從即時工作階段事件衍生的暫時性工具活動。",

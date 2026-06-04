@@ -1,3 +1,4 @@
+// Creates secret-file fixtures for config and credential tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ type SecretFiles = {
   tokenFile?: string;
 };
 
+/** Writes temporary secret files for config tests and removes the directory afterward. */
 export async function withTempSecretFiles<T>(
   prefix: string,
   secrets: { password?: string; token?: string },

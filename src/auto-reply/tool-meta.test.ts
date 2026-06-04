@@ -1,3 +1,4 @@
+/** Tests compact tool metadata formatting for auto-reply progress output. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatToolAggregate, formatToolPrefix, shortenMeta, shortenPath } from "./tool-meta.js";

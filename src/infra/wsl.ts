@@ -1,13 +1,16 @@
+// Detects Windows Subsystem for Linux environments.
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 let wslCached: boolean | null = null;
 
+/** Clears the cached async WSL detection result between isolated tests. */
 export function resetWSLStateForTests(): void {
   wslCached = null;
 }
 
+/** Detects WSL from environment variables without touching the filesystem. */
 export function isWSLEnv(): boolean {
   if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
     return true;
@@ -16,8 +19,7 @@ export function isWSLEnv(): boolean {
 }
 
 /**
- * Synchronously check if running in WSL.
- * Checks env vars first, then /proc/version.
+ * Synchronously detects WSL from env vars first, then `/proc/version`.
  */
 export function isWSLSync(): boolean {
   if (process.platform !== "linux") {
@@ -35,7 +37,7 @@ export function isWSLSync(): boolean {
 }
 
 /**
- * Synchronously check if running in WSL2.
+ * Synchronously detects WSL2 from kernel-version markers after WSL detection.
  */
 export function isWSL2Sync(): boolean {
   if (!isWSLSync()) {
@@ -49,6 +51,7 @@ export function isWSL2Sync(): boolean {
   }
 }
 
+/** Asynchronously detects WSL from env vars and `/proc/sys/kernel/osrelease`, with process cache. */
 export async function isWSL(): Promise<boolean> {
   if (wslCached !== null) {
     return wslCached;

@@ -3,6 +3,8 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 
+// Shared allowlist matching primitives for channel ingress, setup, and plugin
+// helpers. Callers provide candidate sources so audit logs can explain matches.
 export type AllowlistMatchSource =
   | "wildcard"
   | "id"
@@ -26,12 +28,14 @@ export type CompiledAllowlist = {
   wildcard: boolean;
 };
 
+/** Formats match metadata for diagnostics without leaking channel-specific text. */
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
+/** Compiles normalized allowlist entries and records wildcard presence. */
 export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
   const set = new Set(entries.filter(Boolean));
   return {
@@ -67,6 +71,7 @@ export function resolveAllowlistCandidates<TSource extends string>(params: {
   return { allowed: false };
 }
 
+/** Applies wildcard and empty-list semantics before candidate matching. */
 export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
   compiledAllowlist: CompiledAllowlist;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -80,6 +85,7 @@ export function resolveCompiledAllowlistMatch<TSource extends string>(params: {
   return resolveAllowlistCandidates(params);
 }
 
+/** Convenience wrapper for callers that do not need to reuse a compiled list. */
 export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
   allowList: ReadonlyArray<string>;
   candidates: Array<{ value?: string; source: TSource }>;
@@ -90,6 +96,7 @@ export function resolveAllowlistMatchByCandidates<TSource extends string>(params
   });
 }
 
+/** Matches simple sender id/name allowlists used by legacy channel config. */
 export function resolveAllowlistMatchSimple(params: {
   allowFrom: ReadonlyArray<string | number>;
   senderId: string;

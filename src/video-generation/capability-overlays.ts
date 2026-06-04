@@ -8,6 +8,8 @@ import type {
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
+// Runtime/model capability overlays let a provider refine static manifest caps
+// for the selected model without rebuilding the registry.
 function isVideoGenerationTransformCapabilities(
   capabilities: VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
 ): capabilities is VideoGenerationTransformCapabilities {
@@ -32,6 +34,8 @@ export function buildReferenceInputCapabilityFailure(params: {
   });
 
   if (inputImageCount > 0 || inputVideoCount > 0) {
+    // Reference inputs must be explicitly supported. Falling back to a provider
+    // that ignores them would look successful while losing user-supplied assets.
     const visualLabel =
       inputImageCount > 0 && inputVideoCount > 0
         ? "combined image/video reference inputs"
@@ -87,6 +91,8 @@ function mergeVideoGenerationModeCapabilities<
   }
   const overlayOptions = overlay.providerOptions;
   const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
+  // Explicit empty providerOptions means "clear inherited options"; undefined
+  // means "inherit base declaration".
   const mergedProviderOptions =
     hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
       ? overlayOptions
@@ -155,6 +161,8 @@ export async function resolveProviderWithModelCapabilities(params: {
     if (!modelCapabilities) {
       return params.provider;
     }
+    // Return a request-local provider copy so dynamic model caps cannot leak
+    // across later requests or different model candidates.
     return {
       ...params.provider,
       capabilities: mergeVideoGenerationProviderCapabilities(

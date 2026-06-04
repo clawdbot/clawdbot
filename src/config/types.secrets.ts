@@ -1,5 +1,7 @@
+// Defines secret reference and resolution configuration types.
 import { isRecord } from "../utils.js";
 
+/** Supported secret reference backends in config. */
 export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
 
 /**
@@ -15,28 +17,40 @@ export type SecretRef = {
   id: string;
 };
 
+/** Secret-bearing config input: either a literal string or a structured SecretRef. */
 export type SecretInput = string | SecretRef;
+/** Provider alias used when a SecretRef omits a source-specific provider. */
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
+/** Strict env-var id shape accepted for env-backed SecretRefs. */
 export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+/** Legacy env SecretRef marker retained for config migration/read compatibility. */
 export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
+/** Older env SecretRef marker retained for migration/read compatibility. */
 export const LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX = "__env__:"; // pragma: allowlist secret
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 const ENV_SECRET_SHORTHAND_RE = /^\$([A-Z][A-Z0-9_]{0,127})$/;
+/** Secret string read mode: throw on unresolved refs or inspect without resolving. */
 export type SecretInputStringResolutionMode = "strict" | "inspect";
+/** Result of reading a secret input without necessarily materializing the secret value. */
 export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
   | { status: "configured_unavailable"; value: undefined; ref: SecretRef }
   | { status: "missing"; value: undefined; ref: null };
 type SecretDefaults = {
+  /** Default provider alias for env SecretRefs. */
   env?: string;
+  /** Default provider alias for file SecretRefs. */
   file?: string;
+  /** Default provider alias for exec SecretRefs. */
   exec?: string;
 };
 
+/** Return whether an env SecretRef id is a supported uppercase environment variable name. */
 export function isValidEnvSecretRefId(value: string): boolean {
   return ENV_SECRET_REF_ID_RE.test(value);
 }
 
+/** Narrow a value to the canonical SecretRef object shape. */
 export function isSecretRef(value: unknown): value is SecretRef {
   if (!isRecord(value)) {
     return false;
@@ -67,6 +81,7 @@ function isLegacySecretRefWithoutProvider(
   );
 }
 
+/** Parse `$NAME` and `${NAME}` env-secret shorthand strings into env SecretRefs. */
 export function parseEnvTemplateSecretRef(
   value: unknown,
   provider = DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -86,6 +101,7 @@ export function parseEnvTemplateSecretRef(
   };
 }
 
+/** Parse legacy env SecretRef marker strings kept for config migration/read compatibility. */
 export function parseLegacySecretRefEnvMarker(
   value: unknown,
   provider = DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -113,6 +129,7 @@ export function parseLegacySecretRefEnvMarker(
   };
 }
 
+/** Coerce canonical, legacy, and env-shorthand secret inputs into a SecretRef. */
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
   if (isSecretRef(value)) {
     return value;
@@ -141,6 +158,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
   return null;
 }
 
+/** Return whether a value contains either a literal secret string or resolvable SecretRef shape. */
 export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaults): boolean {
   if (normalizeSecretInputString(value)) {
     return true;
@@ -148,6 +166,7 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
   return coerceSecretRef(value, defaults) !== null;
 }
 
+/** Trim a literal secret input string while leaving non-string inputs unresolved. */
 export function normalizeSecretInputString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -166,6 +185,7 @@ function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef
   );
 }
 
+/** Throw when a secret field still contains an unresolved SecretRef at a read site. */
 export function assertSecretInputResolved(params: {
   value: unknown;
   refValue?: unknown;
@@ -183,6 +203,7 @@ export function assertSecretInputResolved(params: {
   throw createUnresolvedSecretInputError({ path: params.path, ref });
 }
 
+/** Resolve a secret field to either a literal value, a configured-unavailable ref, or missing. */
 export function resolveSecretInputString(params: {
   value: unknown;
   refValue?: unknown;
@@ -220,6 +241,7 @@ export function resolveSecretInputString(params: {
   };
 }
 
+/** Return a strict literal secret value, throwing if the field still points at a SecretRef. */
 export function normalizeResolvedSecretInputString(params: {
   value: unknown;
   refValue?: unknown;
@@ -236,6 +258,7 @@ export function normalizeResolvedSecretInputString(params: {
   return undefined;
 }
 
+/** Resolve explicit `refValue` before inline secret references embedded in `value`. */
 export function resolveSecretInputRef(params: {
   value: unknown;
   refValue?: unknown;
@@ -246,6 +269,7 @@ export function resolveSecretInputRef(params: {
   ref: SecretRef | null;
 } {
   const explicitRef = coerceSecretRef(params.refValue, params.defaults);
+  // Explicit ref fields take precedence so a literal fallback can stay beside a configured ref.
   const inlineRef = explicitRef ? null : coerceSecretRef(params.value, params.defaults);
   return {
     explicitRef,

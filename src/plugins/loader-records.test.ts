@@ -1,3 +1,4 @@
+/** Verifies plugin loader records expose stable metadata for registered plugin surfaces. */
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
 

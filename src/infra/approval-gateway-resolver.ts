@@ -1,3 +1,4 @@
+// Resolves exec and plugin approvals through the gateway client.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { isApprovalNotFoundError } from "./approval-errors.js";
@@ -14,6 +15,7 @@ type ResolveApprovalOverGatewayParams = {
   clientDisplayName?: string;
 };
 
+/** Resolves an exec or plugin approval id through the operator approvals gateway. */
 export async function resolveApprovalOverGateway(
   params: ResolveApprovalOverGatewayParams,
 ): Promise<void> {
@@ -43,6 +45,7 @@ export async function resolveApprovalOverGateway(
         if (!params.allowPluginFallback || !isApprovalNotFoundError(err)) {
           throw err;
         }
+        // Slash commands can omit the plugin prefix; only retry when exec lookup proves no match.
         await requestResolve("plugin.approval.resolve");
       }
     },

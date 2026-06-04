@@ -1,3 +1,4 @@
+/** Converts image provider base64/data-url payloads into generated or source image assets. */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -9,6 +10,9 @@ import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 const DEFAULT_IMAGE_FILE_PREFIX = "image";
 
+// Image asset helpers for provider responses and source uploads. They normalize
+// base64/data-url inputs into in-memory assets with predictable filenames.
+/** Result of conservative image MIME sniffing for provider responses. */
 export type ImageMimeTypeDetection = {
   mimeType: string;
   extension: string;
@@ -31,6 +35,7 @@ function throwMalformedImageResponse(message: string | undefined): never | undef
   return undefined;
 }
 
+/** Maps an image MIME type to a stable filename extension. */
 export function imageFileExtensionForMimeType(
   mimeType: string | undefined,
   fallback = "png",
@@ -49,6 +54,8 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
+// Lightweight magic-byte sniffing for providers that omit mime_type. Keep this
+// conservative so unknown formats still use the configured default mime type.
 export function sniffImageMimeType(
   buffer: Buffer,
   fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
@@ -109,6 +116,8 @@ export function parseImageDataUrl(
   return { mimeType, base64: canonicalBase64 };
 }
 
+// Public conversion path for OpenAI-compatible base64 payloads. Invalid or
+// empty base64 returns undefined so callers can choose strict/lenient handling.
 export function generatedImageAssetFromBase64(params: {
   base64: string | undefined;
   index: number;
@@ -220,6 +229,8 @@ export function parseOpenAiCompatibleImageResponse(
   return images;
 }
 
+// Upload filename contract for edit/reference images. User-provided filenames
+// win; generated names follow the same prefix/index/mime logic as outputs.
 export function imageSourceUploadFileName(params: {
   image: ImageGenerationSourceImage;
   index: number;

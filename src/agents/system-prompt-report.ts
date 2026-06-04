@@ -1,3 +1,9 @@
+/**
+ * System prompt report builder.
+ *
+ * Session metadata uses this report to account for prompt size, bootstrap file
+ * injection, skills, and tool schema footprint without storing raw prompt text.
+ */
 import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
@@ -70,6 +76,8 @@ function buildToolSchemaStats(
       return Object.keys(props as Record<string, unknown>).length;
     })(),
   };
+  // Tool parameter objects are reused across runs; cache their stable size/hash
+  // so report generation stays cheap during frequent prompt rebuilds.
   toolSchemaStatsCache.set(parameters, stats);
   return stats;
 }
@@ -94,6 +102,7 @@ function measureRenderedProjectContextChars(systemPrompt: string): number {
   return extractBetween(systemPrompt, "\n# Project Context\n", "\n## Silent Replies\n").length;
 }
 
+/** Builds the stored report for a rendered system prompt and its inputs. */
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;

@@ -1,3 +1,4 @@
+// Tracks detached task runtime state and spawned process handles.
 import type {
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,
@@ -5,8 +6,10 @@ import type {
 
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
+// Process-wide detached task runtime registration, owned by plugin activation.
 let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
 
+/** Registers the active detached task lifecycle runtime implementation. */
 export function registerDetachedTaskLifecycleRuntime(
   pluginId: string,
   runtime: DetachedTaskLifecycleRuntime,

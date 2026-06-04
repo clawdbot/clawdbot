@@ -1,3 +1,5 @@
+// Public session delivery queue facade: storage and recovery live in split
+// modules, callers import the stable aggregate API from here.
 export {
   ackSessionDelivery,
   enqueueSessionDelivery,

@@ -4,6 +4,7 @@ import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/f
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 
+// Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
   sessionId: string;
   updatedAt: number;

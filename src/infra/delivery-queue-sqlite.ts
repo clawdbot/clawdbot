@@ -1,3 +1,4 @@
+// Stores durable delivery queue entries in SQLite.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -6,9 +7,12 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
+// Generic durable delivery queue storage shared by session and outbound queues.
+// Queue-specific wrappers own payload shape; this layer owns SQLite state.
 type QueueStatus = "pending" | "failed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
+/** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
 export type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
@@ -17,6 +21,7 @@ export type DeliveryQueueRowMetadata = {
   accountId?: string;
 };
 
+/** Persisted queue entry fields common to all delivery queue payloads. */
 export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
@@ -87,6 +92,7 @@ function metadata(entry: DeliveryQueueEntryState): DeliveryQueueRowMetadata {
   };
 }
 
+/** Insert or replace a delivery queue entry under a queue namespace. */
 export function upsertDeliveryQueueEntry(params: {
   queueName: string;
   entry: DeliveryQueueEntryState;
@@ -144,6 +150,7 @@ export function upsertDeliveryQueueEntry(params: {
   );
 }
 
+/** Load a single pending delivery queue entry. */
 export function loadDeliveryQueueEntry(
   queueName: string,
   id: string,
@@ -172,6 +179,7 @@ export function loadDeliveryQueueEntry(
   return row ? inflate(row) : null;
 }
 
+/** Load all pending entries for a queue namespace in database order. */
 export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
@@ -200,6 +208,7 @@ export function loadDeliveryQueueEntries(
   return rows.map(inflate);
 }
 
+/** Delete a pending delivery queue entry after successful delivery. */
 export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
@@ -213,6 +222,7 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
   );
 }
 
+/** Load, transform, and persist a pending delivery queue entry. */
 export function updateDeliveryQueueEntry(
   queueName: string,
   id: string,
@@ -226,6 +236,7 @@ export function updateDeliveryQueueEntry(
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
 }
 
+/** Mark a pending delivery queue entry as failed for later diagnostics. */
 export function moveDeliveryQueueEntryToFailed(
   queueName: string,
   id: string,

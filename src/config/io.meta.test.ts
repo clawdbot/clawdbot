@@ -1,3 +1,4 @@
+// Verifies config IO metadata for persisted and generated settings.
 import { describe, expect, it } from "vitest";
 import { AUTO_MANAGED_CONFIG_META_PATHS, stampConfigWriteMetadata } from "./io.meta.js";
 

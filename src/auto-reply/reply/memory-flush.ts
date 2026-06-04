@@ -1,3 +1,4 @@
+// Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { legacyModelKey, modelKey } from "../../agents/model-selection-normalize.js";

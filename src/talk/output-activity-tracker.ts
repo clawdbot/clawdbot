@@ -1,13 +1,22 @@
+/**
+ * Realtime voice output activity counters and playback-state tracking.
+ *
+ * Providers use this to decide whether assistant output is active,
+ * interruptible, or overdue relative to the audio duration already emitted.
+ */
 export type RealtimeVoiceOutputActivityTrackerOptions = {
+  /** Injectable clock for deterministic tests and playback watchdog math. */
   now?: () => number;
 };
 
+/** One output activity increment from source audio and/or sink audio. */
 export type RealtimeVoiceOutputActivityDelta = {
   audioMs?: number;
   sourceAudioBytes?: number;
   sinkAudioBytes?: number;
 };
 
+/** Current output counters and playback timestamps. */
 export type RealtimeVoiceOutputActivitySnapshot = {
   audioMs: number;
   chunks: number;
@@ -19,19 +28,24 @@ export type RealtimeVoiceOutputActivitySnapshot = {
   playbackStartedAt?: number;
 };
 
+/** Mutable tracker for one realtime voice output stream. */
 export type RealtimeVoiceOutputActivityTracker = {
   markStreamOpened(): void;
   markStreamEnding(): void;
   markPlaybackStarted(): void;
   markAudio(delta: RealtimeVoiceOutputActivityDelta): void;
   reset(): void;
+  /** Whether output exists or the downstream sink reports active playback. */
   isActive(sinkActive?: boolean): boolean;
+  /** Whether caller speech should be treated as interrupting current output. */
   isInterruptible(sinkActive?: boolean): boolean;
   elapsedPlaybackMs(): number;
+  /** Delay before watchdog should assume playback has exceeded expected audio duration. */
   playbackWatchdogDelayMs(options: { marginMs: number; minMs?: number }): number | undefined;
   snapshot(): RealtimeVoiceOutputActivitySnapshot;
 };
 
+/** Create a fresh output activity tracker for a realtime voice session. */
 export function createRealtimeVoiceOutputActivityTracker(
   options: RealtimeVoiceOutputActivityTrackerOptions = {},
 ): RealtimeVoiceOutputActivityTracker {
@@ -58,6 +72,8 @@ export function createRealtimeVoiceOutputActivityTracker(
 
   return {
     markStreamOpened() {
+      // A new stream clears playback markers but keeps cumulative counters until
+      // reset(), so callers can preserve total output stats across stream opens.
       streamEnding = false;
       playbackStarted = false;
       playbackStartedAt = undefined;
@@ -74,6 +90,8 @@ export function createRealtimeVoiceOutputActivityTracker(
       playbackStartedAt = now();
     },
     markAudio(delta) {
+      // Clamp negative/provider-buggy deltas to zero while still recording that
+      // a chunk arrived.
       audioMs += Math.max(0, delta.audioMs ?? 0);
       sourceAudioBytes += Math.max(0, delta.sourceAudioBytes ?? 0);
       sinkAudioBytes += Math.max(0, delta.sinkAudioBytes ?? 0);
@@ -91,6 +109,7 @@ export function createRealtimeVoiceOutputActivityTracker(
       playbackStartedAt = undefined;
     },
     isActive(sinkActive = false) {
+      // Some sinks can report active playback before byte counters are visible.
       return sinkActive || chunks > 0;
     },
     isInterruptible(sinkActive = false) {
@@ -103,6 +122,8 @@ export function createRealtimeVoiceOutputActivityTracker(
       if (playbackStartedAt === undefined || audioMs <= 0) {
         return undefined;
       }
+      // Watchdog waits for emitted audio duration plus margin, but never below
+      // the configured minimum to avoid immediate false positives.
       return Math.max(minMs, audioMs - (now() - playbackStartedAt) + marginMs);
     },
     snapshot,

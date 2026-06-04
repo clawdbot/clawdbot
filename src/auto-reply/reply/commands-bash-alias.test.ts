@@ -1,3 +1,4 @@
+/** Tests bash command aliases and chat shortcut handling. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleBashCommand } from "./commands-bash.js";

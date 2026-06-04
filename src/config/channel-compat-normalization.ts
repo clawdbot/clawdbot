@@ -1,3 +1,4 @@
+// Normalizes channel config compatibility fields during config loading.
 import {
   normalizeLegacyDmAliases,
   type CompatMutationResult,
@@ -6,6 +7,7 @@ import {
 export { normalizeLegacyDmAliases };
 export type { CompatMutationResult };
 
+/** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
 export type LegacyStreamingAliasOptions = {
   resolvedMode: string;
   includePreviewChunk?: boolean;
@@ -13,6 +15,7 @@ export type LegacyStreamingAliasOptions = {
   offModeLegacyNotice?: (pathPrefix: string) => string;
 };
 
+/** Account-level channel config passed to channel-specific doctor migrations. */
 export type NormalizeLegacyChannelAccountParams = {
   account: Record<string, unknown>;
   accountId: string;
@@ -20,12 +23,14 @@ export type NormalizeLegacyChannelAccountParams = {
   changes: string[];
 };
 
+/** Narrows unknown config JSON values to mutable object records. */
 export function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
+/** Checks whether any account entry still carries a channel-specific legacy alias. */
 export function hasLegacyAccountStreamingAliases(
   value: unknown,
   match: (entry: unknown) => boolean,
@@ -40,11 +45,18 @@ export function hasLegacyAccountStreamingAliases(
 function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
   const existing = asObjectRecord(owner[key]);
   if (existing) {
+    // Clone nested records before migration so callers keep immutable before/after snapshots.
     return { ...existing };
   }
   return {};
 }
 
+/**
+ * Moves legacy flat streaming aliases into the nested `streaming` config shape.
+ *
+ * Existing nested values win over legacy aliases, matching doctor migration rules
+ * that preserve explicit modern config while removing stale compatibility keys.
+ */
 export function normalizeLegacyStreamingAliases(
   params: {
     entry: Record<string, unknown>;
@@ -75,6 +87,7 @@ export function normalizeLegacyStreamingAliases(
   const block = ensureNestedRecord(streaming, "block");
   const preview = ensureNestedRecord(streaming, "preview");
 
+  // Only fill `streaming.mode` when the modern nested field is absent.
   if (
     (hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -177,6 +190,12 @@ export function normalizeLegacyStreamingAliases(
   return { entry: updated, changed };
 }
 
+/**
+ * Runs generic channel doctor alias migration for the root entry and accounts.
+ *
+ * Channel plugins provide streaming resolution and optional account-specific
+ * migrations so core can keep one compatibility path for all channel shapes.
+ */
 export function normalizeLegacyChannelAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -269,6 +288,7 @@ export function normalizeLegacyChannelAliases(params: {
   return { entry: updated, changed };
 }
 
+/** Detects legacy streaming aliases on one channel or account config entry. */
 export function hasLegacyStreamingAliases(
   value: unknown,
   options?: { includePreviewChunk?: boolean; includeNativeTransport?: boolean },

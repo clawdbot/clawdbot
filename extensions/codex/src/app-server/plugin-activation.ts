@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAMES,
-  isCodexPluginsMarketplaceName,
-  type ResolvedCodexPluginPolicy,
-} from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
   pluginReadParams,
@@ -52,32 +48,27 @@ export type CodexPluginRuntimeRefreshResult = {
 export async function ensureCodexPluginActivation(
   params: EnsureCodexPluginActivationParams,
 ): Promise<CodexPluginActivationResult> {
-  if (!isCodexPluginsMarketplaceName(params.identity.marketplaceName)) {
+  if (params.identity.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME) {
     return activationFailure(params.identity, "marketplace_missing", {
-      message:
-        "Only " + CODEX_PLUGINS_MARKETPLACE_NAMES.join(" or ") + " plugins can be activated.",
+      message: "Only openai-curated plugins can be activated.",
     });
   }
 
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const resolved = findOpenAiCuratedPluginSummary(
-    listed,
-    params.identity.pluginName,
-    params.identity.marketplaceName,
-  );
+  const resolved = findOpenAiCuratedPluginSummary(listed, params.identity.pluginName);
   if (!resolved) {
-    const hasMarketplace = listed.marketplaces.some(
-      (marketplace) => marketplace.name === params.identity.marketplaceName,
+    const hasCuratedMarketplace = listed.marketplaces.some(
+      (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
     );
-    if (!hasMarketplace) {
+    if (!hasCuratedMarketplace) {
       return activationFailure(params.identity, "marketplace_missing", {
-        message: `Codex marketplace ${params.identity.marketplaceName} was not found.`,
+        message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
       });
     }
     return activationFailure(params.identity, "plugin_missing", {
-      message: `${params.identity.pluginName} was not found in ${params.identity.marketplaceName}.`,
+      message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
     });
   }
 

@@ -1,3 +1,4 @@
+// Covers config file parsing errors and JSON5 compatibility behavior.
 import { describe, expect, it, vi } from "vitest";
 import { parseConfigJson5 } from "./config.js";
 

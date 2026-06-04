@@ -1,3 +1,4 @@
+// Defines reply directive parsing constants and text-matching helpers.
 import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel, TraceLevel } from "../thinking.js";
 import {

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for web content extractor plugin types and HTML cleanup helpers.
+ */
 export type {
   WebContentExtractionRequest,
   WebContentExtractionResult,

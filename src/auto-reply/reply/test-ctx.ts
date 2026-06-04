@@ -1,3 +1,4 @@
+// Builds minimal message contexts for reply unit tests.
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 

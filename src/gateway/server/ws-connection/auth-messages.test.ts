@@ -1,3 +1,6 @@
+/**
+ * WebSocket authentication message regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
 

@@ -1,3 +1,4 @@
+/** Preflight compaction and memory flush helpers for agent runner sessions. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -129,6 +130,7 @@ const memoryDeps = {
   now: () => Date.now(),
 };
 
+/** Overrides memory helper dependencies for tests. */
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
@@ -325,6 +327,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
     : message;
 }
 
+/** Usage snapshot read from a session transcript before compaction. */
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
@@ -673,6 +676,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
 }
 
+/** Runs preflight compaction when session state exceeds configured thresholds. */
 export async function runPreflightCompactionIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -951,6 +955,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   return entry ?? params.sessionEntry;
 }
 
+/** Runs post-turn memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;

@@ -18,6 +18,8 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
+    // Parenthesized spans often contain rewritten links or file references;
+    // avoid splitting them unless the window has no safer outside break.
     if (char === "(") {
       depth += 1;
       continue;
@@ -39,7 +41,11 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   return { lastNewline, lastWhitespace };
 }
 
-/** Splits plain text at readable boundaries while avoiding breaks inside parentheses. */
+/**
+ * Splits plain text into size-bounded chunks at readable boundaries.
+ *
+ * Returns the original text as one chunk when the limit is non-positive.
+ */
 export function chunkText(text: string, limit: number): string[] {
   const early = resolveChunkEarlyReturn(text, limit);
   if (early) {
@@ -56,6 +62,8 @@ export function chunkText(text: string, limit: number): string[] {
     const windowEnd = Math.min(text.length, cursor + limit);
     const window = text.slice(cursor, windowEnd);
     const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+    // Prefer block boundaries, then spaces, then a hard size cut when no
+    // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;
     const end = breakOffset > 0 ? cursor + breakOffset : windowEnd;
     chunks.push(text.slice(cursor, end));

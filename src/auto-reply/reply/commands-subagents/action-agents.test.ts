@@ -1,3 +1,4 @@
+// Tests subagent agent-list command output and filtering.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const THREAD_CHANNEL = "thread-chat";

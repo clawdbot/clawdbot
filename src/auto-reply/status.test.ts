@@ -1,3 +1,4 @@
+/** Tests auto-reply status message formatting. */
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";

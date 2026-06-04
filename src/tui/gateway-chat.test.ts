@@ -1,3 +1,4 @@
+// Covers gateway-backed chat behavior used by the TUI backend.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

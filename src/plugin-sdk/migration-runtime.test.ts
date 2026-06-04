@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK migration runtime facades and migration helper behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

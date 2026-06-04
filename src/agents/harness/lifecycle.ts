@@ -1,3 +1,9 @@
+/**
+ * Agent harness lifecycle diagnostics wrapper.
+ *
+ * This module wraps harness attempts with context-engine support checks,
+ * diagnostic events, trace propagation, and result classification.
+ */
 import {
   assertContextEngineHostSupport,
   type ContextEngineHostSupport,
@@ -192,6 +198,7 @@ function emitAgentHarnessRunError(params: {
   });
 }
 
+/** Runs one harness attempt with diagnostics, tracing, and result classification. */
 export async function runAgentHarnessLifecycleAttempt(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
@@ -225,6 +232,8 @@ export async function runAgentHarnessLifecycleAttempt(
     phase = "prepare";
     assertAgentHarnessContextEngineSupport(harness, params);
     if (shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace) {
+      // Non-OpenClaw harnesses get a child run trace so provider/harness spans
+      // stay linked without reusing the parent harness trace id.
       agentRunTrace = freezeDiagnosticTraceContext(
         createChildDiagnosticTraceContext(activeHarnessTrace),
       );
@@ -238,6 +247,8 @@ export async function runAgentHarnessLifecycleAttempt(
       phase = "send";
       const rawResult = await harness.runAttempt(params);
       phase = "resolve";
+      // Classification happens inside the diagnostic phase so failures identify
+      // whether they came from send or result resolution.
       return applyAgentHarnessResultClassification(harness, rawResult, params);
     };
     result = agentRunTrace

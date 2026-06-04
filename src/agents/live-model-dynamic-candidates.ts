@@ -13,6 +13,9 @@ import type { ProviderResolveDynamicModelContext } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { listPrioritizedHighSignalLiveModelRefs } from "./live-model-filter.js";
 
+// Adds provider-discovered live models to the static catalog candidates. This
+// keeps the hot catalog path provider-agnostic while still honoring plugin
+// dynamic model hooks for high-signal refs.
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;
@@ -47,6 +50,13 @@ function liveModelKey(provider: string, id: string): string | null {
   return normalizedProvider && normalizedId ? `${normalizedProvider}/${normalizedId}` : null;
 }
 
+/**
+ * Append prioritized dynamic live models that are not already present.
+ *
+ * Provider hooks can prepare credentials/session state, resolve the current
+ * model metadata, and then pass through the same model normalizer used by agent
+ * discovery so downstream catalog code sees one canonical shape.
+ */
 export async function appendPrioritizedDynamicLiveModels(params: {
   models: Model[];
   config?: OpenClawConfig;
@@ -82,6 +92,8 @@ export async function appendPrioritizedDynamicLiveModels(params: {
       params.config?.models?.providers,
       ref.provider,
     );
+    // Dynamic model hooks receive the originally requested provider/id so they
+    // can map aliases or live service identifiers before returning a catalog row.
     const context = {
       config: params.config,
       agentDir: params.agentDir,
@@ -110,6 +122,8 @@ export async function appendPrioritizedDynamicLiveModels(params: {
     }
     const model = await normalizeModel(resolved as Model, params.agentDir);
     const resolvedKey = liveModelKey(model.provider, model.id);
+    // De-dupe against the resolved identity as well as the requested ref; hooks
+    // may canonicalize provider ids or return aliases.
     if (!resolvedKey || seen.has(resolvedKey)) {
       continue;
     }

@@ -1,3 +1,4 @@
+// Defines shared legacy config rule contracts for detection and migration.
 export type LegacyConfigRule = {
   path: string[];
   message: string;

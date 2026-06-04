@@ -1,3 +1,4 @@
+// Covers npm package archive installation helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { packNpmSpecToArchive, withTempDir } from "./install-source-utils.js";
 import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";

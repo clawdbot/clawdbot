@@ -12,6 +12,7 @@ export type AcpTranslatorSessionRef = {
   ledgerSessionId?: string;
 };
 
+// Session update helper records ACP-visible updates into the replay ledger when requested.
 type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
   cwd: string;
 };

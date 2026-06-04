@@ -1,3 +1,4 @@
+/** Tests completion delivery policy for source replies and private finals. */
 import { describe, expect, it } from "vitest";
 import {
   completionRequiresMessageToolDelivery,

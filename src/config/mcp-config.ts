@@ -1,3 +1,4 @@
+// Normalizes MCP server config for runtime launch and validation.
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -31,6 +32,7 @@ type ConfigMcpWriteResult =
     }
   | { ok: false; path: string; error: string };
 
+/** Include/exclude tool selection stored for a configured MCP server. */
 export type McpServerToolSelection = {
   include?: string[];
   exclude?: string[];

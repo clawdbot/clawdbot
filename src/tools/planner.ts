@@ -1,3 +1,4 @@
+// Plans usable tools from descriptors, availability, and request constraints.
 import { evaluateToolAvailability } from "./availability.js";
 import { ToolPlanContractError } from "./diagnostics.js";
 import type {
@@ -8,6 +9,12 @@ import type {
   ToolPlanEntry,
 } from "./types.js";
 
+/**
+ * Deterministic planner for descriptor-backed tools.
+ *
+ * The planner sorts descriptors, hides unavailable tools with diagnostics, and
+ * throws only when visible tool descriptors violate executor/name contracts.
+ */
 function compareDescriptors(left: ToolDescriptor, right: ToolDescriptor): number {
   return (
     (left.sortKey ?? left.name).localeCompare(right.sortKey ?? right.name) ||
@@ -29,6 +36,7 @@ function assertUniqueNames(descriptors: readonly ToolDescriptor[]): void {
   }
 }
 
+/** Build the visible and hidden tool plan for a runtime context. */
 export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
   const descriptors = options.descriptors.toSorted(compareDescriptors);
   assertUniqueNames(descriptors);
@@ -45,6 +53,7 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
       continue;
     }
     if (!descriptor.executor) {
+      // Hidden tools may omit executors; visible tools must be callable after planning.
       throw new ToolPlanContractError({
         code: "missing-executor",
         toolName: descriptor.name,

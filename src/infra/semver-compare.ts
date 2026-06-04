@@ -1,3 +1,4 @@
+// Compares semantic versions for package and runtime compatibility checks.
 type ComparableSemver = {
   major: number;
   minor: number;
@@ -5,6 +6,9 @@ type ComparableSemver = {
   prerelease: string[] | null;
 };
 
+/**
+ * Converts legacy OpenClaw `1.2.3.beta.N` tags into semver-compatible `1.2.3-beta.N`.
+ */
 export function normalizeLegacyDotBetaVersion(version: string): string {
   const trimmed = version.trim();
   const dotBetaMatch = /^([vV]?[0-9]+\.[0-9]+\.[0-9]+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(trimmed);
@@ -16,6 +20,9 @@ export function normalizeLegacyDotBetaVersion(version: string): string {
   return suffix ? `${base}-beta.${suffix}` : `${base}-beta`;
 }
 
+/**
+ * Parses an exact semver-like version into fields used by update and plugin version ordering.
+ */
 export function parseComparableSemver(
   version: string | null | undefined,
   options?: { normalizeLegacyDotBeta?: boolean },
@@ -44,10 +51,14 @@ export function parseComparableSemver(
   };
 }
 
+/**
+ * Compares semver prerelease identifiers using numeric-before-string semver precedence rules.
+ */
 export function comparePrereleaseIdentifiers(a: string[] | null, b: string[] | null): number {
   if (!a?.length && !b?.length) {
     return 0;
   }
+  // A stable release has higher precedence than any prerelease for the same major/minor/patch.
   if (!a?.length) {
     return 1;
   }
@@ -91,6 +102,9 @@ export function comparePrereleaseIdentifiers(a: string[] | null, b: string[] | n
   return 0;
 }
 
+/**
+ * Compares parsed semver values, returning null when either side could not be parsed.
+ */
 export function compareComparableSemver(
   a: ComparableSemver | null,
   b: ComparableSemver | null,

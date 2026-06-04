@@ -29,6 +29,9 @@ import type {
   TrajectoryToolDefinition,
 } from "./types.js";
 
+// Trajectory bundle exporter: joins persisted session JSONL with runtime
+// trace JSONL, redacts local/support-sensitive data, and writes a portable
+// support bundle for debugging agent behavior.
 type BuildTrajectoryBundleParams = {
   outputDir: string;
   sessionFile: string;
@@ -118,6 +121,8 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
   if (version < 2) {
+    // Older session logs predate entry ids. Synthetic ids preserve branch order
+    // long enough to export the reachable suffix without mutating source files.
     let previousId: string | null = null;
     let index = 0;
     for (const entry of entries) {
@@ -569,6 +574,8 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
+  // Redact only strings that look path-like after workspace substitution. This
+  // keeps ordinary model text readable while still removing local host details.
   if (
     workspaceRedacted !== value ||
     path.isAbsolute(workspaceRedacted) ||
@@ -627,6 +634,8 @@ function redactTrajectoryExportObjectKeys(
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    // Object keys can contain file paths or tool payload snippets too. Preserve
+    // all entries even when redaction collapses two original keys together.
     next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
       entry,
       redaction,
@@ -728,6 +737,8 @@ function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] 
       return collectPotentialPathStrings(event.data?.arguments);
     }),
   );
+  // Skill invocation is inferred from tool-call file paths in captured prompts;
+  // this keeps the export self-contained without re-reading skill state later.
   const normalizedInvokedPaths = new Set(
     [...invokedPaths].map((value) => normalizePathForMatch(value)),
   );
@@ -920,6 +931,8 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
+// Public export API used by CLI/tests. The bundle is intentionally sanitized
+// before writing so sharing it should not expose credentials or local paths.
 export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;

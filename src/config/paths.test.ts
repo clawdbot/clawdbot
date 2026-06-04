@@ -1,3 +1,4 @@
+// Covers config path resolution across env, home, and agent roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Native delivery contract for approval prompts and responses.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeSurface,
@@ -11,12 +12,14 @@ import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 
+/** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {
   surface: ChannelApprovalNativeSurface;
   target: ChannelApprovalNativeTarget;
   reason: "preferred" | "fallback";
 };
 
+/** Complete native approval routing plan, including optional origin-chat notice state. */
 export type ChannelApprovalNativeDeliveryPlan = {
   targets: ChannelApprovalNativePlannedTarget[];
   originTarget: ChannelApprovalNativeTarget | null;
@@ -34,11 +37,13 @@ function dedupeTargets(
       continue;
     }
     seen.add(key);
+    // Keep the first surface/reason so origin-preferred plans stay stable when DM targets overlap.
     deduped.push(target);
   }
   return deduped;
 }
 
+/** Resolves the origin and approver-DM targets a channel should use for native approvals. */
 export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;

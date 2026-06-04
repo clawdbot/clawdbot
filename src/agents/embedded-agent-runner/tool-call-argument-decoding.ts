@@ -3,6 +3,12 @@ import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
 
+/**
+ * Decodes HTML entities inside streamed tool-call arguments before downstream execution.
+ *
+ * Some providers HTML-escape JSON-ish argument strings in tool-call content blocks; this wrapper
+ * repairs only arguments, preserving user-facing assistant text exactly as emitted.
+ */
 const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 
 function decodeHtmlEntities(value: string): string {
@@ -24,6 +30,7 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#(\d+);/gi, (_, dec: string) => decodeNumericEntity(dec, 10));
 }
 
+/** Recursively decodes common HTML entities in string leaves of an object graph. */
 export function decodeHtmlEntitiesInObject(value: unknown): unknown {
   if (typeof value === "string") {
     return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
@@ -65,6 +72,8 @@ function wrapStreamMessageObjects(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  // Patch both final result and streamed partial/message events. Tool execution can consume either
+  // path depending on provider wrapper shape, so one-sided decoding would leave escaped args live.
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
       const iterator = originalAsyncIterator();
@@ -89,6 +98,7 @@ function wrapStreamMessageObjects(
   return stream;
 }
 
+/** Wraps a stream function so tool-call arguments are decoded before consumers inspect them. */
 export function createHtmlEntityToolCallArgumentDecodingWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {

@@ -5,6 +5,8 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
 const GATEWAY_SERVICE_KIND = "gateway";
 
+// Doctor/startup warning shape for shells where OPENCLAW_GATEWAY_TOKEN would
+// make direct clients use a different token than the managed gateway service.
 export type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
   title: string;
@@ -14,6 +16,7 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/** Returns a warning when env token precedence can diverge from configured gateway auth. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;

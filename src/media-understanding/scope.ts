@@ -15,10 +15,12 @@ function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecisi
   return undefined;
 }
 
+/** Normalizes channel/direct chat type aliases used by media-understanding scope rules. */
 export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
   return normalizeChatType(raw ?? undefined);
 }
 
+/** Evaluates ordered media-understanding scope rules against channel, chat type, and session key. */
 export function resolveMediaUnderstandingScope(params: {
   scope?: MediaUnderstandingScopeConfig;
   sessionKey?: string;

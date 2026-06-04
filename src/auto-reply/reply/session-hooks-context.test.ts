@@ -1,3 +1,4 @@
+// Tests context passed to session lifecycle hooks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Verifies web-search credential presence checks for plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

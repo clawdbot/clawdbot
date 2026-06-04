@@ -16,6 +16,9 @@ import {
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
+// Node connect reconciliation turns declared caps/commands/permissions into the
+// effective runtime surface. New or upgraded surfaces create a pending pairing
+// request while already-approved surfaces are intersected with the declaration.
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
   declaredCaps: string[];
@@ -37,6 +40,8 @@ function resolveApprovedReconnectCommands(params: {
   });
 }
 
+// Permissions are sorted before comparison/results so reconnects are stable
+// even when clients send JSON object keys in different orders.
 function normalizePermissionMap(
   value: Record<string, boolean> | undefined,
 ): Record<string, boolean> | undefined {
@@ -101,12 +106,13 @@ function buildNodePairingRequestInput(params: {
   };
 }
 
+/** Reconciles a connecting node against stored approval and requests pairing when needed. */
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
-  requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
+  requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
   const policyNode = {
@@ -136,6 +142,9 @@ export async function reconcileNodePairingOnConnect(params: {
         remoteIp: params.reportedClientIp,
       }),
     );
+    if (!pendingPairing) {
+      throw new Error("node pairing request required");
+    }
     return {
       nodeId,
       declaredCaps,
@@ -177,6 +186,8 @@ export async function reconcileNodePairingOnConnect(params: {
     declared: declaredPermissions,
   });
 
+  // A reconnect may use only the intersection of old approval and new
+  // declaration until the upgraded caps/commands/permissions are approved.
   if (hasCommandUpgrade || hasCapabilityChange || hasPermissionChange) {
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
@@ -196,7 +207,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCommands: effectiveApprovedDeclaredCommands,
       declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
-      pendingPairing,
+      ...(pendingPairing ? { pendingPairing } : {}),
     };
   }
 

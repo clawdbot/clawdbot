@@ -239,13 +239,29 @@ function runCommand(command, args, options = {}) {
     const stdout = createOutputCapture("stdout");
     const stderr = createOutputCapture("stderr");
     let timedOut = false;
+    let aborted = false;
     let killTimer;
+    const abort = () => {
+      if (childHasExited(child)) {
+        return;
+      }
+      aborted = true;
+      terminateProcessTree(child, "SIGTERM");
+      killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
+      killTimer.unref();
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, "SIGTERM");
       killTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
       killTimer.unref();
     }, timeoutMs);
+    const abortSignal = options.signal;
+    if (abortSignal?.aborted) {
+      abort();
+    } else {
+      abortSignal?.addEventListener("abort", abort, { once: true });
+    }
     child.stdout?.on("data", (chunk) => {
       stdout.append(chunk);
     });
@@ -275,6 +291,7 @@ function runCommand(command, args, options = {}) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
       reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
     });
@@ -283,8 +300,13 @@ function runCommand(command, args, options = {}) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
       const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      if (aborted) {
+        reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
+        return;
+      }
       if (timedOut) {
         terminateProcessTree(child, "SIGKILL");
         reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
@@ -665,30 +687,65 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
   child.stderr.on("data", (chunk) => {
     stderr.append(chunk);
   });
+  const gatewayExit = new Promise((resolve) => {
+    child.once("error", (error) => {
+      resolve({
+        kind: "gateway-error",
+        error: error instanceof Error ? error : new Error(formatErrorMessage(error)),
+      });
+    });
+    child.once("exit", (code, signal) => {
+      resolve({ kind: "gateway-exit", code, signal });
+    });
+  });
   const started = Date.now();
   let lastHealthResult;
   let lastHealthError;
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
+    if (childHasExited(child)) {
+      const exit = child.signalCode ? `signal ${child.signalCode}` : `code ${child.exitCode}`;
       throw new Error(
-        scrub(
-          `gateway exited during startup (${child.exitCode})\n${stderr.text() || stdout.text()}`,
-        ),
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
     }
     const remainingMs = remainingDeadlineMs(started, READY_TIMEOUT_MS);
-    try {
-      const health = await gatewayCall(
-        envCtx.env,
-        port,
-        token,
-        "health",
-        {},
-        {
-          allowFailure: true,
-          timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
-        },
+    const healthAbort = new AbortController();
+    const healthProbe = (async () => {
+      try {
+        const health = await gatewayCall(
+          envCtx.env,
+          port,
+          token,
+          "health",
+          {},
+          {
+            allowFailure: true,
+            signal: healthAbort.signal,
+            timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
+          },
+        );
+        return { kind: "health", health };
+      } catch (error) {
+        return { kind: "health-error", error };
+      }
+    })();
+    const outcome = await Promise.race([healthProbe, gatewayExit]);
+    if (outcome.kind === "gateway-error") {
+      healthAbort.abort();
+      throw new Error(scrub(`gateway failed to start: ${outcome.error.message}`));
+    }
+    if (outcome.kind === "gateway-exit") {
+      healthAbort.abort();
+      const exit = outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.code}`;
+      throw new Error(
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
+    }
+    try {
+      if (outcome.kind === "health-error") {
+        throw outcome.error;
+      }
+      const health = outcome.health;
       lastHealthResult = health;
       if (health.code === 0) {
         return {
@@ -813,7 +870,11 @@ async function gatewayCall(env, port, token, method, params = {}, options = {}) 
       OPENCLAW_STATE_DIR: clientStateDir,
       OPENCLAW_HOME: clientStateDir,
     },
-    { timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000, allowFailure: options.allowFailure },
+    {
+      timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000,
+      allowFailure: options.allowFailure,
+      signal: options.signal,
+    },
   );
 }
 

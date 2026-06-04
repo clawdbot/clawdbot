@@ -1,26 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+} from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
-import {
-  connectOk,
-  installGatewayTestHooks,
-  rpcReq,
-  startServerWithClient,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
+import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
-let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
-let sessionStoreDir: string;
-let sessionStorePath: string;
+const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-subagent-delivery-ctx-");
 
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
@@ -30,8 +22,8 @@ const createStubChannelPlugin = (params: {
     id: params.id,
     label: params.label,
   }),
-  outbound: {
-    deliveryMode: "direct",
+  outbound: createDirectOutboundTestAdapter({
+    channel: params.id,
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim() ?? "";
       if (trimmed) {
@@ -39,9 +31,7 @@ const createStubChannelPlugin = (params: {
       }
       return { ok: false, error: new Error(`missing target for ${params.id}`) };
     },
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  }),
 });
 
 const defaultRegistry = createRegistry([
@@ -51,21 +41,6 @@ const defaultRegistry = createRegistry([
     plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
   },
 ]);
-
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
-  ws = started.ws;
-  await connectOk(ws);
-  sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-subagent-delivery-ctx-"));
-  sessionStorePath = path.join(sessionStoreDir, "sessions.json");
-});
-
-afterAll(async () => {
-  ws.close();
-  await server.close();
-  await fs.rm(sessionStoreDir, { recursive: true, force: true });
-});
 
 type StoredEntry = {
   route?: {
@@ -85,7 +60,7 @@ type StoreEntries = Parameters<typeof writeSessionStore>[0]["entries"];
 
 async function prepareSessionStore(entries: StoreEntries = {}): Promise<void> {
   setRegistry(defaultRegistry);
-  testState.sessionStorePath = sessionStorePath;
+  testState.sessionStorePath = gatewaySuite.sessionStorePath;
   await writeSessionStore({ entries });
 }
 
@@ -105,7 +80,7 @@ function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliv
 }
 
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
-  const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+  const stored = JSON.parse(await fs.readFile(gatewaySuite.sessionStorePath, "utf-8")) as Record<
     string,
     StoredEntry
   >;
@@ -113,7 +88,7 @@ async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
 }
 
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {
-  const res = await rpcReq(ws, "agent", {
+  const res = await rpcReq(gatewaySuite.ws, "agent", {
     deliver: false,
     ...params,
   });

@@ -1,3 +1,4 @@
+// Covers system-run command formatting and consistency checks.
 import { describe, expect, test } from "vitest";
 import {
   extractShellCommandFromArgv,

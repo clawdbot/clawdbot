@@ -1,3 +1,9 @@
+/**
+ * Lazy public entrypoint for the gateway server implementation.
+ *
+ * Keeping `server.impl` behind dynamic import lets light-weight callers import
+ * server types and helpers without paying the full startup dependency graph.
+ */
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server.impl.js";
 
@@ -21,6 +27,7 @@ async function loadServerImpl() {
   }
 }
 
+/** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
   ...args: Parameters<typeof import("./server.impl.js").startGatewayServer>
 ): ReturnType<typeof import("./server.impl.js").startGatewayServer> {
@@ -28,6 +35,7 @@ export async function startGatewayServer(
   return await mod.startGatewayServer(...args);
 }
 
+/** Clears the server implementation's model-catalog cache between tests. */
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const mod = await loadServerImpl();
   await mod.resetModelCatalogCacheForTest();

@@ -1,3 +1,4 @@
+/** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatTranscriptArtifacts,

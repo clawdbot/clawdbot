@@ -4,10 +4,14 @@ import {
 } from "../shared/number-coercion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+// Shared subagent timeout math. Timer delays and duration/deadline values are
+// resolved separately because setTimeout has stricter safe bounds.
+/** Convert subagent timeout seconds to a timer-safe delay. */
 export function resolveSubagentRunTimerDelayMs(timeoutSeconds: unknown): number | undefined {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }
 
+/** Convert subagent timeout seconds to a finite millisecond duration. */
 export function resolveSubagentRunDurationMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
@@ -20,6 +24,7 @@ export function resolveSubagentRunDurationMs(timeoutSeconds: unknown): number | 
   return Number.isSafeInteger(durationMs) && durationMs > 0 ? durationMs : undefined;
 }
 
+/** Resolve the absolute timeout deadline for a subagent run. */
 export function resolveSubagentRunDeadlineMs(
   entry: Pick<SubagentRunRecord, "createdAt" | "startedAt" | "runTimeoutSeconds">,
   observedStartedAt?: number,

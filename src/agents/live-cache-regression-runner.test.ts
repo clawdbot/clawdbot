@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { testing } from "./live-cache-regression-runner.js";
+import { ProviderAuthError } from "./model-auth-runtime-shared.js";
+import {
+  LiveCachePrerequisiteSkip,
+  toLiveCachePrerequisiteSkip,
+} from "./live-cache-test-support.js";
 
 describe("live cache regression runner", () => {
   it("keeps OpenAI image cache floors observable without blocking release validation", () => {
@@ -82,6 +87,85 @@ describe("live cache regression runner", () => {
         1,
       ),
     ).toBe(false);
+  });
+
+  it("keeps missing optional live-cache prerequisites non-blocking", async () => {
+    const regressions: string[] = [];
+    const warnings: string[] = [];
+    const summary: Record<string, Record<string, unknown>> = {
+      anthropic: {},
+      openai: {},
+    };
+
+    const resolved = await testing.resolveLiveCacheProviderPool({
+      config: {
+        provider: "openai",
+        api: "openai-responses",
+        envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+        preferredModelIds: ["gpt-5.5"],
+      },
+      resolver: async () => {
+        throw new LiveCachePrerequisiteSkip(
+          "openai",
+          "No openai openai-responses model available in registry.",
+        );
+      },
+      regressions,
+      summary,
+      warnings,
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(regressions).toStrictEqual([]);
+    expect(warnings).toEqual([
+      "openai skipped: No openai openai-responses model available in registry.",
+    ]);
+    expect(summary.openai).toEqual({ skipped: true });
+  });
+
+  it("keeps missing Anthropic live-cache prerequisites blocking", async () => {
+    const regressions: string[] = [];
+    const warnings: string[] = [];
+    const summary: Record<string, Record<string, unknown>> = {
+      anthropic: {},
+      openai: {},
+    };
+
+    const resolved = await testing.resolveLiveCacheProviderPool({
+      config: {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+        preferredModelIds: ["claude-sonnet-4-6"],
+      },
+      resolver: async () => {
+        throw new LiveCachePrerequisiteSkip(
+          "anthropic",
+          "No anthropic anthropic-messages model available in registry.",
+        );
+      },
+      regressions,
+      summary,
+      warnings,
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(regressions).toEqual([
+      "anthropic skipped: No anthropic anthropic-messages model available in registry.",
+    ]);
+    expect(warnings).toStrictEqual([]);
+    expect(summary.anthropic).toEqual({ skipped: true });
+  });
+
+  it("classifies missing provider auth as a live-cache prerequisite", () => {
+    const skip = toLiveCachePrerequisiteSkip(
+      "openai",
+      new ProviderAuthError("missing-provider-auth", "openai", "No API key found."),
+    );
+
+    expect(skip).toBeInstanceOf(LiveCachePrerequisiteSkip);
+    expect(skip?.provider).toBe("openai");
+    expect(skip?.message).toBe("No API key found.");
   });
 
   it("retries a cache probe twice when provider text misses the sentinel", () => {

@@ -1,3 +1,6 @@
+/**
+ * Shared gateway-token session rotation tests.
+ */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {

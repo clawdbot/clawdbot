@@ -1,3 +1,6 @@
+/**
+ * Tests approval client helper filters and target recipient matching.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createChannelExecApprovalProfile,

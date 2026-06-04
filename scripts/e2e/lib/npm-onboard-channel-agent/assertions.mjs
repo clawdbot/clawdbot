@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -8,13 +9,75 @@ import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const ansiEscapePattern = new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, "g");
+
+function stripAnsi(text) {
+  return text.replace(ansiEscapePattern, "");
+}
+
+const statusSectionTitles = new Set([
+  "openclaw status",
+  "overview",
+  "plugin compatibility",
+  "model selection",
+  "security audit",
+  "channels",
+  "sessions",
+  "system events",
+  "health",
+  "usage",
+]);
+
+function normalizedStatusHeading(line) {
+  return stripAnsi(line)
+    .trim()
+    .replace(/^#+\s*/, "")
+    .trim()
+    .toLowerCase();
+}
+
+function extractStatusSection(text, title) {
+  const target = title.toLowerCase();
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => normalizedStatusHeading(line) === target);
+  if (start === -1) {
+    return null;
+  }
+  const section = [];
+  for (const line of lines.slice(start + 1)) {
+    const normalized = normalizedStatusHeading(line);
+    if (normalized && statusSectionTitles.has(normalized)) {
+      break;
+    }
+    section.push(line);
+  }
+  return stripAnsi(section.join("\n"));
+}
+
+function readAuthProfileStoreText(agentDir) {
+  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
 
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const authPath = path.join(agentDir, "auth-profiles.json");
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
@@ -22,14 +85,14 @@ function assertOnboardState() {
   if (!fs.existsSync(agentDir)) {
     throw new Error("onboard did not create main agent dir");
   }
-  if (!fs.existsSync(authPath)) {
-    throw new Error("onboard did not create auth-profiles.json");
+  const authStoreText = readAuthProfileStoreText(agentDir);
+  if (!authStoreText) {
+    throw new Error("onboard did not persist auth profile store");
   }
-  const authRaw = fs.readFileSync(authPath, "utf8");
-  if (!authRaw.includes("OPENAI_API_KEY")) {
+  if (!authStoreText.includes("OPENAI_API_KEY")) {
     throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
   }
-  if (authRaw.includes("sk-openclaw-npm-onboard-e2e")) {
+  if (authStoreText.includes("sk-openclaw-npm-onboard-e2e")) {
     throw new Error("auth profile persisted the raw OpenAI test key");
   }
 }
@@ -88,20 +151,44 @@ function assertMockModelConfig() {
 function assertChannelConfig() {
   const channel = process.argv[3];
   const expectedTokens = process.argv.slice(4);
-  if (expectedTokens.length === 0) {
-    throw new Error("assert-channel-config requires at least one expected token");
-  }
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const entry = cfg.channels?.[channel];
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  const serializedEntry = JSON.stringify(entry);
-  for (const token of expectedTokens) {
-    if (!serializedEntry.includes(token)) {
-      throw new Error(`${channel} token was not persisted`);
+  const assertTokenField = (field, expected) => {
+    if (entry[field] !== expected) {
+      throw new Error(
+        `${channel} config did not persist ${field}; expected ${expected}, got ${JSON.stringify(entry[field])}`,
+      );
     }
+  };
+  switch (channel) {
+    case "telegram": {
+      if (expectedTokens.length !== 1) {
+        throw new Error("telegram channel config assertion requires one bot token");
+      }
+      assertTokenField("botToken", expectedTokens[0]);
+      return;
+    }
+    case "discord": {
+      if (expectedTokens.length !== 1) {
+        throw new Error("discord channel config assertion requires one bot token");
+      }
+      assertTokenField("token", expectedTokens[0]);
+      return;
+    }
+    case "slack": {
+      if (expectedTokens.length !== 2) {
+        throw new Error("slack channel config assertion requires bot and app tokens");
+      }
+      assertTokenField("botToken", expectedTokens[0]);
+      assertTokenField("appToken", expectedTokens[1]);
+      return;
+    }
+    default:
+      throw new Error(`unsupported channel config assertion: ${channel}`);
   }
 }
 
@@ -122,8 +209,14 @@ function assertStatusSurfaces() {
   if (!/channels/i.test(statusText)) {
     throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
   }
-  if (!statusText.toLowerCase().includes(channel.toLowerCase())) {
-    throw new Error(`plain status output did not mention ${channel}. Output: ${statusText}`);
+  const channelsSection = extractStatusSection(statusText, "channels");
+  if (!channelsSection) {
+    throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
+  }
+  if (!channelsSection.toLowerCase().includes(channel.toLowerCase())) {
+    throw new Error(
+      `plain status output did not mention ${channel} in the Channels section. Output: ${statusText}`,
+    );
   }
 }
 

@@ -1,3 +1,6 @@
+/**
+ * Tests channel inbound context and dispatch helper behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildChannelInboundEventContext,

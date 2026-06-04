@@ -1,3 +1,4 @@
+/** Reads ACP session status from the runtime and reconciles persisted identity metadata. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type {
   AcpRuntime,
@@ -16,6 +17,7 @@ import type {
 import { requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
+/** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

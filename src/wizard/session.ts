@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 
+// WizardSession exposes interactive setup as a step/answer protocol for remote
+// clients while reusing the same WizardPrompter contract as the local CLI.
 export type WizardStepOption = {
   value: unknown;
   label: string;
@@ -160,6 +162,8 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
+    // Each emitted step receives an id so remote clients can answer the exact
+    // pending prompt and stale answers can be rejected.
     return await this.session.awaitAnswer({
       ...step,
       id: randomUUID(),
@@ -219,6 +223,8 @@ export class WizardSession {
     this.error = "cancelled";
     this.currentStep = null;
     for (const [, deferred] of this.answerDeferred) {
+      // Reject all pending prompt promises so the runner can unwind through its
+      // normal cancellation path.
       deferred.reject(new WizardCancelledError());
     }
     this.answerDeferred.clear();
@@ -260,6 +266,8 @@ export class WizardSession {
   private resolveStep(step: WizardStep | null) {
     if (!this.stepDeferred) {
       if (step === null) {
+        // The runner can finish immediately after an answer before next() has
+        // installed a waiter; remember that terminal state for the next poll.
         this.pendingTerminalResolution = true;
       }
       return;

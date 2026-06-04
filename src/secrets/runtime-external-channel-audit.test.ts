@@ -1,3 +1,4 @@
+/** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

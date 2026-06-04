@@ -1,3 +1,10 @@
+/**
+ * Baseline floors for live prompt-cache regression tests.
+ *
+ * These numbers capture observed provider cache usage and the minimums that
+ * live validation should enforce or warn about for each cache lane.
+ */
+/** Per-lane cache evidence thresholds used by live cache regression checks. */
 export type LiveCacheFloor = {
   observedCacheRead?: number;
   observedCacheWrite?: number;
@@ -11,6 +18,7 @@ export type LiveCacheFloor = {
   warnOnly?: boolean;
 };
 
+/** Provider and lane-specific cache regression baseline. */
 export const LIVE_CACHE_REGRESSION_BASELINE = {
   anthropic: {
     disabled: {

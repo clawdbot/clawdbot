@@ -4,6 +4,8 @@ import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import type { CaptureBlobRecord } from "./types.js";
 
+// Capture blobs store request/response bodies by content hash, gzip-compressed
+// on disk, so repeated payloads can share one file across events.
 function ensureDir(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -30,6 +32,8 @@ export function writeCaptureBlob(params: {
   };
 }
 
+// Debug CLI reads blobs as UTF-8 previews. Binary payloads still remain
+// available via the compressed file path recorded in the blob metadata.
 export function readCaptureBlobText(blobPath: string): string {
   return gunzipSync(fs.readFileSync(blobPath)).toString("utf8");
 }

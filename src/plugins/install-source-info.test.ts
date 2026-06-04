@@ -1,3 +1,4 @@
+// Covers plugin install source info formatting and parsing.
 import { describe, expect, it } from "vitest";
 import { describePluginInstallSource } from "./install-source-info.js";
 

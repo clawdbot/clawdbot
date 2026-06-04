@@ -12,12 +12,14 @@ import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
 
+/** CLI/session-store target selection options. */
 export type SessionStoreSelectionOptions = {
   store?: string;
   agent?: string;
   allAgents?: boolean;
 };
 
+/** One session store path paired with its owning agent id. */
 export type SessionStoreTarget = {
   agentId: string;
   storePath: string;
@@ -60,6 +62,7 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   );
 }
 
+/** Lists agent ids whose session stores should be considered configured. */
 export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
   const addAcpAgentId = (agentId: string | undefined) => {
@@ -167,6 +170,7 @@ function toDiscoveredSessionStoreTarget(
   };
 }
 
+/** Resolves all configured and discoverable agent session stores synchronously. */
 export function resolveAllAgentSessionStoreTargetsSync(
   cfg: OpenClawConfig,
   params: { env?: NodeJS.ProcessEnv } = {},
@@ -233,6 +237,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
   return dedupeTargetsByStorePath([...validatedConfiguredTargets, ...discoveredTargets]);
 }
 
+/** Resolves session store targets for one agent, including retired/manual stores. */
 export function resolveAgentSessionStoreTargetsSync(
   cfg: OpenClawConfig,
   agentId: string,
@@ -318,6 +323,7 @@ export function resolveAgentSessionStoreTargetsSync(
   return dedupeTargetsByStorePath(targets);
 }
 
+/** Resolves all configured and discoverable agent session stores asynchronously. */
 export async function resolveAllAgentSessionStoreTargets(
   cfg: OpenClawConfig,
   params: { env?: NodeJS.ProcessEnv } = {},
@@ -401,6 +407,7 @@ export async function resolveAllAgentSessionStoreTargets(
   return dedupeTargetsByStorePath([...validatedConfiguredTargets, ...discoveredTargets]);
 }
 
+/** Resolves session store targets from explicit CLI-style selection options. */
 export function resolveSessionStoreTargets(
   cfg: OpenClawConfig,
   opts: SessionStoreSelectionOptions,

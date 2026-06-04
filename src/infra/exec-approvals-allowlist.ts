@@ -1,3 +1,4 @@
+// Evaluates exec approval allowlists and safe-bin usage.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,

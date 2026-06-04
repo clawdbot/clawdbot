@@ -1,3 +1,4 @@
+// Covers small-model risk audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSmallModelRiskFindings } from "./audit-extra.summary.js";

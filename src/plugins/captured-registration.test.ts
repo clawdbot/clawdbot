@@ -1,3 +1,4 @@
+// Covers captured plugin registration behavior in test registries.
 import { describe, expect, it } from "vitest";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";

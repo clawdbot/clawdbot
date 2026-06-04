@@ -1,3 +1,4 @@
+// Defines channel bot-loop protection configuration types.
 export type ChannelBotLoopProtectionConfig = {
   /** Enable pair loop protection for channels that support it. */
   enabled?: boolean;

@@ -1,3 +1,6 @@
+/**
+ * Shared HTTP fetch mock helpers for provider contract tests.
+ */
 import { afterEach, vi, type Mock } from "vitest";
 import type {
   fetchProviderDownloadResponse,

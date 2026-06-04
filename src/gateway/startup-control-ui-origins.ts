@@ -5,6 +5,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isContainerEnvironment } from "./net.js";
 
+/**
+ * Seeds runtime-only Control UI origins when a non-loopback gateway bind would
+ * otherwise reject the browser that just opened the local UI.
+ */
 export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   log: { info: (msg: string) => void; warn: (msg: string) => void };

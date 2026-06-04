@@ -1,3 +1,4 @@
+/** Parses AZURE_OPENAI_DEPLOYMENT_MAP-style model=deployment entries. */
 export function parseAzureDeploymentNameMap(value: string | undefined): Map<string, string> {
   const map = new Map<string, string>();
   if (!value) {
@@ -22,6 +23,7 @@ export function parseAzureDeploymentNameMap(value: string | undefined): Map<stri
   return map;
 }
 
+/** Resolves the Azure deployment name for a model id, falling back to the model id. */
 export function resolveAzureDeploymentNameFromMap(params: {
   modelId: string;
   deploymentMap?: string;

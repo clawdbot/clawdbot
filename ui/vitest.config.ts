@@ -9,6 +9,32 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
+const workspaceSourceAliases = [
+  {
+    find: /^@openclaw\/normalization-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
+  },
+  {
+    find: "@openclaw/normalization-core",
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/media-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
+  },
+  {
+    find: "@openclaw/media-core",
+    replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/net-policy\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
+  },
+  {
+    find: "@openclaw/net-policy",
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
+  },
+];
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
@@ -21,21 +47,15 @@ const nodeDrivenBrowserLayoutTests = [
 
 export default defineConfig({
   resolve: {
-    alias: [
-      {
-        find: /^@openclaw\/normalization-core\/(.+)$/u,
-        replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
-      },
-      {
-        find: /^@openclaw\/media-core\/(.+)$/u,
-        replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
-      },
-    ],
+    alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -47,6 +67,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -57,6 +80,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           name: "browser",

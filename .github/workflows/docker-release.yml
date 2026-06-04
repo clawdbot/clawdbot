@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-alpha.*"
     paths-ignore:
       - "docs/**"
       - "**/*.md"
@@ -38,7 +39,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
+          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
+            echo "Docker alpha image publishing is disabled."
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi

@@ -1,3 +1,6 @@
+/**
+ * Tests approval renderer payload and text formatting.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildApprovalPendingReplyPayload,

@@ -2,6 +2,10 @@ import path from "node:path";
 import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Resolve package-manager commands that Windows exposes through .cmd shims.
+ * Explicit extensions are preserved so callers can pass already-resolved tools.
+ */
 export function resolveWindowsCommandShim(params: {
   command: string;
   cmdCommands: readonly string[];

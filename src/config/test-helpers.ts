@@ -1,3 +1,4 @@
+// Provides config test helpers for temporary homes and fixture writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";

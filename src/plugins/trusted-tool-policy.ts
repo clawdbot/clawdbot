@@ -1,3 +1,4 @@
+// Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
@@ -18,12 +19,14 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
 
+/** Diagnostic entry for an installed trusted tool policy. */
 export type TrustedToolPolicyDiagnosticEntry = {
   id: string;
   pluginId: string;
   pluginName?: string;
 };
 
+/** True when the active plugin registry has trusted tool policies. */
 export function hasTrustedToolPolicies(): boolean {
   return copyTrustedPolicyRegistrations(getActivePluginRegistry()).length > 0;
 }
@@ -127,6 +130,7 @@ function trustedPolicyFailureResult(
   };
 }
 
+/** Lists trusted tool policies for status and diagnostics. */
 export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
   return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
     const entry: TrustedToolPolicyDiagnosticEntry = {
@@ -161,6 +165,7 @@ function normalizeToolIdentity(
   };
 }
 
+/** Runs trusted tool policies before a tool call and returns the first terminal decision. */
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
@@ -262,6 +267,7 @@ export async function runTrustedToolPolicies(
       continue;
     }
     try {
+      // Policies run in order; block decisions are terminal, mutations feed later policies.
       if ("allow" in decision && decision.allow === false) {
         return {
           block: true,

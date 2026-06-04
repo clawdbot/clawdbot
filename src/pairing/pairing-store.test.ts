@@ -1,3 +1,4 @@
+// Tests persisted pairing store lifecycle and challenge lookup.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";

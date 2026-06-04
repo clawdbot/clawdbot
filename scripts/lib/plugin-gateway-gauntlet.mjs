@@ -370,6 +370,7 @@ function buildGauntletPrebuildEnv(env, options = {}) {
       ? env
       : {
           ...env,
+          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
           ...runtimeOnlyPrebuildEnv,
           ...(buildIds.size > 0
             ? {
@@ -382,6 +383,7 @@ function buildGauntletPrebuildEnv(env, options = {}) {
   }
   return {
     ...env,
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
     ...runtimeOnlyPrebuildEnv,
     OPENCLAW_BUILD_PRIVATE_QA: "1",
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",

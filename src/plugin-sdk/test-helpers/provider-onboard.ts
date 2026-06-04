@@ -1,3 +1,6 @@
+/**
+ * Shared assertions for provider onboarding config migration and fallback behavior.
+ */
 import { expect } from "vitest";
 import {
   resolveAgentModelFallbackValues,

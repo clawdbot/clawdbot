@@ -1,3 +1,4 @@
+// Verifies graceful plugin init failure handling and reporting.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -20,6 +21,8 @@ const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 function isAbsolutePath(value: string): boolean {
+  // `path.isAbsolute` follows the host OS, but config files can be authored for Windows from
+  // macOS/Linux. Accept Windows forms explicitly so cross-platform config validation stays stable.
   return (
     path.isAbsolute(value) ||
     WINDOWS_ABS_PATH_PATTERN.test(value) ||
@@ -76,12 +79,14 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+/** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
 ]);
 
+/** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
 const SecretsEnvProviderSchema = z
@@ -161,17 +166,19 @@ const SecretsExecProviderSchema = z.union([
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
+/** Schema for one configured env/file/exec secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
 ]);
 
+/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
     providers: z
       .object({
-        // Keep this as a record so users can define multiple providers per source.
+        // Keep this as a record so users can define multiple named providers per source.
       })
       .catchall(SecretProviderSchema)
       .optional(),

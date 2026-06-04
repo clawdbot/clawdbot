@@ -9,6 +9,9 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
+// Voice-call labels for the SDK realtime fast-context resolver.
+
+/** Resolve fast-context consult data using caller-oriented labels. */
 export async function resolveRealtimeFastContextConsult(params: {
   cfg: OpenClawConfig;
   agentId: string;

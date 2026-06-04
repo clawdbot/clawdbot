@@ -1,3 +1,4 @@
+/** Queue handling mode for inbound channel messages. */
 export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 export type QueueDropPolicy = "old" | "new" | "summarize";
 

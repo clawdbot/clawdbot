@@ -1,3 +1,4 @@
+// APNs test-push command for iOS nodes.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -26,6 +27,7 @@ function normalizeEnvironment(value: unknown): "sandbox" | "production" | null {
   return null;
 }
 
+/** Register the node push-test command. */
 export function registerNodesPushCommand(nodes: Command) {
   nodesCallOpts(
     nodes

@@ -5,6 +5,8 @@ import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runt
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 
+// Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
+// are selectable here; built-in OpenClaw/default runtime ids are excluded.
 function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
   return normalizeOptionalAgentRuntimeId(value);
 }
@@ -17,6 +19,8 @@ function isSelectablePluginRuntime(runtime: string | undefined): runtime is stri
   );
 }
 
+// Agent model config accepts a direct string or primary/fallback object. Collect
+// all refs so fallback-only harness preferences still preload their plugin.
 function listAgentModelRefs(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -44,6 +48,8 @@ function pushAgentModelRefs(refs: string[], value: unknown): void {
   }
 }
 
+// Parses provider/model refs used in config maps before asking harness policy
+// which runtime owns that provider/model pair.
 function parseConfiguredModelRef(
   value: unknown,
 ): { provider: string; modelId: string } | undefined {
@@ -166,10 +172,12 @@ function pushConfiguredAgentModelRuntimeIds(
   }
 }
 
+/** Options for collecting configured agent harness runtimes. */
 export type ConfiguredAgentHarnessRuntimeOptions = {
   includeImplicitRuntimePreferences?: boolean;
 };
 
+/** Lists configured plugin harness runtime ids referenced by agent/model config. */
 export function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
   options: ConfiguredAgentHarnessRuntimeOptions = {},

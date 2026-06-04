@@ -92,7 +92,7 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
@@ -119,6 +119,7 @@ import {
   resolvePluginNodeCapabilityExpiresAtMs,
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
+import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -172,6 +173,12 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
 ]);
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
+class NodePairingRateLimitError extends Error {
+  constructor(readonly retryAfterMs: number) {
+    super("node pairing rate limited");
+  }
+}
+
 /** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
@@ -196,6 +203,32 @@ function resolveLocalNodeId(): string | null {
     cachedLocalNodeId = null;
   }
   return cachedLocalNodeId;
+}
+
+async function requestNodePairingFromConnect(params: {
+  input: Parameters<typeof requestNodePairing>[0];
+  rateLimiter?: AuthRateLimiter;
+  clientIp?: string;
+}): Promise<Awaited<ReturnType<typeof requestNodePairing>>> {
+  if (!params.rateLimiter) {
+    return await requestNodePairing(params.input);
+  }
+  return await withSerializedRateLimitAttempt({
+    ip: params.clientIp,
+    scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+    run: async () => {
+      const rateCheck = params.rateLimiter?.check(
+        params.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+      );
+      if (rateCheck && !rateCheck.allowed) {
+        throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
+      }
+      const result = await requestNodePairing(params.input);
+      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING);
+      return result;
+    },
+  });
 }
 
 export type WsOriginCheckMetrics = {
@@ -1580,13 +1613,45 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
         if (role === "node") {
-          const reconciliation = await reconcileNodePairingOnConnect({
-            cfg: getRuntimeConfig(),
-            connectParams,
-            pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
-            reportedClientIp,
-            requestPairing: async (input) => await requestNodePairing(input),
-          });
+          let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
+          const pairedNode = await getPairedNode(
+            connectParams.device?.id ?? connectParams.client.id,
+          );
+          try {
+            reconciliation = await reconcileNodePairingOnConnect({
+              cfg: getRuntimeConfig(),
+              connectParams,
+              pairedNode,
+              reportedClientIp,
+              requestPairing: async (input) => {
+                try {
+                  return await requestNodePairingFromConnect({
+                    input,
+                    rateLimiter: authRateLimiter,
+                    clientIp: browserRateLimitClientIp,
+                  });
+                } catch (error) {
+                  if (error instanceof NodePairingRateLimitError && pairedNode) {
+                    // Paired upgrade reconnects can keep their approved surface;
+                    // only the fresh pending request is throttled here.
+                    return null;
+                  }
+                  throw error;
+                }
+              },
+            });
+          } catch (error) {
+            if (error instanceof NodePairingRateLimitError) {
+              rejectUnauthorized({
+                ok: false,
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: error.retryAfterMs,
+              });
+              return;
+            }
+            throw error;
+          }
           if (reconciliation.pendingPairing?.created) {
             const requestContext = buildRequestContext();
             const resolvedAt = Date.now();

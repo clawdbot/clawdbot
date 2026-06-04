@@ -1,3 +1,4 @@
+// Covers the process-global embedded mode flag.
 import { afterEach, describe, expect, it } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "./embedded-mode.js";
 

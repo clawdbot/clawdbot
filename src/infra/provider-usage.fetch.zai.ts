@@ -1,3 +1,4 @@
+// Fetches and normalizes Z.ai provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,

@@ -2,11 +2,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
+/** Resolves the private transcript path for an internal session-effect run. */
 export function resolveInternalSessionEffectsTranscriptPath(runId: string): string {
   const safeRunId = runId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "run";
   return path.join(resolveStateDir(), "internal-agent-runs", `${safeRunId}.jsonl`);
 }
 
+/** Copies or creates a private transcript for internal session-effect recovery. */
 export async function prepareInternalSessionEffectsTranscript(params: {
   sessionFile?: string;
   runId: string;
@@ -34,6 +36,7 @@ export async function prepareInternalSessionEffectsTranscript(params: {
   return sessionFile;
 }
 
+/** Removes an internal session-effect transcript if it is inside the owned dir. */
 export async function removeInternalSessionEffectsTranscript(
   sessionFile: string | undefined,
 ): Promise<void> {

@@ -8,6 +8,8 @@ import {
   resolveConfigWriteTargetFromPath,
 } from "../../config-writes.js";
 
+// Reusable config-write authorization contract suites. They prove origin and
+// target channel/account policy are resolved before plugin writes mutate config.
 const demoOriginChannelId = "demo-origin";
 const demoTargetChannelId = "demo-target";
 
@@ -85,6 +87,7 @@ function expectFormattedDeniedMessage(
   ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
 }
 
+/** Installs policy tests for allowed, denied, and bypassed config writes. */
 export function describeChannelConfigWritePolicyContract() {
   describe("authorizeConfigWrite policy contract", () => {
     it.each([
@@ -136,6 +139,7 @@ export function describeChannelConfigWritePolicyContract() {
   });
 }
 
+/** Installs target-resolution tests for path-derived and explicit writes. */
 export function describeChannelConfigWriteTargetContract() {
   describe("authorizeConfigWrite target contract", () => {
     it.each([

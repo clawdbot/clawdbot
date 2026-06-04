@@ -1,3 +1,5 @@
+// Public barrel for media-understanding shared contracts and helpers.
+
 export * from "./active-model.js";
 export * from "./defaults.js";
 export * from "./errors.js";

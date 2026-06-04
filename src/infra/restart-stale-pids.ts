@@ -1,3 +1,4 @@
+// Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";

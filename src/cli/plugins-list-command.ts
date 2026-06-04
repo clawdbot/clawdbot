@@ -1,7 +1,9 @@
+// `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 
+/** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
@@ -35,6 +37,7 @@ async function loadHumanListModules() {
   };
 }
 
+/** Render installed plugin discovery state as JSON, compact table, or verbose text. */
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,

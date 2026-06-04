@@ -1,3 +1,4 @@
+// Parses shell commands into exec approval analysis segments.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import {

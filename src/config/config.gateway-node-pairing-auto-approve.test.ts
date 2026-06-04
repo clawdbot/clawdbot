@@ -1,3 +1,4 @@
+// Covers gateway node-pairing auto-approve config parsing.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 

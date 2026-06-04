@@ -2,15 +2,12 @@ import fs from "node:fs";
 import { readTextFileTail, tailText } from "./text-file-utils.mjs";
 
 const ERROR_DETAIL_TAIL_BYTES = 64 * 1024;
+const OUTPUT_SCAN_TAIL_BYTES = 2 * 1024 * 1024;
 const REPLY_TEXT_PREVIEW_BYTES = 8 * 1024;
 const REPLY_TEXT_PREVIEW_COUNT = 5;
 const REQUEST_LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const REQUEST_LOG_SCAN_CARRY_CHARS = 256;
 const OPENAI_REQUEST_PATH_PATTERN = /\/v1\/(responses|chat\/completions)/u;
-
-function readTextFile(file) {
-  return fs.readFileSync(file, "utf8");
-}
 
 function textByteLength(text) {
   return Buffer.byteLength(text, "utf8");
@@ -164,7 +161,7 @@ export function extractAgentReplyTexts(text) {
 }
 
 export function assertAgentReplyContainsMarker(marker, outputPath) {
-  const output = readTextFile(outputPath);
+  const output = readTextFileTail(outputPath, OUTPUT_SCAN_TAIL_BYTES);
   const replyTexts = extractAgentReplyTexts(output);
   if (replyTexts.some((text) => text.includes(marker))) {
     return;

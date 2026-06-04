@@ -1,3 +1,4 @@
+// Parses execution directives for approval, sandbox, and target settings.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ExecAsk,
@@ -7,6 +8,7 @@ import {
 } from "../../../infra/exec-approvals.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
+/** Parsed `/exec` directive state used to override execution policy for one turn. */
 type ExecDirectiveParse = {
   cleaned: string;
   hasDirective: boolean;
@@ -161,6 +163,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
   };
 }
 
+/** Extracts and removes `/exec` options from message text. */
 export function extractExecDirective(body?: string): ExecDirectiveParse {
   if (!body) {
     return {
@@ -189,6 +192,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
   const start = match.index + match[0].indexOf("/exec");
   const argsStart = start + "/exec".length;
   const parsed = parseExecDirectiveArgs(body.slice(argsStart));
+  // Remove only consumed key/value options so remaining text still reaches the agent.
   const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
   const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();
   return {

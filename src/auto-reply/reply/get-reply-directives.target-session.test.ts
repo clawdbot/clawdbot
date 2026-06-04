@@ -1,3 +1,4 @@
+/** Tests directive handling for target-session command turns. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";

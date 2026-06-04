@@ -1,3 +1,4 @@
+/** Tests vendored ACP SDK schema fixtures against valid and invalid protocol payloads. */
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import {
   zCloseSessionRequest,

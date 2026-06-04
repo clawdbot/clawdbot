@@ -1,3 +1,4 @@
+// Stores plugin runtime registry state for the current process lifecycle.
 import type { PluginRegistry } from "./registry-types.js";
 
 export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");

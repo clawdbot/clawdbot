@@ -85,10 +85,7 @@ const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
 );
-const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
-  1_000,
-  toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
-);
+const GATEWAY_LIVE_SETUP_TIMEOUT_MS = resolveGatewayLiveSetupTimeoutMs();
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS = resolveGatewayLiveSessionControlTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
@@ -212,6 +209,12 @@ function toInt(value: string | undefined, fallback: number): number {
   }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function resolveGatewayLiveSetupTimeoutMs(
+  raw = process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(1_000, toInt(raw, 180_000));
 }
 
 function resolveGatewayLiveMaxModels(): number {
@@ -755,6 +758,14 @@ describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
 });
 
 describe("gateway live timeout floors", () => {
+  it("defaults setup budget above slow ARM model discovery", () => {
+    expect(resolveGatewayLiveSetupTimeoutMs("")).toBe(180_000);
+  });
+
+  it("keeps explicit shorter setup budgets available for targeted probes", () => {
+    expect(resolveGatewayLiveSetupTimeoutMs("60000")).toBe(60_000);
+  });
+
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);

@@ -1,5 +1,8 @@
 {
   "fallbackKeys": [
+    "skillWorkshop.header.useCurrentChat",
+    "skillWorkshop.header.useCurrentChatAria",
+    "skillWorkshop.header.useCurrentChatTooltip",
     "workboard.dependencies",
     "workboard.dependenciesBlocked",
     "workboard.dependenciesBlockedTitle",
@@ -29,12 +32,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-01T07:19:24.054Z",
+  "generatedAt": "2026-06-03T22:35:03.206Z",
   "locale": "tr",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "0639815f4b249fd84b5149556602c9e5da1136d73a747f26a1c12981a4319ebb",
-  "totalKeys": 1330,
+  "sourceHash": "045696b27bf36b4d0ef74cfd8ec76124de70c9bcef7ca7cb378a0d07f1bdfa61",
+  "totalKeys": 1333,
   "translatedKeys": 1302,
   "workflow": 1
 }

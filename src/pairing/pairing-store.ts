@@ -1,3 +1,4 @@
+// Persists pairing challenges and approved channel account bindings.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

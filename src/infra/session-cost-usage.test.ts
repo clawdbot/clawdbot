@@ -1,3 +1,4 @@
+// Covers session cost and usage summary loading.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

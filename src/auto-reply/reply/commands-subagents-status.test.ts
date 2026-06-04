@@ -1,3 +1,4 @@
+// Tests subagent status command output and active run summaries.
 import { beforeEach, describe, expect, it } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import {

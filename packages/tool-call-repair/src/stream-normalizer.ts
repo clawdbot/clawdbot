@@ -11,26 +11,36 @@ import {
 } from "./grammar.js";
 
 export type PlainTextToolCallNameMatcher = {
+  /** True only when the candidate is a complete tool name this request may repair. */
   hasExactName(name: string): boolean;
+  /** True while streamed bytes still match at least one repairable tool name prefix. */
   hasNamePrefix(prefix: string): boolean;
 };
 
+/** Result of repairing the final message carried by a provider stream `done` event. */
 export type PlainTextToolCallMessageNormalization =
   | { kind: "promoted" | "scrubbed"; message: Record<string, unknown> }
   | undefined;
 
+/** Stream-level hooks used to promote leaked text tool calls into provider events. */
 export type PlainTextToolCallStreamNormalizerOptions = {
+  /** Expands a promoted final message into provider-native tool-call stream events. */
   createPromotedToolCallEvents(message: Record<string, unknown>): Iterable<unknown>;
+  /** Tool-name matcher scoped to the exact request being normalized. */
   matcher: PlainTextToolCallNameMatcher;
+  /** Repairs or scrubs the final done-message snapshot after text buffering completes. */
   normalizeDoneMessage(params: {
     message: unknown;
     reason: unknown;
   }): PlainTextToolCallMessageNormalization;
+  /** Stop after the first normalized done event when the wrapped provider has completed. */
   stopAfterDone?: boolean;
 };
 
 const TEXT_TOOL_CALL_BUFFER_MAX_CHARS = 256_000;
 
+// Keep a bounded prefix plus enough tail to notice closing markers after the cap;
+// otherwise a huge leaked payload could either grow unbounded or lose the visible suffix.
 const TEXT_TOOL_CALL_SUPPRESSED_SCAN_MAX_CHARS = TEXT_TOOL_CALL_BUFFER_MAX_CHARS + 64_000;
 const TEXT_TOOL_CALL_SUPPRESSED_TAIL_CHARS =
   TEXT_TOOL_CALL_SUPPRESSED_SCAN_MAX_CHARS - TEXT_TOOL_CALL_BUFFER_MAX_CHARS;
@@ -941,6 +951,7 @@ function scrubReclassifiedMixedTextFromError(
   };
 }
 
+/** Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap. */
 export function scrubOverCapPlainTextToolCallMessage(params: {
   candidateText: string | undefined;
   matcher: PlainTextToolCallNameMatcher;
@@ -1039,6 +1050,7 @@ function isBufferedTextEvent(bufferedEvent: unknown): boolean {
   );
 }
 
+/** Buffers provider stream text long enough to promote or hide leaked plain-text tool calls. */
 export async function* normalizePlainTextToolCallStreamEvents(
   source: AsyncIterable<unknown>,
   options: PlainTextToolCallStreamNormalizerOptions,
@@ -1121,6 +1133,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
         continue;
       }
       if (suppressingOverCapTextToolCall) {
+        // Once the tentative tool call exceeds the cap, suppress text deltas until a closing
+        // marker proves whether the buffered prefix was a hidden call or mixed visible text.
         if (hasSuppressedTextContentIndex && record.contentIndex !== suppressedTextContentIndex) {
           if (isAllowedTextToolCallLikeEvent(record, options.matcher)) {
             continue;
@@ -1171,6 +1185,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
             ? stripSerializedToolCallPrefixes(bufferedText.trimStart(), options.matcher)
             : null;
         if (visibleText?.trim()) {
+          // A tool-call prefix followed by visible text must be reclassified: emit only the
+          // suffix now, then scrub the final done/error snapshots to match that stream history.
           yield* flushScrubbedBufferedNonTextEvents(true);
           reclassifiedMixedTextContentIndex = record.contentIndex;
           hasReclassifiedMixedTextContentIndex = true;

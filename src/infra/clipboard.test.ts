@@ -1,3 +1,4 @@
+// Covers platform clipboard command selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());

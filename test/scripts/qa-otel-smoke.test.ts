@@ -100,6 +100,92 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(captured.traces?.[0]).not.toContain("a".repeat(20));
   });
 
+  it("returns a bounded failure for malformed local OTLP protobuf", async () => {
+    const receiver = testing.startLocalOtlpReceiver(["OTEL-QA-SECRET"]);
+    const port = await receiver.listen();
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/traces`, {
+        method: "POST",
+        headers: { "content-type": "application/x-protobuf" },
+        body: Buffer.concat([Buffer.from([0x0a]), Buffer.from("OTEL-QA-SECRET")]),
+      });
+      const text = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(text).toContain("truncated protobuf");
+      expect(receiver.capturedRequests).toEqual([
+        {
+          path: "/v1/traces",
+          signal: "traces",
+          bytes: 15,
+          contentEncoding: undefined,
+          status: 400,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        },
+      ]);
+      expect(receiver.capturedBodyText.traces).toEqual([
+        "[detected leak needle] OTEL-QA-SECRET",
+        "\nOTEL-QA-SECRET",
+      ]);
+    } finally {
+      await receiver.close();
+    }
+  });
+
+  it("rejects truncated unknown fixed-width protobuf fields", async () => {
+    const receiver = testing.startLocalOtlpReceiver();
+    const port = await receiver.listen();
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/traces`, {
+        method: "POST",
+        headers: { "content-type": "application/x-protobuf" },
+        body: Buffer.from([0x09]),
+      });
+      const text = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(text).toContain("truncated protobuf fixed64");
+      expect(receiver.capturedRequests).toMatchObject([
+        {
+          path: "/v1/traces",
+          signal: "traces",
+          bytes: 1,
+          status: 400,
+        },
+      ]);
+    } finally {
+      await receiver.close();
+    }
+  });
+
+  it("fails smoke assertions for captured non-2xx OTLP requests", () => {
+    const assertion = testing.assertSmoke({
+      bodyText: {},
+      childExitCode: 0,
+      disallowedBodyNeedles: [],
+      logRecords: [],
+      metrics: [],
+      requests: [
+        {
+          path: "/v1/traces",
+          signal: "traces",
+          bytes: 15,
+          contentEncoding: undefined,
+          status: 400,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        },
+      ],
+      spans: [],
+    });
+
+    expect(assertion.passed).toBe(false);
+    expect(assertion.failures).toContain("OTLP traces request /v1/traces returned status 400");
+  });
+
   it("preserves leak markers even when later body text is truncated", () => {
     const captured: { traces?: string[] } = {};
 

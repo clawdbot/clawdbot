@@ -552,7 +552,12 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
-  if (commandCase.id !== "configGetGatewayPort" && commandCase.id !== "gatewayHealthJson") {
+  if (
+    commandCase.id !== "configGetGatewayPort" &&
+    commandCase.id !== "gatewayHealthJson" &&
+    commandCase.id !== "health" &&
+    commandCase.id !== "healthJson"
+  ) {
     return null;
   }
   const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);

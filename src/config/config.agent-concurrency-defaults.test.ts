@@ -1,3 +1,4 @@
+// Verifies agent concurrency config defaults and limits.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,

@@ -5,6 +5,8 @@ import type { MusicGenerationProvider } from "../../../src/music-generation/type
 import type { VideoGenerationProvider } from "../../../src/video-generation/types.js";
 import { resetGenerationRuntimeMocks } from "./runtime-test-mocks.js";
 
+// Shared Vitest module mocks for image, music, and video generation runtimes.
+
 type ModelRef = { provider: string; model: string };
 
 const mediaRuntimeMocks = vi.hoisted(() => {
@@ -128,10 +130,12 @@ vi.mock("../../../src/video-generation/provider-registry.js", () => ({
   listVideoGenerationProviders: mediaRuntimeMocks.listVideoGenerationProviders,
 }));
 
+/** Return the hoisted shared media generation runtime mocks. */
 export function getMediaGenerationRuntimeMocks() {
   return mediaRuntimeMocks;
 }
 
+/** Reset image generation runtime mocks to default empty-provider behavior. */
 export function resetImageGenerationRuntimeMocks(): void {
   resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
@@ -142,6 +146,7 @@ export function resetImageGenerationRuntimeMocks(): void {
   });
 }
 
+/** Reset music generation runtime mocks to default empty-provider behavior. */
 export function resetMusicGenerationRuntimeMocks(): void {
   resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
@@ -152,6 +157,7 @@ export function resetMusicGenerationRuntimeMocks(): void {
   });
 }
 
+/** Reset video generation runtime mocks to default empty-provider behavior. */
 export function resetVideoGenerationRuntimeMocks(): void {
   resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
@@ -162,6 +168,7 @@ export function resetVideoGenerationRuntimeMocks(): void {
   });
 }
 
+/** Reset shared auth/failover/logger mocks used by all media generation runtimes. */
 function resetSharedRuntimeImportMocks(): void {
   mediaRuntimeMocks.ensureAuthProfileStore.mockReset();
   mediaRuntimeMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });

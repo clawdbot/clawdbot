@@ -1,3 +1,4 @@
+/** Shared export-command parsing and target session resolution helpers. */
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -10,6 +11,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+/** Resolved session entry and transcript file targeted by an export command. */
 export interface ExportCommandSessionTarget {
   entry: SessionEntry;
   sessionFile: string;
@@ -21,6 +23,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Parses an optional non-flag output path from export command text. */
 export function parseExportCommandOutputPath(
   commandBodyNormalized: string,
   aliases: readonly string[],
@@ -40,6 +43,7 @@ export function parseExportCommandOutputPath(
   return { outputPath };
 }
 
+/** Resolves the session store entry and transcript file for an export command. */
 export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
@@ -65,6 +69,7 @@ export function resolveExportCommandSessionTarget(
   }
 }
 
+/** Distinguishes command error replies from successful export session targets. */
 export function isReplyPayload(
   value: ExportCommandSessionTarget | ReplyPayload,
 ): value is ReplyPayload {

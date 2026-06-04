@@ -1,3 +1,4 @@
+// Covers inline CLI option token parsing.
 import { describe, expect, it } from "vitest";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 

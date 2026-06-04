@@ -1,3 +1,4 @@
+// Tracks plugin loader provenance for diagnostics and policy checks.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
@@ -19,6 +20,7 @@ type InstallTrackingRule = {
   matcher: PathMatcher;
 };
 
+/** Provenance lookup for trusted plugin load paths and install records. */
 export type PluginProvenanceIndex = {
   loadPathMatcher: PathMatcher;
   installRules: Map<string, InstallTrackingRule>;
@@ -65,6 +67,7 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
   return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
 }
 
+/** Builds provenance matchers from configured load paths and install records. */
 export function buildProvenanceIndex(params: {
   normalizedLoadPaths: string[];
   env: NodeJS.ProcessEnv;
@@ -175,6 +178,7 @@ function resolveCandidateDuplicateRank(params: {
   return 5;
 }
 
+/** Orders duplicate plugin candidates by configured, installed, bundled, then workspace trust. */
 export function compareDuplicateCandidateOrder(params: {
   left: PluginCandidate;
   right: PluginCandidate;
@@ -203,6 +207,7 @@ export function compareDuplicateCandidateOrder(params: {
   );
 }
 
+/** Warns when an open plugin allowlist may auto-load non-bundled plugins. */
 export function warnWhenAllowlistIsOpen(params: {
   emitWarning: boolean;
   logger: PluginLogger;
@@ -241,6 +246,7 @@ export function warnWhenAllowlistIsOpen(params: {
   );
 }
 
+/** Adds diagnostics for loaded plugins without install or load-path provenance. */
 export function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;

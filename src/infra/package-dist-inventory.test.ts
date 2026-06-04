@@ -1,3 +1,4 @@
+// Covers package dist inventory collection and validation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -133,66 +134,63 @@ describe("package dist inventory", () => {
   });
 
   it("honors package files exclusions when writing the dist inventory", async () => {
-    await withTempDir(
-      { prefix: "openclaw-dist-inventory-package-files-" },
-      async (packageRoot) => {
-        const packagedRuntime = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-        const omittedTestRuntime = path.join(
-          packageRoot,
-          "dist",
-          "plugin-sdk",
-          "plugin-test-runtime.js",
-        );
-        const omittedTestTypes = path.join(
-          packageRoot,
-          "dist",
-          "plugin-sdk",
-          "plugin-test-runtime.d.ts",
-        );
-        const omittedNestedHelper = path.join(
-          packageRoot,
-          "dist",
-          "plugin-sdk",
-          "src",
-          "test-utils",
-          "helpers.d.ts",
-        );
-        const omittedQaCompat = path.join(packageRoot, "dist", "plugin-sdk", "qa-channel.js");
-        const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
-        const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
-        const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
+    await withTempDir({ prefix: "openclaw-dist-inventory-package-files-" }, async (packageRoot) => {
+      const packagedRuntime = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+      const omittedTestRuntime = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "plugin-test-runtime.js",
+      );
+      const omittedTestTypes = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "plugin-test-runtime.d.ts",
+      );
+      const omittedNestedHelper = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "src",
+        "test-utils",
+        "helpers.d.ts",
+      );
+      const omittedQaCompat = path.join(packageRoot, "dist", "plugin-sdk", "qa-channel.js");
+      const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
+      const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
+      const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
 
-        await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
-        await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({
-            files: [
-              "dist/",
-              "!dist/plugin-sdk/plugin-test-runtime.js",
-              "!dist/plugin-sdk/plugin-test-runtime.d.ts",
-              "!dist/plugin-sdk/src/test-utils/**",
-              "!dist/plugin-sdk/qa-channel.*",
-              "!dist/qa-runtime-*.js",
-              "!dist/**/*.map",
-            ],
-          }),
-          "utf8",
-        );
-        await fs.writeFile(packagedRuntime, "export {};\n", "utf8");
-        await fs.writeFile(omittedTestRuntime, "export {};\n", "utf8");
-        await fs.writeFile(omittedTestTypes, "export {};\n", "utf8");
-        await fs.writeFile(omittedNestedHelper, "export {};\n", "utf8");
-        await fs.writeFile(omittedQaCompat, "export {};\n", "utf8");
-        await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
-        await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
-        await fs.writeFile(omittedMap, "{}", "utf8");
+      await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({
+          files: [
+            "dist/",
+            "!dist/plugin-sdk/plugin-test-runtime.js",
+            "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+            "!dist/plugin-sdk/src/test-utils/**",
+            "!dist/plugin-sdk/qa-channel.*",
+            "!dist/qa-runtime-*.js",
+            "!dist/**/*.map",
+          ],
+        }),
+        "utf8",
+      );
+      await fs.writeFile(packagedRuntime, "export {};\n", "utf8");
+      await fs.writeFile(omittedTestRuntime, "export {};\n", "utf8");
+      await fs.writeFile(omittedTestTypes, "export {};\n", "utf8");
+      await fs.writeFile(omittedNestedHelper, "export {};\n", "utf8");
+      await fs.writeFile(omittedQaCompat, "export {};\n", "utf8");
+      await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
+      await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
+      await fs.writeFile(omittedMap, "{}", "utf8");
 
-        await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
-          "dist/plugin-sdk/runtime.js",
-        ]);
-      },
-    );
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/plugin-sdk/runtime.js",
+      ]);
+    });
   });
 
   it("keeps transient plugin dependency trees out of the inventory", async () => {

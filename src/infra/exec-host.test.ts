@@ -1,3 +1,4 @@
+// Covers exec host socket request signing and response handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());

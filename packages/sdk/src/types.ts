@@ -1,10 +1,14 @@
+// Public SDK data contracts for Gateway transport, runs, sessions, tools,
+// artifacts, tasks, environments, and normalized event streams.
 export type JsonObject = Record<string, unknown>;
 
+/** Per-request options accepted by SDK transports. */
 export type GatewayRequestOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
 };
 
+/** Raw event payload emitted by the Gateway transport. */
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
@@ -12,6 +16,7 @@ export type GatewayEvent = {
   stateVersion?: unknown;
 };
 
+/** Minimal transport interface consumed by the OpenClaw SDK client. */
 export type OpenClawTransport = {
   request<T = unknown>(
     method: string,
@@ -22,10 +27,12 @@ export type OpenClawTransport = {
   close?(): Promise<void> | void;
 };
 
+/** Transport variant that requires an explicit connection step. */
 export type ConnectableOpenClawTransport = OpenClawTransport & {
   connect(): Promise<void>;
 };
 
+/** Desired runtime/harness selection for future per-run execution routing. */
 export type RuntimeSelection =
   | "auto"
   | { type: "embedded"; id: "openclaw" | "codex" | (string & {}) }
@@ -33,6 +40,7 @@ export type RuntimeSelection =
   | { type: "acp"; harness: "claude" | "cursor" | "gemini" | "opencode" | (string & {}) }
   | { type: "managed"; provider: "local" | "node" | "testbox" | "cloud" | (string & {}) };
 
+/** Desired execution environment selection for future per-run routing. */
 export type EnvironmentSelection =
   | { type: "local"; cwd?: string }
   | { type: "gateway"; url?: string; cwd?: string }
@@ -60,6 +68,7 @@ export type WorkspaceSelection = {
 
 export type ApprovalMode = "ask" | "never" | "auto" | "trusted";
 
+/** Terminal and non-terminal status values returned by Run.wait. */
 export type RunStatus = "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type RunTimestamp = string | number;
@@ -71,6 +80,7 @@ export type SDKMessage = {
   toolCallId?: string;
 };
 
+/** Metadata for an artifact attached to a run, task, or session. */
 export type ArtifactSummary = {
   id: string;
   runId?: string;
@@ -122,6 +132,7 @@ export type ArtifactsDownloadResult = {
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
+/** Gateway task summary returned by task list/get calls. */
 export type TaskSummary = {
   id: string;
   taskId?: string;
@@ -176,6 +187,7 @@ export type SDKError = {
   details?: unknown;
 };
 
+/** Parameters for direct tool invocation through the SDK. */
 export type ToolInvokeParams = {
   args?: JsonObject;
   sessionKey?: string;
@@ -194,6 +206,7 @@ export type ToolInvokeResult = {
   error?: SDKError;
 };
 
+/** Normalized result returned by Run.wait. */
 export type RunResult = {
   runId: string;
   status: RunStatus;
@@ -217,6 +230,7 @@ export type RunResult = {
   raw?: unknown;
 };
 
+/** Stable SDK event type taxonomy derived from raw Gateway events. */
 export type OpenClawEventType =
   | "run.created"
   | "run.queued"
@@ -247,6 +261,7 @@ export type OpenClawEventType =
   | "git.pr"
   | "raw";
 
+/** Normalized SDK event with common run/session/task metadata. */
 export type OpenClawEvent<TData = unknown> = {
   version: 1;
   id: string;
@@ -261,6 +276,7 @@ export type OpenClawEvent<TData = unknown> = {
   raw?: GatewayEvent;
 };
 
+/** Parameters for creating an agent run. */
 export type AgentRunParams = {
   input: string;
   agentId?: string;
@@ -279,6 +295,7 @@ export type AgentRunParams = {
   idempotencyKey?: string;
 };
 
+/** Parameters for creating a session. */
 export type SessionCreateParams = {
   key?: string;
   agentId?: string;
@@ -289,6 +306,7 @@ export type SessionCreateParams = {
   message?: string;
 };
 
+/** Parameters for sending a message to an existing session. */
 export type SessionSendParams = {
   key: string;
   message: string;

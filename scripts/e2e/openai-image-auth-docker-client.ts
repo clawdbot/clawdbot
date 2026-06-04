@@ -1,12 +1,15 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { isRequestBodyTooLargeError, readBody } from "./lib/mock-openai-http.mjs";
 
 const DIRECT_IMAGE_BYTES = Buffer.from("docker-direct-image");
 const CODEX_IMAGE_BYTES = Buffer.from("docker-codex-image");
 const DIRECT_TOKEN = "sk-openclaw-image-auth-e2e";
 const CODEX_TOKEN = "docker-codex-oauth-token";
 
-type RequestRecord = {
+export type RequestRecord = {
   method?: string;
   url?: string;
   authorization?: string;
@@ -19,18 +22,6 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
 }
 
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -63,14 +54,23 @@ function writeCodexSse(res: http.ServerResponse): void {
   res.end("data: [DONE]\n\n");
 }
 
-async function startMockServer(records: RequestRecord[]): Promise<{
+export async function startMockServer(records: RequestRecord[]): Promise<{
   baseUrl: string;
   close: () => Promise<void>;
 }> {
   const server = http.createServer((req, res) => {
     void (async () => {
       try {
-        const body = await readBody(req);
+        let body: string;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          if (isRequestBodyTooLargeError(error)) {
+            writeJson(res, 413, { error: { message: error.message } });
+            return;
+          }
+          throw error;
+        }
         records.push({
           method: req.method,
           url: req.url,
@@ -164,7 +164,7 @@ function createCodexOAuthStore() {
   } as const;
 }
 
-async function main() {
+export async function main() {
   assert(
     process.env.OPENAI_API_KEY === DIRECT_TOKEN,
     "Docker lane must expose the direct OpenAI API key",
@@ -246,4 +246,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

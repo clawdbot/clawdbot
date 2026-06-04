@@ -3,6 +3,15 @@ import path from "node:path";
 import { describe, it } from "vitest";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./version.js";
 
+/**
+ * Cross-language guard for Gateway protocol version constants.
+ *
+ * Native Swift/Kotlin clients and dev smoke scripts cannot derive these values
+ * from TypeScript at runtime, so this test keeps checked-in generated constants
+ * and connect payloads aligned with the package source of truth.
+ */
+
+/** Min/max protocol pair expected in every native client surface. */
 type ProtocolLevels = {
   min: number;
   max: number;
@@ -13,10 +22,12 @@ const expectedLevels: ProtocolLevels = {
   max: PROTOCOL_VERSION,
 };
 
+/** Reads a repo-relative source file used by a native protocol guard. */
 async function readRepoFile(relativePath: string): Promise<string> {
   return fs.readFile(path.join(process.cwd(), relativePath), "utf8");
 }
 
+/** Extracts one integer constant and reports the owning file on drift. */
 function extractInteger(
   content: string,
   pattern: RegExp,
@@ -32,6 +43,7 @@ function extractInteger(
   return Number.parseInt(match[1], 10);
 }
 
+/** Compares native min/max values to the TypeScript version constants. */
 function assertLevelsMatch(relativePath: string, actual: ProtocolLevels): void {
   if (actual.min === expectedLevels.min && actual.max === expectedLevels.max) {
     return;
@@ -41,6 +53,7 @@ function assertLevelsMatch(relativePath: string, actual: ProtocolLevels): void {
   );
 }
 
+/** Asserts a compatibility pattern exists in generated/native source text. */
 function assertPattern(
   content: string,
   relativePath: string,

@@ -1,3 +1,4 @@
+// Defines access-group config types for channel audiences.
 export type DiscordChannelAudienceAccessGroup = {
   /**
    * Discord dynamic audience backed by the users who can currently view a guild

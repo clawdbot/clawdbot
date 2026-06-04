@@ -1,8 +1,15 @@
 import { Type } from "typebox";
 import { optionalStringEnum } from "./schema/typebox.js";
 
+/**
+ * TypeBox schemas for shell/process tools exposed to model providers.
+ *
+ * Keep these schemas provider-friendly: flat fields, string enums, and explicit
+ * descriptions that match runtime validation.
+ */
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
+/** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
@@ -40,7 +47,8 @@ export const execSchema = Type.Object({
   ),
   ask: Type.Optional(
     Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
+      description:
+        "Baseline ask comes from tools.exec.ask and host approvals; channel-origin calls ignore per-call ask when effective host ask is off.",
     }),
   ),
   node: Type.Optional(
@@ -50,6 +58,7 @@ export const execSchema = Type.Object({
   ),
 });
 
+/** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",

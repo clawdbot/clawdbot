@@ -1,3 +1,4 @@
+/** Verifies host hook cleanup timeout behavior and cancellation reporting. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PLUGIN_HOST_CLEANUP_TIMEOUT_MS,

@@ -1,3 +1,4 @@
+// Normalizes fetch header inputs while stripping non-header symbols.
 type HeadersLike = {
   entries: () => IterableIterator<[string, string]>;
   get: (name: string) => string | null;
@@ -16,10 +17,11 @@ function isHeadersLike(value: object): value is HeadersLike {
   );
 }
 
+/** Normalizes HeadersInit records so fetch receives only string-keyed header properties. */
 export function normalizeHeadersInitForFetch(
   headers: HeadersInit | undefined,
 ): HeadersInit | undefined {
-  // To do: delete once supported Node runtimes accept symbol-keyed header records.
+  // Some fetch runtimes reject records with symbol keys; preserve Headers/arrays unchanged.
   if (!headers || typeof headers !== "object" || Array.isArray(headers) || isHeadersLike(headers)) {
     return headers;
   }
@@ -35,6 +37,7 @@ export function normalizeHeadersInitForFetch(
   return normalized;
 }
 
+/** Normalizes request init headers without cloning the init object when no change is needed. */
 export function normalizeRequestInitHeadersForFetch<T extends { headers?: HeadersInit }>(
   init: T | undefined,
 ): T | undefined {

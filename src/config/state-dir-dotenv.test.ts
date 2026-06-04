@@ -1,3 +1,4 @@
+// Covers state-directory dotenv discovery, parsing, and merge behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

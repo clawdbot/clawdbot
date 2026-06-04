@@ -18,6 +18,8 @@ import {
   type StreamingMode,
 } from "./streaming.js";
 
+// Composes transient channel progress drafts from tool, reasoning, and
+// commentary updates. It owns draft lifecycle state before the final reply wins.
 export type ChannelProgressDraftMode = StreamingMode;
 
 export type ChannelProgressDraftCompositor = ReturnType<
@@ -25,6 +27,7 @@ export type ChannelProgressDraftCompositor = ReturnType<
 >;
 type ProgressDraftLine = string | ChannelProgressDraftLine;
 
+/** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
   entry: StreamingCompatEntry | null | undefined;
   mode: ChannelProgressDraftMode;
@@ -139,6 +142,8 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     if (shouldStoreLine && params.tryNativeUpdate) {
+      // Native draft updates get unformatted text; if the channel accepts it,
+      // keep local state aligned without sending a generic draft message.
       const text = formatDraftText(nextLines, { formatted: false });
       if (text && (await params.tryNativeUpdate(text))) {
         lines = nextLines;
@@ -228,6 +233,8 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (previewToolProgressEnabled) {
+        // Reasoning streams usually arrive as deltas. Replace the previous
+        // reasoning line so the draft stays compact instead of appending noise.
         const priorIndex =
           lastReasoningLine === undefined ? -1 : lines.lastIndexOf(lastReasoningLine);
         if (priorIndex >= 0) {
@@ -258,6 +265,8 @@ export function createChannelProgressDraftCompositor(params: {
       const normalized = normalizeCommentaryProgressText(text ?? "");
       const lineId = itemId ? `commentary:${itemId}` : normalized ? `commentary:${normalized}` : "";
       if (!normalized) {
+        // Empty commentary with an item id means the producer retracted that
+        // item; remove its draft line if it was already rendered.
         if (lineId) {
           await clearLine(lineId);
         }
@@ -311,6 +320,8 @@ const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((na
 
 function readReasoningProgressTextOutsideCode(text: string): string | undefined {
   if (isPartialReasoningProgressTagPrefix(text)) {
+    // Hold partial tags until more bytes arrive; otherwise a streaming "<thi"
+    // fragment can flash as user-visible progress.
     return undefined;
   }
   const codeRegions = findCodeRegions(text);
@@ -321,6 +332,8 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
     const offset = match.index ?? 0;
     if (isInsideCode(offset, codeRegions)) {
+      // Preserve code examples that mention reasoning tags; only actual model
+      // wrapper tags outside code delimit private reasoning progress.
       continue;
     }
     hasTags = true;
@@ -449,6 +462,8 @@ function mergeReasoningProgressText(
     isReasoningSnapshotText(incoming) ||
     (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
+    // Snapshot-style providers resend the full reasoning text. Replace the
+    // buffer instead of duplicating the already-seen prefix.
     return incoming;
   }
   return `${current}${incoming}`;

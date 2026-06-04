@@ -10,6 +10,7 @@ import {
 } from "../internal-runtime-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
+/** Parameters for merging and persisting a session entry update. */
 export type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -19,6 +20,7 @@ export type PersistSessionEntryParams = {
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
+/** Persists one session entry while keeping the caller's in-memory store aligned. */
 export async function persistSessionEntry(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
@@ -31,6 +33,8 @@ export async function persistSessionEntry(
       }
       const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
       for (const field of params.clearedFields ?? []) {
+        // Cleared fields only apply when the replacement entry did not set the
+        // field again; this preserves explicit false/null updates.
         if (!Object.hasOwn(params.entry, field)) {
           Reflect.deleteProperty(merged, field);
         }
@@ -52,6 +56,7 @@ export async function persistSessionEntry(
   return persisted;
 }
 
+/** Prepends hidden internal event context unless the body already carries it. */
 export function prependInternalEventContext(
   body: string,
   events: AgentCommandOpts["internalEvents"],
@@ -66,6 +71,8 @@ export function prependInternalEventContext(
   return [renderedEvents, body].filter(Boolean).join("\n\n");
 }
 
+// ACP/plain transcript bodies cannot carry internal runtime context markup, so
+// render events as visible plain text before stripping hidden sections.
 function resolvePlainInternalEventBody(
   body: string,
   events: AgentCommandOpts["internalEvents"],
@@ -78,6 +85,7 @@ function resolvePlainInternalEventBody(
   return [renderedEvents, visibleBody].filter(Boolean).join("\n\n") || body;
 }
 
+/** Resolves the prompt body submitted to ACP runtimes. */
 export function resolveAcpPromptBody(
   body: string,
   events: AgentCommandOpts["internalEvents"],
@@ -85,6 +93,7 @@ export function resolveAcpPromptBody(
   return events?.length ? resolvePlainInternalEventBody(body, events) : body;
 }
 
+/** Resolves the body stored in transcripts after internal event rendering. */
 export function resolveInternalEventTranscriptBody(
   body: string,
   events: AgentCommandOpts["internalEvents"],

@@ -1,3 +1,6 @@
+/**
+ * Tests server-level tool catalog assembly and filtering.
+ */
 import { describe, expect, it } from "vitest";
 import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";

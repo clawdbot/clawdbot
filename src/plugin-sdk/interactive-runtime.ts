@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for interactive replies and message presentation helpers.
+ */
 export {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,

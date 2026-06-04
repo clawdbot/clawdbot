@@ -1,3 +1,4 @@
+/** Utilities for queued reply runtime config, auth, threading, and embedded run params. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -38,6 +39,7 @@ import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
+/** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   const runtimeConfig =
     typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
@@ -52,6 +54,7 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
   );
 }
 
+/** Resolves command secrets for queued reply execution, scoped to the origin route. */
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -100,6 +103,7 @@ export async function resolveQueuedReplyExecutionConfig(
 /**
  * Build provider-specific threading context for tool auto-injection.
  */
+/** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
@@ -171,9 +175,11 @@ export function buildThreadingToolContext(params: {
   };
 }
 
+/** Detects Bun socket-close errors that should be formatted more clearly. */
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
+/** Formats Bun socket-close errors for user-facing reply output. */
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
   return [
@@ -184,12 +190,14 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
+/** Resolves whether final-answer tags should be enforced for a queued run. */
 export const resolveEnforceFinalTag = (
   run: FollowupRun["run"],
   provider: string,
   model = run.model,
 ) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
 
+/** Builds base embedded run params with auth and provider runtime hints. */
 export function buildEmbeddedRunBaseParams(
   params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
 ) {
@@ -249,6 +257,7 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
+/** Builds extra context payloads for embedded run execution. */
 export function buildEmbeddedRunContexts(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
@@ -266,6 +275,7 @@ export function buildEmbeddedRunContexts(params: {
   };
 }
 
+/** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;

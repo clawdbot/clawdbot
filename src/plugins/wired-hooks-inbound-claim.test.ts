@@ -1,3 +1,4 @@
+// Covers wired hook inbound-claim dispatch behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 

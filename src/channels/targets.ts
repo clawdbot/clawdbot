@@ -1,10 +1,16 @@
+/**
+ * Shared messaging-target parsing primitives for channel plugins and SDK consumers.
+ * Channel-specific grammars stay in plugins; this file owns common target shapes and parse order.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type { DirectoryConfigParams } from "./plugins/directory-types.js";
 export type { ChannelDirectoryEntry } from "./plugins/types.public.js";
 
+/** Canonical route target families shared by channel-owned parsers. */
 export type MessagingTargetKind = "user" | "channel";
 
+/** Parsed channel target with the original token and normalized lookup key. */
 export type MessagingTarget = {
   kind: MessagingTargetKind;
   id: string;
@@ -12,15 +18,18 @@ export type MessagingTarget = {
   normalized: string;
 };
 
+/** Options for parsers that can infer a kind or reject ambiguous input. */
 export type MessagingTargetParseOptions = {
   defaultKind?: MessagingTargetKind;
   ambiguousMessage?: string;
 };
 
+/** Builds the stable lower-case lookup key used to compare channel targets. */
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
   return normalizeLowercaseStringOrEmpty(`${kind}:${id}`);
 }
 
+/** Creates a parsed target while preserving the user-provided raw token. */
 export function buildMessagingTarget(
   kind: MessagingTargetKind,
   id: string,
@@ -34,6 +43,7 @@ export function buildMessagingTarget(
   };
 }
 
+/** Validates an extracted target id with a channel-owned grammar. */
 export function ensureTargetId(params: {
   candidate: string;
   pattern: RegExp;
@@ -45,6 +55,7 @@ export function ensureTargetId(params: {
   return params.candidate;
 }
 
+/** Parses one mention pattern whose first capture group is the target id. */
 export function parseTargetMention(params: {
   raw: string;
   mentionPattern: RegExp;
@@ -57,6 +68,7 @@ export function parseTargetMention(params: {
   return buildMessagingTarget(params.kind, match[1], params.raw);
 }
 
+/** Parses a single kind-prefixed target such as channel:<id> or user:<id>. */
 export function parseTargetPrefix(params: {
   raw: string;
   prefix: string;
@@ -69,6 +81,7 @@ export function parseTargetPrefix(params: {
   return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
 }
 
+/** Parses the first matching kind-prefixed target from a channel grammar list. */
 export function parseTargetPrefixes(params: {
   raw: string;
   prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
@@ -86,6 +99,7 @@ export function parseTargetPrefixes(params: {
   return undefined;
 }
 
+/** Parses @user shorthand and validates it against a channel-owned user grammar. */
 export function parseAtUserTarget(params: {
   raw: string;
   pattern: RegExp;
@@ -103,6 +117,7 @@ export function parseAtUserTarget(params: {
   return buildMessagingTarget("user", id, params.raw);
 }
 
+/** Tries mention, explicit prefixes, then @user shorthand in deterministic order. */
 export function parseMentionPrefixOrAtUserTarget(params: {
   raw: string;
   mentionPattern: RegExp;
@@ -132,6 +147,7 @@ export function parseMentionPrefixOrAtUserTarget(params: {
   });
 }
 
+/** Requires a parsed target of the requested kind and returns its channel id. */
 export function requireTargetKind(params: {
   platform: string;
   target: MessagingTarget | undefined;

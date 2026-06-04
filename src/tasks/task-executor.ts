@@ -1,3 +1,4 @@
+// Executes task records through configured runtimes and updates registry state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
@@ -43,6 +44,7 @@ import type {
 
 const log = createSubsystemLogger("tasks/executor");
 
+// One-task flows give detached ACP/subagent runs a flow handle for status and retry surfaces.
 function isOneTaskFlowEligible(task: TaskRecord): boolean {
   if (task.parentFlowId?.trim() || task.scopeKind !== "session") {
     return false;

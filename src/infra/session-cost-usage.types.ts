@@ -1,3 +1,4 @@
+// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,

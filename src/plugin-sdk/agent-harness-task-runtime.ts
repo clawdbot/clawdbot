@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK helpers for agent harness task persistence and completion delivery.
+ */
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import {
@@ -37,6 +40,7 @@ type RecordTaskRunProgressParams = Parameters<typeof recordTaskRunProgressByRunI
 type FinalizeTaskRunParams = Parameters<typeof finalizeTaskRunByRunId>[0];
 type SetDeliveryStatusParams = Parameters<typeof setDetachedTaskDeliveryStatusByRunId>[0];
 
+/** Scope and naming options used to bind task operations to one requester session. */
 export type AgentHarnessTaskRuntimeScopeParams = {
   runtime: AgentHarnessTaskRuntimeId;
   scope: AgentHarnessTaskRuntimeScope;
@@ -66,6 +70,7 @@ export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
   "runtime" | "sessionKey"
 >;
 
+/** Scoped task runtime that prevents callers from mutating tasks outside their harness scope. */
 export type AgentHarnessTaskRuntime = {
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
   tryCreateRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord | null;
@@ -85,6 +90,7 @@ export type AgentHarnessCompletionDelivery = Awaited<
 
 const AGENT_HARNESS_COMPLETION_SOURCE_TOOL = "agent_harness_task";
 
+/** Creates a task runtime whose run ids and task records are constrained to one scope. */
 export function createAgentHarnessTaskRuntime(
   params: AgentHarnessTaskRuntimeScopeParams,
 ): AgentHarnessTaskRuntime {
@@ -153,6 +159,7 @@ export function createAgentHarnessTaskRuntime(
   };
 }
 
+/** Delivers a completed harness task result back to the requester or parent session. */
 export async function deliverAgentHarnessTaskCompletion(params: {
   scope: AgentHarnessTaskRuntimeScope;
   childSessionKey: string;
@@ -240,6 +247,7 @@ function mapHarnessCompletionStatus(
   return "error";
 }
 
+/** Returns true when completion delivery reached a persistent direct or steered path. */
 export function isDurableAgentHarnessCompletionDelivery(
   delivery: AgentHarnessCompletionDelivery,
 ): boolean {

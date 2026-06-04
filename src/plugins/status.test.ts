@@ -1,3 +1,4 @@
+// Covers plugin status reporting from config, discovery, and registry state.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMemoryEmbeddingProviderRegistration } from "./registry-types.js";
 import {

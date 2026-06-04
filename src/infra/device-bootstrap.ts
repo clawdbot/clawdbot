@@ -1,3 +1,4 @@
+// Bootstraps device identity and trust state on first run.
 import path from "node:path";
 import {
   asDateTimestampMs,

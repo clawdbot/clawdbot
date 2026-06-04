@@ -1,3 +1,4 @@
+// Covers identity avatar config normalization and file-path handling.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "./test-helpers.js";

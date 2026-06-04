@@ -1,3 +1,4 @@
+// Covers transient and benign unhandled rejection classifiers.
 import { describe, expect, it } from "vitest";
 import {
   isAbortError,

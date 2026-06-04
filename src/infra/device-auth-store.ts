@@ -1,3 +1,4 @@
+// Persists device authorization records for paired nodes.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";

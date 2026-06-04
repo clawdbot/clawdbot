@@ -1,3 +1,4 @@
+/** Starts, stops, and inspects plugin service registrations. */
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

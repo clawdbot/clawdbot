@@ -1,11 +1,17 @@
+// Defines config regexes used by security validation.
 import {
   compileSafeRegexDetailed,
   type SafeRegexCompileResult,
   type SafeRegexRejectReason,
 } from "./safe-regex.js";
 
+/** Reject reasons that should be surfaced for user-configured regex patterns. */
 export type ConfigRegexRejectReason = Exclude<SafeRegexRejectReason, "empty">;
 
+/**
+ * Result for one config regex pattern.
+ * Empty patterns return null from the compiler; invalid or unsafe patterns return a rejected shape.
+ */
 export type CompiledConfigRegex =
   | {
       regex: RegExp;
@@ -27,8 +33,13 @@ function normalizeRejectReason(result: SafeRegexCompileResult): ConfigRegexRejec
   return result.reason;
 }
 
+/**
+ * Compile a single user-configured regex with the shared safe-regex guardrails.
+ * Returns null for blank patterns so optional config entries can be skipped silently.
+ */
 export function compileConfigRegex(pattern: string, flags = ""): CompiledConfigRegex | null {
   const result = compileSafeRegexDetailed(pattern, flags);
+  // Blank config entries are absence, not rejection diagnostics.
   if (result.reason === "empty") {
     return null;
   }
@@ -40,6 +51,10 @@ export function compileConfigRegex(pattern: string, flags = ""): CompiledConfigR
   } as CompiledConfigRegex;
 }
 
+/**
+ * Compile a list of user-configured regex patterns, separating usable regexes from diagnostics.
+ * Callers can keep operating with safe entries while reporting rejected unsafe patterns once.
+ */
 export function compileConfigRegexes(
   patterns: string[],
   flags = "",

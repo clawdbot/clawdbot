@@ -1,3 +1,4 @@
+// Covers web provider public artifact extraction from plugin metadata.
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {

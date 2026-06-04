@@ -1,3 +1,6 @@
+/**
+ * Gateway WebSocket log formatting tests.
+ */
 import { describe, expect, test } from "vitest";
 import { formatForLog, shortId, summarizeAgentEventForWsLog } from "./ws-log.js";
 

@@ -1,3 +1,4 @@
+// Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,

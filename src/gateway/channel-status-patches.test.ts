@@ -1,3 +1,6 @@
+/**
+ * Channel status patching tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createConnectedChannelStatusPatch,

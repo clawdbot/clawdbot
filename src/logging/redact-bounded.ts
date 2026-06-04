@@ -1,3 +1,4 @@
+// Bounded regex replacement prevents large support/log strings from monopolizing the event loop.
 const REDACT_REGEX_CHUNK_THRESHOLD = 32_768;
 const REDACT_REGEX_CHUNK_SIZE = 16_384;
 
@@ -6,6 +7,7 @@ type BoundedRedactOptions = {
   chunkSize?: number;
 };
 
+/** Applies a regex replacement in chunks once input crosses the redaction size threshold. */
 export function replacePatternBounded(
   text: string,
   pattern: RegExp,
@@ -19,6 +21,7 @@ export function replacePatternBounded(
   }
 
   let output = "";
+  // Chunking may miss matches spanning chunk boundaries; use only for token-like redaction patterns.
   for (let index = 0; index < text.length; index += chunkSize) {
     output += text.slice(index, index + chunkSize).replace(pattern, replacer);
   }

@@ -35,6 +35,11 @@ type RequireOpenAllowFromFn = (params: {
   message: string;
 }) => void;
 
+/**
+ * Builds the standard passive-channel status object used by plugin status surfaces.
+ * Missing lifecycle fields are normalized to stable defaults so callers can merge
+ * plugin-specific extras without leaking `undefined` into status responses.
+ */
 export function buildPassiveChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -49,6 +54,7 @@ export function buildPassiveChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Adds probe state to the standard passive-channel status summary. */
 export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -60,6 +66,7 @@ export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Normalizes optional traffic timestamps for channel status payloads. */
 export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | null) {
   return {
     lastInboundAt: snapshot?.lastInboundAt ?? null,
@@ -67,6 +74,10 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
   };
 }
 
+/**
+ * Runs a passive monitor until the supplied abort signal fires, then calls `stop()`.
+ * This adapts simple plugin monitors to the shared passive account lifecycle.
+ */
 export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
   abortSignal: AbortSignal;
   start: () => Promise<TMonitor>;
@@ -80,6 +91,10 @@ export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonit
   });
 }
 
+/**
+ * Returns the provided runtime or creates a logger-backed fallback for monitor-only paths.
+ * The fallback cannot exit the process, so command/runtime callers should inject a real runtime.
+ */
 export function resolveLoggerBackedRuntime<TRuntime>(
   runtime: TRuntime | undefined,
   logger: Parameters<typeof createLoggerBackedRuntime>[0]["logger"],
@@ -93,6 +108,7 @@ export function resolveLoggerBackedRuntime<TRuntime>(
   );
 }
 
+/** Applies the shared validation rule for open DM policies that require wildcard allowlists. */
 export function requireChannelOpenAllowFrom(params: {
   channel: string;
   policy?: string;
@@ -109,6 +125,7 @@ export function requireChannelOpenAllowFrom(params: {
   });
 }
 
+/** Extracts a fixed set of fields from unknown status issue payloads without trusting shape. */
 export function readStatusIssueFields<TField extends string>(
   value: unknown,
   fields: readonly TField[],
@@ -124,10 +141,12 @@ export function readStatusIssueFields<TField extends string>(
   return result;
 }
 
+/** Converts string or numeric account identifiers from status issue payloads to strings. */
 export function coerceStatusIssueAccountId(value: unknown): string | undefined {
   return typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
 }
 
+/** Creates a promise with externally controlled resolve/reject hooks for async handoff code. */
 export function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -159,6 +178,7 @@ type PluginConfigIssueMessageOptions = {
   rootInvalidTypeMessage?: string;
 };
 
+/** Formats Zod plugin-config issues into stable user-facing status messages. */
 export function formatPluginConfigIssue(
   issue: z.ZodIssue | undefined,
   options?: PluginConfigIssueMessageOptions,
@@ -175,6 +195,7 @@ export function formatPluginConfigIssue(
   return issue.message;
 }
 
+/** Keeps only string/number path segments so config issue paths stay JSON-safe. */
 export function normalizePluginConfigIssuePath(
   path: readonly unknown[],
 ): PluginConfigIssuePathSegment[] {
@@ -184,6 +205,7 @@ export function normalizePluginConfigIssuePath(
   });
 }
 
+/** Converts raw Zod issues into the plugin status issue shape used by bundled channels. */
 export function mapPluginConfigIssues(
   issues: readonly z.ZodIssue[],
   options?: PluginConfigIssueMessageOptions,
@@ -194,6 +216,7 @@ export function mapPluginConfigIssues(
   }));
 }
 
+/** Checks whether a read-only plugin path may resolve a secret through an env provider. */
 export function canResolveEnvSecretRefInReadOnlyPath(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -210,6 +233,7 @@ export function canResolveEnvSecretRefInReadOnlyPath(params: {
   return !allowlist || allowlist.includes(params.id);
 }
 
+/** Reads plugin package versions across source, bundled, and test layouts with a fallback. */
 export function readPluginPackageVersion(params: {
   require: PackageJsonRequire;
   candidates?: readonly string[];
@@ -228,6 +252,11 @@ export function readPluginPackageVersion(params: {
   return params.fallback ?? "unknown";
 }
 
+/**
+ * Builds an ambient Node proxy agent when proxy env/config is active.
+ * Managed proxy CA trust is attached when available; creation errors are reported
+ * through `onError` and otherwise degrade to no agent.
+ */
 export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
   onError?: (error: unknown) => void;
   onUsingProxy?: () => void;

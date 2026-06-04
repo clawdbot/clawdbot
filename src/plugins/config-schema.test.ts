@@ -1,3 +1,4 @@
+// Covers plugin config schema validation and diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {

@@ -1,3 +1,4 @@
+// Covers core plugin auto-enable behavior and bundled plugin defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";

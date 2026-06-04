@@ -1,3 +1,4 @@
+/** Filesystem permission audit facade backed by shared infra permission helpers. */
 export {
   formatPermissionDetail,
   formatPermissionRemediation,

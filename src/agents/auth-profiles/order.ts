@@ -19,12 +19,14 @@ import {
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
+/** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
   | AuthCredentialReasonCode
   | "profile_missing"
   | "provider_mismatch"
   | "mode_mismatch";
 
+/** Eligibility decision for one auth profile candidate. */
 export type AuthProfileEligibility = {
   eligible: boolean;
   reasonCode: AuthProfileEligibilityReasonCode;
@@ -33,6 +35,8 @@ export type AuthProfileEligibility = {
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
 
+// OpenAI Codex auth can reuse OpenAI API-key credentials. Keep this special
+// case local so generic provider alias resolution stays provider-owned.
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
@@ -74,6 +78,7 @@ function isCredentialProviderCompatibleWithAuthProvider(params: {
   );
 }
 
+/** Returns true when a stored credential can authenticate the requested provider. */
 export function isStoredCredentialCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
@@ -149,6 +154,7 @@ function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: str
   return authMode === "aws-sdk";
 }
 
+/** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -167,6 +173,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   return providerAllowsAwsSdkAuth(params.cfg, params.provider);
 }
 
+/** Resolves whether a profile can be used for a provider right now. */
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -227,6 +234,7 @@ export function resolveAuthProfileEligibility(params: {
   };
 }
 
+/** Resolves ordered auth profile candidates for a provider. */
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -259,6 +267,8 @@ export function resolveAuthProfileOrder(params: {
     : undefined;
   const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
   const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+  // Stored order repairs are allowed to fall back to live store profiles when
+  // old setup flows persisted profile ids that no longer exist.
   const explicitOrderFromStore =
     directStoredOrder !== undefined ||
     (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
@@ -331,12 +341,9 @@ export function resolveAuthProfileOrder(params: {
 
   const deduped = dedupeProfileIds(filtered);
 
-  // If user specified explicit order (store override or config), respect it
-  // exactly, but still apply cooldown sorting to avoid repeatedly selecting
-  // known-bad/rate-limited keys as the first candidate.
+  // Explicit order remains a hard user/config preference, but cooldown tracking
+  // moves temporarily bad profiles behind available ones.
   if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
-    // ...but still respect cooldown tracking to avoid repeatedly selecting a
-    // known-bad/rate-limited key as the first candidate.
     const available: string[] = [];
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
@@ -356,16 +363,15 @@ export function resolveAuthProfileOrder(params: {
 
     const ordered = [...available, ...cooldownSorted];
 
-    // Still put preferredProfile first if specified
+    // Explicit user choice still wins when it is part of the filtered order.
     if (preferredProfile && ordered.includes(preferredProfile)) {
       return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
     }
     return ordered;
   }
 
-  // Otherwise, use round-robin: sort by lastUsed (oldest first)
-  // preferredProfile goes first if specified (for explicit user choice)
-  // lastGood is NOT prioritized - that would defeat round-robin
+  // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
+  // because prioritizing it would starve other healthy profiles.
   const sorted = orderProfilesByMode(deduped, store);
 
   if (preferredProfile && sorted.includes(preferredProfile)) {

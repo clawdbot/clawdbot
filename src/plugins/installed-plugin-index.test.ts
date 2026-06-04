@@ -1,3 +1,4 @@
+// Covers installed plugin index read, write, and policy behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

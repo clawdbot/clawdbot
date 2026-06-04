@@ -4,12 +4,20 @@ import { isStrictAgenticExecutionContractActive } from "./execution-contract.js"
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+/**
+ * Registration helpers for optional OpenClaw-owned tools.
+ *
+ * This keeps model/runtime gating separate from tool construction so callers can
+ * assemble candidate tools first, then filter by config and execution contract.
+ */
+/** Drops disabled optional tools while preserving candidate order. */
 export function collectPresentOpenClawTools(
   candidates: readonly (AnyAgentTool | null | undefined)[],
 ): AnyAgentTool[] {
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
+/** Resolves the default update_plan switch from explicit config or strict execution contract. */
 export function isUpdatePlanToolEnabledForOpenClawTools(params: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
@@ -49,6 +57,7 @@ function isToolExplicitlyAllowedByOpenClawToolPolicy(params: {
   });
 }
 
+/** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
 export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
   config?: OpenClawConfig;
   agentSessionKey?: string;

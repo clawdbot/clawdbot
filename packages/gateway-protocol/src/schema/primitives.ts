@@ -8,20 +8,31 @@ import {
   SINGLE_VALUE_FILE_REF_ID,
 } from "../secret-ref-contract.js";
 
+/**
+ * Shared schema primitives reused by gateway protocol request/result schemas.
+ *
+ * Keep these schemas small and transport-oriented; feature-specific validation
+ * belongs in the owning schema module or runtime handler.
+ */
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 const SESSION_LABEL_MAX_LENGTH = 512;
 
+/** Non-empty string primitive for protocol fields that reject blank values. */
 export const NonEmptyString = Type.String({ minLength: 1 });
+/** Maximum stable session key length accepted by chat-send protocol requests. */
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
+/** Chat-send session key string primitive with bounded length. */
 export const ChatSendSessionKeyString = Type.String({
   minLength: 1,
   maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
 });
+/** Human-readable session label primitive with bounded display length. */
 export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
+/** Provenance marker for content copied from another user/session/system source. */
 export const InputProvenanceSchema = Type.Object(
   {
     kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
@@ -33,10 +44,13 @@ export const InputProvenanceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Closed gateway client id schema aligned with `GATEWAY_CLIENT_IDS`. */
 export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
 
+/** Closed gateway client mode schema aligned with `GATEWAY_CLIENT_MODES`. */
 export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
 
+/** Supported secret reference backing stores for protocol SecretRef payloads. */
 export const SecretRefSourceSchema = Type.Union([
   Type.Literal("env"),
   Type.Literal("file"),
@@ -87,10 +101,12 @@ const ExecSecretRefSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Structured secret reference accepted by config and channel protocol payloads. */
 export const SecretRefSchema = Type.Union([
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
 ]);
 
+/** Secret input value: either an inline string or a structured SecretRef. */
 export const SecretInputSchema = Type.Union([Type.String(), SecretRefSchema]);

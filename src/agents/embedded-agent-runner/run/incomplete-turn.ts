@@ -230,6 +230,11 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+/**
+ * Marks whether retrying the attempt can safely replay the prompt. Mutating
+ * tools, async work, committed delivery, spawned sessions, and cron writes all
+ * count as side effects that make blind replay unsafe.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,12 +252,18 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Builds the user-visible incomplete-turn warning when a terminal attempt did
+ * not produce a safe final assistant response and no committed delivery/progress
+ * already completed the task.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -321,6 +332,11 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Allows one retry when the provider returned no assistant turn at all and the
+ * attempt has no side effects, active lifecycle items, delivery, or terminal
+ * assistant/tool state.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -437,6 +453,7 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
   return false;
 }
 
+/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
 export function resolveSilentToolResultReplyPayload(params: {
   isCronTrigger: boolean;
   payloadCount: number;
@@ -464,6 +481,11 @@ export function resolveSilentToolResultReplyPayload(params: {
     : null;
 }
 
+/**
+ * Marks replay invalid whenever the recorded attempt might not be safe to
+ * replay or the current run ended in a compaction/incomplete-turn state that
+ * needs a fresh prompt boundary.
+ */
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
@@ -476,6 +498,7 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
+/** Classifies the persisted run state used by session recovery and resume logic. */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
@@ -588,6 +611,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -607,6 +631,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
+/**
+ * Builds the retry instruction for reasoning-only turns that consumed provider
+ * output budget but produced no visible assistant text.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -645,6 +673,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Builds the retry instruction for empty assistant turns when the provider/model
+ * is eligible for non-visible turn recovery.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -762,6 +794,7 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+/** Detects short multilingual approval prompts that should continue execution immediately. */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -781,6 +814,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+/** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -820,6 +854,7 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+/** Extracts the visible plan text and normalized step list from a plan-only reply. */
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -889,6 +924,7 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+/** Retry budget for plan-only recovery, higher for strict-agentic models. */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
 ): number {
@@ -897,6 +933,11 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Builds the retry instruction for assistant turns that only promised a plan
+ * instead of taking concrete action. The guard excludes real side effects,
+ * non-actionable prompts, explicit completions, and multi-tool progress.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;

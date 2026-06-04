@@ -1,3 +1,9 @@
+/**
+ * Public sandbox barrel for agent runtime code.
+ *
+ * Keep sandbox implementation modules behind this export surface so callers use
+ * the same config, backend, Docker, SSH, filesystem, and policy contracts.
+ */
 export {
   resolveSandboxBrowserConfig,
   resolveSandboxConfigForAgent,

@@ -13,6 +13,7 @@ export const schtasksCalls: string[][] = [];
 export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
 export const killProcessTree: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
+/** Runs a test with Windows-like daemon environment paths and cleans the temp dir. */
 export async function withWindowsEnv(
   prefix: string,
   run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,

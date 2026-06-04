@@ -64,7 +64,7 @@ steps:
           - ref: state
           - lambda:
               params: [candidate]
-              expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound'"
+              expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.firstMarker)"
           - expr: liveTurnTimeoutMs(env, 60000)
       - set: beforeRestartCursor
         value:
@@ -80,9 +80,9 @@ steps:
         value:
           expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
       - assert:
-          expr: "firstMatchesBeforeFollowup.length === 1"
+          expr: "firstMatchesBeforeFollowup.length === 1 && String(firstMatchesBeforeFollowup[0]?.text ?? '').includes(config.firstMarker)"
           message:
-            expr: "`readiness cycle replayed first reply ${firstMatchesBeforeFollowup.length} times; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
+            expr: "`readiness cycle should preserve exactly one marked first reply, saw ${firstMatchesBeforeFollowup.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
       - call: runAgentPrompt
         args:
           - ref: env
@@ -99,7 +99,7 @@ steps:
           - ref: state
           - lambda:
               params: [candidate]
-              expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound'"
+              expr: "candidate.conversation.id === 'qa-room' && candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.secondMarker)"
           - expr: liveTurnTimeoutMs(env, 60000)
           - sinceIndex:
               ref: beforeRestartCursor
@@ -108,13 +108,16 @@ steps:
           expr: state.getSnapshot()
       - set: firstMatches
         value:
-          expr: "snapshot.messages.slice(0, beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
+          expr: "snapshot.messages.slice(0, beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.firstMarker))"
       - set: secondMatches
+        value:
+          expr: "snapshot.messages.slice(beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && String(candidate.text ?? '').includes(config.secondMarker))"
+      - set: postRestartOutbounds
         value:
           expr: "snapshot.messages.slice(beforeRestartCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room')"
       - assert:
-          expr: "firstMatches.length === 1 && secondMatches.length === 1"
+          expr: "firstMatches.length === 1 && secondMatches.length === 1 && postRestartOutbounds.length === 1 && !postRestartOutbounds.some((candidate) => String(candidate.text ?? '').includes(config.firstMarker))"
           message:
-            expr: "`expected one pre-restart and one post-restart reply; first=${firstMatches.length} second=${secondMatches.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
+            expr: "`expected one marked pre-restart reply and exactly one marked post-restart reply without replaying the first marker; first=${firstMatches.length} second=${secondMatches.length} post=${postRestartOutbounds.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
     detailsExpr: "`before=${firstOutbound.text}\\nafter=${secondOutbound.text}`"
 ```

@@ -1,3 +1,6 @@
+/**
+ * Tests OpenAI HTTP usage extraction and gateway usage accounting.
+ */
 import { describe, expect, it } from "vitest";
 import { testOnlyOpenAiHttp } from "./openai-http.js";
 

@@ -1,3 +1,4 @@
+// Tests shared utility helpers used by CLI and runtime modules.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";

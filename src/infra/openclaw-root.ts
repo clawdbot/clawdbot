@@ -1,3 +1,4 @@
+// Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";

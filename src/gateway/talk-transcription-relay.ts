@@ -18,6 +18,13 @@ import {
   requireActiveTalkRelaySession,
 } from "./talk-relay-session-lifecycle.js";
 
+/**
+ * Gateway-owned relay for streaming speech-to-text providers used by Talk.
+ *
+ * The relay accepts browser audio on one WebSocket connection, forwards it to a
+ * realtime transcription provider, and mirrors provider callbacks into Talk
+ * events for the same connection.
+ */
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
@@ -72,6 +79,7 @@ type TalkTranscriptionRelaySessionResult = {
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
 
+/** Normalizes common provider audio-format aliases into the relay contract. */
 function normalizeRelayInputEncoding(
   value: unknown,
 ): "g711_ulaw" | "g711_alaw" | "pcm16" | undefined {
@@ -120,6 +128,7 @@ function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
   return match ? readFiniteNumber(match[1]) : undefined;
 }
 
+/** Verifies provider config matches the audio format the browser relay emits. */
 function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
   const encodingValue =
     providerConfig.encoding ?? providerConfig.audioFormat ?? providerConfig.audio_format;
@@ -211,6 +220,7 @@ function enforceTranscriptionSessionLimits(connId: string): void {
   }
 }
 
+/** Creates a transcription relay session and returns its browser audio contract. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
 ): TalkTranscriptionRelaySessionResult {
@@ -368,6 +378,7 @@ function getTranscriptionSession(
   });
 }
 
+/** Streams one base64-encoded audio frame into the owning transcription relay. */
 export function sendTalkTranscriptionRelayAudio(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -392,6 +403,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
   });
 }
 
+/** Commits the current transcription turn and closes the relay. */
 export function stopTalkTranscriptionRelaySession(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -414,6 +426,7 @@ export function stopTalkTranscriptionRelaySession(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Cancels the active transcription turn and closes the relay. */
 export function cancelTalkTranscriptionRelayTurn(params: {
   transcriptionSessionId: string;
   connId: string;
@@ -435,6 +448,7 @@ export function cancelTalkTranscriptionRelayTurn(params: {
   closeTranscriptionSession(session, "completed");
 }
 
+/** Clears process-local transcription relays between tests. */
 export function clearTalkTranscriptionRelaySessionsForTest(): void {
   for (const session of transcriptionSessions.values()) {
     clearTimeout(session.cleanupTimer);

@@ -15,6 +15,7 @@ async function loadHookInstallRuntime() {
   return hookInstallRuntimePromise;
 }
 
+/** Logger contract used by hook install and update operations. */
 export type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
@@ -38,6 +39,7 @@ export type InstallHooksResult =
     }
   | { ok: false; error: string };
 
+/** Integrity drift payload surfaced when npm metadata no longer matches an install record. */
 export type HookNpmIntegrityDriftParams = {
   spec: string;
   expectedIntegrity: string;
@@ -85,6 +87,7 @@ function validateHookId(hookId: string): string | null {
   return null;
 }
 
+/** Resolve the canonical local install directory for one hook pack id. */
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
   const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
   const hookIdError = validateHookId(hookId);
@@ -157,6 +160,8 @@ async function installFromResolvedHookDir(
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
   const manifestPath = path.join(resolvedDir, "package.json");
+  // A directory with package.json is a hook pack. A bare hook directory must
+  // contain HOOK.md plus a handler file and installs as a single hook.
   if (await runtime.fileExists(manifestPath)) {
     return await installHookPackageFromDir({
       packageDir: resolvedDir,
@@ -261,6 +266,8 @@ async function installHookPackageFromDir(
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    // Validate both lexical containment and realpath containment so archive
+    // symlinks cannot make package hook entries escape after extraction.
     if (!runtime.isPathInside(params.packageDir, hookDir)) {
       return {
         ok: false,
@@ -372,6 +379,7 @@ async function installHookFromDir(params: {
   return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
 }
 
+/** Install hooks from an archive after extracting and validating the archive root. */
 export async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
@@ -404,6 +412,7 @@ export async function installHooksFromArchive(
   });
 }
 
+/** Download, verify, and install an npm hook pack tarball. */
 export async function installHooksFromNpmSpec(params: {
   spec: string;
   dangerouslyForceUnsafeInstall?: boolean;
@@ -446,6 +455,7 @@ export async function installHooksFromNpmSpec(params: {
   });
 }
 
+/** Install a hook pack or single hook from a local directory/archive path. */
 export async function installHooksFromPath(
   params: HookPathInstallParams,
 ): Promise<InstallHooksResult> {

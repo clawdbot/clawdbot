@@ -1,3 +1,4 @@
+// Regresses allowlist config requiring explicit allowFrom entries.
 import { describe, expect, it } from "vitest";
 import {
   DiscordConfigSchema,

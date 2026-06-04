@@ -1,3 +1,4 @@
+// Covers Gemini auth profile discovery and credential routing.
 import { describe, expect, it } from "vitest";
 import { parseGeminiAuth } from "./gemini-auth.js";
 

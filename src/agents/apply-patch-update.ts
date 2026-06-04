@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
 
+// Update-hunk application for the apply_patch parser. It locates expected old
+// lines with tolerant matching, applies chunks in order, and returns normalized
+// file contents with a trailing newline.
 type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];
@@ -12,6 +15,7 @@ async function defaultReadFile(filePath: string): Promise<string> {
   return fs.readFile(filePath, "utf8");
 }
 
+/** Apply parsed update chunks to one file and return the new file contents. */
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
@@ -69,6 +73,8 @@ function computeReplacements(
     let found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
 
     if (found === null && pattern[pattern.length - 1] === "") {
+      // Parsed hunks may carry an EOF sentinel as a blank trailing line. Retry
+      // without it so equivalent file contents still match.
       pattern = pattern.slice(0, -1);
       if (newSlice.length > 0 && newSlice[newSlice.length - 1] === "") {
         newSlice = newSlice.slice(0, -1);
@@ -95,6 +101,8 @@ function applyReplacements(
   replacements: Array<[number, number, string[]]>,
 ): string[] {
   const result = [...lines];
+  // Apply from the end of the file backward so earlier replacement indexes stay
+  // stable while later replacements mutate the array.
   for (const [startIndex, oldLen, newLines] of [...replacements].toReversed()) {
     for (let i = 0; i < oldLen; i += 1) {
       if (startIndex < result.length) {
@@ -132,6 +140,9 @@ function seekSequence(
       return i;
     }
   }
+  // Fall back through increasingly tolerant comparisons. This preserves normal
+  // exact matching while accepting whitespace/punctuation differences common in
+  // generated patch text.
   for (let i = searchStart; i <= maxStart; i += 1) {
     if (linesMatch(lines, pattern, i, (value) => value.trimEnd())) {
       return i;

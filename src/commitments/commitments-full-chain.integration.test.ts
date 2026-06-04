@@ -1,3 +1,4 @@
+// Exercises the full commitment extraction-to-follow-up chain.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";

@@ -1,3 +1,4 @@
+/** Builds /status replies using the command's authorized channel context. */
 import { logVerbose } from "../../globals.js";
 import { buildStatusText } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
@@ -9,6 +10,7 @@ type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
   command: CommandContext;
 };
 
+/** Builds a status reply or suppresses unauthorized status requests. */
 export async function buildStatusReply(
   params: BuildStatusReplyParams,
 ): Promise<ReplyPayload | undefined> {

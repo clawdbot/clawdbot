@@ -1,9 +1,11 @@
+// Setup command registration: baseline setup by default, onboarding wizard when wizard flags appear.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 
+/** Register the `setup` command and route wizard-style invocations to onboarding. */
 export function registerSetupCommand(program: Command): void {
   program
     .command("setup")
@@ -49,6 +51,7 @@ export function registerSetupCommand(program: Command): void {
           "remoteUrl",
           "remoteToken",
         ]);
+        // Any onboarding-only flag means the user intended the wizard path even without --wizard.
         if (opts.wizard || hasWizardFlags) {
           const { setupWizardCommand } = await import("../../commands/onboard.js");
           await setupWizardCommand(

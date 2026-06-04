@@ -1,3 +1,4 @@
+/** Private command reply routing for sensitive owner-only command output. */
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,6 +15,7 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
+/** Resolved private delivery target for command replies and approvals. */
 export type PrivateCommandRouteTarget = {
   channel: string;
   to: string;
@@ -24,6 +26,7 @@ export type PrivateCommandRouteTarget = {
 const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
 const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
 
+/** Resolves expiry timestamp for temporary private approval routes. */
 export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()): number {
   return (
     resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, { nowMs }) ??
@@ -31,6 +34,7 @@ export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()
   );
 }
 
+/** Finds private owner DM routes that can receive sensitive command replies. */
 export async function resolvePrivateCommandRouteTargets(params: {
   commandParams: HandleCommandsParams;
   request: ExecApprovalRequest;
@@ -80,6 +84,7 @@ export async function resolvePrivateCommandRouteTargets(params: {
   });
 }
 
+/** Delivers a sensitive command reply to the resolved private targets. */
 export async function deliverPrivateCommandReply(params: {
   commandParams: HandleCommandsParams;
   targets: PrivateCommandRouteTarget[];
@@ -105,6 +110,7 @@ export async function deliverPrivateCommandReply(params: {
   return results.some((result) => result.status === "fulfilled" && result.value.ok);
 }
 
+/** Reads the command message thread id from command context. */
 export function readCommandMessageThreadId(params: HandleCommandsParams): string | undefined {
   return typeof params.ctx.MessageThreadId === "string" ||
     typeof params.ctx.MessageThreadId === "number"
@@ -112,6 +118,7 @@ export function readCommandMessageThreadId(params: HandleCommandsParams): string
     : undefined;
 }
 
+/** Reads the best delivery target for command route resolution. */
 export function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
   return (
     normalizeOptionalString(params.ctx.OriginatingTo) ??

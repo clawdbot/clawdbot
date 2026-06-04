@@ -1,3 +1,4 @@
+// Covers abort-signal wiring patterns used by async infrastructure helpers.
 import { describe, expect, it, vi } from "vitest";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 

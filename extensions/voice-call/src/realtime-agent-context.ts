@@ -5,6 +5,9 @@ import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
+// Builds compact agent context injected into realtime voice sessions.
+
+/** Agent identity subset used by voice instructions. */
 type VoiceIdentityLike = {
   name?: unknown;
   emoji?: unknown;
@@ -13,6 +16,7 @@ type VoiceIdentityLike = {
   vibe?: unknown;
 };
 
+/** Limit injected context while preserving an explicit truncation marker. */
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
@@ -20,6 +24,7 @@ function limitText(text: string, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
 }
 
+/** Read configured workspace context files through the safe workspace root. */
 async function readWorkspaceVoiceContextFiles(params: {
   workspaceDir: string;
   files: readonly string[];
@@ -48,6 +53,7 @@ async function readWorkspaceVoiceContextFiles(params: {
   return sections;
 }
 
+/** Build final realtime instructions from base instructions, consult policy, and fast context. */
 export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
@@ -98,6 +104,7 @@ export async function buildRealtimeVoiceInstructions(params: {
       params.coreConfig as OpenClawConfig,
       agentId,
     );
+    // Workspace reads stay under the agent root; missing or unreadable context files are omitted.
     const fileSections = await readWorkspaceVoiceContextFiles({
       workspaceDir,
       files: contextConfig.files,

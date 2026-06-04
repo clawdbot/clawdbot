@@ -1,3 +1,4 @@
+// Covers provider catalog entries derived from plugin metadata.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";

@@ -1,6 +1,13 @@
 import { Type } from "typebox";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
+/**
+ * Agent and channel-action gateway schemas.
+ *
+ * These payloads sit on the boundary between external channel adapters, gateway
+ * RPC callers, and the agent runtime. Keep public request fields documented
+ * because older CLI/channel clients may continue sending them across releases.
+ */
 const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion";
 const AGENT_INTERNAL_EVENT_SOURCES = [
   "subagent",
@@ -11,6 +18,7 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
 
+/** Generated media/file attachment metadata carried by internal agent events. */
 export const AgentGeneratedAttachmentSchema = Type.Object(
   {
     type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
@@ -24,6 +32,7 @@ export const AgentGeneratedAttachmentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Internal completion event surfaced when child automation reports back to a parent run. */
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -43,6 +52,7 @@ export const AgentInternalEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Stream event emitted by the agent runtime over the gateway protocol. */
 export const AgentEventSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -56,6 +66,7 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Channel context injected into message actions so tools can reply in-place. */
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
@@ -84,6 +95,7 @@ export const MessageActionToolContextSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Request to execute a channel message action through a configured adapter. */
 export const MessageActionParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -106,6 +118,7 @@ export const MessageActionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Outbound send request shared by channel adapters. */
 export const SendParamsSchema = Type.Object(
   {
     to: NonEmptyString,
@@ -135,6 +148,7 @@ export const SendParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Poll creation request for adapters that support native polls. */
 export const PollParamsSchema = Type.Object(
   {
     to: NonEmptyString,
@@ -157,6 +171,7 @@ export const PollParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Main agent-run request accepted by the gateway. */
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
@@ -212,6 +227,7 @@ export const AgentParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Identity lookup request for the current or selected agent/session. */
 export const AgentIdentityParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -220,6 +236,7 @@ export const AgentIdentityParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Public display identity returned for an agent. */
 export const AgentIdentityResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -233,6 +250,7 @@ export const AgentIdentityResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Waits for a submitted agent run to complete or time out. */
 export const AgentWaitParamsSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -241,6 +259,7 @@ export const AgentWaitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Wake request from external schedulers or devices into an agent session. */
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),

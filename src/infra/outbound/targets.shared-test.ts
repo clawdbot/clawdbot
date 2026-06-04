@@ -8,6 +8,7 @@ import {
   createTestChannelPlugin,
 } from "./targets.test-helpers.js";
 
+/** Installs target-resolution plugin registry fixtures around shared tests. */
 export function installResolveOutboundTargetPluginRegistryHooks(): void {
   beforeEach(() => {
     setActivePluginRegistry(

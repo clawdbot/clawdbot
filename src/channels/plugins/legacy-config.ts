@@ -5,6 +5,8 @@ import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
 import type { ChannelId } from "./types.public.js";
 
+// Collects channel-owned legacy config rules for validator fast paths. Bundled
+// contract APIs are checked before plugin doctor hooks so startup stays cheap.
 function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
   if (!raw || typeof raw !== "object") {
     return [];
@@ -25,6 +27,8 @@ function shouldIncludeLegacyRuleForTouchedPaths(
   if (!touchedPaths || touchedPaths.length === 0) {
     return true;
   }
+  // A rule is relevant when either side is a prefix of the other. This lets a
+  // changed parent path include child rules without scanning all config rules.
   return touchedPaths.some((touchedPath) => {
     const sharedLength = Math.min(rulePath.length, touchedPath.length);
     for (let index = 0; index < sharedLength; index += 1) {
@@ -61,6 +65,8 @@ function collectRelevantChannelIdsForTouchedPaths(params: {
     if (second === "defaults") {
       continue;
     }
+    // Channel ids are the second segment under channels.*; deeper touched paths
+    // still map back to the owning channel for rule collection.
     touchedChannelIds.add(second as ChannelId);
   }
 
@@ -99,6 +105,8 @@ export function collectChannelLegacyConfigRules(
       continue;
     }
 
+    // Unknown configured channels may be externally installed plugins. Ask the
+    // plugin doctor registry only after bundled/bootstrap lookups miss.
     unresolvedChannelIds.push(channelId);
   }
   if (unresolvedChannelIds.length > 0) {

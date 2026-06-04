@@ -1,3 +1,9 @@
+/**
+ * Tool model config and auth helpers.
+ *
+ * Model-backed tools use this module to choose provider/model refs and check
+ * whether candidate providers have usable auth before exposing defaults.
+ */
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -19,12 +25,14 @@ import { resolveConfiguredModelRef } from "../model-selection.js";
 
 export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
 
+/** Returns whether a tool model config contains a primary or fallback model ref. */
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
   return Boolean(
     model?.primary?.trim() || (model?.fallbacks ?? []).some((entry) => entry.trim().length > 0),
   );
 }
 
+/** Resolves the configured default model ref, falling back to OpenClaw defaults. */
 export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string; model: string } {
   if (cfg) {
     const resolved = resolveConfiguredModelRef({
@@ -37,6 +45,7 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
   return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 }
 
+/** Returns whether a provider has env, profile, or external CLI auth available. */
 export function hasAuthForProvider(params: {
   provider: string;
   agentDir?: string;
@@ -48,6 +57,7 @@ export function hasAuthForProvider(params: {
   return hasAuthProfileForProvider({ ...params, includeExternalCli: true });
 }
 
+/** Returns whether an auth profile exists for a provider, optionally filtered by type. */
 export function hasAuthProfileForProvider(params: {
   provider: string;
   agentDir?: string;
@@ -64,6 +74,8 @@ export function hasAuthProfileForProvider(params: {
     if (!hasAnyAuthProfileStoreSource(agentDir)) {
       return false;
     }
+    // Only include external CLI profiles when callers explicitly want live
+    // provider availability, not when checking stored profile shape.
     store = params.includeExternalCli
       ? ensureAuthProfileStore(agentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
@@ -79,6 +91,7 @@ export function hasAuthProfileForProvider(params: {
   return profileIds.some((profileId) => store.profiles[profileId]?.type === params.type);
 }
 
+/** Returns whether a provider can be used by a model-backed tool. */
 export function hasProviderAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -98,6 +111,7 @@ export function hasProviderAuthForTool(params: {
   return hasUsableCustomProviderApiKey(params.cfg, params.provider);
 }
 
+/** Normalizes agent tool model config into a compact runtime shape. */
 export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
@@ -109,6 +123,7 @@ export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelCo
   };
 }
 
+/** Builds a tool model config from configured auth-aware candidate model refs. */
 export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;
@@ -129,6 +144,8 @@ export function buildToolModelConfigFromCandidates(params: {
       continue;
     }
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
+    // Candidate defaults are only surfaced when the provider is configured or
+    // has auth, so tools do not advertise unusable model refs.
     const providerConfigured =
       params.isProviderConfigured?.(provider) ??
       hasProviderAuthForTool({

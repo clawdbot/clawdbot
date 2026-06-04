@@ -44,6 +44,7 @@ function renderCompactTerminalQr(modules: QrTerminalModules): string {
   return lines.join("\n");
 }
 
+/** Renders QR text for terminal display, with an optional compact half-block mode. */
 export async function renderQrTerminal(
   input: string,
   opts: { small?: boolean } = {},
@@ -51,6 +52,7 @@ export async function renderQrTerminal(
   const text = normalizeQrText(input);
   const qrCode = await loadQrCodeRuntime();
   if (opts.small === true) {
+    // Avoid qrcode's small terminal mode so we control quiet-zone size and ANSI reset placement.
     return renderCompactTerminalQr(qrCode.create(text).modules);
   }
   return await qrCode.toString(text, {

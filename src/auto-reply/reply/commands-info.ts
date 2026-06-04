@@ -1,3 +1,4 @@
+/** Handles informational commands such as /help, /commands, /tools, and exports. */
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -46,6 +47,7 @@ async function resolveSkillCommands(
   });
 }
 
+/** Command handler for /help. */
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -65,6 +67,7 @@ export const handleHelpCommand: CommandHandler = async (params, allowTextCommand
   };
 };
 
+/** Command handler for /commands. */
 export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -125,6 +128,7 @@ function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams[
   return lines.join("\n");
 }
 
+/** Command handler for /skill usage help. */
 export const handleSkillCommandUsage: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -157,6 +161,7 @@ export const handleSkillCommandUsage: CommandHandler = async (params, allowTextC
   };
 };
 
+/** Command handler for /tools. */
 export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -243,6 +248,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 };
 
+/** Command handler for /status. */
 export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -284,6 +290,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
   return { shouldContinue: false, reply };
 };
 
+/** Command handler for /export-session. */
 export const handleExportSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -306,6 +313,7 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
 
+/** Command handler for /export-trajectory. */
 export const handleExportTrajectoryCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

@@ -24,8 +24,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/**
+ * Shared data shapes and classification helpers for session tools.
+ *
+ * Session list/send/status tools use this module to agree on row fields,
+ * requester visibility context, and compact session kind/channel labels.
+ */
+/** Coarse session category used by session list/status tools. */
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
+/** Delivery target metadata attached to session rows. */
 export type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
@@ -33,8 +41,10 @@ export type SessionListDeliveryContext = {
   threadId?: string | number;
 };
 
+/** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+/** Normalized session row returned by session list-style tools. */
 export type SessionListRow = {
   key: string;
   agentId?: string;
@@ -79,6 +89,7 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+/** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -95,6 +106,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
+/** Classifies a session key/gateway kind into the row category used by tools. */
 export function classifySessionKind(params: {
   key: string;
   gatewayKind?: string | null;
@@ -118,11 +130,13 @@ export function classifySessionKind(params: {
     return "group";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
+    // Gateway-less archived rows still encode group/channel shape in the session key.
     return "group";
   }
   return "other";
 }
 
+/** Derives the best channel label for a session row. */
 export function deriveChannel(params: {
   key: string;
   kind: SessionKind;

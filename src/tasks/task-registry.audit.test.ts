@@ -1,3 +1,4 @@
+// Covers task registry audit summaries used for maintenance diagnostics.
 import { describe, expect, it } from "vitest";
 import {
   listTaskAuditFindings,

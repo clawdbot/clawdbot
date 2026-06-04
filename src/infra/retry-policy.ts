@@ -1,9 +1,12 @@
+// Defines reusable retry envelopes for channel and network operations.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
+/** Runs an async operation with a policy-specific retry wrapper and optional log label. */
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
+/** Default retry envelope for channel API operations that hit transient network edges. */
 export const CHANNEL_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
@@ -25,6 +28,8 @@ function resolveChannelApiShouldRetry(params: {
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
+  // Channel APIs often wrap network failures differently by provider. Keep the
+  // fallback regex unless callers opt into strict idempotency control.
   return (err: unknown) =>
     params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
 }
@@ -34,6 +39,8 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
     return undefined;
   }
   const candidate =
+    // Telegram-style clients may expose retry_after on the root error, response,
+    // or nested error object; keep all shapes aligned so rate-limit sleeps match.
     "parameters" in err && err.parameters && typeof err.parameters === "object"
       ? (err.parameters as { retry_after?: unknown }).retry_after
       : "response" in err &&
@@ -51,6 +58,7 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
+/** Creates a generic rate-limit-aware retry runner from explicit retry policy pieces. */
 export function createRateLimitRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
@@ -82,6 +90,7 @@ export function createRateLimitRetryRunner(params: {
     });
 }
 
+/** Creates the channel API retry runner used by outbound messaging integrations. */
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;

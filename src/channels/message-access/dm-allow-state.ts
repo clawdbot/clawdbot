@@ -2,6 +2,8 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { ChannelId } from "../plugins/types.public.js";
 import { readChannelIngressStoreAllowFromForDmPolicy } from "./runtime.js";
 
+// Builds the normalized DM allowlist state used by audits and setup prompts.
+// Config and persisted ingress-store entries are merged before counting users.
 export async function resolveDmAllowAuditState(params: {
   provider: ChannelId;
   accountId: string;

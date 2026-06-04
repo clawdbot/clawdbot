@@ -1,3 +1,4 @@
+// Verifies task-flow owner access checks for parent and child sessions.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findLatestTaskFlowForOwner,

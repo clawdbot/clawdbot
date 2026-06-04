@@ -865,10 +865,37 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
 
 export type ChatSendAckStatus = "started" | "in_flight" | "ok";
 
+export type ChatSendAckServerTiming = {
+  receivedToAckMs?: number;
+  loadSessionMs?: number;
+  prepareAttachmentsMs?: number;
+};
+
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  serverTiming?: ChatSendAckServerTiming;
 };
+
+function normalizeAckTimingValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
+  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
+  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
+  const timing: ChatSendAckServerTiming = {
+    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
+    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
+    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+  };
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
 
 function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
   if (!payload || typeof payload !== "object") {
@@ -878,9 +905,11 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const runId =
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
+  const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
     status: status === "in_flight" || status === "ok" ? status : "started",
+    ...(serverTiming ? { serverTiming } : {}),
   };
 }
 
@@ -894,6 +923,28 @@ export async function requestChatSend(
     agentId?: string;
   },
 ): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, params);
+  const payload = await state.client!.request("chat.send", {
+    sessionKey: routing.sessionKey,
+    ...(isGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
+      ? { agentId: routing.selectedAgentId }
+      : {}),
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
+  return normalizeChatSendAck(payload, params.runId);
+}
+
+function resolveChatSendRouting(
+  state: ChatState,
+  params: {
+    sessionKey?: string;
+    agentId?: string;
+  },
+): { selectedAgentId?: string; sessionId?: string; sessionKey: string } {
   const sessionKey = params.sessionKey ?? state.sessionKey;
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
@@ -907,14 +958,36 @@ export async function requestChatSend(
     canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
       ? currentSessionId.trim()
       : undefined;
-  const payload = await state.client!.request("chat.send", {
+  return {
     sessionKey,
-    ...(isGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
+    ...(selectedAgentId ? { selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
-    message: params.message,
-    deliver: false,
+  };
+}
+
+export async function requestSkillWorkshopRevisionChatSend(
+  state: ChatState,
+  params: {
+    proposalId: string;
+    instructions: string;
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+    targetAgentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, {
+    sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
+  });
+  const payload = await state.client!.request("skills.proposals.requestRevision", {
+    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
+    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
+    proposalId: params.proposalId,
+    instructions: params.instructions,
+    sessionKey: routing.sessionKey,
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
     idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
   });
   return normalizeChatSendAck(payload, params.runId);
 }

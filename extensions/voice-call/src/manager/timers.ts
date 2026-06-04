@@ -6,6 +6,8 @@ import {
   resolveVoiceCallTimerDelayMs,
 } from "./timer-delays.js";
 
+// Max-duration and transcript-waiter timers for active voice calls.
+
 type TimerContext = Pick<
   CallManagerContext,
   "activeCalls" | "maxDurationTimers" | "config" | "storePath" | "transcriptWaiters"
@@ -16,6 +18,7 @@ type MaxDurationTimerContext = Pick<
 >;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
 
+/** Clear and forget the max-duration timer for a call. */
 export function clearMaxDurationTimer(
   ctx: Pick<MaxDurationTimerContext, "maxDurationTimers">,
   callId: CallId,
@@ -27,6 +30,7 @@ export function clearMaxDurationTimer(
   }
 }
 
+/** Start or replace the max-duration timer for a call. */
 export function startMaxDurationTimer(params: {
   ctx: MaxDurationTimerContext;
   callId: CallId;
@@ -53,6 +57,7 @@ export function startMaxDurationTimer(params: {
         );
         call.endReason = "timeout";
         persistCallRecord(params.ctx.storePath, call);
+        // Provider-specific timeout handling owns the actual hangup after state persistence.
         await params.onTimeout(params.callId);
       }
     })();
@@ -61,6 +66,7 @@ export function startMaxDurationTimer(params: {
   params.ctx.maxDurationTimers.set(params.callId, timer);
 }
 
+/** Clear and forget a pending final-transcript waiter. */
 export function clearTranscriptWaiter(ctx: TranscriptWaiterContext, callId: CallId): void {
   const waiter = ctx.transcriptWaiters.get(callId);
   if (!waiter) {
@@ -70,6 +76,7 @@ export function clearTranscriptWaiter(ctx: TranscriptWaiterContext, callId: Call
   ctx.transcriptWaiters.delete(callId);
 }
 
+/** Reject a pending transcript waiter during call finalization or error paths. */
 export function rejectTranscriptWaiter(
   ctx: TranscriptWaiterContext,
   callId: CallId,
@@ -83,6 +90,7 @@ export function rejectTranscriptWaiter(
   waiter.reject(new Error(reason));
 }
 
+/** Resolve a transcript waiter when the matching turn's final transcript arrives. */
 export function resolveTranscriptWaiter(
   ctx: TranscriptWaiterContext,
   callId: CallId,
@@ -101,6 +109,7 @@ export function resolveTranscriptWaiter(
   return true;
 }
 
+/** Wait for the next final transcript for a call, optionally scoped to a turn token. */
 export function waitForFinalTranscript(
   ctx: TimerContext,
   callId: CallId,

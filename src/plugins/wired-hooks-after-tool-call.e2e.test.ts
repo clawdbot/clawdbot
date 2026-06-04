@@ -1,3 +1,4 @@
+// Exercises wired plugin hooks after tool-call completion.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)

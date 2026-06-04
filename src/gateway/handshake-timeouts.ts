@@ -1,3 +1,5 @@
+// Re-export gateway-client handshake timeout helpers so server code and client
+// packages share the same preauth/connect timeout bounds.
 export {
   clampConnectChallengeTimeoutMs,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,

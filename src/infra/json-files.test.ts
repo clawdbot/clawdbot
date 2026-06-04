@@ -1,3 +1,4 @@
+// Covers durable JSON read/write helpers, parse failures, and atomic update behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

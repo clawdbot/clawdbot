@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+// Legacy OAuth references used by older Codex/OpenClaw credential files. Keep
+// this recognizer strict so migration code only preserves known legacy refs.
 export const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
 export const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
 
@@ -9,6 +11,7 @@ export type LegacyOAuthRef = {
   id: string;
 };
 
+/** Return true for the legacy OAuth reference shape persisted by older stores. */
 export function isLegacyOAuthRef(value: unknown): value is LegacyOAuthRef {
   if (!isRecord(value)) {
     return false;

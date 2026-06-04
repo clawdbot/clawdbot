@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -20,6 +19,7 @@ afterAll(() => {
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
+let loadPersistedAuthProfileStore: typeof import("./auth-profiles/persisted.js").loadPersistedAuthProfileStore;
 let resolveApiKeyForProfile: typeof import("./auth-profiles.js").resolveApiKeyForProfile;
 let resetFileLockStateForTest: typeof import("../infra/file-lock.js").resetFileLockStateForTest;
 
@@ -27,6 +27,7 @@ describe("auth-profiles (chutes)", () => {
   beforeAll(async () => {
     ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore, resolveApiKeyForProfile } =
       await import("./auth-profiles.js"));
+    ({ loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js"));
     ({ resetFileLockStateForTest } = await import("../infra/file-lock.js"));
   });
 
@@ -65,7 +66,7 @@ describe("auth-profiles (chutes)", () => {
             },
           },
         };
-        const authProfilePath = await state.writeAuthProfiles(store);
+        await state.writeAuthProfiles(store);
 
         const fetchSpy = vi.fn(async (input: string | URL) => {
           const url = typeof input === "string" ? input : input.toString();
@@ -92,10 +93,12 @@ describe("auth-profiles (chutes)", () => {
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         expect(fetchSpy).toHaveBeenCalledWith(CHUTES_TOKEN_ENDPOINT, expect.any(Object));
 
-        const persisted = JSON.parse(await fs.readFile(authProfilePath, "utf8")) as {
-          profiles?: Record<string, { access?: string }>;
-        };
-        expect(persisted.profiles?.["chutes:default"]?.access).toBe("at_new");
+        const persisted = loadPersistedAuthProfileStore(state.agentDir());
+        const persistedCredential = persisted?.profiles["chutes:default"];
+        expect(persistedCredential?.type).toBe("oauth");
+        expect(persistedCredential?.type === "oauth" ? persistedCredential.access : undefined).toBe(
+          "at_new",
+        );
       },
     );
   });

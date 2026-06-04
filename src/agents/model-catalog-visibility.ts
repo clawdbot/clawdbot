@@ -8,6 +8,8 @@ import {
   createModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 
+// Model catalog visibility resolver for browse/UI surfaces. It combines explicit
+// visibility policy with configured models and auth-backed runtime availability.
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";
@@ -25,6 +27,8 @@ function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<bool
 }
 
 function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
+  // OpenAI platform entries for current Codex-routable ids can use the ChatGPT
+  // Responses auth path even when their catalog API is not already that API.
   return (
     entry.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
     entry.api !== undefined &&
@@ -52,6 +56,8 @@ async function providerHasAuth(
   if (await resolveProviderAuthCheck(providerAuthChecker, entry.provider, entry.api)) {
     return true;
   }
+  // Codex-routable OpenAI models may be available through a sibling Responses
+  // auth route, so check that route before hiding the catalog entry.
   return isCodexRoutableOpenAIPlatformCatalogEntry(entry)
     ? await resolveProviderAuthCheck(
         providerAuthChecker,
@@ -68,6 +74,8 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
 }
 
 function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  // Preserve the first occurrence after precedence merging while removing
+  // provider/id duplicates from configured and auth-backed catalogs.
   const seen = new Set<string>();
   const next: ModelCatalogEntry[] = [];
   for (const entry of entries) {
@@ -81,6 +89,10 @@ function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEn
   return next;
 }
 
+/**
+ * Resolve catalog entries visible for one view, honoring explicit visibility
+ * policy, configured models, and providers with usable auth.
+ */
 export async function resolveVisibleModelCatalog(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
@@ -132,6 +144,9 @@ export async function resolveVisibleModelCatalog(params: {
     agentId: params.agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
+  // When policy allows wildcards, the default visible set includes configured
+  // entries plus auth-backed entries. Otherwise the policy operates on explicit
+  // catalog selections only.
   const defaultVisibleCatalog =
     policy.allowAny || policy.hasProviderWildcards ? await buildDefaultVisibleCatalog() : [];
   return sortModelCatalogEntries(

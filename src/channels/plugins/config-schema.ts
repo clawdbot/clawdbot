@@ -18,9 +18,12 @@ type ExtendableZodObject = ZodTypeAny & {
   extend: (shape: Record<string, ZodTypeAny>) => ZodTypeAny;
 };
 
+/** Shared allowlist entry shape for channel sender/user ids. */
 export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
+/** Optional allowlist array used by channel config schema builders. */
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
+/** Build the common nested DM config block used by channel account schemas. */
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   const baseShape = {
     enabled: z.boolean().optional(),
@@ -30,6 +33,7 @@ export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   return z.object(extraShape ? { ...baseShape, ...extraShape } : baseShape).optional();
 }
 
+/** Add `accounts` catchall and `defaultAccount` fields to a channel account schema. */
 export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodObject>(
   accountSchema: T,
 ): T {
@@ -112,6 +116,7 @@ function safeParseJsonSchema(
   };
 }
 
+/** Build a channel config schema from JSON Schema with runtime validation/default support. */
 export function buildJsonChannelConfigSchema(
   schema: JsonSchemaObject,
   options?: BuildJsonChannelConfigSchemaOptions,
@@ -126,6 +131,7 @@ export function buildJsonChannelConfigSchema(
   };
 }
 
+/** Build a channel config schema from Zod, exporting JSON Schema when available. */
 export function buildChannelConfigSchema(
   schema: ZodTypeAny,
   options?: BuildChannelConfigSchemaOptions,
@@ -158,6 +164,7 @@ export function buildChannelConfigSchema(
   };
 }
 
+/** Return a channel config schema for channels that intentionally accept no config keys. */
 export function emptyChannelConfigSchema(): ChannelConfigSchema {
   return {
     schema: {

@@ -1,3 +1,4 @@
+/** Builds the ACP available-command list exposed to compatible clients. */
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { getChatCommands } from "../auto-reply/commands-registry.data.js";
 
@@ -45,6 +46,7 @@ function listDockAvailableCommands(): AvailableCommand[] {
     }));
 }
 
+/** Returns static ACP commands plus plugin-registered dock commands. */
 export function getAvailableCommands(): AvailableCommand[] {
   return [...BASE_AVAILABLE_COMMANDS, ...listDockAvailableCommands()];
 }

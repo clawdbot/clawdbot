@@ -1,3 +1,4 @@
+/** Covers plugin compaction provider registration and lookup behavior. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearCompactionProviders,

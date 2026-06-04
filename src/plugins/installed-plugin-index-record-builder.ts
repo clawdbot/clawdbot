@@ -1,3 +1,4 @@
+/** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
@@ -64,6 +65,7 @@ function buildContributionInfo(record: PluginManifestRecord): InstalledPluginCon
   };
 }
 
+/** Collects compatibility codes implied by a manifest's legacy or activation surfaces. */
 export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {

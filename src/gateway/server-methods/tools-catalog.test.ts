@@ -1,3 +1,6 @@
+/**
+ * Tests for tool catalog gateway methods and plugin tool visibility.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {

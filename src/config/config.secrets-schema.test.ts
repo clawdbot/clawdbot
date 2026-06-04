@@ -1,3 +1,4 @@
+// Verifies secrets schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,

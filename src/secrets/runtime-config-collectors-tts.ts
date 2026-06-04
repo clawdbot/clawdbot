@@ -1,3 +1,4 @@
+/** Collects text-to-speech secret refs from runtime config. */
 import {
   collectSecretInputAssignment,
   type ResolverContext,
@@ -28,6 +29,7 @@ function collectProviderApiKeyAssignment(params: {
   });
 }
 
+/** Collects provider API key SecretRefs from a TTS config block. */
 export function collectTtsApiKeyAssignments(params: {
   tts: Record<string, unknown>;
   pathPrefix: string;

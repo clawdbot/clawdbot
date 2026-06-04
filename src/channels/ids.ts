@@ -2,6 +2,9 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
+/**
+ * Canonical chat channel id used by core routing, plugin config, and channel catalogs.
+ */
 export type ChatChannelId = string;
 
 type BundledChatChannelEntry = {
@@ -27,12 +30,21 @@ const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(listBundledChatChannelEntries
 const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
 let runtimeBundledChatChannelEntries: BundledChatChannelEntry[] | null = null;
 
+/**
+ * Stable built-in channel order derived from generated bundled channel metadata.
+ */
 export const CHAT_CHANNEL_ORDER = Object.freeze(
   BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id),
 );
 
+/**
+ * Alias retained for callers that still refer to chat channel ordering as channel ids.
+ */
 export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 
+/**
+ * Maps configured built-in channel aliases to canonical chat channel ids.
+ */
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
     BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
@@ -41,11 +53,16 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze
   ),
 ) as Record<string, ChatChannelId>;
 
+/**
+ * Lists configured built-in chat channel aliases.
+ */
 export function listChatChannelAliases(): string[] {
   return Object.keys(CHAT_CHANNEL_ALIASES);
 }
 
 function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
+  // Generated metadata is the hot-path source. The runtime catalog fallback covers
+  // dynamically registered bundled metadata without repeated catalog reads.
   runtimeBundledChatChannelEntries ??= listBundledChannelCatalogEntries().map((entry) => ({
     id: entry.id,
     aliases: entry.aliases,
@@ -63,6 +80,9 @@ function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId
   return null;
 }
 
+/**
+ * Normalizes a raw chat channel id or alias to a known canonical built-in channel id.
+ */
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {

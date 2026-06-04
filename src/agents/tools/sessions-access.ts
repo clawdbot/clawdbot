@@ -4,6 +4,12 @@ import { resolveSandboxSessionToolsVisibility } from "../../plugin-sdk/session-v
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-resolution.js";
 
+/**
+ * Session visibility/access helpers shared by session tools.
+ *
+ * Re-exports the SDK visibility contracts and adds OpenClaw session-key alias
+ * normalization for sandboxed tool callers.
+ */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
@@ -13,6 +19,7 @@ export {
   resolveEffectiveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 
+/** Resolves the requester context used to filter sandboxed session-tool access. */
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -41,6 +48,7 @@ export function resolveSandboxedSessionToolContext(params: {
     visibility === "spawned" &&
     Boolean(requesterInternalKey) &&
     !isSubagentSessionKey(requesterInternalKey);
+  // Main sessions can see all sessions; sandboxed non-subagent callers stay scoped to spawned rows.
   return {
     mainKey,
     alias,

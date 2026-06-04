@@ -1,3 +1,4 @@
+// Covers install target canonicalization and occupied-directory checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";

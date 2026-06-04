@@ -1,3 +1,10 @@
+/**
+ * Live-provider model error classifiers.
+ *
+ * Probe and fallback code uses these string checks to distinguish missing or
+ * deprecated model ids from generic provider/runtime failures.
+ */
+/** Returns whether a provider error message indicates a missing or retired model id. */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
   if (!msg) {
@@ -45,6 +52,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+/** Returns whether a MiniMax HTML-style 404 body is a model-not-found signal. */
 export function isMiniMaxModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
   if (!msg) {

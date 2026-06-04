@@ -1,3 +1,4 @@
+/** Public queue API for deferred auto-reply follow-up runs. */
 export { extractQueueDirective } from "./queue/directive.js";
 export { clearSessionQueues } from "./queue/cleanup.js";
 export type { ClearSessionQueueResult } from "./queue/cleanup.js";

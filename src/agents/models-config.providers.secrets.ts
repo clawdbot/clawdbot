@@ -22,6 +22,9 @@ import {
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
+// Provider auth resolution entry points. These functions return marker values
+// for config/env/profile sources so model discovery can prove auth without
+// exposing secret material in generated model config.
 export type {
   ProfileApiKeyResolution,
   ProviderApiKeyResolver,
@@ -62,6 +65,8 @@ function createProviderAuthLookupCaches(
   let caches: ProviderAuthLookupCaches | undefined;
   return () => {
     if (!caches) {
+      // Env auth lookup maps are process-stable for a resolver instance, so one
+      // cached normalization pass avoids repeating alias/candidate expansion.
       const lookupMaps = resolveProviderEnvAuthLookupMaps({ config, env });
       caches = {
         aliasMap: lookupMaps.aliasMap,
@@ -99,6 +104,8 @@ export function createProviderApiKeyResolver(
       authEvidenceMap: lookupCaches.authEvidenceMap,
     });
     if (envVar) {
+      // Public return value carries the env var name, while discovery receives
+      // only the redacted/hashable value form.
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
@@ -130,6 +137,7 @@ export function createProviderApiKeyResolver(
   };
 }
 
+/** Create a resolver that reports provider auth mode and provenance. */
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
@@ -157,6 +165,8 @@ export function createProviderAuthResolver(
         continue;
       }
       if (cred.type === "oauth") {
+        // Prefer concrete API-key profiles, but keep one OAuth profile as a
+        // fallback so provider routing can advertise OAuth-backed availability.
         oauthCandidate ??= {
           apiKey: options?.oauthMarker,
           discoveryApiKey: toDiscoveryApiKey(cred.access),
@@ -245,6 +255,8 @@ function resolveConfigBackedProviderAuth(params: {
   });
   const apiKey = synthetic?.apiKey?.trim();
   if (apiKey) {
+    // Synthetic plugin auth can prove configured availability, but non-marker
+    // values must not be written back as raw generated config secrets.
     return isNonSecretApiKeyMarker(apiKey)
       ? {
           apiKey,
@@ -267,6 +279,8 @@ function resolveConfigBackedProviderAuth(params: {
     defaults: params.config?.secrets?.defaults,
   }).ref;
   if (configuredApiKeyRef) {
+    // Secret refs are preserved as markers. Env refs can still provide a
+    // discovery value from the current process without exposing the secret name's value.
     if (configuredApiKeyRef.source === "env") {
       const envVar = configuredApiKeyRef.id.trim();
       const envValue = params.env?.[envVar]?.trim();

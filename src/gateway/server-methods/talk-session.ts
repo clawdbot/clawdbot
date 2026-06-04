@@ -68,6 +68,12 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+/**
+ * Gateway-managed Talk session methods for managed rooms and audio relays.
+ *
+ * The public `sessionId` is resolved through the unified registry so each RPC
+ * can enforce the correct connection ownership for its concrete backend.
+ */
 type ManagedRoomTalkSession = Extract<UnifiedTalkSessionRecord, { kind: "managed-room" }>;
 
 function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
@@ -181,6 +187,7 @@ function respondManagedRoomTurn(params: {
   respondOk(params.respond, { ok: true, turnId: result.turnId, events: result.events });
 }
 
+/** RPC handlers for gateway-managed Talk sessions and room lifecycle. */
 export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.create": async ({ params, respond, context, client }) => {
     if (

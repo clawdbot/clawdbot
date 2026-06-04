@@ -1,3 +1,4 @@
+// Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";

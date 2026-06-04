@@ -1,3 +1,6 @@
+/**
+ * Tests session utility interactions with plugin runtime state.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";

@@ -1,3 +1,4 @@
+/** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
@@ -6,6 +7,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
 
+/** Builds the registry record shape shared by plugin loading, status, and diagnostics. */
 export function createPluginRecord(params: {
   id: string;
   name?: string;
@@ -50,6 +52,7 @@ export function createPluginRecord(params: {
     activationSource: params.activationState?.source,
     activationReason: params.activationState?.reason,
     syntheticAuthRefs: params.syntheticAuthRefs ?? [],
+    // Disabled records still enter the registry so status/doctor can explain why they are inactive.
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
@@ -84,12 +87,14 @@ export function createPluginRecord(params: {
   };
 }
 
+/** Marks a discovered plugin inactive without discarding its metadata record. */
 export function markPluginActivationDisabled(record: PluginRecord, reason?: string): void {
   record.activated = false;
   record.activationSource = "disabled";
   record.activationReason = reason;
 }
 
+/** Joins auto-enable reasons into the single registry field shown by status surfaces. */
 export function formatAutoEnabledActivationReason(
   reasons: readonly string[] | undefined,
 ): string | undefined {
@@ -99,6 +104,7 @@ export function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
+/** Records a loader failure in the registry, diagnostics list, and operator log consistently. */
 export function recordPluginError(params: {
   logger: PluginLogger;
   registry: PluginRegistry;
@@ -121,6 +127,7 @@ export function recordPluginError(params: {
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
+  // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
   const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
   params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
@@ -137,6 +144,7 @@ export function recordPluginError(params: {
   });
 }
 
+/** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
   const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
   for (const plugin of failedPlugins) {

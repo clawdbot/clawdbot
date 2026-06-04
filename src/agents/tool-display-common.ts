@@ -7,6 +7,8 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
+// Shared formatting helpers for compact tool-call display labels. Display text
+// is redacted and summarized so tool updates stay readable in chat/UI streams.
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
@@ -35,10 +37,12 @@ type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
+/** Normalize a tool name for fallback display. */
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Convert a tool identifier into a human-readable title. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -75,6 +79,7 @@ function resolveActionArg(args: unknown): string | undefined {
   return action || undefined;
 }
 
+/** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -183,6 +188,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
+/** Format a detail path/key into a short display label. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
   let last = "";
   for (const segment of raw.split(".")) {
@@ -364,6 +370,8 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
 }
 
 function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
+  // This is a bounded summary parser for display only; execution still uses the
+  // real tool-search bridge and schema validation.
   const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
   if (!prefixMatch || prefixMatch.index === undefined) {
     return undefined;
@@ -565,6 +573,7 @@ function summarizeToolSearchCallInput(raw: string | undefined): string | undefin
   return undefined;
 }
 
+/** Infer the bridged tool target displayed for tool_search_code snippets. */
 export function resolveToolSearchCodeDisplayTarget(
   args: unknown,
 ): ToolSearchCodeDisplayTarget | undefined {
@@ -771,6 +780,7 @@ function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
+/** Normalize final detail text before attaching it to a tool display line. */
 export function formatToolDetailText(
   detail: string | undefined,
   opts: { prefixWithWith?: boolean } = {},

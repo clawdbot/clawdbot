@@ -1,3 +1,4 @@
+/** Tests subagent command log output formatting and routing. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";

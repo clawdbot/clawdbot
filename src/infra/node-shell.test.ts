@@ -1,3 +1,4 @@
+// Covers platform shell argv construction.
 import { describe, expect, it } from "vitest";
 import { buildNodeShellCommand } from "./node-shell.js";
 

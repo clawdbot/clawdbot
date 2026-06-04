@@ -1,3 +1,5 @@
+// Narrow IO/runtime facade re-exported for memory host helpers.
+
 export {
   CHARS_PER_TOKEN_ESTIMATE,
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,

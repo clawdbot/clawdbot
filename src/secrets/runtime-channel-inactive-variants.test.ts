@@ -1,3 +1,4 @@
+/** Tests inactive channel variants in secrets runtime collection. */
 import { describe, expect, it } from "vitest";
 import "./runtime-channel-inactive-variants.test-support.ts";
 import {

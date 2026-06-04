@@ -1,3 +1,4 @@
+/** Tests manifest contract runtime resolution across bundled and installed plugin metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());

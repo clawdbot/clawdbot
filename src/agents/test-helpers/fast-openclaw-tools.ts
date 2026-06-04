@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import { stubTool } from "./fast-tool-stubs.js";
 
+/**
+ * Fast Vitest mock for the OpenClaw tool bundle used by inventory-heavy tests.
+ */
 function stubActionTool(name: string, actions: string[]) {
   return {
     ...stubTool(name),
@@ -57,6 +60,8 @@ const createOpenClawToolsMock = vi.fn(
   },
 );
 
+// Preserve action enums for tools whose tests assert schema/inventory behavior without paying the
+// cost of constructing the real tool bundle.
 vi.mock("../openclaw-tools.js", () => ({
   createOpenClawTools: createOpenClawToolsMock,
   testing: {

@@ -1,3 +1,4 @@
+// Backup command registration for local state archive creation and verification.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -7,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
+/** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")

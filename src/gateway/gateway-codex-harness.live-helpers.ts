@@ -1,3 +1,9 @@
+/**
+ * Text matchers shared by live Codex harness tests.
+ *
+ * The live CLI can answer with model lists, status cards, or sandbox fallback
+ * text depending on the host, so tests assert accepted response families here.
+ */
 export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
@@ -75,6 +81,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current OpenClaw session status reports the active model as:",
 ] as const;
 
+/** Accepted `/codex status` response fragments for live harness probes. */
 export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "Codex app-server:",
   "Model: `codex/",
@@ -96,6 +103,7 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "Ready.",
 ] as const;
 
+/** Returns true when text matches a known healthy Codex status response shape. */
 export function isExpectedCodexStatusCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsOpenClawStatus =
@@ -156,6 +164,7 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
   );
 }
 
+/** Returns true when text matches a known Codex model-list or fallback shape. */
 export function isExpectedCodexModelsCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsCodexModelsCommand =
@@ -273,6 +282,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   );
 }
 
+/** Identifies transient live harness errors that are worth retrying. */
 export function isRetryableCodexHarnessLiveError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -280,6 +290,7 @@ export function isRetryableCodexHarnessLiveError(error: unknown): boolean {
   return error.message.includes("gateway request timeout for sessions.list");
 }
 
+/** Skips retryable live errors only when the subagent probe is not under test. */
 export function shouldSkipRetryableCodexHarnessLiveError(
   error: unknown,
   params: { subagentProbe: boolean },

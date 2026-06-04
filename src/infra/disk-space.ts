@@ -1,3 +1,4 @@
+// Reads and formats disk-space snapshots and warnings.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -31,10 +32,13 @@ function findExistingDiskSpacePath(targetPath: string): string | null {
   }
 }
 
+/** Reads available bytes for the volume containing a target path when statfs is available. */
 export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   if (typeof fs.statfsSync !== "function") {
     return null;
   }
+  // Install/update targets may not exist yet; statfs needs the nearest existing
+  // ancestor to identify the backing volume.
   const checkedPath = findExistingDiskSpacePath(targetPath);
   if (!checkedPath) {
     return null;
@@ -58,6 +62,7 @@ export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   }
 }
 
+/** Formats byte counts for compact operator-facing disk-space warnings. */
 export function formatDiskSpaceBytes(bytes: number): string {
   const mib = bytes / (1024 * 1024);
   if (mib < 1024) {
@@ -67,6 +72,7 @@ export function formatDiskSpaceBytes(bytes: number): string {
   return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
 }
 
+/** Builds a soft low-disk warning for setup/update flows without failing the operation. */
 export function createLowDiskSpaceWarning(params: {
   targetPath: string;
   purpose: string;

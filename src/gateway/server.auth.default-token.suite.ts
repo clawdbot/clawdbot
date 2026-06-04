@@ -80,6 +80,26 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(health.ok).toBe(true);
     }
 
+    function readHelloOkAuth(payload: unknown):
+      | {
+          role?: unknown;
+          scopes?: unknown;
+          deviceToken?: unknown;
+        }
+      | undefined {
+      return (
+        payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined
+      )?.auth;
+    }
+
     test("closes silent handshakes after timeout", async () => {
       vi.useRealTimers();
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -250,18 +270,10 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         const res = await connectReq(ws, { scopes: ["operator.read"], device: null });
         expect(res.ok).toBe(true);
-        const helloOk = res.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(helloOk?.auth?.scopes).toEqual([]);
-        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+        const auth = readHelloOkAuth(res.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.scopes).toEqual([]);
+        expect(auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
       }
@@ -286,20 +298,12 @@ export function registerDefaultAuthTokenSuite(): void {
           deviceIdentityPath,
         });
         expect(initial.ok).toBe(true);
-        const helloOk = initial.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(Array.isArray(helloOk?.auth?.scopes)).toBe(true);
-        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
-        pairedDeviceToken = helloOk?.auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = helloOk?.auth?.scopes;
+        const auth = readHelloOkAuth(initial.payload);
+        expect(auth?.role).toBe("operator");
+        expect(Array.isArray(auth?.scopes)).toBe(true);
+        expect(typeof auth?.deviceToken).toBe("string");
+        pairedDeviceToken = auth?.deviceToken as string | undefined;
+        pairedDeviceScopes = auth?.scopes;
       } finally {
         wsInitial.close();
       }
@@ -312,19 +316,11 @@ export function registerDefaultAuthTokenSuite(): void {
           deviceIdentityPath,
         });
         expect(reconnect.ok).toBe(true);
-        const helloOk = reconnect.payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-              };
-            }
-          | undefined;
-        expect(helloOk?.auth?.role).toBe("operator");
-        expect(helloOk?.auth?.deviceToken).toBe(pairedDeviceToken);
-        expect(helloOk?.auth?.scopes).toEqual(pairedDeviceScopes);
-        expect(helloOk?.auth?.scopes).not.toEqual(["operator.read"]);
+        const auth = readHelloOkAuth(reconnect.payload);
+        expect(auth?.role).toBe("operator");
+        expect(auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(auth?.scopes).toEqual(pairedDeviceScopes);
+        expect(auth?.scopes).not.toEqual(["operator.read"]);
       } finally {
         wsReconnect.close();
       }

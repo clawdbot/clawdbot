@@ -1,3 +1,4 @@
+// Runs commitment extraction, scheduling, and follow-up lifecycle work.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
@@ -19,6 +20,8 @@ import type {
   CommitmentScope,
 } from "./types.js";
 
+// Background runtime for extracting inferred follow-up commitments from
+// completed turns. It batches hidden extraction requests and persists results.
 type TimerHandle = ReturnType<typeof setTimeout>;
 type ModelRef = { provider: string; model: string };
 type EmbeddedAgentPayloadResult = { payloads?: Array<{ text?: string }> };
@@ -74,10 +77,12 @@ function clearTimer(handle: TimerHandle): void {
   (runtime.clearTimer ?? clearTimeout)(handle);
 }
 
+/** Installs runtime hooks for extraction tests or alternate batch extraction. */
 export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
 }
 
+/** Clears queued work, timers, and injected hooks for isolated tests. */
 export function resetCommitmentExtractionRuntimeForTests(): void {
   if (timer) {
     clearTimer(timer);
@@ -99,6 +104,7 @@ function isUsefulText(value: string | undefined): boolean {
   return Boolean(value?.trim());
 }
 
+/** Enqueues one completed turn for delayed commitment extraction. */
 export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueInput): boolean {
   const resolved = resolveCommitmentsConfig(input.cfg);
   const nowMs = input.nowMs ?? Date.now();
@@ -183,6 +189,8 @@ function openTerminalFailureCooldown(
   if (cooldownUntil !== undefined) {
     terminalFailureCooldownUntilByAgent.set(agentId, cooldownUntil);
   }
+  // Terminal auth/model failures will keep failing for queued turns from the
+  // same agent. Drop them and cool down to avoid noisy background retries.
   queue = queue.filter((item) => item.agentId !== agentId);
   log.warn("commitment extraction disabled temporarily after terminal model/auth failure", {
     agentId,
@@ -273,6 +281,7 @@ async function hydrateBatch(
   );
 }
 
+/** Drains queued extraction work in batches and returns processed item count. */
 export async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
     return 0;

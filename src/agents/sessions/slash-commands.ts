@@ -1,6 +1,9 @@
 import { APP_NAME } from "../config.js";
 import type { SourceInfo } from "./source-info.js";
 
+/**
+ * Slash command metadata surfaced by built-ins, prompt packs, skills, and extensions.
+ */
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 
 export interface SlashCommandInfo {
@@ -15,6 +18,7 @@ export interface BuiltinSlashCommand {
   description: string;
 }
 
+/** Built-in TUI slash commands that exist even when no prompt/skill packages are loaded. */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
   { name: "settings", description: "Open settings menu" },
   { name: "model", description: "Select model (opens selector UI)" },

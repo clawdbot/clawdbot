@@ -1,3 +1,4 @@
+// Tests root help fast-path handling before full CLI startup.
 import { describe, expect, it, vi } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 

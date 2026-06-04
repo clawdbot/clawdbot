@@ -1,3 +1,4 @@
+// Tests session restart command behavior and runtime reset handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";

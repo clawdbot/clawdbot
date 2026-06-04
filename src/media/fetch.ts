@@ -19,22 +19,28 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
+/** Default remote media fetch cap shared by buffer reads and store writes. */
 export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
+/** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
   buffer: Buffer;
   contentType?: string;
   fileName?: string;
 };
 
+/** Saved media record enriched with the best remote filename candidate. */
 export type SavedRemoteMedia = SavedMedia & {
   fileName?: string;
 };
 
+/** Closed error classes callers can use for retry and diagnostic policy. */
 export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
+/** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
 
+/** Structured fetch error used for retry decisions and caller-facing diagnostics. */
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
   readonly status?: number;
@@ -51,8 +57,10 @@ export class MediaFetchError extends Error {
   }
 }
 
+/** Fetch-compatible injection point used by tests and guarded network callers. */
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+/** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
 export type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
@@ -86,6 +94,7 @@ type FetchMediaOptions = {
   trustExplicitProxyDns?: boolean;
 };
 
+/** Options for validating and saving an existing Response body into the media store. */
 export type SaveResponseMediaOptions = {
   sourceUrl?: string;
   filePathHint?: string;
@@ -96,6 +105,7 @@ export type SaveResponseMediaOptions = {
   originalFilename?: string;
 };
 
+/** Options for guarded URL fetches that are saved directly into the media store. */
 export type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
@@ -186,6 +196,7 @@ async function fetchGuardedMediaResponse(
   } = options;
   const sourceUrl = redactMediaUrl(url);
 
+  // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
@@ -371,6 +382,8 @@ function resolveResponseContentType(params: {
   }
   const headerContentType = params.headerContentType?.split(";")[0]?.trim().toLowerCase();
   const fallbackContentType = params.fallbackContentType.split(";")[0]?.trim().toLowerCase();
+  // Some platforms mislabel audio/video container uploads by top-level type.
+  // Preserve the caller hint when only that top-level prefix differs.
   if (
     headerContentType?.startsWith("video/") &&
     fallbackContentType?.startsWith("audio/") &&
@@ -553,6 +566,7 @@ async function withMediaFetchRetry<T>(
   });
 }
 
+/** Validates and saves a caller-provided response without performing a new fetch. */
 export async function saveResponseMedia(
   res: Response,
   options: SaveResponseMediaOptions = {},
@@ -579,6 +593,7 @@ export async function saveResponseMedia(
   });
 }
 
+/** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
   return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
 }
@@ -611,6 +626,7 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
   }
 }
 
+/** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
   return await withMediaFetchRetry(options, () => readRemoteMediaBufferOnce(options));
 }

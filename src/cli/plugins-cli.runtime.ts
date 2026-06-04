@@ -1,3 +1,5 @@
+// Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
+// lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -176,6 +178,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
+/** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
@@ -220,6 +223,7 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   );
 }
 
+/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsDisableCommand(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
@@ -267,6 +271,7 @@ export async function runPluginsInstallAction(
   );
 }
 
+/** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry, refreshPluginRegistry } =
     await import("../plugins/plugin-registry.js");
@@ -319,6 +324,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   defaultRuntime.log(lines.join("\n"));
 }
 
+/** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
 export async function runPluginsDoctorCommand(): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
@@ -434,6 +440,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   defaultRuntime.log(lines.join("\n"));
 }
 
+/** List plugins from a configured marketplace manifest. */
 export async function runPluginMarketplaceListCommand(
   source: string,
   opts: PluginMarketplaceListOptions,

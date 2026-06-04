@@ -95,6 +95,167 @@ Most skills configuration lives under `skills` in
   need this setting.
 </ParamField>
 
+## Operator Install Policy (`security.installPolicy`)
+
+Use `security.installPolicy` when operators need a trusted local command to
+approve or block skill and plugin installs with host-specific policy. The policy
+runs after OpenClaw has staged source material and before the install or update
+continues. It applies to ClawHub skills, uploaded skills, Git/local skills,
+skill dependency installers, and plugin install/update sources.
+
+```json5
+{
+  security: {
+    installPolicy: {
+      enabled: true,
+      // Omit targets to cover every supported target.
+      targets: ["skill", "plugin"],
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        args: ["--json"],
+        timeoutMs: 10000,
+        noOutputTimeoutMs: 10000,
+        maxOutputBytes: 1048576,
+        passEnv: ["OPENCLAW_STATE_DIR", "PATH"],
+        env: { POLICY_MODE: "strict" },
+        trustedDirs: ["/usr/local/bin"],
+      },
+    },
+  },
+}
+```
+
+<ParamField path="security.installPolicy.enabled" type="boolean" default="false">
+  Enables operator-owned install policy. When enabled without a valid `exec`
+  command, installs fail closed.
+</ParamField>
+
+<ParamField path="security.installPolicy.targets" type='("skill" | "plugin")[]'>
+  Optional target filter. When omitted, policy applies to every supported target
+  so new installs do not unexpectedly fail open.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.command" type="string">
+  Absolute path to the trusted policy executable. OpenClaw runs it without a
+  shell and validates the path before use.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.args" type="string[]">
+  Static arguments passed after `command`.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.timeoutMs" type="number" default="10000">
+  Maximum wall-clock runtime for one policy decision.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.noOutputTimeoutMs" type="number" default="timeoutMs">
+  Maximum time without stdout or stderr output before the policy fails closed.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.maxOutputBytes" type="number" default="1048576">
+  Maximum combined stdout and stderr bytes accepted from the policy process.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.env" type="Record<string, string>">
+  Literal environment variables provided to the policy process.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.passEnv" type="string[]">
+  Environment variable names copied from the OpenClaw process into the policy
+  process. Only named variables are passed.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.trustedDirs" type="string[]">
+  Optional allowlist of directories that may contain the policy executable.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
+  Bypasses command path ownership and permission checks. Use only when the path
+  is protected by another mechanism.
+</ParamField>
+
+<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
+  Allows the configured command path to be a symlink. The resolved target must
+  still satisfy the other path checks. Interpreter script arguments must be
+  direct regular files, not symlinks.
+</ParamField>
+
+The policy receives one JSON object on stdin with `protocolVersion: 1`,
+`openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
+optional structured `source`, structured `origin`, and `request`. It must write
+one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }` or
+`{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
+exit, timeout, malformed JSON, missing fields, or unsupported protocol versions
+fail closed.
+
+OpenClaw does not execute install policy during normal Gateway startup. Installs
+and updates fail closed when policy is enabled but unavailable. `openclaw doctor`
+performs static validation, and `openclaw doctor --deep` executes a synthetic
+install probe against the configured command.
+
+Bulk updates apply policy per target: a blocked skill or plugin update fails
+that target without disabling the policy or skipping later targets in the batch.
+
+Example stdin:
+
+```json
+{
+  "protocolVersion": 1,
+  "openclawVersion": "2026.6.1",
+  "targetType": "skill",
+  "targetName": "weather",
+  "sourcePath": "/var/folders/.../openclaw-skill-clawhub/root",
+  "sourcePathKind": "directory",
+  "source": {
+    "kind": "clawhub",
+    "authority": "openclaw",
+    "mutable": false,
+    "network": true
+  },
+  "origin": {
+    "type": "clawhub",
+    "registry": "https://clawhub.openclaw.ai",
+    "slug": "weather",
+    "version": "1.0.0"
+  },
+  "request": {
+    "kind": "skill-install",
+    "mode": "install",
+    "requestedSpecifier": "clawhub:weather@1.0.0"
+  },
+  "skill": {
+    "installId": "clawhub"
+  }
+}
+```
+
+Minimal policy command:
+
+```js
+#!/usr/bin/env node
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const request = JSON.parse(input);
+  if (request.targetType === "plugin" && request.source?.kind === "local-path") {
+    process.stdout.write(
+      JSON.stringify({
+        protocolVersion: 1,
+        decision: "block",
+        reason: "local plugin paths are not approved on this host",
+      }),
+    );
+    return;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+});
+```
+
 ## Bundled skill allowlist
 
 <ParamField path="skills.allowBundled" type="string[]">

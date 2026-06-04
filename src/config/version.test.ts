@@ -1,3 +1,4 @@
+// Verifies config version handling and future-version guards.
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawVersions,

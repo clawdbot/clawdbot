@@ -16,6 +16,14 @@ import {
   resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
 
+/**
+ * Connect error detail regressions for Gateway/WebSocket clients.
+ *
+ * These tests pin structured auth/pairing details, human-readable fallback
+ * formatting, and request-id sanitization because these strings surface in
+ * control UI reconnect flows and device pairing diagnostics.
+ */
+
 describe("readConnectErrorDetailCode", () => {
   it("reads structured detail codes", () => {
     expect(readConnectErrorDetailCode({ code: "AUTH_TOKEN_MISMATCH" })).toBe("AUTH_TOKEN_MISMATCH");

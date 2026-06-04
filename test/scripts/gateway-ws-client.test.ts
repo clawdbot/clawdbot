@@ -101,12 +101,54 @@ describe("createGatewayWsClient", () => {
     client.close();
   });
 
+  it("rejects pending RPC requests when the socket errors", async () => {
+    const url = await listen(() => {});
+    const client = createGatewayWsClient({ url });
+    await client.waitOpen();
+
+    const pending = client.request("health", {}, 1000);
+    client.ws.emit("error", new Error("socket exploded"));
+
+    await expect(pending).rejects.toThrow("socket exploded");
+    client.close();
+  });
+
+  it("rejects websocket closes before opening", async () => {
+    const stalled = await listenStalledUpgrade();
+    const client = createGatewayWsClient({ openTimeoutMs: 1000, url: stalled.url });
+    const opened = client.waitOpen();
+
+    client.ws.emit("close", 1006, Buffer.from("bye"));
+
+    try {
+      await expect(opened).rejects.toThrow("closed before open (1006): bye");
+    } finally {
+      client.close();
+      await stalled.close();
+    }
+  });
+
   it("terminates stalled websocket handshakes after the open timeout", async () => {
     const stalled = await listenStalledUpgrade();
     const client = createGatewayWsClient({ openTimeoutMs: 5, url: stalled.url });
     try {
       await expect(client.waitOpen()).rejects.toThrow("ws open timeout");
       await waitFor(() => client.ws.readyState === WebSocket.CLOSED);
+    } finally {
+      client.close();
+      await stalled.close();
+    }
+  });
+
+  it("uses caller-specific websocket open timeout messages", async () => {
+    const stalled = await listenStalledUpgrade();
+    const client = createGatewayWsClient({
+      openTimeoutMessage: "gateway ws open timeout",
+      openTimeoutMs: 5,
+      url: stalled.url,
+    });
+    try {
+      await expect(client.waitOpen()).rejects.toThrow("gateway ws open timeout");
     } finally {
       client.close();
       await stalled.close();

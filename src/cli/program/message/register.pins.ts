@@ -1,6 +1,8 @@
+// Pin command registration for pin, unpin, and list-pins actions.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register message pin management commands. */
 export function registerMessagePinCommands(message: Command, helpers: MessageCliHelpers) {
   const pins = [
     helpers

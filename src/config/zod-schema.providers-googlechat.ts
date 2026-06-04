@@ -1,3 +1,4 @@
+// Defines Google Chat provider schema fragments.
 import { z } from "zod";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
@@ -13,6 +14,7 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+/** DM policy schema for Google Chat accounts. */
 export const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),

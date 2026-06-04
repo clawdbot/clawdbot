@@ -1,3 +1,4 @@
+// Parses byte-size config values for logging and retention limits.
 import { parseByteSize } from "../cli/parse-bytes.js";
 
 /**
@@ -15,6 +16,7 @@ export function parseNonNegativeByteSize(value: unknown): number | null {
       return null;
     }
     try {
+      // Bare numbers in config strings are bytes, matching numeric config values.
       const bytes = parseByteSize(trimmed, { defaultUnit: "b" });
       return bytes >= 0 ? bytes : null;
     } catch {
@@ -24,6 +26,7 @@ export function parseNonNegativeByteSize(value: unknown): number | null {
   return null;
 }
 
+/** Validates byte-size strings accepted by agent default byte-threshold config. */
 export function isValidNonNegativeByteSizeString(value: string): boolean {
   return parseNonNegativeByteSize(value) !== null;
 }

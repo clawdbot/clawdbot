@@ -1,3 +1,4 @@
+// Tests session update fanout and persisted lifecycle records.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";

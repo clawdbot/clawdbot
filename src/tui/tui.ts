@@ -1,3 +1,4 @@
+// Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";

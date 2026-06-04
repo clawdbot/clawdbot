@@ -1,3 +1,4 @@
+/** Runtime shape needed to expose an active plugin channel registration. */
 export type ActiveChannelPluginRuntimeShape = {
   id?: string | null;
   meta?: {
@@ -16,12 +17,14 @@ export type ActiveChannelPluginRuntimeShape = {
   } | null;
 };
 
+/** Active channel registration with owning plugin metadata. */
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
   origin?: string | null;
 };
 
+/** Active runtime channel registry snapshot. */
 export type ActivePluginChannelRegistry = {
   channels: ActivePluginChannelRegistration[];
 };

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -128,6 +128,43 @@ test ! -e "$ONBOARD_TMP_DIR"
       });
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("removes fallback ClawHub skill install HOME on failure", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-home-test-"));
+    const fakeBin = path.join(tempRoot, "bin");
+    const scratchRoot = path.join(tempRoot, "scratch");
+    await mkdir(fakeBin, { recursive: true });
+    await mkdir(scratchRoot, { recursive: true });
+    await writeFile(
+      path.join(fakeBin, "pnpm"),
+      `#!/usr/bin/env bash
+exit 42
+`,
+      { mode: 0o755 },
+    );
+
+    try {
+      const result = spawnSync("bash", ["scripts/e2e/lib/skills/clawhub-install-proof.sh"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "",
+          OPENCLAW_TEST_STATE_SCRIPT_B64: "",
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          TMPDIR: scratchRoot,
+        },
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
+      const scratchEntries = await readdir(scratchRoot);
+      expect(scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home."))).toEqual(
+        [],
+      );
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

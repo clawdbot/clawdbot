@@ -1,3 +1,4 @@
+// Tests model picker item construction and provider endpoint labeling.
 import { describe, expect, it } from "vitest";
 import {
   buildModelPickerItems,

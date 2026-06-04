@@ -1,3 +1,6 @@
+/**
+ * Node pending-work tracking tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acknowledgeNodePendingWork,

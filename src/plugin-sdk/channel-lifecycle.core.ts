@@ -13,18 +13,27 @@ type PassiveAccountLifecycleParams<Handle> = {
   onStop?: () => void | Promise<void>;
 };
 
+/** Runtime context passed to queued channel work. */
 export type ChannelRunQueueTaskContext = {
+  /** Signal tied to the channel/account lifecycle that owns the queued work. */
   lifecycleSignal?: AbortSignal;
 };
 
+/** Per-key async queue used by channel plugins to serialize account or thread work. */
 export type ChannelRunQueue = {
+  /** Enqueue work under a serialization key such as account id, thread id, or chat id. */
   enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  /** Stop accepting meaningful work and mark the lifecycle as inactive. */
   deactivate: () => void;
 };
 
+/** Hooks used to wire channel queue state into runtime status and error reporting. */
 export type ChannelRunQueueParams = {
+  /** Receives busy/idle lifecycle snapshots from the shared run-state machine. */
   setStatus?: RunStateStatusSink;
+  /** Lifecycle signal propagated to queued tasks. */
   abortSignal?: AbortSignal;
+  /** Best-effort sink for task failures after enqueueing. */
   onError?: (error: unknown) => void;
 };
 
@@ -67,6 +76,7 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           }
           runState.onRunStart();
           try {
+            // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
               return;
             }

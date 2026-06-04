@@ -1,8 +1,15 @@
+/**
+ * Lightweight MIME sniffing helpers for agent image inputs.
+ *
+ * The checks here avoid trusting file extensions and reject unsupported image
+ * variants before provider upload paths try to process them.
+ */
 import { open } from "node:fs/promises";
 
 const IMAGE_TYPE_SNIFF_BYTES = 4100;
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+/** Detects supported image MIME types from leading file bytes. */
 export function detectSupportedImageMimeType(buffer: Uint8Array): string | null {
   if (startsWith(buffer, [0xff, 0xd8, 0xff])) {
     return buffer[3] === 0xf7 ? null : "image/jpeg";
@@ -19,6 +26,7 @@ export function detectSupportedImageMimeType(buffer: Uint8Array): string | null 
   return null;
 }
 
+/** Reads a bounded prefix from disk and detects its supported image MIME type. */
 export async function detectSupportedImageMimeTypeFromFile(
   filePath: string,
 ): Promise<string | null> {
@@ -52,6 +60,7 @@ function isAnimatedPng(buffer: Uint8Array): boolean {
       return false;
     }
 
+    // PNG chunk length is untrusted input; bail if advancing would wrap or exceed the sniffed bytes.
     const nextOffset = offset + 8 + chunkLength + 4;
     if (nextOffset <= offset || nextOffset > buffer.length) {
       return false;

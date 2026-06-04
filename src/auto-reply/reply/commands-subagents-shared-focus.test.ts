@@ -1,3 +1,4 @@
+// Tests shared subagent focus resolution and command target normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFocusTargetSession } from "./commands-subagents/shared.js";
 

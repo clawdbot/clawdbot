@@ -7,6 +7,12 @@ import type {
   RuntimeWebSearchMetadata,
 } from "../../secrets/runtime-web-tools.types.js";
 
+/**
+ * Resolves late-bound runtime context for web fetch/search tools.
+ *
+ * Tools can capture config at construction time, but secret/provider setup may
+ * change before execution; late binding reads the active runtime snapshots.
+ */
 type WebProviderKind = "fetch" | "search";
 
 type WebProviderRuntimeMetadata = RuntimeWebFetchMetadata | RuntimeWebSearchMetadata;
@@ -43,6 +49,7 @@ function shouldPreferRuntimeProviders(params: {
   if (!params.providerSelectionId) {
     return true;
   }
+  // Built-in providers are handled by core; plugin-owned selections should route through plugins.
   return !resolveManifestContractOwnerPluginId({
     contract: resolveWebProviderContract(params.kind),
     value: params.providerSelectionId,
@@ -59,6 +66,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
 }): ResolvedWebToolRuntimeContext<TMetadata> {
   const activeWebTools =
     params.lateBindRuntimeConfig === true ? getActiveRuntimeWebToolsMetadata() : null;
+  // Late-bound metadata wins over constructor-captured metadata for long-lived tool instances.
   const runtimeMetadata = (activeWebTools?.[params.kind] ?? params.capturedRuntimeMetadata) as
     | TMetadata
     | undefined;
@@ -80,6 +88,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
   };
 }
 
+/** Resolves runtime provider context for the web_search tool. */
 export function resolveWebSearchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;
@@ -101,6 +110,7 @@ export function resolveWebSearchToolRuntimeContext(params: {
   };
 }
 
+/** Resolves runtime provider context for the web_fetch tool. */
 export function resolveWebFetchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;

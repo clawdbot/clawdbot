@@ -1,6 +1,8 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 
+// Converts user-facing sandbox tool policy config into the normalized runtime
+// allow/deny policy object used by tool filtering.
 export const IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW = Symbol.for(
   "openclaw.toolPolicy.implicitAllowAllFromAlsoAllow",
 );
@@ -12,6 +14,8 @@ type SandboxToolPolicyConfig = {
 };
 
 function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
+  // `alsoAllow` extends an existing allow list. Without an explicit allow list it
+  // means "allow defaults plus these extras", represented by implicit "*".
   if (!Array.isArray(extra) || extra.length === 0) {
     return base;
   }
@@ -52,6 +56,8 @@ export function pickSandboxToolPolicy(
     [IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]?: true;
   };
   if (allowFromAlsoAllowOnly) {
+    // Preserve provenance for downstream diagnostics: this allow-all came from
+    // `alsoAllow`, not from an operator-authored explicit wildcard.
     Object.defineProperty(policy, IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW, {
       value: true,
     });

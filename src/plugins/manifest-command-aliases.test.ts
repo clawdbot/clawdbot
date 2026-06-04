@@ -1,3 +1,4 @@
+// Verifies command alias metadata declared by plugin manifests.
 import { describe, expect, it } from "vitest";
 import {
   normalizeManifestCommandAliases,

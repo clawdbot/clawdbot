@@ -39,6 +39,11 @@ type HookRunnerLike = {
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+/**
+ * Runs model-selection hooks before resolving the runtime model. The dedicated
+ * `before_model_resolve` hook wins over legacy `before_agent_start` overrides
+ * when both provide provider/model changes.
+ */
 export async function resolveHookModelSelection(params: {
   prompt: string;
   attachments?: PluginHookBeforeModelResolveAttachment[];
@@ -103,6 +108,11 @@ export async function resolveHookModelSelection(params: {
   };
 }
 
+/**
+ * Converts prompt image refs into the minimal attachment shape exposed to
+ * before-model-resolve hooks. Empty image lists stay undefined so hook payloads
+ * do not grow a meaningless attachments field.
+ */
 export function buildBeforeModelResolveAttachments(
   images: readonly { mimeType?: string }[] | undefined,
 ): PluginHookBeforeModelResolveAttachment[] | undefined {
@@ -115,6 +125,12 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
+/**
+ * Resolves context-window policy for the selected runtime model and returns the
+ * model shape the session runtime should see. Configured context caps are
+ * reflected in `effectiveModel.contextWindow` so auto-compaction uses the same
+ * limit as the guard.
+ */
 export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

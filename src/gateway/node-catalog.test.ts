@@ -1,3 +1,6 @@
+/**
+ * Gateway node catalog regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createKnownNodeCatalog,
@@ -140,9 +143,7 @@ describe("gateway/node-catalog", () => {
 
   it("surfaces node-pair metadata even when the node is offline", () => {
     const catalog = createKnownNodeCatalog({
-      pairedDevices: [
-        pairedDevice(),
-      ],
+      pairedDevices: [pairedDevice()],
       pairedNodes: [
         pairedNode({
           caps: ["system"],

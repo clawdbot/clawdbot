@@ -1,3 +1,4 @@
+// Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";

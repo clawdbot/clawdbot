@@ -1,3 +1,4 @@
+// Verifies plugin auto-enable prefer-over precedence rules.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

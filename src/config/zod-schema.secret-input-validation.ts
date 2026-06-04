@@ -1,3 +1,4 @@
+// Validates secret input schema fragments shared by config sections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
@@ -26,6 +27,7 @@ type SlackConfigLike = {
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
 
+// Only enabled accounts need per-account secret requirement checks.
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
   run: (accountId: string, account: T) => void,
@@ -41,6 +43,7 @@ function forEachEnabledAccount<T extends { enabled?: unknown }>(
   }
 }
 
+/** Validates Telegram webhook URLs have a usable shared or account webhook secret. */
 export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
   ctx: z.RefinementCtx,

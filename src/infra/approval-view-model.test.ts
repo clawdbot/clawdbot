@@ -1,3 +1,4 @@
+// Tests approval view model formatting for prompts and decisions.
 import { describe, expect, it } from "vitest";
 import { buildPendingApprovalView } from "./approval-view-model.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";

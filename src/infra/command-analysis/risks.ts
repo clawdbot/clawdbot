@@ -18,8 +18,10 @@ import {
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
+/** Shared command carrier constants used by approval policy and command explanation. */
 export { COMMAND_CARRIER_EXECUTABLES, resolveCarrierCommandArgv, SOURCE_EXECUTABLES };
 
+/** Command and flag pair that can carry nested command text. */
 export type CommandCarrierHit = {
   command: string;
   flag?: string;
@@ -27,6 +29,7 @@ export type CommandCarrierHit = {
 
 export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
 
+// Recurse through env, carriers, and shell wrappers while guarding argv cycles.
 function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
@@ -38,6 +41,7 @@ function isCommandCarrierExecutable(executable: string, options?: { includeExec?
   );
 }
 
+/** Builds candidate command payload strings from nested carriers and shell wrappers. */
 export function buildCommandPayloadCandidates(
   argv: string[],
   seenArgv = new Set<string>(),

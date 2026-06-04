@@ -1,3 +1,6 @@
+/**
+ * Tests for text-to-speech gateway methods and provider error envelopes.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";

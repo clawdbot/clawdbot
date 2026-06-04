@@ -57,9 +57,13 @@ export function resolveOpenClawManifestBlock(params: {
 }
 
 export type OpenClawManifestRequires = {
+  /** All binaries that must be available. */
   bins: string[];
+  /** Alternative binaries where any one match is enough. */
   anyBins: string[];
+  /** Environment variables required by the entry. */
   env: string[];
+  /** Config paths required by the entry. */
   config: string[];
 };
 
@@ -99,10 +103,15 @@ export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>):
 }
 
 export type ParsedOpenClawManifestInstallBase = {
+  /** Original install entry for caller-specific parsing. */
   raw: Record<string, unknown>;
+  /** Normalized install kind accepted by the caller. */
   kind: string;
+  /** Optional stable package/tool id from the manifest entry. */
   id?: string;
+  /** Optional human-facing package/tool label. */
   label?: string;
+  /** Optional binaries expected after installation. */
   bins?: string[];
 };
 

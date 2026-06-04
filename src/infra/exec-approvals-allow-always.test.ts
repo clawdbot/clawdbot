@@ -1,3 +1,4 @@
+// Tests persistent always-allow execution approval rules.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

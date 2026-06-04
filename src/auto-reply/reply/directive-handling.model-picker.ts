@@ -1,3 +1,4 @@
+// Builds model picker choices and endpoint labels for model directives.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,12 +10,14 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Catalog entry shown by the model picker directive UI. */
 export type ModelPickerCatalogEntry = {
   provider: string;
   id: string;
   name?: string;
 };
 
+/** Normalized model reference emitted by the model picker. */
 export type ModelPickerItem = ModelRef;
 
 const MODEL_PICK_PROVIDER_PREFERENCE = [
@@ -55,6 +58,7 @@ function compareProvidersForPicker(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
+/** Builds de-duped picker items from provider catalogs in display order. */
 export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): ModelPickerItem[] {
   const seen = new Set<string>();
   const out: ModelPickerItem[] = [];
@@ -89,6 +93,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
   return out;
 }
 
+/** Resolves optional endpoint/API labels for a provider in picker details. */
 export function resolveProviderEndpointLabel(
   provider: string,
   cfg: OpenClawConfig,

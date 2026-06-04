@@ -1,3 +1,4 @@
+// Tests system command version probing for presence checks.
 import os from "node:os";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";

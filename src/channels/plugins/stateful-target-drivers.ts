@@ -4,6 +4,8 @@ import type {
   StatefulBindingTargetDescriptor,
 } from "./binding-types.js";
 
+// Registry for binding targets that carry external mutable session state, such
+// as ACP-backed channels that need per-session reset and lookup behavior.
 export type StatefulBindingTargetReadyResult = { ok: true } | { ok: false; error: string };
 export type StatefulBindingTargetSessionResult =
   | { ok: true; sessionKey: string }
@@ -12,6 +14,7 @@ export type StatefulBindingTargetResetResult =
   | { ok: true }
   | { ok: false; skipped?: boolean; error?: string };
 
+/** Driver contract for lifecycle operations on one stateful target family. */
 export type StatefulBindingTargetDriver = {
   id: string;
   ensureReady: (params: {
@@ -49,6 +52,8 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
   const normalized = { ...driver, id };
   const existing = registeredStatefulBindingTargetDrivers.get(id);
   if (existing) {
+    // Builtins and tests may register through multiple load paths. First writer
+    // wins so process-local sessions keep using the same driver instance.
     return;
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
@@ -74,6 +79,8 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
   if (!sessionKey) {
     return null;
   }
+  // Session keys are globally opaque to callers. Ask each registered driver so
+  // channel-specific encodings stay private to their owner.
   for (const driver of listStatefulBindingTargetDrivers()) {
     const bindingTarget = driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,

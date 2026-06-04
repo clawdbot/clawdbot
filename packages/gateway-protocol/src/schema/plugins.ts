@@ -1,8 +1,16 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Plugin control-surface protocol schemas.
+ *
+ * These payloads let the gateway expose plugin-provided UI actions without
+ * baking plugin-specific payload shapes into the core protocol.
+ */
+/** Arbitrary plugin-owned JSON payload carried opaquely through the gateway. */
 export const PluginJsonValueSchema = Type.Unknown();
 
+/** Descriptor for one plugin-provided control UI action or surface. */
 export const PluginControlUiDescriptorSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -23,8 +31,10 @@ export const PluginControlUiDescriptorSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for listing plugin UI descriptors. */
 export const PluginsUiDescriptorsParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Response payload containing all plugin UI descriptors visible to the client. */
 export const PluginsUiDescriptorsResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -33,6 +43,7 @@ export const PluginsUiDescriptorsResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Request payload for invoking one plugin-owned session action. */
 export const PluginsSessionActionParamsSchema = Type.Object(
   {
     pluginId: NonEmptyString,
@@ -43,6 +54,7 @@ export const PluginsSessionActionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Successful plugin action result, optionally continuing the agent turn. */
 export const PluginsSessionActionSuccessResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -53,6 +65,7 @@ export const PluginsSessionActionSuccessResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Failed plugin action result with plugin-owned detail payload. */
 export const PluginsSessionActionFailureResultSchema = Type.Object(
   {
     ok: Type.Literal(false),
@@ -63,6 +76,7 @@ export const PluginsSessionActionFailureResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Discriminated plugin action result returned to gateway clients. */
 export const PluginsSessionActionResultSchema = Type.Union([
   PluginsSessionActionSuccessResultSchema,
   PluginsSessionActionFailureResultSchema,

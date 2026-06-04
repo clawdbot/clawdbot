@@ -1,3 +1,4 @@
+// Resolves ClawHub plugin catalog entries and install metadata.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -17,9 +18,11 @@ import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
+  isDefaultClawHubBaseUrl,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  resolveClawHubBaseUrl,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
@@ -1203,6 +1206,8 @@ export async function installPluginFromClawHub(
         `ClawHub package "${canonicalPackageName}@${versionState.version}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
       );
     }
+    const clawhubRegistry = resolveClawHubBaseUrl(params.baseUrl);
+    const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
     params.logger?.info?.(
       `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${parsed.name}@${versionState.version} from ClawHub…`,
     );
@@ -1210,12 +1215,18 @@ export async function installPluginFromClawHub(
       archivePath: archive.archivePath,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       trustedSourceLinkedOfficialInstall: isTrustedSourceLinkedOfficialPackage(detail.package!),
+      config: params.config,
       logger: params.logger,
       mode: params.mode,
       extensionsDir: params.extensionsDir,
       timeoutMs: params.timeoutMs,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      installPolicyRequest: {
+        kind: "plugin-archive",
+        requestedSpecifier: params.spec,
+        source: { kind: "clawhub", authority: clawhubAuthority, mutable: false, network: true },
+      },
     });
     if (!installResult.ok) {
       return installResult;
@@ -1250,10 +1261,7 @@ export async function installPluginFromClawHub(
       packageName: parsed.name,
       clawhub: {
         source: "clawhub",
-        clawhubUrl:
-          normalizeOptionalString(params.baseUrl) ||
-          normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-          "https://clawhub.ai",
+        clawhubUrl: clawhubRegistry,
         clawhubPackage: parsed.name,
         clawhubFamily,
         clawhubChannel: pkg.channel,

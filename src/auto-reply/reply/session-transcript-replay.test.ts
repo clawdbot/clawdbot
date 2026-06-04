@@ -1,3 +1,4 @@
+// Tests transcript replay behavior used after session resets.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

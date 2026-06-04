@@ -1,3 +1,4 @@
+/** Tests secrets configure plan generation and target validation. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

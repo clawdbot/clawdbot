@@ -1,3 +1,4 @@
+// Tests private message-tool final delivery and visibility suppression.
 import { describe, expect, it } from "vitest";
 import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-final.js";
 

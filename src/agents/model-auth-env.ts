@@ -10,6 +10,8 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 
+// Resolves API keys and local auth evidence from environment state. This keeps
+// env-var lookup, shell-env provenance, and plugin setup fallbacks in one path.
 export type EnvApiKeyResult = {
   apiKey: string;
   source: string;
@@ -86,6 +88,7 @@ function resolveAuthEvidence(
   return null;
 }
 
+/** Resolve an API key or auth-evidence marker for a provider from environment state. */
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,

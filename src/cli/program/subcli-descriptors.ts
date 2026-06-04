@@ -1,7 +1,9 @@
+// Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
+/** Descriptor shape for root-level sub-CLI commands. */
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandCatalog = defineCommandDescriptorCatalog([
@@ -189,11 +191,13 @@ function filterPrivateQaItems<T>(
   return items.filter((item) => getName(item) !== "qa");
 }
 
+/** Visible sub-CLI descriptors after private QA gating. */
 export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
   subCliCommandCatalog.descriptors,
   (descriptor) => descriptor.name,
 );
 
+/** Return visible sub-CLI descriptors in help/registration order. */
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return filterPrivateQaItems(
     subCliCommandCatalog.getDescriptors(),
@@ -201,6 +205,7 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   );
 }
 
+/** Return visible sub-CLI names that own child subcommands. */
 export function getSubCliCommandsWithSubcommands(): string[] {
   return [
     ...filterPrivateQaItems(
@@ -210,6 +215,7 @@ export function getSubCliCommandsWithSubcommands(): string[] {
   ];
 }
 
+/** Return visible sub-CLI names whose parent command should show help by default. */
 export function getSubCliParentDefaultHelpCommands(): string[] {
   return [
     ...filterPrivateQaItems(

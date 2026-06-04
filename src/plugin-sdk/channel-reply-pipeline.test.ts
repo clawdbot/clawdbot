@@ -1,3 +1,6 @@
+/**
+ * Tests channel reply pipeline prefix context and typing callback behavior.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";

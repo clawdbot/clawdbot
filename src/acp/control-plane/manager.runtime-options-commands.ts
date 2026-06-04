@@ -1,3 +1,4 @@
+/** Command handlers for changing ACP runtime mode and config options on live sessions. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,6 +19,7 @@ import {
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
+/** Manager services required by runtime-option command handlers. */
 export type RuntimeOptionCommandServices = {
   runtimeHandles: ManagerRuntimeHandleCache;
   resolveSession: ResolveManagerSession;
@@ -35,6 +37,7 @@ type RuntimeOptionCommandContext = RuntimeOptionCommandServices & {
   sessionKey: string;
 };
 
+/** Applies a backend runtime mode control and persists the selected mode. */
 export async function runSetManagerSessionRuntimeMode(
   params: RuntimeOptionCommandContext & { runtimeMode: string },
 ): Promise<AcpSessionRuntimeOptions> {
@@ -77,6 +80,7 @@ export async function runSetManagerSessionRuntimeMode(
   return nextOptions;
 }
 
+/** Applies a backend config-option control and persists the inferred runtime option patch. */
 export async function runSetManagerSessionConfigOption(
   params: RuntimeOptionCommandContext & { key: string; value: string },
 ): Promise<AcpSessionRuntimeOptions> {
@@ -138,6 +142,7 @@ export async function runSetManagerSessionConfigOption(
   return nextOptions;
 }
 
+/** Persists runtime option changes that do not need an immediate backend control call. */
 export async function runUpdateManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext & { patch: Partial<AcpSessionRuntimeOptions> },
 ): Promise<AcpSessionRuntimeOptions> {
@@ -157,6 +162,7 @@ export async function runUpdateManagerSessionRuntimeOptions(
   return nextOptions;
 }
 
+/** Closes the current runtime handle and clears persisted runtime options. */
 export async function runResetManagerSessionRuntimeOptions(
   params: RuntimeOptionCommandContext,
 ): Promise<AcpSessionRuntimeOptions> {

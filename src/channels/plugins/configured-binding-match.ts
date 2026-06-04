@@ -14,6 +14,13 @@ import type {
   ChannelConfiguredBindingMatch,
 } from "./types.adapters.js";
 
+/**
+ * Matching helpers for configured channel binding rules.
+ */
+
+/**
+ * Ranks account pattern matches for configured binding rules.
+ */
 export function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -38,11 +45,17 @@ function matchCompiledBindingConversation(params: {
   });
 }
 
+/**
+ * Normalizes a raw channel id into a configured-binding channel id.
+ */
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 
+/**
+ * Converts an outbound conversation ref into configured-binding match input.
+ */
 export function toConfiguredBindingConversationRef(conversation: ConversationRef): {
   channel: ConfiguredBindingChannel;
   accountId: string;
@@ -62,6 +75,9 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
   };
 }
 
+/**
+ * Materializes a configured binding record from the winning rule and conversation.
+ */
 export function materializeConfiguredBindingRecord(params: {
   rule: CompiledConfiguredBinding;
   accountId: string;
@@ -73,6 +89,9 @@ export function materializeConfiguredBindingRecord(params: {
   });
 }
 
+/**
+ * Resolves the best configured binding rule for a conversation.
+ */
 export function resolveMatchingConfiguredBinding(params: {
   rules: CompiledConfiguredBinding[];
   conversation: ReturnType<typeof toConfiguredBindingConversationRef>;
@@ -93,6 +112,8 @@ export function resolveMatchingConfiguredBinding(params: {
       rule.accountPattern,
       params.conversation.accountId,
     );
+    // Exact account matches beat wildcard matches, but both still respect the
+    // provider's per-conversation match priority within that account tier.
     if (accountMatchPriority === 0) {
       continue;
     }

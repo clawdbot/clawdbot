@@ -1,8 +1,11 @@
+// Collects core dependency status for plugin diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 
+/** Dependency name-to-version map from a plugin package manifest. */
 export type PluginDependencySpecMap = Record<string, string>;
 
+/** Installation status for one plugin dependency. */
 export type PluginDependencyEntry = {
   name: string;
   spec: string;
@@ -11,6 +14,7 @@ export type PluginDependencyEntry = {
   resolvedPath?: string;
 };
 
+/** Aggregate installation status for required and optional plugin dependencies. */
 export type PluginDependencyStatus = {
   hasDependencies: boolean;
   installed: boolean;
@@ -37,6 +41,7 @@ function normalizeDependencyMap(raw: unknown): PluginDependencySpecMap {
   return normalized;
 }
 
+/** Normalizes raw package dependency maps into sorted plugin dependency specs. */
 export function normalizePluginDependencySpecs(params: {
   dependencies?: unknown;
   optionalDependencies?: unknown;
@@ -104,6 +109,7 @@ function buildDependencyEntries(params: {
     });
 }
 
+/** Builds dependency installation status for a plugin package root. */
 export function buildPluginDependencyStatus(params: {
   rootDir?: string;
   dependencies?: PluginDependencySpecMap;

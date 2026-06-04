@@ -1,8 +1,17 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Shared boolean coercion helpers for config, env, and plugin SDK runtime inputs.
+ *
+ * `asBoolean` is intentionally strict; string parsing is opt-in through
+ * `parseBooleanValue` so schema callers do not silently accept ambiguous text.
+ */
+
 /** Accepted string literals for boolean parsing beyond actual booleans. */
 export type BooleanParseOptions = {
+  /** Lowercase string values that should parse as true. */
   truthy?: string[];
+  /** Lowercase string values that should parse as false. */
   falsy?: string[];
 };
 

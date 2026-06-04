@@ -1,3 +1,4 @@
+// Covers runtime detection and version support checks.
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,

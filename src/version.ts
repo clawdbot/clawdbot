@@ -1,3 +1,4 @@
+// Resolves package version metadata for CLI and library callers.
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 

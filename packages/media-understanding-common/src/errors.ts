@@ -1,3 +1,6 @@
+// Media-understanding skip error used for non-fatal attachment omissions.
+
+/** Reason a media-understanding attachment was skipped. */
 type MediaUnderstandingSkipReason =
   | "maxBytes"
   | "timeout"
@@ -6,6 +9,7 @@ type MediaUnderstandingSkipReason =
   | "blocked"
   | "tooSmall";
 
+/** Error used when a media attachment should be skipped without failing the whole request. */
 export class MediaUnderstandingSkipError extends Error {
   readonly reason: MediaUnderstandingSkipReason;
 
@@ -16,6 +20,7 @@ export class MediaUnderstandingSkipError extends Error {
   }
 }
 
+/** Narrow unknown errors to media-understanding skip errors. */
 export function isMediaUnderstandingSkipError(err: unknown): err is MediaUnderstandingSkipError {
   return err instanceof MediaUnderstandingSkipError;
 }

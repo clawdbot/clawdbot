@@ -1,5 +1,8 @@
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 
+/**
+ * Session construction bridge for embedded-attempt runs.
+ */
 export type EmbeddedAgentSessionOptions = {
   cwd: string;
   agentDir: string;
@@ -15,6 +18,7 @@ export type EmbeddedAgentSessionOptions = {
   withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
 };
 
+/** Invokes the supplied session factory with the prepared embedded-agent session options. */
 export async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {
   createAgentSession: (options: EmbeddedAgentSessionOptions) => Promise<Result> | Result;
   options: EmbeddedAgentSessionOptions;

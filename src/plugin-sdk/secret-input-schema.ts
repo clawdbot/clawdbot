@@ -8,6 +8,10 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 
+/**
+ * Returns the shared secret-input schema for plaintext values and env/file/exec refs.
+ * Reusing this singleton preserves sensitive-path registration for config redaction.
+ */
 export function buildSecretInputSchema() {
   return secretInputSchema;
 }

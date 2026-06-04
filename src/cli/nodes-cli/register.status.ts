@@ -1,3 +1,4 @@
+// Node status/list/describe commands and paired-node display formatting.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -46,6 +47,7 @@ function resolveNodeVersions(node: {
     return { core: undefined, ui: undefined };
   }
   const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
+  // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
@@ -180,6 +182,7 @@ function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNode
   return copy as Omit<PairedNodeListRow, "token">;
 }
 
+/** Register node status, describe, and paired-node list commands. */
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes

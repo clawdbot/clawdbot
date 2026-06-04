@@ -9,6 +9,8 @@ import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
+// Onboarding migration import helpers detect existing setups, select a plugin
+// migration provider, preview a plan, back up state, and apply into fresh setup.
 export type SetupMigrationDetection = {
   providerId: string;
   label: string;
@@ -98,6 +100,8 @@ function assertFreshSetupMigrationTarget(freshness: {
   fresh: boolean;
   reasons: readonly string[];
 }): void {
+  // Migration import is currently fresh-setup only unless an explicit env gate
+  // opts into existing-target behavior.
   if (freshness.fresh || process.env.OPENCLAW_MIGRATION_EXISTING_IMPORT === "1") {
     return;
   }
@@ -148,6 +152,8 @@ export async function detectSetupMigrationSources(params: {
         });
       }
     } catch (error) {
+      // Detection is advisory; one failing provider must not prevent onboarding
+      // from offering other migration sources.
       logger.debug?.(
         `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
       );
@@ -280,6 +286,8 @@ export async function runSetupMigrationImport(params: {
   }
 
   const stateDir = resolveStateDir();
+  // Freshness is checked after workspace selection because the migration target
+  // can be different from the process cwd/default workspace.
   assertFreshSetupMigrationTarget(
     await inspectSetupMigrationFreshness({
       baseConfig: params.baseConfig,
@@ -315,6 +323,8 @@ export async function runSetupMigrationImport(params: {
 
   const reportDir = buildMigrationReportDir(providerId, stateDir);
   const backupPath = await createPreMigrationBackup({});
+  // Commit base wizard metadata before applying migrations so generated reports
+  // can reference a concrete OpenClaw config target.
   targetConfig = onboardHelpers.applyWizardMetadata(targetConfig, {
     command: "onboard",
     mode: "local",

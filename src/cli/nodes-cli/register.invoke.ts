@@ -1,3 +1,4 @@
+// Generic node.invoke command with shell-exec commands intentionally blocked.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,6 +17,7 @@ import type { NodesRpcOpts } from "./types.js";
 
 const BLOCKED_NODE_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 
+/** Register direct node command invocation. */
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes

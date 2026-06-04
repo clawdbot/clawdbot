@@ -7,6 +7,7 @@ function readString(value: Record<string, unknown>, key: string): string | undef
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
+/** Resolves subagent thinking override and initial session patch from caller/agent config. */
 export function resolveSubagentThinkingOverride(params: {
   cfg: OpenClawConfig;
   requesterAgentConfig?: unknown;

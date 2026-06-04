@@ -1,3 +1,4 @@
+/** Tests serialization of structured command arguments into slash-command text. */
 import { describe, expect, it } from "vitest";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type { CommandArgValues } from "./commands-registry.types.js";

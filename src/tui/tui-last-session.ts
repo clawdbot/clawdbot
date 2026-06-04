@@ -1,3 +1,4 @@
+// Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -6,6 +7,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { TuiSessionList } from "./tui-backend.js";
 import type { SessionScope } from "./tui-types.js";
 
+// Persists the last human-selected TUI session per connection/agent/scope.
 type LastSessionRecord = {
   sessionKey: string;
   updatedAt: number;
@@ -13,10 +15,12 @@ type LastSessionRecord = {
 
 type LastSessionStore = Record<string, LastSessionRecord>;
 
+/** Resolves the private state file for remembered TUI sessions. */
 export function resolveTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
   return path.join(stateDir, "tui", "last-session.json");
 }
 
+/** Builds a stable private-store key for the current TUI connection, agent, and session scope. */
 export function buildTuiLastSessionScopeKey(params: {
   connectionUrl: string;
   agentId: string;
@@ -51,6 +55,7 @@ function isHeartbeatSessionKey(sessionKey: string): boolean {
   return normalizeMarker(sessionKey).endsWith(":heartbeat");
 }
 
+/** Detects heartbeat/system sessions that should not become the remembered human session. */
 export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][number]): boolean {
   if (isHeartbeatSessionKey(session.key)) {
     return true;
@@ -67,6 +72,7 @@ export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][nu
   return markers.some((marker) => normalizeMarker(marker) === "heartbeat");
 }
 
+/** Reads the remembered session key for a scope, ignoring missing or malformed stores. */
 export async function readTuiLastSessionKey(params: {
   scopeKey: string;
   stateDir?: string;
@@ -76,6 +82,7 @@ export async function readTuiLastSessionKey(params: {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** Writes the remembered session key unless it is empty, unknown, or heartbeat-owned. */
 export async function writeTuiLastSessionKey(params: {
   scopeKey: string;
   sessionKey: string;
@@ -96,6 +103,7 @@ export async function writeTuiLastSessionKey(params: {
   });
 }
 
+/** Resolves a remembered key to a currently listed session for the active agent. */
 export function resolveRememberedTuiSessionKey(params: {
   rememberedKey: string | null | undefined;
   currentAgentId: string;
@@ -114,6 +122,7 @@ export function resolveRememberedTuiSessionKey(params: {
     return null;
   }
   const rememberedRest = parsed?.rest ?? rememberedKey;
+  // Agent-prefixed and bare keys can refer to the same session; compare the session rest too.
   const match = params.sessions.find((session) => {
     if (isHeartbeatLikeTuiSession(session)) {
       return false;

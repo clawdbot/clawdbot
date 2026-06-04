@@ -1,9 +1,12 @@
+// Shares provider registry normalization helpers across plugin paths.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
+/** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(providerId);
 }
 
+/** Builds canonical and alias lookup maps for capability providers. */
 export function buildCapabilityProviderMaps<T extends { id: string; aliases?: readonly string[] }>(
   providers: readonly T[],
   normalizeId: (

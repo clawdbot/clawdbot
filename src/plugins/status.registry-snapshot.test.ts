@@ -1,3 +1,4 @@
+// Covers plugin status snapshots built from registry state.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

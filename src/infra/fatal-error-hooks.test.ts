@@ -1,3 +1,4 @@
+// Covers fatal error hook registration and output collection.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   registerFatalErrorHook,

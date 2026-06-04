@@ -1,3 +1,6 @@
+/**
+ * Tests control UI root resolution for gateway static asset serving.
+ */
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const controlUiAssetsMocks = vi.hoisted(() => ({

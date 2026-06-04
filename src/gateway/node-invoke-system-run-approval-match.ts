@@ -6,6 +6,8 @@ import {
   type SystemRunApprovalMatchResult,
 } from "../infra/system-run-approval-binding.js";
 
+// system.run approvals are bound to argv, cwd, agent/session, and env keys so a
+// node cannot replay one approval for a different command or execution context.
 type SystemRunApprovalBinding = {
   cwd: string | null;
   agentId: string | null;
@@ -23,6 +25,7 @@ function requestMismatch(): SystemRunApprovalMatchResult {
 
 export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
 
+/** Evaluates whether a node system.run request matches the stored approval binding. */
 export function evaluateSystemRunApprovalMatch(params: {
   argv: string[];
   request: ExecApprovalRequestPayload;

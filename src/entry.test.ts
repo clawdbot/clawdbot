@@ -1,3 +1,4 @@
+// Tests CLI entrypoint argument handling and startup behavior.
 import { describe, expect, it } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 

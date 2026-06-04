@@ -1,3 +1,4 @@
+// Tests host environment security policy parity with documented rules.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

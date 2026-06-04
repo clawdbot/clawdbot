@@ -1,3 +1,4 @@
+/** Exercises runtime capability-provider loading from manifest-backed plugin contracts. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";

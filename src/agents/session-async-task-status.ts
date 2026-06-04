@@ -2,8 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../tasks/task-registry.types.js";
 
+// Session async-task lookup helpers for avoiding duplicate long-running work and
+// reporting the active task back through tool/status metadata.
 const DEFAULT_ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running"]);
 
+/** Find the active queued/running task that matches a session and optional filters. */
 export function findActiveSessionTask(params: {
   sessionKey?: string;
   runtime?: TaskRuntime;
@@ -41,6 +44,8 @@ export function findActiveSessionTask(params: {
     }
     if (sourceIdPrefix) {
       const sourceId = normalizeOptionalString(task.sourceId) ?? "";
+      // Prefix matching lets call sites group task attempts by stable source
+      // family while still allowing per-attempt suffixes.
       if (sourceId !== sourceIdPrefix && !sourceId.startsWith(`${sourceIdPrefix}:`)) {
         return false;
       }
@@ -50,9 +55,11 @@ export function findActiveSessionTask(params: {
   if (matches.length === 0) {
     return undefined;
   }
+  // Prefer the task already running over queued duplicates for user-facing status.
   return matches.find((task) => task.status === "running") ?? matches[0];
 }
 
+/** Build tool details that point callers at the already-active async task. */
 export function buildSessionAsyncTaskStatusDetails(task: TaskRecord): Record<string, unknown> {
   return {
     async: true,

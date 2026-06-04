@@ -1,3 +1,4 @@
+// Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingProgressConfig,

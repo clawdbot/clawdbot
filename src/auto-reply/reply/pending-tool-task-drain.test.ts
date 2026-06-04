@@ -1,3 +1,4 @@
+// Tests pending tool task drain ordering, settlement, and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 

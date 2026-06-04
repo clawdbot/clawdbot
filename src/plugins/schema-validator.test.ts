@@ -1,3 +1,4 @@
+/** Covers plugin schema validation for manifests and exported config schemas. */
 import { Format } from "typebox/format";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";

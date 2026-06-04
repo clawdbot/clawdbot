@@ -16,9 +16,13 @@ const EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA = Type.Object({}, { additionalProperties: 
 export const toolPluginMetadataSymbol = Symbol.for("openclaw.plugin-sdk.tool-plugin.metadata");
 
 export type ToolPluginExecutionContext = {
+  /** Plugin runtime API for tool implementations that need OpenClaw services. */
   api: OpenClawPluginApi;
+  /** Abort signal for the current tool call. */
   signal?: AbortSignal;
+  /** Stable id of the current model tool call. */
   toolCallId: string;
+  /** Optional progress callback for streaming tool status updates. */
   onUpdate?: AgentToolUpdateCallback;
 };
 
@@ -31,16 +35,24 @@ type ToolPluginToolFactory<TConfig> = <TParamsSchema extends TSchema>(
 ) => DefinedToolPluginTool;
 
 export type ToolPluginFactoryContext<TConfig> = {
+  /** Plugin runtime API passed to context-sensitive tool factories. */
   api: OpenClawPluginApi;
+  /** Resolved plugin config typed from the declared config schema. */
   config: TConfig;
+  /** Runtime tool context, including sandbox/capability information. */
   toolContext: OpenClawPluginToolContext;
 };
 
 type ToolPluginToolDefinitionBase<TParamsSchema extends TSchema> = {
+  /** Model-facing tool name. */
   name: string;
+  /** Human-facing label; defaults to `name`. */
   label?: string;
+  /** Model-facing tool description. */
   description: string;
+  /** TypeBox parameter schema used for runtime validation and metadata. */
   parameters: TParamsSchema;
+  /** Register as optional so runtimes may omit it when unsupported. */
   optional?: boolean;
 };
 
@@ -50,6 +62,7 @@ export type ToolPluginToolDefinition<
 > = ToolPluginToolDefinitionBase<TParamsSchema> &
   (
     | {
+        /** Execute one concrete tool call and return either plain text or JSON-serializable data. */
         execute: (
           params: Static<TParamsSchema>,
           config: TConfig,
@@ -58,6 +71,7 @@ export type ToolPluginToolDefinition<
         factory?: never;
       }
     | {
+        /** Build runtime-specific tool definitions without losing static manifest metadata. */
         factory: (
           context: ToolPluginFactoryContext<TConfig>,
         ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
@@ -95,11 +109,17 @@ export type ToolPluginMetadata = {
 };
 
 export type DefineToolPluginOptions<TConfigSchema extends TSchema | undefined = undefined> = {
+  /** Stable plugin id used in config, manifests, and generated metadata. */
   id: string;
+  /** Human-facing plugin name. */
   name: string;
+  /** Human/model-facing plugin description. */
   description: string;
+  /** Manifest activation rule; defaults to startup activation. */
   activation?: PluginManifestActivation;
+  /** Optional TypeBox config schema; omitted means a strict empty object config. */
   configSchema?: TConfigSchema;
+  /** Declares static tool metadata and either execute handlers or runtime factories. */
   tools: (
     tool: ToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>,
   ) => readonly DefinedToolPluginTool[];

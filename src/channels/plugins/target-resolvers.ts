@@ -1,5 +1,12 @@
 import type { ChannelResolveResult } from "./types.adapters.js";
 
+/**
+ * Shared helpers for channel target resolution flows.
+ */
+
+/**
+ * Builds unresolved target results with one common note.
+ */
 export function buildUnresolvedTargetResults(
   inputs: string[],
   note: string,
@@ -11,6 +18,9 @@ export function buildUnresolvedTargetResults(
   }));
 }
 
+/**
+ * Resolves targets only when a required token is available.
+ */
 export async function resolveTargetsWithOptionalToken<TResult>(params: {
   token?: string | null;
   inputs: string[];
@@ -20,6 +30,8 @@ export async function resolveTargetsWithOptionalToken<TResult>(params: {
 }): Promise<ChannelResolveResult[]> {
   const token = params.token?.trim();
   if (!token) {
+    // Preserve one output row per input so setup UIs can show which entries
+    // could not be resolved while credentials are missing.
     return buildUnresolvedTargetResults(params.inputs, params.missingTokenNote);
   }
   const resolved = await params.resolveWithToken({

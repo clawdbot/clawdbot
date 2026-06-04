@@ -1,12 +1,21 @@
+/** Applies secrets migration plans across config files, auth stores, and env files. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  coercePersistedAuthProfileStore,
+  loadPersistedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
+import {
+  deletePersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   replaceConfigFile,
@@ -34,7 +43,7 @@ import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
 import {
-  listAuthProfileStorePaths,
+  listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -52,12 +61,18 @@ type ApplyWrite = {
   mode: number;
 };
 
+type AuthStoreSnapshot = {
+  agentDir: string;
+  store: ReturnType<typeof loadPersistedAuthProfileStore>;
+};
+
 type ProjectedState = {
   nextConfig: OpenClawConfig;
   configSnapshot: ConfigFileSnapshot;
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
   authJsonByPath: Map<string, Record<string, unknown>>;
   envRawByPath: Map<string, string>;
   changedFiles: Set<string>;
@@ -78,12 +93,14 @@ type ConfigTargetMutationResult = {
   providerTargets: Set<string>;
   configChanged: boolean;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
 };
 
 type MutableAuthProfileStore = Record<string, unknown> & {
   profiles: Record<string, unknown>;
 };
 
+/** Result summary for a secrets apply dry-run or write run. */
 export type SecretsApplyResult = {
   mode: "dry-run" | "write";
   changed: boolean;
@@ -233,6 +250,7 @@ async function projectPlanState(params: {
     nextConfig,
     stateDir,
     authStoreByPath: new Map<string, Record<string, unknown>>(),
+    authStoreAgentDirByPath: new Map<string, string>(),
     changedFiles,
   });
   if (targetMutations.configChanged) {
@@ -245,6 +263,7 @@ async function projectPlanState(params: {
     providerTargets: targetMutations.providerTargets,
     scrubbedValues: targetMutations.scrubbedValues,
     authStoreByPath: targetMutations.authStoreByPath,
+    authStoreAgentDirByPath: targetMutations.authStoreAgentDirByPath,
     changedFiles,
     warnings,
     enabled: options.scrubAuthProfilesForProviderTargets,
@@ -280,6 +299,7 @@ async function projectPlanState(params: {
     configPath,
     configWriteOptions: writeOptions,
     authStoreByPath,
+    authStoreAgentDirByPath: targetMutations.authStoreAgentDirByPath,
     authJsonByPath,
     envRawByPath,
     changedFiles,
@@ -295,6 +315,7 @@ function applyConfigTargetMutations(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
   changedFiles: Set<string>;
 }): ConfigTargetMutationResult {
   const resolvedTargets = params.planTargets.map((target) => ({
@@ -313,6 +334,7 @@ function applyConfigTargetMutations(params: {
         nextConfig: params.nextConfig,
         stateDir: params.stateDir,
         authStoreByPath: params.authStoreByPath,
+        authStoreAgentDirByPath: params.authStoreAgentDirByPath,
         scrubbedValues,
       });
       if (authStoreChanged) {
@@ -321,11 +343,11 @@ function applyConfigTargetMutations(params: {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
         params.changedFiles.add(
-          resolveAuthStorePathForAgent({
+          resolveAuthStoreTargetForAgent({
             nextConfig: params.nextConfig,
             stateDir: params.stateDir,
             agentId,
-          }),
+          }).path,
         );
       }
       continue;
@@ -369,6 +391,7 @@ function applyConfigTargetMutations(params: {
     providerTargets,
     configChanged,
     authStoreByPath: params.authStoreByPath,
+    authStoreAgentDirByPath: params.authStoreAgentDirByPath,
   };
 }
 
@@ -378,6 +401,7 @@ function scrubAuthStoresForProviderTargets(params: {
   providerTargets: Set<string>;
   scrubbedValues: Set<string>;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
   changedFiles: Set<string>;
   warnings: string[];
   enabled: boolean;
@@ -386,9 +410,13 @@ function scrubAuthStoresForProviderTargets(params: {
     return params.authStoreByPath;
   }
 
-  for (const authStorePath of listAuthProfileStorePaths(params.nextConfig, params.stateDir)) {
+  for (const target of listAuthProfileStoreTargets(params.nextConfig, params.stateDir)) {
+    const { agentDir, path: authStorePath } = target;
     const existing = params.authStoreByPath.get(authStorePath);
-    const parsed = existing ?? readJsonObjectIfExists(authStorePath).value;
+    if (!existing && !fs.existsSync(authStorePath)) {
+      continue;
+    }
+    const parsed = existing ?? loadPersistedAuthProfileStore(agentDir);
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
@@ -428,6 +456,7 @@ function scrubAuthStoresForProviderTargets(params: {
     }
     if (mutated) {
       params.authStoreByPath.set(authStorePath, nextStore);
+      params.authStoreAgentDirByPath.set(authStorePath, agentDir);
       params.changedFiles.add(authStorePath);
     }
   }
@@ -451,43 +480,59 @@ function resolveAuthStoreForTarget(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
 }): { path: string; store: MutableAuthProfileStore } {
   const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
-  const authStorePath = resolveAuthStorePathForAgent({
+  const authStoreTarget = resolveAuthStoreTargetForAgent({
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
     agentId,
   });
+  const authStorePath = authStoreTarget.path;
   const existing = params.authStoreByPath.get(authStorePath);
-  const loaded = existing ?? readJsonObjectIfExists(authStorePath).value;
+  const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
   params.authStoreByPath.set(authStorePath, store);
+  params.authStoreAgentDirByPath.set(authStorePath, authStoreTarget.agentDir);
   return { path: authStorePath, store };
 }
 
-function resolveAuthStorePathForAgent(params: {
+function resolveAuthStoreTargetForAgent(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   agentId: string;
-}): string {
+}): { agentDir: string; path: string } {
   const normalizedAgentId = normalizeAgentId(params.agentId);
   const configuredAgentDir = resolveAgentConfig(
     params.nextConfig,
     normalizedAgentId,
   )?.agentDir?.trim();
   if (configuredAgentDir) {
-    return resolveUserPath(resolveAuthStorePath(configuredAgentDir));
+    const agentDir = resolveUserPath(configuredAgentDir);
+    registerResolvedAgentDir({ agentId: normalizedAgentId, agentDir });
+    return { agentDir, path: resolveAuthProfileDatabasePath(agentDir) };
   }
-  return path.join(
+  const agentDir = path.join(
     resolveUserPath(params.stateDir),
     "agents",
     normalizedAgentId,
     "agent",
-    "auth-profiles.json",
   );
+  registerResolvedAgentDir({ agentId: normalizedAgentId, agentDir });
+  return { agentDir, path: resolveAuthProfileDatabasePath(agentDir) };
+}
+
+function listAuthProfileStoreTargets(
+  config: OpenClawConfig,
+  stateDir: string,
+): Array<{ agentDir: string; path: string }> {
+  return listAuthProfileStoreAgentDirs(config, stateDir).map((agentDir) => ({
+    agentDir,
+    path: resolveAuthProfileDatabasePath(agentDir),
+  }));
 }
 
 function ensureAuthProfileContainer(params: {
@@ -547,6 +592,7 @@ function applyAuthProfileTargetMutation(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
+  authStoreAgentDirByPath: Map<string, string>;
   scrubbedValues: Set<string>;
 }): boolean {
   if (params.resolved.entry.configFile !== "auth-profiles.json") {
@@ -557,6 +603,7 @@ function applyAuthProfileTargetMutation(params: {
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
     authStoreByPath: params.authStoreByPath,
+    authStoreAgentDirByPath: params.authStoreAgentDirByPath,
   });
   let changed = ensureAuthProfileContainer({
     target: params.target,
@@ -702,7 +749,7 @@ async function validateProjectedSecretsState(params: {
       // whole-runtime check.
       includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
-        const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
+        const storePath = resolveUserPath(resolveAuthProfileDatabasePath(agentDir));
         const override = authStoreLookup.get(storePath);
         if (override) {
           return (
@@ -754,6 +801,8 @@ function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWri
   };
 }
 
+/** Applies or dry-runs a validated secrets plan across config, auth stores, and scrub targets. */
+/** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
@@ -807,18 +856,23 @@ export async function runSecretsApply(params: {
 
   const io = createSecretsConfigIO({ env });
   const snapshots = new Map<string, FileSnapshot>();
+  const authStoreSnapshots = new Map<string, AuthStoreSnapshot>();
   const capture = (pathname: string) => {
     if (!snapshots.has(pathname)) {
       snapshots.set(pathname, captureFileSnapshot(pathname));
     }
   };
+  const captureAuthStore = (pathname: string, agentDir: string) => {
+    if (!authStoreSnapshots.has(pathname)) {
+      authStoreSnapshots.set(pathname, {
+        agentDir,
+        store: loadPersistedAuthProfileStore(agentDir),
+      });
+    }
+  };
 
   capture(projected.configPath);
   const writes: ApplyWrite[] = [];
-  for (const [pathname, value] of projected.authStoreByPath.entries()) {
-    capture(pathname);
-    writes.push(toJsonWrite(pathname, value));
-  }
   for (const [pathname, value] of projected.authJsonByPath.entries()) {
     capture(pathname);
     writes.push(toJsonWrite(pathname, value));
@@ -830,6 +884,9 @@ export async function runSecretsApply(params: {
       content: raw,
       mode: 0o600,
     });
+  }
+  for (const [pathname, agentDir] of projected.authStoreAgentDirByPath.entries()) {
+    captureAuthStore(pathname, agentDir);
   }
 
   try {
@@ -843,10 +900,32 @@ export async function runSecretsApply(params: {
     for (const writeLocal of writes) {
       writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
     }
+    for (const [pathname, value] of projected.authStoreByPath.entries()) {
+      const agentDir = projected.authStoreAgentDirByPath.get(pathname);
+      const store = coercePersistedAuthProfileStore(value);
+      if (agentDir && store) {
+        saveAuthProfileStore(store, agentDir);
+      }
+    }
   } catch (err) {
+    // Apply can touch multiple files; restore captured snapshots so partial writes do not leave
+    // config/auth/env stores out of sync when a later write fails.
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
         restoreFileSnapshot(pathname, snapshot);
+      } catch {
+        // Best effort only; preserve original error.
+      }
+    }
+    for (const snapshot of authStoreSnapshots.values()) {
+      try {
+        if (snapshot.store) {
+          saveAuthProfileStore(snapshot.store, snapshot.agentDir, {
+            syncExternalCli: false,
+          });
+        } else {
+          deletePersistedAuthProfileStoreRaw(snapshot.agentDir);
+        }
       } catch {
         // Best effort only; preserve original error.
       }

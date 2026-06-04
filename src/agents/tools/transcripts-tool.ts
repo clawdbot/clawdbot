@@ -21,6 +21,8 @@ import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcript
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
 
+// Transcript tool runtime for live capture, manual import, summarization, and
+// auto-started meeting sources. Active sessions are process-local live handles.
 type TranscriptsLogger = {
   warn: (message: string) => void;
 };
@@ -132,6 +134,8 @@ async function waitForPendingAutoStartsToSettle(
   }
 }
 
+// Provider routing comes from tool params so manual imports and live providers
+// share one persisted source descriptor.
 function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
   const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
   return {
@@ -156,6 +160,8 @@ function toolText(text: string, details?: Record<string, unknown>) {
   };
 }
 
+// Summaries are persisted beside the session so stop/import/summarize actions
+// return both model-readable details and a durable artifact path.
 async function summarizeAndPersist(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   store: TranscriptsStore;
@@ -393,6 +399,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   );
 }
 
+/** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   config?: OpenClawConfig;
   stateDir?: string;
@@ -435,6 +442,7 @@ export function createTranscriptsTool(options?: {
   };
 }
 
+/** Create the process lifecycle service that starts configured transcript captures. */
 export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext): {
   start: () => void;
   stop: () => Promise<void>;
@@ -445,6 +453,8 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
   const pendingStartControllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
 
+  // Auto-start is retrying and stoppable; each scheduled timer is tracked so a
+  // gateway shutdown can cancel retries before stopping any started sessions.
   const schedule = (run: () => void, delayMs: number) => {
     const timer = setTimeout(() => {
       timers.delete(timer);

@@ -29,6 +29,7 @@ type CapturedResponse = {
   status: number;
   headers: Record<string, number | string | string[]>;
   body: string;
+  bodyBytes: Buffer;
 };
 
 type HttpRequestHandler = (
@@ -73,6 +74,7 @@ async function captureHttpResponse(
     status: 200,
     headers: {},
     body: "",
+    bodyBytes: Buffer.alloc(0),
   };
   const res = {
     statusCode: 200,
@@ -84,7 +86,8 @@ async function captureHttpResponse(
     },
     end(chunk?: string | Buffer) {
       response.status = this.statusCode;
-      response.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
+      response.bodyBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? "");
+      response.body = response.bodyBytes.toString("utf8");
       return this;
     },
   };
@@ -409,6 +412,19 @@ describe("canvas host", () => {
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
+      const expectedPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      for (const assetPath of [
+        "assets/providers/google.png",
+        "assets/providers/x.png",
+        "granola.png",
+      ]) {
+        const assetRes = await captureA2uiResponse(`${A2UI_PATH}/${assetPath}`);
+        expect(assetRes.status).toBe(200);
+        expect(assetRes.headers["content-type"]).toBe("image/png");
+        expect(assetRes.bodyBytes.subarray(0, expectedPngSignature.length)).toEqual(
+          expectedPngSignature,
+        );
+      }
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");

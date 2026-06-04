@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "./types.js";
 
+/** Detects model overrides created by automatic fallback provenance. */
 export function hasSessionAutoModelFallbackProvenance(
   entry:
     | Pick<

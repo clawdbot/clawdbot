@@ -18,6 +18,9 @@ import type {
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
+// Projects enabled bundle MCP servers into Codex app-server thread config.
+// The projection keeps loopback approval defaults and header env placeholders
+// compatible with Codex's MCP config shape.
 export type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
@@ -71,6 +74,8 @@ export function normalizeCodexMcpServerConfig(
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
   } else if (isOpenClawLoopbackMcpServer(name, server)) {
+    // OpenClaw's loopback MCP exposes local tools; Codex should ask for approval
+    // unless plugin metadata explicitly selected another approval mode.
     next.default_tools_approval_mode = "approve";
   }
   const httpHeaders = normalizeStringRecord(server.headers);
@@ -84,6 +89,7 @@ export function normalizeCodexMcpServerConfig(
         continue;
       }
       if (decoded.bearer && normalizeOptionalLowercaseString(nameLocal) === "authorization") {
+        // Codex has a dedicated bearer token env field for Authorization headers.
         next.bearer_token_env_var = decoded.envVar;
         continue;
       }
@@ -99,6 +105,7 @@ export function normalizeCodexMcpServerConfig(
   return next;
 }
 
+/** Build Codex `mcp_servers` config from normalized bundle MCP config. */
 export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
   return Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => [
@@ -129,6 +136,7 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
     .digest("hex");
 }
 
+/** Load bundle MCP config for one Codex app-server thread. */
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {

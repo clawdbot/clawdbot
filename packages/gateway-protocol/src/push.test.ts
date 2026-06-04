@@ -2,6 +2,11 @@ import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { PushTestResultSchema } from "./schema/push.js";
 
+/**
+ * Push protocol schema regression for APNS test results.
+ * The transport field tells operators whether delivery used direct APNS or the
+ * relay path, so it is part of the public result contract.
+ */
 describe("gateway protocol push schema", () => {
   const validatePushTestResult = Compile(PushTestResultSchema);
 

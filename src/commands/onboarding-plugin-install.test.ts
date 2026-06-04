@@ -78,9 +78,24 @@ const recordPluginInstall = vi.hoisted(() =>
   })),
 );
 const buildNpmResolutionInstallFields = vi.hoisted(() => vi.fn(() => ({})));
+const resolveNpmInstallRecordSpec = vi.hoisted(() =>
+  vi.fn(
+    (params: {
+      requestedSpec?: string;
+      resolution?: { resolvedSpec?: string };
+      pinResolvedRegistrySpec?: boolean;
+    }) => {
+      if (params.pinResolvedRegistrySpec && params.resolution?.resolvedSpec) {
+        return params.resolution.resolvedSpec;
+      }
+      return params.requestedSpec;
+    },
+  ),
+);
 vi.mock("../plugins/installs.js", () => ({
   recordPluginInstall,
   buildNpmResolutionInstallFields,
+  resolveNpmInstallRecordSpec,
 }));
 
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));

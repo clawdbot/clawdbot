@@ -1,3 +1,6 @@
+/**
+ * WebSocket connection startup regression tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,

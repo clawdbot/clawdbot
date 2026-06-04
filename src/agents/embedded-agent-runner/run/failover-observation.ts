@@ -8,6 +8,7 @@ import {
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
 
+/** Structured fields emitted whenever embedded run failover chooses an action. */
 export type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
@@ -26,8 +27,13 @@ export type FailoverDecisionLoggerInput = {
   status?: number;
 };
 
+/** Stable context captured before a concrete failover decision is known. */
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
+/**
+ * Derives timeout failure reasons for logs that were built from timeout state
+ * before the normal provider error classifier had a raw error to inspect.
+ */
 export function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
@@ -38,6 +44,11 @@ export function normalizeFailoverDecisionObservationBase(
   };
 }
 
+/**
+ * Captures sanitized failover context and returns a decision logger. The closure
+ * keeps prompt/assistant failover branches consistent while still allowing the
+ * final decision and HTTP status to be supplied at the action point.
+ */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
@@ -59,6 +70,9 @@ export function createFailoverDecisionLogger(
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    // Some provider/runtime failure kinds already have normalized detail fields.
+    // Repeating the raw suffix there makes the console line noisier without
+    // adding actionable failover evidence.
     const rawErrorConsoleSuffix =
       safeRawErrorPreview &&
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)

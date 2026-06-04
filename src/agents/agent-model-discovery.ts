@@ -10,7 +10,6 @@ import {
 import { isRecord } from "../utils.js";
 import {
   resolveAgentCredentialsForDiscovery,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
@@ -40,6 +39,7 @@ type DiscoverModelsOptions = {
   normalizeModels?: boolean;
 };
 
+/** Applies plugin model normalization and transport hooks to discovered agent models. */
 export function normalizeDiscoveredAgentModel<T>(value: T, agentDir: string): T {
   if (!isRecord(value)) {
     return value;
@@ -146,19 +146,17 @@ function createOpenClawModelRegistry(
   return registry;
 }
 
+/** Creates auth storage for model discovery from stored and env-backed credentials. */
 export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): AgentAuthStorage {
   const credentials =
     options?.skipCredentials === true ? {} : resolveAgentCredentialsForDiscovery(agentDir, options);
-  const authPath = path.join(agentDir, "auth.json");
-  if (options?.readOnly !== true) {
-    scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);
-  }
   return AuthStorage.inMemory(credentials);
 }
 
+/** Creates the model registry used by agent model discovery. */
 export function discoverModels(
   authStorage: AgentAuthStorage,
   agentDir: string,
@@ -175,6 +173,5 @@ export function discoverModels(
 export {
   addEnvBackedAgentCredentials,
   resolveAgentCredentialsForDiscovery,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";

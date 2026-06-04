@@ -1,3 +1,4 @@
+// Tests safe filesystem wrappers and protected file-handle behavior.
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";

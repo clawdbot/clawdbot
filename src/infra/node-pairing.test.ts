@@ -1,3 +1,4 @@
+// Tests node pairing identity persistence and validation.
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";

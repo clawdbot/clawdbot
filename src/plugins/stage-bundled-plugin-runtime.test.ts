@@ -1,3 +1,4 @@
+// Covers staging bundled plugin runtime files for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

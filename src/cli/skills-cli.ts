@@ -400,8 +400,10 @@ export function registerSkillsCli(program: Command) {
               info: (message) => defaultRuntime.log(message),
             },
           });
+          let failed = false;
           for (const result of results) {
             if (!result.ok) {
+              failed = true;
               defaultRuntime.error(result.error);
               continue;
             }
@@ -412,6 +414,9 @@ export function registerSkillsCli(program: Command) {
               continue;
             }
             defaultRuntime.log(`${result.slug} already at ${result.version}`);
+          }
+          if (failed) {
+            defaultRuntime.exit(1);
           }
         } catch (err) {
           defaultRuntime.error(String(err));

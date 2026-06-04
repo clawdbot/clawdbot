@@ -1,3 +1,4 @@
+// Covers Claude bundle inspection for plugin packaging metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

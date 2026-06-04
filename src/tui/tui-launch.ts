@@ -1,3 +1,4 @@
+// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -5,6 +6,7 @@ import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type { TuiOptions } from "./tui.js";
 
+// Relaunch helper used when setup wants to hand control to an inherited-stdio TUI process.
 type TuiLaunchOptions = {
   authSource?: "config";
   gatewayUrl?: string;
@@ -21,6 +23,7 @@ function filterTuiExecArgv(execArgv: readonly string[]): string[] {
   const filtered: string[] = [];
   for (let index = 0; index < execArgv.length; index += 1) {
     const arg = execArgv[index] ?? "";
+    // Strip inspector flags so a relaunched TUI does not fight the parent debug port.
     if (
       arg === "--inspect" ||
       arg.startsWith("--inspect=") ||
@@ -77,6 +80,7 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   return args;
 }
 
+/** Launches a child TUI process with inherited stdio and setup-specific environment hints. */
 export async function launchTuiCli(
   opts: TuiOptions,
   launchOptions: TuiLaunchOptions = {},
@@ -95,6 +99,7 @@ export async function launchTuiCli(
   const stdinWasPaused =
     typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
 
+  // Pause parent stdin while the child owns the terminal, then restore the previous state.
   process.stdin.pause();
 
   await new Promise<void>((resolve, reject) => {

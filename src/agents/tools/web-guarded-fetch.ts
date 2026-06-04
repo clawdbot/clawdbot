@@ -12,6 +12,12 @@ import {
 } from "../../infra/net/ssrf.js";
 import { readPositiveIntegerParam } from "./common.js";
 
+/**
+ * Guarded fetch wrappers for web tools.
+ *
+ * These helpers apply SSRF policy, timeout normalization, and optional trusted
+ * env proxy mode before tool-specific response handling runs.
+ */
 const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
   allowRfc2544BenchmarkRange: true,
@@ -45,6 +51,7 @@ function resolveTimeoutMs(params: {
   return undefined;
 }
 
+/** Runs a guarded fetch with strict or trusted-env-proxy web tool policy. */
 export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
@@ -72,6 +79,7 @@ async function withWebToolsNetworkGuard<T>(
   }
 }
 
+/** Runs a fetch for trusted endpoints, allowing env proxy with pinned-host policy. */
 export async function withTrustedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
@@ -87,6 +95,7 @@ export async function withTrustedWebToolsEndpoint<T>(
   );
 }
 
+/** Runs a fetch for configured self-hosted endpoints with private-network access allowed. */
 export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
@@ -101,6 +110,7 @@ export async function withSelfHostedWebToolsEndpoint<T>(
   );
 }
 
+/** Runs a fetch under strict SSRF protection without env proxy trust. */
 export async function withStrictWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,

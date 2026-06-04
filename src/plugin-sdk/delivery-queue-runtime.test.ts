@@ -1,3 +1,6 @@
+/**
+ * Tests delivery queue runtime ordering and retry behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

@@ -1,3 +1,4 @@
+/** Tests plugin version drift detection between package, manifest, and install records. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";

@@ -1,3 +1,4 @@
+// Validates safe-bin policy profiles against command argv semantics.
 import { parseExecArgvToken } from "./exec-command-resolution.js";
 import {
   buildLongFlagPrefixMap,

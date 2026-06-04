@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -30,7 +30,7 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(actual.getGlobalHookRunner),
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -38,6 +38,37 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+    hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+      hookRunner: null,
+      registry: null,
+    };
+  }
+  hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+}
+
+function getGlobalHookRunnerForTest(): unknown {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
+}
+
+afterEach(() => {
+  setGlobalHookRunnerForTest(null);
+  mockGetGlobalHookRunner.mockReset();
+  mockGetGlobalHookRunner.mockImplementation(
+    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
+  );
+});
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: {
@@ -750,7 +781,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "blocked by policy",
@@ -924,24 +955,13 @@ describe("before_tool_call requireApproval handling", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
       runBeforeToolCall: vi.fn(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
-    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-    const hookRunnerGlobalState = globalThis as Record<
-      symbol,
-      { hookRunner: unknown; registry?: unknown } | undefined
-    >;
-    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
-      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
-        hookRunner: null,
-        registry: null,
-      };
-    }
-    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+    setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });

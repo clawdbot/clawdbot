@@ -1,6 +1,7 @@
 let lastTimestamp = -Infinity;
 let sequence = 0;
 
+// Small UUIDv7 generator for browser/node package builds without a runtime dep.
 function fillRandomBytes(bytes: Uint8Array): void {
   const crypto = globalThis.crypto;
   if (crypto?.getRandomValues) {
@@ -12,6 +13,7 @@ function fillRandomBytes(bytes: Uint8Array): void {
   }
 }
 
+/** Generate a monotonic UUIDv7 string. */
 export function uuidv7(): string {
   const random = new Uint8Array(16);
   fillRandomBytes(random);
@@ -21,6 +23,8 @@ export function uuidv7(): string {
     sequence = random[6] * 0x1000000 + random[7] * 0x10000 + random[8] * 0x100 + random[9];
     lastTimestamp = timestamp;
   } else {
+    // Same-ms calls increment the sequence so generated ids remain sortable and
+    // unique even when random bytes repeat.
     sequence = (sequence + 1) >>> 0;
     if (sequence === 0) {
       lastTimestamp++;

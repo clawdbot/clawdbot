@@ -1,3 +1,4 @@
+/** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
 import { describe, expect, it } from "vitest";
 import {
   AcpRuntimeError,

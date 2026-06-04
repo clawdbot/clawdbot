@@ -8,6 +8,10 @@ import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
+/**
+ * Setup plugin registry facade for channel onboarding flows.
+ */
+
 type ChannelSetupPluginView = {
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
@@ -31,6 +35,8 @@ function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlug
   return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
+    // Keep setup screens in explicit plugin order, then known built-in order,
+    // then stable extension id order.
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
     const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
     if (orderA !== orderB) {
@@ -44,6 +50,8 @@ function resolveChannelSetupPlugins(): ChannelSetupPluginView {
   const registry = requireActivePluginRegistry();
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
+  // Before the registry has setup plugins, bundled setup plugins provide the
+  // onboarding catalog so first-run setup can still render.
   const sorted = sortChannelSetupPlugins(
     registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
   );
@@ -58,15 +66,24 @@ function resolveChannelSetupPlugins(): ChannelSetupPluginView {
   };
 }
 
+/**
+ * Lists setup-capable channel plugins, falling back to bundled setup metadata.
+ */
 export function listChannelSetupPlugins(): ChannelPlugin[] {
   return resolveChannelSetupPlugins().sorted.slice();
 }
 
+/**
+ * Lists setup plugins from the active channel registry only.
+ */
 export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
   const registry = getActivePluginChannelRegistry();
   return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
+/**
+ * Returns one setup-capable channel plugin by id.
+ */
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

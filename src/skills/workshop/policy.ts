@@ -7,6 +7,7 @@ const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine
 
 type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine";
 
+// Only lifecycle actions mutate proposals and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
   if (typeof action !== "string" || !SKILL_WORKSHOP_LIFECYCLE_ACTIONS.has(action)) {
@@ -41,6 +42,7 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
   };
 }
 
+/** Returns approval policy for skill workshop lifecycle tool calls. */
 export function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;

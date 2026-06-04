@@ -1,3 +1,4 @@
+// Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export function createEditorSubmitHandler(params: {

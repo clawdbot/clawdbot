@@ -1,3 +1,4 @@
+// Covers Windows install-root normalization and discovery.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   privateTestApi,

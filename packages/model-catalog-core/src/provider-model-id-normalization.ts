@@ -4,6 +4,9 @@ import {
   normalizeTogetherModelId,
 } from "./provider-model-id-normalize.js";
 
+// Provider model-id normalization policies from manifests plus built-in provider rules.
+
+/** Manifest-defined normalization rules for one provider. */
 export type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
@@ -14,6 +17,7 @@ export type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
+/** Manifest fragment that can define provider model-id normalization policies. */
 export type ManifestModelIdNormalizationRecord = {
   modelIdNormalization?: {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
@@ -24,6 +28,7 @@ let currentManifestModelIdNormalizationPolicies:
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined;
 
+/** Collect provider model-id normalization policies from plugin manifests. */
 export function collectManifestModelIdNormalizationPolicies(
   plugins: readonly ManifestModelIdNormalizationRecord[],
 ): Map<string, ManifestModelIdNormalizationProvider> {
@@ -36,6 +41,7 @@ export function collectManifestModelIdNormalizationPolicies(
   return policies;
 }
 
+/** Replace the process-local manifest normalization policy snapshot. */
 export function setCurrentManifestModelIdNormalizationRecords(
   plugins: readonly ManifestModelIdNormalizationRecord[] | undefined,
 ): void {
@@ -44,20 +50,24 @@ export function setCurrentManifestModelIdNormalizationRecords(
     : undefined;
 }
 
+/** Return the current process-local manifest normalization policy snapshot. */
 export function getCurrentManifestModelIdNormalizationPolicies():
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined {
   return currentManifestModelIdNormalizationPolicies;
 }
 
+/** Return true when a model id already includes a provider namespace. */
 function hasProviderPrefix(modelId: string): boolean {
   return modelId.includes("/");
 }
 
+/** Join a provider prefix and model id with exactly one slash. */
 function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
+/** Strip a duplicated self-provider prefix from a model id. */
 export function stripSelfProviderModelPrefix(provider: string, model: string): string {
   const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
   const trimmed = model.trim();
@@ -66,6 +76,7 @@ export function stripSelfProviderModelPrefix(provider: string, model: string): s
     : model;
 }
 
+/** Apply manifest normalization policies for one provider/model id. */
 export function normalizeProviderModelIdWithPolicies(params: {
   provider: string;
   policies: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
@@ -107,6 +118,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
   return modelId;
 }
 
+/** Apply built-in provider-specific model id normalization rules. */
 export function normalizeBuiltInProviderModelId(provider: string, model: string): string {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   if (
@@ -174,6 +186,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   return model;
 }
 
+/** Apply manifest policies and built-in normalization to a static provider/model id. */
 export function normalizeStaticProviderModelIdWithPolicies(
   provider: string,
   model: string,
@@ -192,6 +205,7 @@ export function normalizeStaticProviderModelIdWithPolicies(
   return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
 }
 
+/** Normalize a configured provider/model catalog reference using current policies. */
 export function normalizeConfiguredProviderCatalogModelId(
   provider: string,
   model: string,
@@ -201,6 +215,7 @@ export function normalizeConfiguredProviderCatalogModelId(
   return normalizeConfiguredProviderCatalogModelRef(providerModel);
 }
 
+/** Normalize embedded Google model aliases inside provider/model catalog refs. */
 export function normalizeConfiguredProviderCatalogModelRef(providerModel: string): string {
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {

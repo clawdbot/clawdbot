@@ -1,3 +1,4 @@
+// Covers safe gateway restart preflight and requests.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeGatewayRestartPreflight,

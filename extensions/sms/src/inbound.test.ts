@@ -109,15 +109,12 @@ describe("dispatchSmsInboundEvent", () => {
       meta: undefined,
     });
     expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
-    const firstSendCall = sendSmsViaTwilio.mock.calls[0];
-    expect(firstSendCall).toBeDefined();
-    if (!firstSendCall) {
-      throw new Error("Expected SMS send call");
-    }
-    expect(firstSendCall[0]).toMatchObject({
-      to: "+15551234567",
-    });
-    expect(firstSendCall[0].text).toContain("PAIR123");
+    expect(sendSmsViaTwilio).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+15551234567",
+        text: expect.stringContaining("PAIR123"),
+      }),
+    );
   });
 
   it("uses the canonical routed session key for authorized SMS turns", async () => {

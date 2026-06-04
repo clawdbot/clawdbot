@@ -1,3 +1,4 @@
+// Maintains interactive plugin registry entries discovered from manifests.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizePluginInteractiveNamespace,
@@ -13,11 +14,13 @@ import {
 } from "./interactive-state.js";
 import type { PluginInteractiveHandlerRegistration } from "./types.js";
 
+/** Registration result for plugin interactive namespace handlers. */
 export type InteractiveRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
+/** Resolves a channel payload to a registered plugin interactive namespace handler. */
 export function resolvePluginInteractiveNamespaceMatch(
   channel: string,
   data: string,
@@ -29,6 +32,7 @@ export function resolvePluginInteractiveNamespaceMatch(
   });
 }
 
+/** Registers one plugin interactive namespace for a channel. */
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
@@ -59,14 +63,17 @@ export function registerPluginInteractiveHandler(
   return { ok: true };
 }
 
+/** Clears all active plugin interactive handlers. */
 export function clearPluginInteractiveHandlers(): void {
   clearPluginInteractiveHandlersState();
 }
 
+/** Clears stored plugin interactive handler registrations. */
 export function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 
+/** Clears active interactive handlers owned by one plugin. */
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
@@ -76,10 +83,12 @@ export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void 
   }
 }
 
+/** Lists active plugin interactive handlers. */
 export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
   return Array.from(getPluginInteractiveHandlersState().values());
 }
 
+/** Restores active plugin interactive handlers from a saved registry snapshot. */
 export function restorePluginInteractiveHandlers(
   registrations: readonly RegisteredInteractiveHandler[],
 ): void {

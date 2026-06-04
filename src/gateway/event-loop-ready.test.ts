@@ -1,3 +1,6 @@
+/**
+ * Gateway event-loop readiness tests.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForEventLoopReady } from "./event-loop-ready.js";
 

@@ -1,5 +1,7 @@
 import { createEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 
+// Shared fixture for tests that exercise embedded agent tool handler state.
+/** Build the minimal mutable state object expected by tool handler tests. */
 export function createBaseToolHandlerState() {
   return {
     replayState: createEmbeddedRunReplayState(),

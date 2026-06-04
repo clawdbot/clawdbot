@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for skill snapshot invalidation and refresh listeners.
+ */
 export {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,

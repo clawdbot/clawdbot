@@ -1,3 +1,4 @@
+// Collects dangerous config flag findings across agents and runtime config.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
@@ -6,6 +7,10 @@ import { isRecord } from "../utils.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
+/**
+ * Collect enabled insecure/dangerous config flags for audit warnings and gateway tool previews.
+ * Plugin flags use current metadata when requested, then fall back to resolving manifest contracts.
+ */
 export function collectEnabledInsecureOrDangerousFlags(
   cfg: OpenClawConfig,
   options: { preferCurrentPluginMetadataSnapshot?: boolean } = {},

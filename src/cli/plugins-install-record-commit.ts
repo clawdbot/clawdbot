@@ -1,3 +1,4 @@
+// Commit helpers that move transient plugin install records into the persisted install index.
 import { isDeepStrictEqual } from "node:util";
 import {
   replaceConfigFile,
@@ -28,10 +29,12 @@ function mergeUnsetPaths(
   return merged.length > 0 ? merged : undefined;
 }
 
+/** Return whether config still contains legacy/transient plugin install records. */
 export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
   return Object.keys(config.plugins?.installs ?? {}).length > 0;
 }
 
+/** Find pending install records that match the base config and can be stripped as unchanged. */
 export function unchangedPendingPluginInstallRecordIds(
   config: OpenClawConfig,
   baseConfig: OpenClawConfig,
@@ -42,6 +45,7 @@ export function unchangedPendingPluginInstallRecordIds(
     .map(([pluginId]) => pluginId);
 }
 
+/** Remove pending plugin install records from config, optionally only for selected ids. */
 export function stripPendingPluginInstallRecords(
   config: OpenClawConfig,
   pluginIds?: Iterable<string>,
@@ -113,6 +117,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
     });
   } catch (error) {
     try {
+      // Keep config and install index atomic from the caller's perspective.
       await writePersistedInstalledPluginIndexInstallRecords(previousInstallRecords);
     } catch (rollbackError) {
       throw new Error(
@@ -124,6 +129,7 @@ async function commitPluginInstallRecordsWithWriter(params: {
   }
 }
 
+/** Persist plugin install records and commit the matching config update to disk. */
 export async function commitPluginInstallRecordsWithConfig(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
@@ -143,6 +149,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   });
 }
 
+/** Commit config while migrating any pending install records into the install index. */
 export async function commitConfigWriteWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
@@ -187,6 +194,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   };
 }
 
+/** Replace the config file after moving pending plugin install records into the install index. */
 export async function commitConfigWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
@@ -210,6 +218,7 @@ export async function commitConfigWithPendingPluginInstalls(params: {
   });
 }
 
+/** Transform config with retry support while preserving plugin install index consistency. */
 export async function transformConfigWithPendingPluginInstalls<T = void>(
   params: Omit<TransformConfigFileWithRetryParams<T>, "commit">,
 ): Promise<ConfigMutationResult<T>> {
@@ -246,6 +255,7 @@ export async function transformConfigWithPendingPluginInstalls<T = void>(
   });
 }
 
+/** Mutating-draft adapter for config transforms that may contain pending plugin installs. */
 export async function mutateConfigWithPendingPluginInstalls<T = void>(
   params: Omit<TransformConfigFileWithRetryParams<T>, "commit" | "transform"> & {
     mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;

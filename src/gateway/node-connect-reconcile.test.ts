@@ -1,3 +1,6 @@
+/**
+ * Node connect reconciliation tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -169,6 +172,29 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectiveCommands).toEqual([]);
     expect(result.declaredCaps).toEqual(["camera", "screen"]);
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
+  });
+
+  it("preserves the approved surface when paired node upgrade pairing is throttled", async () => {
+    const requestPairing = vi.fn(async () => null);
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera"],
+        commands: [],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledOnce();
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.declaredCaps).toEqual(["camera", "screen"]);
+    expect(result.pendingPairing).toBeUndefined();
   });
 
   it("requires a fresh pairing request when paired node permissions change", async () => {

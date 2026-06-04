@@ -1,3 +1,6 @@
+/**
+ * Tests for task gateway methods and persisted task lifecycle responses.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

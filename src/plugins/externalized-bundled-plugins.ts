@@ -1,3 +1,4 @@
+// Defines metadata for bundled plugins that are installed externally.
 export type ExternalizedBundledPluginPreferredSource = "npm" | "clawhub";
 
 export type ExternalizedBundledPluginBridge = {

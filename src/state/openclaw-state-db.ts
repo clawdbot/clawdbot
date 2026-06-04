@@ -17,26 +17,39 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
+/**
+ * Shared OpenClaw SQLite state database lifecycle and metadata writers.
+ *
+ * This module owns schema creation, additive migrations for released state
+ * tables, private file permissions, cached handles, and audit rows for
+ * migrations/backups that operate on local state.
+ */
 const OPENCLAW_STATE_SCHEMA_VERSION = 1;
+/** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
 const OPENCLAW_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
+/** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
   db: DatabaseSync;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
 
+/** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
 };
 
+/** Status stored for a state migration run. */
 export type OpenClawMigrationRunStatus = "completed" | "warning" | "failed";
+/** Status stored for a state backup run. */
 export type OpenClawBackupRunStatus = "completed" | "failed";
 
+/** Input for recording one state migration run summary. */
 export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOptions & {
   id?: string;
   startedAt: number;
@@ -45,6 +58,7 @@ export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOption
   report: Record<string, unknown>;
 };
 
+/** Input for recording one migrated source file/table pair. */
 export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOptions & {
   runId: string;
   migrationKind: string;
@@ -60,6 +74,7 @@ export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOpt
   report: Record<string, unknown>;
 };
 
+/** Input for recording one state backup archive. */
 export type RecordOpenClawStateBackupRunOptions = OpenClawStateDatabaseOptions & {
   id?: string;
   createdAt: number;
@@ -99,6 +114,7 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
   }
   const dirExisted = existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_STATE_DIR_MODE });
+  // Default state contains credentials-adjacent metadata; custom existing dirs keep caller modes.
   if (isDefaultStateDatabase || !dirExisted) {
     chmodSync(dir, OPENCLAW_STATE_DIR_MODE);
   }
@@ -127,6 +143,7 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): v
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
     return;
   }
+  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
 }
 
@@ -312,6 +329,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     if (!job) {
       continue;
     }
+    // Legacy cron rows kept the contract in job_json; columns are a queryable projection of it.
     const schedule = recordField(job, "schedule");
     const payload = recordField(job, "payload");
     const scheduleKind = textField(schedule ?? {}, "kind");
@@ -456,6 +474,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     if (!entry) {
       continue;
     }
+    // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
     const session = recordField(entry, "session");
     const route = recordField(entry, "route");
     const deliveryContext = recordField(entry, "deliveryContext");
@@ -671,6 +690,7 @@ function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string
   return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
 }
 
+/** Open or return a cached shared state database after schema and migration checks. */
 export function openOpenClawStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase {
@@ -681,6 +701,7 @@ export function openOpenClawStateDatabase(
     return cached;
   }
   if (cached) {
+    // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
     cached.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
@@ -709,6 +730,7 @@ export function openOpenClawStateDatabase(
   return database;
 }
 
+/** Run a synchronous immediate transaction against the shared state database. */
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
@@ -724,6 +746,7 @@ export function runOpenClawStateWriteTransaction<T>(
   return result;
 }
 
+/** Record a state migration run and return its stable run id. */
 export function recordOpenClawStateMigrationRun(
   options: RecordOpenClawStateMigrationRunOptions,
 ): string {
@@ -744,6 +767,7 @@ export function recordOpenClawStateMigrationRun(
   return id;
 }
 
+/** Upsert the per-source audit row for a state migration. */
 export function recordOpenClawStateMigrationSource(
   options: RecordOpenClawStateMigrationSourceOptions,
 ): void {
@@ -786,6 +810,7 @@ export function recordOpenClawStateMigrationSource(
   }, options);
 }
 
+/** Record a state backup archive and return its stable backup id. */
 export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupRunOptions): string {
   const id = options.id ?? randomUUID();
   runOpenClawStateWriteTransaction((database) => {
@@ -804,6 +829,7 @@ export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupR
   return id;
 }
 
+/** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(): void {
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
@@ -815,8 +841,10 @@ export function closeOpenClawStateDatabase(): void {
   cachedDatabases.clear();
 }
 
+/** Test whether any cached shared state database handle is still open. */
 export function isOpenClawStateDatabaseOpen(): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
+/** Test alias for closing shared state handles from teardown code. */
 export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;

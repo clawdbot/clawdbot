@@ -1,3 +1,6 @@
+/**
+ * Public SDK foundation surface for memory host engine config, paths, and shared helpers.
+ */
 export * from "../../packages/memory-host-sdk/src/engine-foundation.js";
 export {
   resolveAgentContextLimits,

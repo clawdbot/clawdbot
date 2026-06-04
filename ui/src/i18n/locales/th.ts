@@ -447,6 +447,14 @@ export const th: TranslationMap = {
     logs: "บันทึกเกตเวย์แบบสด",
     dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
   },
+  skillWorkshop: {
+    header: {
+      useCurrentChat: "Use current chat",
+      useCurrentChatAria: "Use current chat for revision requests",
+      useCurrentChatTooltip:
+        "Send revision requests to the current chat session instead of the proposal's workshop session.",
+    },
+  },
   activity: {
     title: "กิจกรรม",
     subtitle: "กิจกรรมของเครื่องมือแบบชั่วคราวที่ได้จากเหตุการณ์เซสชันสด",

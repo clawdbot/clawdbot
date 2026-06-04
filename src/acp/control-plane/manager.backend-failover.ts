@@ -1,6 +1,8 @@
+/** Backend failover helpers for ACP session initialization and turn execution. */
 import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
 import { normalizeText } from "./runtime-options.js";
 
+/** Captured backend attempt state used to decide whether failover is safe. */
 export type BackendAttempt = {
   backend: string;
   error: string;
@@ -8,11 +10,13 @@ export type BackendAttempt = {
   sawOutput: boolean;
 };
 
+/** Ordered backend candidates plus display helper for diagnostics. */
 export type BackendCandidatePlan = {
   candidateBackends: string[];
   describeBackendCandidate: (backend: string) => string;
 };
 
+/** Builds the deduped backend order from configured primary, resolved primary, and fallbacks. */
 export function resolveBackendCandidatePlan(params: {
   configuredPrimaryBackend?: string;
   resolvedPrimaryBackend?: string;
@@ -34,6 +38,7 @@ export function resolveBackendCandidatePlan(params: {
   };
 }
 
+/** Returns true for early transient backend errors where trying another backend is safe. */
 export function isFailoverWorthyBackendError(attempt: BackendAttempt): boolean {
   return (
     !attempt.sawOutput &&
@@ -46,6 +51,7 @@ export function isFailoverWorthyBackendError(attempt: BackendAttempt): boolean {
   );
 }
 
+/** Returns whether another backend candidate remains after the current index. */
 export function shouldAttemptBackendFailover(params: {
   backendIndex: number;
   candidateBackends: readonly string[];

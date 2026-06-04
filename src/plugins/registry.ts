@@ -1,3 +1,4 @@
+/** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,

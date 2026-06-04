@@ -1,3 +1,4 @@
+// Covers low-level raw config snapshot redaction transforms.
 import { describe, expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 import { replaceSensitiveValuesInRaw } from "./redact-snapshot.raw.js";

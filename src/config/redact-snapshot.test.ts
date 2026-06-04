@@ -1,3 +1,4 @@
+// Covers config snapshot redaction and restoration behavior.
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
@@ -407,6 +408,56 @@ describe("redactConfigSnapshot", () => {
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.models.providers.local.localService.env.HF_HOME).toBe(
       "local-service-secret-home",
+    );
+  });
+
+  it("redacts install policy env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  security: {
+    installPolicy: {
+      enabled: true,
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        env: {
+          POLICY_TOKEN: "operator-policy-secret-token",
+          AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        security: {
+          installPolicy: {
+            enabled: true,
+            exec: {
+              source: "exec",
+              command: "/usr/local/bin/openclaw-install-policy",
+              env: {
+                POLICY_TOKEN: "operator-policy-secret-token",
+                AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.security.installPolicy.exec.env.POLICY_TOKEN).toBe(REDACTED_SENTINEL);
+    expect(cfg.security.installPolicy.exec.env.AUDIT_ENDPOINT).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("operator-policy-secret-token");
+    expect(result.raw).not.toContain("operator-policy-secret-endpoint");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.security.installPolicy.exec.env.POLICY_TOKEN).toBe(
+      "operator-policy-secret-token",
     );
   });
 

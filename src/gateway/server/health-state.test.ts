@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../../commands/health.js";
 
+/**
+ * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
+ */
 const getHealthSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/health.js", () => ({

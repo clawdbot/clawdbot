@@ -1,3 +1,4 @@
+/** Tests Matrix top-level credential refs when named accounts also exist. */
 import { describe, expect, it } from "vitest";
 import "./runtime-matrix.test-support.ts";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";

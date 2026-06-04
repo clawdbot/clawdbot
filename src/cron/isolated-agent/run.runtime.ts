@@ -1,3 +1,4 @@
+// Runtime dependency facade for isolated cron agent turns.
 export {
   resolveAgentConfig,
   resolveAgentDir,

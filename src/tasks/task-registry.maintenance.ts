@@ -1,3 +1,4 @@
+// Reconciles stale or lost task registry records during maintenance passes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

@@ -1,3 +1,4 @@
+// Tests background side-question command routing and typing controller integration.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

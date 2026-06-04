@@ -1,6 +1,12 @@
 import type { ToolLoopPostCompactionGuardConfig } from "../../config/types.tools.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
+/**
+ * Detects identical tool-call loops immediately after automatic compaction.
+ *
+ * The guard only observes a small post-compaction window; if compaction failed to break an
+ * identical args/result loop, the runner aborts before spending unbounded tokens.
+ */
 const log = createSubsystemLogger("agents/post-compaction-guard");
 
 const DEFAULT_WINDOW_SIZE = 3;
@@ -43,6 +49,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
   return value;
 }
 
+/** Creates a stateful post-compaction loop detector for one embedded run. */
 export function createPostCompactionLoopGuard(
   config?: ToolLoopPostCompactionGuardConfig,
   options?: { enabled?: boolean },
@@ -73,6 +80,8 @@ export function createPostCompactionLoopGuard(
     state.history.push(call);
     const armedAfter = state.remainingAttempts > 0;
 
+    // Compare full tool name + args + result. Repeated args alone can be legitimate polling;
+    // identical results after compaction prove the compression did not change the loop.
     const matches = state.history.filter(
       (entry) =>
         entry.toolName === call.toolName &&
@@ -106,6 +115,7 @@ export function createPostCompactionLoopGuard(
   return { armPostCompaction, observe, snapshot };
 }
 
+/** Error raised when the post-compaction loop guard aborts a run. */
 export class PostCompactionLoopPersistedError extends Error {
   readonly detector: "compaction_loop_persisted";
   readonly count: number;

@@ -5,6 +5,7 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 
+// Sanitizes JSON log records before they enter support bundles.
 const LOG_STRING_FIELD_RE =
   /^(?:action|channel|code|component|endpoint|event|handshake|kind|level|localAddr|logger|method|model|module|msg|name|outcome|phase|pluginId|provider|reason|remoteAddr|requestId|runId|service|source|status|subsystem|surface|target|time|traceId|type)$/iu;
 const LOG_SCALAR_FIELD_RE =
@@ -30,6 +31,7 @@ function createLogRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
+/** Parses and sanitizes one log line into safe support-bundle metadata. */
 export function sanitizeSupportLogRecord(
   line: string,
   redaction: SupportRedactionContext,
@@ -114,6 +116,7 @@ function addLogTapeArgFields(
     .filter(([key]) => LOGTAPE_ARG_FIELD_RE.test(key))
     .toSorted(([left], [right]) => Number(left) - Number(right));
 
+  // LogTape stores message args as numeric keys; only structured safe fields survive.
   for (const [, value] of args) {
     const record = typeof value === "string" ? parseJsonRecord(value) : asOptionalRecord(value);
     if (record) {

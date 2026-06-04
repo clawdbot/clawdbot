@@ -1,3 +1,4 @@
+/** Tests local gateway credential surfaces and their active/inactive SecretRef states. */
 import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 

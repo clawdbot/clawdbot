@@ -1,3 +1,4 @@
+/** Normalizes slash-command text aliases and builds command detection caches. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -49,6 +50,7 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
   return map;
 }
 
+/** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) {
@@ -58,6 +60,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const newline = trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
 
+  // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
     ? (() => {
@@ -100,6 +103,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   return normalizedRest ? `${tokenSpec.canonical} ${normalizedRest}` : tokenSpec.canonical;
 }
 
+/** Returns cached exact and regex detectors for the current command registry instance. */
 export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   const commands = getChatCommands();
   if (cachedDetection && cachedDetectionCommands === commands) {
@@ -133,6 +137,7 @@ export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   return cachedDetection;
 }
 
+/** Resolves a raw text command to the matching normalized alias when known. */
 export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
   const trimmed = normalizeCommandBody(raw).trim();
   if (!trimmed.startsWith("/")) {
@@ -154,6 +159,7 @@ export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
   return getTextAliasMap().has(tokenKey) ? tokenKey : null;
 }
 
+/** Resolves a raw text command into its command definition and raw argument tail. */
 export function resolveTextCommand(
   raw: string,
   cfg?: OpenClawConfig,

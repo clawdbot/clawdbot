@@ -1,3 +1,6 @@
+/**
+ * Tests secret input parsing, normalization, and configured secret resolution.
+ */
 import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,

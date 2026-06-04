@@ -1,3 +1,4 @@
+// Tests version fast-path output before the full entrypoint loads.
 import { describe, expect, it, vi } from "vitest";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 

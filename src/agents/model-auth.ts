@@ -1262,7 +1262,7 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      throw new Error(pluginMissingAuthMessage);
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage);
     }
   }
 

@@ -1,3 +1,4 @@
+// Covers bounded map pruning.
 import { describe, expect, it } from "vitest";
 import { pruneMapToMaxSize } from "./map-size.js";
 

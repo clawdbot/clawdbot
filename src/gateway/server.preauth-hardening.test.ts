@@ -1,3 +1,6 @@
+/**
+ * Gateway pre-auth hardening tests.
+ */
 import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +21,7 @@ import {
   installGatewayTestHooks,
   readConnectChallengeNonce,
 } from "./test-helpers.server.js";
+import { readClientResponseBody } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -72,14 +76,7 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
       reject(new Error("expected websocket upgrade to be rejected"));
     });
     req.once("response", (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        body += chunk;
-      });
-      res.once("end", () => {
-        resolve({ status: res.statusCode ?? 0, body });
-      });
+      void readClientResponseBody(res).then(resolve, reject);
     });
     req.once("error", reject);
     req.end();
@@ -120,7 +117,7 @@ describe("gateway pre-auth hardening", () => {
       handleHooksRequest: async () => false,
       resolvedAuth,
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
     attachGatewayUpgradeHandler({
       httpServer,
       wss,

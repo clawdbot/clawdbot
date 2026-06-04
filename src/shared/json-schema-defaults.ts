@@ -455,6 +455,7 @@ function resolveSchemaRef(
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
 }
 
+/** Normalize JSON Schema constructs into the TypeBox compiler subset used by plugin validators. */
 export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
   return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
 }
@@ -700,6 +701,7 @@ function findJsonSchemaNodeError(
   return undefined;
 }
 
+/** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
 }
@@ -1261,6 +1263,7 @@ function applySchemaDefaults(
   return nextValue;
 }
 
+/** Apply schema defaults to a config value while preserving caller-owned value shape. */
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }

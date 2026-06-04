@@ -2,6 +2,8 @@ import type { ContextEvent, ExtensionAPI, ExtensionContext } from "../../session
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
+// Session extension that prunes context messages before model calls according to
+// the active context-pruning runtime settings.
 export default function contextPruningExtension(api: ExtensionAPI): void {
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     const runtime = getContextPruningRuntime(ctx.sessionManager);
@@ -12,6 +14,8 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     if (runtime.settings.mode === "cache-ttl") {
       const ttlMs = runtime.settings.ttlMs;
       const lastTouch = runtime.lastCacheTouchAt ?? null;
+      // Cache-TTL mode prunes only after the cache has aged out, preserving
+      // prompt-cache reuse for nearby turns.
       if (!lastTouch || ttlMs <= 0) {
         return undefined;
       }

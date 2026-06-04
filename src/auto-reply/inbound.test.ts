@@ -1,3 +1,4 @@
+/** Tests inbound auto-reply handling across channel message contexts. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

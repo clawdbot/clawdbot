@@ -1,3 +1,4 @@
+/** TLS helpers for ChatGPT OAuth provider discovery in plugin runtime code. */
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";

@@ -1,3 +1,4 @@
+// Tests get-reply fast-path command handling before full agent dispatch.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

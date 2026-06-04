@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+/** Workspace-style config fixture used by message action runner tests. */
 export const workspaceConfig = {
   channels: {
     workspace: {
@@ -18,6 +19,7 @@ export const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+/** Direct-chat config fixture that allows any sender. */
 export const directChatConfig = {
   channels: {
     directchat: {
@@ -28,6 +30,7 @@ export const directChatConfig = {
 
 export const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
 
+// Test plugins model token-gated workspace sends without booting real channel runtimes.
 function hasChannelBotToken(channelConfig: unknown): boolean {
   if (channelConfig == null || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
     return false;

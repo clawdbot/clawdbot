@@ -40,6 +40,8 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
+// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
+// redacting sensitive headers and persisting bodies through the blob store.
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
@@ -129,6 +131,8 @@ function redactedCaptureHeaders(
     headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
   const redacted: Record<string, string> = {};
   for (const [name, value] of entries) {
+    // Header names are matched exactly and by sensitive fragments because
+    // providers use many token/key naming variants.
     redacted[name] = isSensitiveCaptureHeaderName(name) ? REDACTED_CAPTURE_HEADER_VALUE : value;
   }
   return redacted;
@@ -171,6 +175,8 @@ function installDebugProxyGlobalFetchPatch(
   if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
+  // Patch only once per target and keep the original fetch for deterministic
+  // teardown in tests and nested capture sessions.
   const fetchImpl = fetchTarget.fetch;
   const originalFetch = fetchImpl.bind(fetchTarget);
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
@@ -242,6 +248,7 @@ function installDebugProxyGlobalFetchPatch(
   };
   const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
   if (typeof mockState === "object" && mockState !== null) {
+    // Preserve Vitest mock metadata when patching mocked fetch targets.
     (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
   }
   fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
@@ -283,6 +290,8 @@ export function initializeDebugProxyCapture(
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
+// Finalization closes the session and restores the fetch patch before closing
+// the cached store, preventing later normal requests from being captured.
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -354,6 +363,8 @@ export function captureHttpExchange(
     typeof params.response.clone === "function" &&
     typeof params.response.arrayBuffer === "function";
   if (!cloneable) {
+    // Some Response-like objects cannot be cloned. Still record status/headers
+    // rather than forcing capture to consume or mutate the original response.
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,
@@ -421,6 +432,8 @@ export function captureHttpExchange(
     });
 }
 
+// Websocket seams call this directly because Node fetch patching cannot observe
+// frame traffic.
 export function captureWsEvent(params: {
   url: string;
   direction: "outbound" | "inbound" | "local";

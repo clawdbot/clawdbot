@@ -560,6 +560,20 @@ function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
   };
 }
 
+function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
+  const seen = new Set<string>();
+  const messages: string[] = [];
+  for (const outcome of outcomes) {
+    const message = outcome.channelFallback?.message;
+    if (!message || seen.has(message)) {
+      continue;
+    }
+    seen.add(message);
+    messages.push(message);
+  }
+  return messages;
+}
+
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
   return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
 }
@@ -1921,6 +1935,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
       parts.push(`${skipped} skipped`);
     }
     defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
+  }
+
+  for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
+    defaultRuntime.log(theme.warn(message));
   }
 
   for (const outcome of pluginUpdateOutcomes) {

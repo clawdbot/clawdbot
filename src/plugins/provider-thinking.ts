@@ -1,3 +1,4 @@
+// Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {
@@ -61,18 +62,21 @@ type ThinkingHookParams<TContext> = {
   context: TContext;
 };
 
+/** Resolves whether a provider treats thinking as binary on/off. */
 export function resolveProviderBinaryThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.isBinaryThinking?.(params.context);
 }
 
+/** Resolves whether a provider supports xhigh thinking. */
 export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
 }
 
+/** Resolves a provider thinking profile from active plugins or bundled policy surface. */
 export function resolveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {
@@ -87,6 +91,7 @@ export function resolveProviderThinkingProfile(
   );
 }
 
+/** Resolves the provider default thinking level from the active plugin registry. */
 export function resolveProviderDefaultThinkingLevel(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {

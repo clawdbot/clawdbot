@@ -1,14 +1,18 @@
+// OSC 9;4 progress reporting for terminals that support shell integration progress.
+
 const OSC_PROGRESS_PREFIX = "\u001b]9;4;";
 const OSC_PROGRESS_ST = "\u001b\\";
 const OSC_PROGRESS_BEL = "\u0007";
 const OSC_PROGRESS_C1_ST = "\u009c";
 
+/** Controller for terminal progress state. */
 export type OscProgressController = {
   setIndeterminate: (label: string) => void;
   setPercent: (label: string, percent: number) => void;
   clear: () => void;
 };
 
+/** Return true when the terminal is known to support OSC progress messages. */
 export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boolean {
   if (!isTty) {
     return false;
@@ -19,6 +23,7 @@ export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boo
   );
 }
 
+/** Remove OSC terminators and escape introducers from progress labels. */
 function sanitizeOscProgressLabel(label: string): string {
   return label
     .replaceAll(OSC_PROGRESS_ST, "")
@@ -30,6 +35,7 @@ function sanitizeOscProgressLabel(label: string): string {
     .trim();
 }
 
+/** Format one OSC progress control sequence. */
 function formatOscProgress(state: number, percent: number | null, label: string): string {
   const cleanLabel = sanitizeOscProgressLabel(label);
   if (percent === null) {
@@ -39,6 +45,7 @@ function formatOscProgress(state: number, percent: number | null, label: string)
   return `${OSC_PROGRESS_PREFIX}${state};${normalizedPercent};${cleanLabel}${OSC_PROGRESS_ST}`;
 }
 
+/** Create a progress controller, returning no-op methods on unsupported terminals. */
 export function createOscProgressController(params: {
   env: NodeJS.ProcessEnv;
   isTty: boolean;

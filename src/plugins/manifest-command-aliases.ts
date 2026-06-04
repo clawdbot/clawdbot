@@ -1,3 +1,4 @@
+/** Normalizes manifest-declared CLI command aliases. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,6 +7,7 @@ import { isRecord } from "../utils.js";
 
 export type PluginManifestCommandAliasKind = "runtime-slash";
 
+/** One command alias declared by a plugin manifest. */
 export type PluginManifestCommandAlias = {
   /** Command-like name users may put in plugin config by mistake. */
   name: string;
@@ -46,6 +48,7 @@ export type PluginManifestCommandAliasRegistry = {
   }[];
 };
 
+/** Normalizes manifest command alias records and reports duplicate/invalid entries. */
 export function normalizeManifestCommandAliases(
   value: unknown,
 ): PluginManifestCommandAlias[] | undefined {

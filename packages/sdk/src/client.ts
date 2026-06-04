@@ -28,10 +28,13 @@ import type {
   ToolInvokeResult,
 } from "./types.js";
 
+// High-level OpenClaw SDK client. Namespaces below translate friendly SDK calls
+// into current Gateway RPC methods and normalize event streams for consumers.
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
 const MAX_NORMALIZED_REPLAY_EVENTS = 2000;
 
+/** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
   gateway?: "auto" | (string & {});
   url?: string;
@@ -52,6 +55,8 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
 }
 
 function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
+  // Gateway wait payloads come from several runtime paths. Preserve timeout vs
+  // cancellation semantics from metadata instead of trusting one status field.
   const record =
     typeof payload === "object" && payload !== null
       ? (payload as Record<string, unknown> & { aborted?: unknown; status?: unknown })
@@ -300,6 +305,7 @@ function normalizeChatProjectionEvent(
   };
 }
 
+/** Root SDK client with namespaces for agents, sessions, runs, and gateway APIs. */
 export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
@@ -541,6 +547,7 @@ export class OpenClaw {
   }
 }
 
+/** Agent-scoped helper for runs and identity lookups. */
 export class Agent {
   constructor(
     private readonly client: OpenClaw,
@@ -561,6 +568,7 @@ export class Agent {
   }
 }
 
+/** Run handle for streaming events, waiting, and cancellation. */
 export class Run {
   constructor(
     private readonly client: OpenClaw,
@@ -607,6 +615,7 @@ export class Run {
   }
 }
 
+/** Session handle for sending messages and session-scoped mutations. */
 export class Session {
   constructor(
     private readonly client: OpenClaw,
@@ -642,6 +651,7 @@ export class Session {
   }
 }
 
+/** Agent management namespace. */
 export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -666,6 +676,7 @@ export class AgentsNamespace {
   }
 }
 
+/** Session management namespace. */
 export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -698,6 +709,7 @@ export class SessionsNamespace {
   }
 }
 
+/** Run creation and lifecycle namespace. */
 export class RunsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -746,6 +758,7 @@ class RpcNamespace {
   }
 }
 
+/** Task query and cancellation namespace. */
 export class TasksNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tasks");
@@ -767,6 +780,7 @@ export class TasksNamespace extends RpcNamespace {
   }
 }
 
+/** Model catalog and auth status namespace. */
 export class ModelsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "models");
@@ -781,6 +795,7 @@ export class ModelsNamespace extends RpcNamespace {
   }
 }
 
+/** Tool catalog, effective tool, and direct invocation namespace. */
 export class ToolsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tools");
@@ -806,6 +821,7 @@ export class ToolsNamespace extends RpcNamespace {
   }
 }
 
+/** Run/session artifact listing and download namespace. */
 export class ArtifactsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "artifacts");
@@ -830,6 +846,7 @@ export class ArtifactsNamespace extends RpcNamespace {
   }
 }
 
+/** Approval request listing and response namespace. */
 export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -842,6 +859,7 @@ export class ApprovalsNamespace {
   }
 }
 
+/** Environment discovery namespace. */
 export class EnvironmentsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "environments");

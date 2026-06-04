@@ -1,3 +1,4 @@
+// Gateway RPC handlers for Talk voice, transcription, and speech synthesis surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -512,6 +513,7 @@ function stripUnresolvedSecretApiKeyFromRecord(
   return rest;
 }
 
+/** Gateway request handlers for Talk config, catalog, mode, sessions, and speech. */
 export const talkHandlers: GatewayRequestHandlers = {
   ...talkSessionHandlers,
   ...talkClientHandlers,

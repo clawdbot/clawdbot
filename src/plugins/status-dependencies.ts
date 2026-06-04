@@ -1,3 +1,4 @@
+/** Public status dependency helpers re-exported from the core implementation. */
 export {
   buildPluginDependencyStatus,
   normalizePluginDependencySpecs,

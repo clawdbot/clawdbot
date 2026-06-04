@@ -1,3 +1,4 @@
+/** Handles diagnostics commands and private owner routing for sensitive diagnostics output. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
@@ -58,6 +59,7 @@ const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   deliverPrivateDiagnosticsReply,
 };
 
+/** Creates a diagnostics command handler with injectable private-route dependencies. */
 export function createDiagnosticsCommandHandler(
   deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
@@ -69,6 +71,7 @@ export function createDiagnosticsCommandHandler(
     await handleDiagnosticsCommandWithDeps(resolvedDeps, params, allowTextCommands);
 }
 
+/** Default diagnostics command handler. */
 export const handleDiagnosticsCommand: CommandHandler = createDiagnosticsCommandHandler();
 
 async function handleDiagnosticsCommandWithDeps(

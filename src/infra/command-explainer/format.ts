@@ -9,6 +9,7 @@ import type { CommandExplanation } from "./types.js";
 
 const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
+// Approval spans must be strict positive source ranges to avoid broken highlighting.
 function spanToCommandSpan(span: {
   startIndex: number;
   endIndex: number;
@@ -41,6 +42,7 @@ function hasUnsupportedShellWrapper(explanation: CommandExplanation): boolean {
   );
 }
 
+/** Converts a parsed command explanation into source spans suitable for approval UI. */
 export function formatCommandSpans(explanation: CommandExplanation): ExecApprovalCommandSpan[] {
   if (hasUnsupportedShellWrapper(explanation)) {
     return [];

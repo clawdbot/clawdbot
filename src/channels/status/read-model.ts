@@ -5,6 +5,8 @@ import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
 
+// Read-model helpers for merging gateway channel status with local config
+// snapshots. Keep input handling tolerant because gateway payloads are external.
 export type RuntimeChannelStatusPayload = {
   channelAccounts?: unknown;
 };
@@ -23,6 +25,7 @@ function readRuntimeAccountsByChannel(payload: unknown): Record<string, unknown>
   return asRecord(asRecord(payload).channelAccounts);
 }
 
+/** Reads raw runtime account records for one channel from a gateway payload. */
 export function getRuntimeChannelAccounts(params: {
   payload: unknown;
   channelId: string;
@@ -31,6 +34,7 @@ export function getRuntimeChannelAccounts(params: {
   return Array.isArray(raw) ? raw.map(asRecord) : [];
 }
 
+/** Normalizes gateway channel account snapshots into a channel-id map. */
 export function normalizeRuntimeChannelAccountSnapshots(
   payload: unknown,
 ): Map<string, ChannelAccountSnapshot[]> {
@@ -52,6 +56,7 @@ export function normalizeRuntimeChannelAccountSnapshots(
   return out;
 }
 
+/** Resolves a stable account id from runtime status record fallbacks. */
 export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
   return (
     normalizeOptionalString(account.accountId) ??
@@ -61,6 +66,7 @@ export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): 
   );
 }
 
+/** Finds a runtime account, including singleton default-account fallback. */
 export function findRuntimeChannelAccount(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
@@ -75,6 +81,7 @@ export function findRuntimeChannelAccount(params: {
   );
 }
 
+/** Reports whether a runtime account has usable live credentials. */
 export function hasRuntimeCredentialAvailable(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
@@ -89,6 +96,7 @@ export function hasRuntimeCredentialAvailable(params: {
   return account.running === true || account.connected === true;
 }
 
+/** Converts configured-but-unavailable credential markers to available. */
 export function markConfiguredUnavailableCredentialStatusesAvailable(
   account: unknown,
 ): Record<string, unknown> {
@@ -101,6 +109,7 @@ export function markConfiguredUnavailableCredentialStatusesAvailable(
   return record;
 }
 
+/** Merges local and runtime accounts into display rows with source metadata. */
 export async function resolveChannelAccountStatusRows(params: {
   localAccountIds: string[];
   runtimeAccounts: ChannelAccountSnapshot[];

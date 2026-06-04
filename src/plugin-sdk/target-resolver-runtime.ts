@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for resolving plugin-declared channel targets.
+ */
 export {
   buildUnresolvedTargetResults,
   resolveTargetsWithOptionalToken,

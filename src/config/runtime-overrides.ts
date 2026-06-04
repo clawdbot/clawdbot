@@ -1,3 +1,4 @@
+// Applies runtime-only config overrides without mutating persisted config.
 import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -20,6 +21,7 @@ function sanitizeOverrideValue(value: unknown, seen = new WeakSet<object>()): un
   seen.add(value);
   const sanitized: OverrideTree = {};
   for (const [key, entry] of Object.entries(value)) {
+    // Overrides can come from debug commands, so strip prototype keys before they reach config.
     if (entry === undefined || isBlockedObjectKey(key)) {
       continue;
     }
@@ -43,14 +45,17 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
   return next;
 }
 
+/** Return the process-local runtime override tree used by debug config commands. */
 export function getConfigOverrides(): OverrideTree {
   return overrides;
 }
 
+/** Clear all process-local runtime overrides. Intended for debug reset flows and tests. */
 export function resetConfigOverrides(): void {
   overrides = {};
 }
 
+/** Set one runtime override at a parsed config path after sanitizing object values. */
 export function setConfigOverride(
   pathRaw: string,
   value: unknown,
@@ -66,6 +71,7 @@ export function setConfigOverride(
   return { ok: true };
 }
 
+/** Remove one runtime override path and report whether an override was present. */
 export function unsetConfigOverride(pathRaw: string): {
   ok: boolean;
   removed: boolean;
@@ -83,6 +89,7 @@ export function unsetConfigOverride(pathRaw: string): {
   return { ok: true, removed };
 }
 
+/** Merge the current runtime overrides over a loaded config without mutating the input config. */
 export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
   if (!overrides || Object.keys(overrides).length === 0) {
     return cfg;

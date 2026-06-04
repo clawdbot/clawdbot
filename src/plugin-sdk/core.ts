@@ -826,6 +826,7 @@ export function createChannelPluginBase<TResolvedAccount>(
     meta: {
       ...resolveSdkChatChannelMeta(params.id),
       ...params.meta,
+      id: params.id,
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),

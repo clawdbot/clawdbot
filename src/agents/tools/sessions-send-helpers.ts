@@ -22,6 +22,7 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
+/** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
@@ -32,6 +33,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const channel = normalizedChannel ?? parsed.channel;
   const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
   const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
+  // Prefer plugin-owned target normalization so channel-specific IDs and topics survive routing.
   const normalized =
     plugin?.messaging?.resolveSessionTarget?.({
       kind: parsed.kind,
@@ -63,6 +65,7 @@ function buildAgentSessionLines(params: {
   ].filter((line): line is string => Boolean(line));
 }
 
+/** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -74,6 +77,7 @@ export function buildAgentToAgentMessageContext(params: {
   return lines.join("\n");
 }
 
+/** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -95,6 +99,7 @@ export function buildAgentToAgentReplyContext(params: {
   return lines.join("\n");
 }
 
+/** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -119,6 +124,7 @@ export function buildAgentToAgentAnnounceContext(params: {
   return lines.join("\n");
 }
 
+/** Resolves the configured A2A ping-pong turn limit with a hard runtime cap. */
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
   const fallback = DEFAULT_AGENTNG_PONG_TURNS;

@@ -1,3 +1,6 @@
+/**
+ * Hook endpoint trust tests for agent dispatch and gateway network config.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.fn();

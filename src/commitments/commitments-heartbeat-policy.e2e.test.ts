@@ -1,3 +1,4 @@
+// Exercises commitment heartbeat policy through end-to-end runtime flows.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";

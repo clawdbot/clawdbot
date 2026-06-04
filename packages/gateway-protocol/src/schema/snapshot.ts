@@ -1,6 +1,13 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Gateway state snapshot schemas.
+ *
+ * Snapshots are sent during hello and later event streams; they summarize node
+ * presence, health, session defaults, and version counters for clients.
+ */
+/** One gateway-visible presence record for a node/client/runtime. */
 export const PresenceEntrySchema = Type.Object(
   {
     host: Type.Optional(NonEmptyString),
@@ -23,8 +30,10 @@ export const PresenceEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Health snapshot is intentionally opaque because providers contribute nested shapes. */
 export const HealthSnapshotSchema = Type.Any();
 
+/** Default session routing keys included in initial gateway snapshots. */
 export const SessionDefaultsSchema = Type.Object(
   {
     defaultAgentId: NonEmptyString,
@@ -35,6 +44,7 @@ export const SessionDefaultsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Monotonic version counters for snapshot subtrees. */
 export const StateVersionSchema = Type.Object(
   {
     presence: Type.Integer({ minimum: 0 }),
@@ -43,6 +53,7 @@ export const StateVersionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Initial and incremental gateway state snapshot payload. */
 export const SnapshotSchema = Type.Object(
   {
     presence: Type.Array(PresenceEntrySchema),

@@ -1,3 +1,6 @@
+/**
+ * Gateway client startup readiness tests.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import type { GatewayClient } from "./client.js";

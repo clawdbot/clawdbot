@@ -1,3 +1,4 @@
+// Tests npm registry spec parsing for packages, tags, and versions.
 import { describe, expect, it } from "vitest";
 import {
   compareOpenClawReleaseVersions,

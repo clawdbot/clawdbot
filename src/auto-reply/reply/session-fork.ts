@@ -1,3 +1,4 @@
+/** Public session-fork facade with parent-size admission checks. */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
@@ -9,6 +10,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
+/** Decision for whether a child session should fork parent context or start isolated. */
 export type ParentForkDecision =
   | {
       status: "fork";
@@ -37,6 +39,7 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
+/** Decides whether parent context is small enough to fork into a child session. */
 export async function resolveParentForkDecision(params: {
   parentEntry: SessionEntry;
   storePath: string;
@@ -62,6 +65,7 @@ export async function resolveParentForkDecision(params: {
   };
 }
 
+/** Forks a new session transcript from a parent session. */
 export async function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;

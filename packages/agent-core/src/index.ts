@@ -1,3 +1,5 @@
+// Public agent-core package surface: agent loop, harness, session storage,
+// compaction, execution envs, and utility helpers.
 export * from "./agent.js";
 export * from "./agent-loop.js";
 export * from "./node.js";

@@ -12,6 +12,7 @@ coverage:
 objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
 successCriteria:
   - Agent replies in the shared channel transcript.
+  - Agent visible reply contains the scenario marker.
   - Agent keeps the conversation scoped to the channel.
   - Agent respects mention-driven group routing semantics.
 docsRefs:
@@ -24,7 +25,8 @@ execution:
   kind: flow
   summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
   config:
-    mentionPrompt: "@openclaw explain the QA lab"
+    expectedMarker: QA-CHANNEL-BASELINE-OK
+    mentionPrompt: "@openclaw qa channel baseline marker check. Reply exactly: QA-CHANNEL-BASELINE-OK"
 ```
 
 ```yaml qa-flow
@@ -78,7 +80,14 @@ steps:
           - ref: state
           - lambda:
               params: [candidate]
-              expr: "candidate.conversation.id === 'qa-room' && !candidate.threadId"
+              expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && candidate.conversation.kind === 'channel' && !candidate.threadId && String(candidate.text ?? '').includes(config.expectedMarker)"
           - expr: liveTurnTimeoutMs(env, 180000)
+      - set: matchingOutbound
+        value:
+          expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && candidate.conversation.kind === 'channel' && String(candidate.text ?? '').includes(config.expectedMarker))"
+      - assert:
+          expr: matchingOutbound.length === 1
+          message:
+            expr: "`expected exactly one channel baseline marker reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'qa-room' })}`"
     detailsExpr: message.text
 ```

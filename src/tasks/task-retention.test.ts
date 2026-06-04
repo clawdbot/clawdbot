@@ -1,3 +1,4 @@
+// Covers task retention pruning and stale-task cleanup windows.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TASK_RETENTION_MS,

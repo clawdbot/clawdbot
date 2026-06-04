@@ -1,3 +1,4 @@
+// Covers config validation policy decisions and warning behavior.
 import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 

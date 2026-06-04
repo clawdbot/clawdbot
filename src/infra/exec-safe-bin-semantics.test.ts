@@ -1,3 +1,4 @@
+// Tests safe executable detection for shell command approval.
 import { describe, expect, it } from "vitest";
 import {
   listRiskyConfiguredSafeBins,

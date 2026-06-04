@@ -1,3 +1,4 @@
+/** Tests OAuth policy handling while collecting auth-profile secrets. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

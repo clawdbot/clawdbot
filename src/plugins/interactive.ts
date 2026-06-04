@@ -1,3 +1,4 @@
+// Resolves interactive plugin entries from registry metadata.
 import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
@@ -15,6 +16,7 @@ type PluginInteractiveDispatchRegistration = {
   namespace: string;
 };
 
+/** Resolved interactive handler match passed to plugin callback dispatch. */
 export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
   registration: RegisteredInteractiveHandler & TRegistration;
   namespace: string;
@@ -28,6 +30,7 @@ export {
 } from "./interactive-registry.js";
 export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
+/** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
   TResult extends { handled?: boolean } | void = { handled?: boolean } | void,

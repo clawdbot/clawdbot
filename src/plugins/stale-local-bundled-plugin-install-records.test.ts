@@ -1,3 +1,4 @@
+// Covers stale local bundled plugin install record detection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";

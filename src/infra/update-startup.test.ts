@@ -1,3 +1,4 @@
+// Covers startup update check and auto-update behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

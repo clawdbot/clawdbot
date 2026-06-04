@@ -189,8 +189,6 @@ class NodeRuntime(
     A2UIHandler(
       canvas = canvas,
       json = json,
-      getNodeCanvasHostUrl = { nodeSession.currentCanvasHostUrl() },
-      getOperatorCanvasHostUrl = { operatorSession.currentCanvasHostUrl() },
     )
 
   private val connectionManager: ConnectionManager =
@@ -254,7 +252,6 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
-      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )

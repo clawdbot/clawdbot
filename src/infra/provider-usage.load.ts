@@ -1,3 +1,4 @@
+// Loads provider usage snapshots from built-in and plugin providers.
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
@@ -15,6 +16,7 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
   timeoutMs: number;
@@ -79,6 +81,7 @@ async function fetchProviderUsageSnapshot(params: {
   });
 }
 
+/** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {

@@ -2,6 +2,7 @@ import { getActiveSkillEnvKeys as getActiveSkillEnvKeysImpl } from "./env-overri
 
 type GetActiveSkillEnvKeys = typeof import("./env-overrides.js").getActiveSkillEnvKeys;
 
+/** Runtime facade for active skill env override discovery. */
 export function getActiveSkillEnvKeys(
   ...args: Parameters<GetActiveSkillEnvKeys>
 ): ReturnType<GetActiveSkillEnvKeys> {

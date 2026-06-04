@@ -1,3 +1,4 @@
+/** Installs native Node resolution aliases so plugins can import the OpenClaw SDK in dev and tests. */
 import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
@@ -36,6 +37,7 @@ type NativeAliasEntry = {
   target: string;
 };
 
+/** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
 export type InstallOpenClawPluginSdkNativeResolverOptions = {
   modulePath?: string;
   pluginModulePath?: string;

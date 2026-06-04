@@ -3,6 +3,7 @@ import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
+/** Resolves a transcript file path and persists it into the session store when needed. */
 export async function resolveAndPersistSessionFile(params: {
   sessionId: string;
   sessionKey: string;

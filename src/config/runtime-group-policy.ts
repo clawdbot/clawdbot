@@ -1,3 +1,4 @@
+// Resolves runtime group-policy settings for channels and sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GroupPolicy } from "./types.base.js";
 
@@ -14,6 +15,10 @@ type RuntimeGroupPolicyParams = {
   missingProviderFallbackPolicy?: GroupPolicy;
 };
 
+/**
+ * Resolve the effective group policy for a channel/provider runtime.
+ * Missing provider config can fail closed separately from configured providers.
+ */
 export function resolveRuntimeGroupPolicy(
   params: RuntimeGroupPolicyParams,
 ): RuntimeGroupPolicyResolution {
@@ -41,10 +46,12 @@ type GroupPolicyDefaultsConfig = {
   };
 };
 
+/** Read the shared channels default group policy used by provider-specific resolvers. */
 export function resolveDefaultGroupPolicy(cfg: GroupPolicyDefaultsConfig): GroupPolicy | undefined {
   return cfg.channels?.defaults?.groupPolicy;
 }
 
+/** Human labels for the access surface blocked by a missing-provider fallback. */
 export const GROUP_POLICY_BLOCKED_LABEL = {
   group: "group messages",
   guild: "guild messages",
@@ -54,9 +61,8 @@ export const GROUP_POLICY_BLOCKED_LABEL = {
 } as const;
 
 /**
- * Standard provider runtime policy:
- * - configured provider fallback: open
- * - missing provider fallback: allowlist (fail-closed)
+ * Resolve the standard channel-provider policy.
+ * Configured providers default open; missing provider config defaults allowlist.
  */
 export function resolveOpenProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
@@ -71,9 +77,8 @@ export function resolveOpenProviderRuntimeGroupPolicy(
 }
 
 /**
- * Strict provider runtime policy:
- * - configured provider fallback: allowlist
- * - missing provider fallback: allowlist (fail-closed)
+ * Resolve the strict channel-provider policy.
+ * Configured and missing provider config both default allowlist.
  */
 export function resolveAllowlistProviderRuntimeGroupPolicy(
   params: ResolveProviderRuntimeGroupPolicyParams,
@@ -89,6 +94,10 @@ export function resolveAllowlistProviderRuntimeGroupPolicy(
 
 const warnedMissingProviderGroupPolicy = new Set<string>();
 
+/**
+ * Log the missing-provider fail-closed fallback once per provider/account.
+ * Returns true only when this call emitted the warning.
+ */
 export function warnMissingProviderGroupPolicyFallbackOnce(params: {
   providerMissingFallbackApplied: boolean;
   providerKey: string;

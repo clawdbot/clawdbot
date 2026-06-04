@@ -1,3 +1,4 @@
+// Generates and verifies pairing bearer tokens.
 import { randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
 

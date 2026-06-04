@@ -1,6 +1,8 @@
+// Normalizes config tag metadata for schema and docs surfaces.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
+/** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
 export const CONFIG_TAGS = [
   "security",
   "auth",
@@ -147,6 +149,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   }
 }
 
+/** Derive known config UI tags from a schema path and optional hint metadata. */
 export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
@@ -194,11 +197,13 @@ export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[
   return normalizeTags([...tags]);
 }
 
+/** Return hints with derived known tags merged ahead of any existing custom tags. */
 export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   const next: ConfigUiHints = {};
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
+    // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
     const tags = [
       ...normalizeTags([...derivedTags, ...existingTags]),
       ...collectUnknownTags(existingTags),

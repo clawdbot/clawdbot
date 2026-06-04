@@ -1,6 +1,10 @@
+/** Per-scope TTL cache used to suppress repeated ids without cross-scope bleed. */
 export type ScopedExpiringIdCache<TScope extends string | number, TId extends string | number> = {
+  /** Records an id for a scope at the provided timestamp or current time. */
   record: (scope: TScope, id: TId, now?: number) => void;
+  /** Returns true while the id is present and within the inclusive TTL window. */
   has: (scope: TScope, id: TId, now?: number) => boolean;
+  /** Clears every scope and id from the backing store. */
   clear: () => void;
 };
 
@@ -13,8 +17,11 @@ export function createScopedExpiringIdCache<
   TScope extends string | number,
   TId extends string | number,
 >(options: {
+  /** Backing store supplied by callers that need module- or test-owned lifecycle. */
   store: Map<string, Map<string, number>>;
+  /** Time-to-live in milliseconds; non-finite values collapse to immediate expiry. */
   ttlMs: number;
+  /** Scope size that triggers opportunistic cleanup on record. */
   cleanupThreshold: number;
 }): ScopedExpiringIdCache<TScope, TId> {
   const ttlMs = resolveNonNegativeInteger(options.ttlMs, 0);

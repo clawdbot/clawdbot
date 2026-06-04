@@ -1,3 +1,4 @@
+// Covers supervisor marker files used to identify managed OpenClaw processes.
 import { describe, expect, it } from "vitest";
 import { detectRespawnSupervisor, SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 

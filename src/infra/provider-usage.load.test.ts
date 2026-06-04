@@ -1,3 +1,4 @@
+// Covers provider usage summary loading across auth and plugin paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {

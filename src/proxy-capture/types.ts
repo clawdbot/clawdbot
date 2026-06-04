@@ -1,3 +1,5 @@
+// Shared debug-proxy capture schema. These records back the SQLite store, CLI
+// reports, and runtime capture events for HTTP/SSE/websocket traffic.
 export type CaptureProtocol = "http" | "https" | "sse" | "ws" | "wss" | "connect";
 
 export type CaptureDirection = "outbound" | "inbound" | "local";

@@ -2,15 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
 import { resolveToolDisplay } from "../agents/tool-display.js";
 
-/**
- * Channel-agnostic status reaction controller.
- * Provides a unified interface for displaying agent status via message reactions.
- */
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
+/** Adapter implemented by channels that expose message reaction status updates. */
 export type StatusReactionAdapter = {
   /** Set/replace the current reaction emoji. */
   setReaction: (emoji: string) => Promise<void>;
@@ -20,30 +12,33 @@ export type StatusReactionAdapter = {
   removeReaction?: (emoji: string) => Promise<void>;
 };
 
+/** Optional emoji overrides for each status reaction state. */
 export type StatusReactionEmojis = {
-  queued?: string; // Default: uses initialEmoji param
-  thinking?: string; // Default: "🧠"
-  tool?: string; // Default: "🛠️"
-  coding?: string; // Default: "💻"
-  web?: string; // Default: "🌐"
-  deploy?: string; // Default: "🛫"
-  build?: string; // Default: "🏗️"
-  concierge?: string; // Default: "💁"
-  done?: string; // Default: "✅"
-  error?: string; // Default: "❌"
-  stallSoft?: string; // Default: "⏳"
-  stallHard?: string; // Default: "⚠️"
-  compacting?: string; // Default: "🗜️"
+  queued?: string;
+  thinking?: string;
+  tool?: string;
+  coding?: string;
+  web?: string;
+  deploy?: string;
+  build?: string;
+  concierge?: string;
+  done?: string;
+  error?: string;
+  stallSoft?: string;
+  stallHard?: string;
+  compacting?: string;
 };
 
+/** Timing controls for debounced status reactions and stall warnings. */
 export type StatusReactionTiming = {
-  debounceMs?: number; // Default: 700
-  stallSoftMs?: number; // Default: 10000
-  stallHardMs?: number; // Default: 30000
-  doneHoldMs?: number; // Default: 1500 (not used in controller, but exported for callers)
-  errorHoldMs?: number; // Default: 2500 (not used in controller, but exported for callers)
+  debounceMs?: number;
+  stallSoftMs?: number;
+  stallHardMs?: number;
+  doneHoldMs?: number;
+  errorHoldMs?: number;
 };
 
+/** Controller API for agent status reaction state transitions. */
 export type StatusReactionController = {
   setQueued: () => Promise<void> | void;
   setThinking: () => Promise<void> | void;
@@ -57,10 +52,7 @@ export type StatusReactionController = {
   restoreInitial: () => Promise<void>;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
-
+/** Default emoji set used by status reaction controllers. */
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
   thinking: "🧠",
@@ -77,6 +69,7 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   compacting: "🗜️",
 };
 
+/** Default debounce, stall, and terminal hold timings for status reactions. */
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
   debounceMs: 700,
   stallSoftMs: 10_000,
@@ -85,6 +78,7 @@ export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
   errorHoldMs: 2500,
 };
 
+/** Tool-name tokens mapped to the coding status reaction. */
 export const CODING_TOOL_TOKENS: string[] = [
   "exec",
   "process",
@@ -95,6 +89,7 @@ export const CODING_TOOL_TOKENS: string[] = [
   "bash",
 ];
 
+/** Tool-name tokens mapped to the web status reaction. */
 export const WEB_TOOL_TOKENS: string[] = [
   "web_search",
   "web-search",
@@ -103,6 +98,7 @@ export const WEB_TOOL_TOKENS: string[] = [
   "browser",
 ];
 
+/** Tool-name tokens mapped to the deploy status reaction. */
 export const DEPLOY_TOOL_TOKENS: string[] = [
   "fastlane",
   "deploy",
@@ -114,6 +110,7 @@ export const DEPLOY_TOOL_TOKENS: string[] = [
   "distribute",
 ];
 
+/** Tool-name tokens mapped to the build status reaction. */
 export const BUILD_TOOL_TOKENS: string[] = [
   "build",
   "compile",
@@ -129,6 +126,7 @@ export const BUILD_TOOL_TOKENS: string[] = [
   "lint",
 ];
 
+/** Tool-name tokens mapped to the concierge/browser-control status reaction. */
 export const CONCIERGE_TOOL_TOKENS: string[] = [
   "navigate",
   "click",
@@ -143,13 +141,7 @@ export const CONCIERGE_TOOL_TOKENS: string[] = [
   "chromedp",
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Functions
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Resolve the appropriate emoji for a tool invocation.
- */
+/** Resolves the appropriate emoji for a tool invocation. */
 export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
@@ -216,7 +208,6 @@ export function createStatusReactionController(params: {
 }): StatusReactionController {
   const { enabled, adapter, initialEmoji, onError } = params;
 
-  // Merge user-provided overrides with defaults
   const emojis: Required<StatusReactionEmojis> = {
     ...DEFAULT_EMOJIS,
     queued: params.emojis?.queued ?? initialEmoji,
@@ -228,7 +219,6 @@ export function createStatusReactionController(params: {
     ...params.timing,
   };
 
-  // State
   let currentEmoji = "";
   let pendingEmoji = "";
   let debounceTimer: NodeJS.Timeout | null = null;
@@ -238,17 +228,11 @@ export function createStatusReactionController(params: {
   let chainPromise = Promise.resolve();
   const activeEmojis = new Set<string>();
 
-  /**
-   * Serialize async operations to prevent race conditions.
-   */
   function enqueue(fn: () => Promise<void>): Promise<void> {
     chainPromise = chainPromise.then(fn, fn);
     return chainPromise;
   }
 
-  /**
-   * Clear all timers.
-   */
   function clearAllTimers(): void {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
@@ -264,9 +248,6 @@ export function createStatusReactionController(params: {
     }
   }
 
-  /**
-   * Clear debounce timer only (used during phase transitions).
-   */
   function clearDebounceTimer(): void {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
@@ -274,9 +255,6 @@ export function createStatusReactionController(params: {
     }
   }
 
-  /**
-   * Reset stall timers (called on each phase change).
-   */
   function resetStallTimers(): void {
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
@@ -315,9 +293,6 @@ export function createStatusReactionController(params: {
     }
   }
 
-  /**
-   * Apply an emoji while keeping previous active-loop reactions visible.
-   */
   async function applyEmoji(newEmoji: string): Promise<void> {
     if (!enabled) {
       return;
@@ -337,9 +312,6 @@ export function createStatusReactionController(params: {
     }
   }
 
-  /**
-   * Schedule an emoji change (debounced or immediate).
-   */
   function scheduleEmoji(
     emoji: string,
     options: { immediate?: boolean; skipStallReset?: boolean } = {},
@@ -348,7 +320,7 @@ export function createStatusReactionController(params: {
       return;
     }
 
-    // Deduplicate: if already scheduled/current, skip send but keep stall timers fresh
+    // Skip duplicate sends while still refreshing stall timers for active phases.
     if (emoji === currentEmoji || emoji === pendingEmoji) {
       if (!options.skipStallReset) {
         resetStallTimers();
@@ -360,13 +332,11 @@ export function createStatusReactionController(params: {
     clearDebounceTimer();
 
     if (options.immediate) {
-      // Immediate execution for terminal states
       void enqueue(async () => {
         await applyEmoji(emoji);
         pendingEmoji = "";
       });
     } else {
-      // Debounced execution for intermediate states
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
         void enqueue(async () => {
@@ -376,15 +346,10 @@ export function createStatusReactionController(params: {
       }, timing.debounceMs);
     }
 
-    // Reset stall timers on phase change (unless triggered by stall timer itself)
     if (!options.skipStallReset) {
       resetStallTimers();
     }
   }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Controller API
-  // ───────────────────────────────────────────────────────────────────────────
 
   function setQueued(): void {
     scheduleEmoji(emojis.queued, { immediate: true });
@@ -416,7 +381,7 @@ export function createStatusReactionController(params: {
     finished = true;
     clearAllTimers();
 
-    // Directly enqueue to ensure we return the updated promise
+    // Return the updated chain so callers can wait for terminal cleanup.
     return enqueue(async () => {
       await applyEmoji(emoji);
       await removeActiveEmojis({ keepEmoji: emoji });

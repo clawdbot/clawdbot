@@ -2,12 +2,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { startGmailWatcher } from "./gmail-watcher.js";
 
+/** Logging surface used while starting the Gmail watcher during gateway startup. */
 export type GMailWatcherLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
   error: (msg: string) => void;
 };
 
+/** Start the Gmail watcher with startup logs and env-based skip handling. */
 export async function startGmailWatcherWithLogs(params: {
   cfg: OpenClawConfig;
   log: GMailWatcherLog;
@@ -16,6 +18,8 @@ export async function startGmailWatcherWithLogs(params: {
   signal?: AbortSignal;
 }) {
   if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
+    // Test and local recovery paths use the env skip to avoid starting a long
+    // lived watcher while still exercising gateway startup.
     params.onSkipped?.();
     return;
   }

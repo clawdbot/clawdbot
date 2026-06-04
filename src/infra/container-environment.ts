@@ -1,3 +1,4 @@
+// Detects container runtimes and related environment hints for diagnostics.
 import fs from "node:fs";
 
 /**

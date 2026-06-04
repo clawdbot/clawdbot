@@ -1,12 +1,14 @@
 import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/** Inputs required to reconcile an active session leaf with the prompt about to be sent. */
 export type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown };
 };
 
+/** Result of merging or dropping a trailing user leaf before provider submission. */
 export type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
@@ -18,8 +20,10 @@ export type OrphanedTrailingUserPromptMergeResult = {
   removeLeaf: boolean;
 };
 
+/** Registry id for the transcript message merge behavior currently supported by embedded runs. */
 export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
+/** Strategy seam for tests and future runtime variants that alter prompt/leaf reconciliation. */
 export type MessageMergeStrategy = {
   id: MessageMergeStrategyId;
   mergeOrphanedTrailingUserPrompt: (
@@ -27,6 +31,7 @@ export type MessageMergeStrategy = {
   ) => OrphanedTrailingUserPromptMergeResult;
 };
 
+/** Default strategy used by embedded attempts when no test override is installed. */
 export const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId =
   "orphan-trailing-user-prompt";
 
@@ -37,6 +42,7 @@ const defaultMessageMergeStrategy: MessageMergeStrategy = {
 
 let activeMessageMergeStrategy = defaultMessageMergeStrategy;
 
+/** Returns the active merge strategy for the current process. */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
   return activeMessageMergeStrategy;
 }
@@ -49,6 +55,7 @@ function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => voi
   };
 }
 
+/** Installs a process-local merge strategy override and returns a restore callback. */
 export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
   return registerMessageMergeStrategy(strategy);
 }

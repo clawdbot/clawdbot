@@ -1,3 +1,4 @@
+// Shares SQLite row mapping helpers between task registry persistence modules.
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { isRecord } from "../utils.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";

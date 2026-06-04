@@ -1,3 +1,4 @@
+// Defines official external install records for plugins.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -40,6 +41,7 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
   return (record.clawhubUrl ?? "").replace(/\/+$/, "") === "https://clawhub.ai";
 }
 
+/** Resolves the official npm spec when an install record matches the trusted catalog package. */
 export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
   pluginId: string;
   record: PluginInstallRecord;
@@ -64,6 +66,7 @@ export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
   return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
 }
 
+/** Resolves the official ClawHub spec when a trusted-source install record matches. */
 export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
   pluginId: string;
   record: PluginInstallRecord;
@@ -71,6 +74,7 @@ export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
   return resolveTrustedSourceLinkedOfficialClawHubInstall(params)?.clawhubSpec;
 }
 
+/** Resolves official ClawHub/npm specs linked to a trusted-source install record. */
 export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;

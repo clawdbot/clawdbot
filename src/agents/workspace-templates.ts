@@ -15,6 +15,7 @@ const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
 
+/** Resolves the primary workspace-template directory from package, cwd, or fallback paths. */
 export async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
@@ -58,6 +59,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   }
 }
 
+/** Clears cached workspace-template directory resolution for tests or package moves. */
 export function resetWorkspaceTemplateDirCache() {
   cachedTemplateDir = undefined;
   resolvingTemplateDir = undefined;
@@ -89,6 +91,7 @@ async function resolveExistingTemplateDirs(candidates: readonly string[]): Promi
   return dirs;
 }
 
+/** Resolves all existing workspace-template search directories, including docs templates. */
 export async function resolveWorkspaceTemplateSearchDirs(opts?: {
   cwd?: string;
   argv1?: string;

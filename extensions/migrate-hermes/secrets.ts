@@ -1,4 +1,7 @@
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -128,6 +131,10 @@ type SecretCandidate = {
   sourceProvider?: string;
   secretField?: string;
 };
+
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
 
 function secretAuthProfileConfig(details: {
   provider: string;
@@ -289,7 +296,7 @@ export async function buildSecretItems(params: {
       createHermesSecretItem({
         id: candidate.id,
         source: candidate.source,
-        target: `${params.targets.agentDir}/auth-profiles.json#${candidate.profileId}`,
+        target: authProfileTarget(params.targets.agentDir, candidate.profileId),
         includeSecrets: params.ctx.includeSecrets,
         existsAlready: (existsAlready && !params.ctx.overwrite) || configConflict,
         details: {

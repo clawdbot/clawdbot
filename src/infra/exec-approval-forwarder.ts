@@ -1,3 +1,4 @@
+// Forwards exec approval requests between runtime sessions and approval handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -44,6 +45,8 @@ import {
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
+// Approval forwarding mirrors foreground exec/plugin approvals into configured
+// chat targets, then sends resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
   typeof import("../channels/message/runtime.js").sendDurableMessageBatch;
@@ -209,6 +212,8 @@ function shouldSkipForwardingFallback(params: {
   if (!channel) {
     return false;
   }
+  // Channel adapters can suppress generic fallback delivery when they already
+  // own native approval UX for the same target.
   const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel));
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({

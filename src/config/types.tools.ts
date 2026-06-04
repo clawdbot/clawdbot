@@ -1,3 +1,4 @@
+// Defines tool availability and allowlist configuration types.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
@@ -8,18 +9,25 @@ import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
+  /** Channel/provider id to match before running media or link understanding. */
   channel?: string;
+  /** Direct/group classification from the channel runtime, when available. */
   chatType?: ChatType;
+  /** Attachment or link key prefix used for narrow per-source routing. */
   keyPrefix?: string;
 };
 
 export type MediaUnderstandingScopeRule = {
+  /** Policy applied when match criteria select this scope rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: MediaUnderstandingScopeMatch;
 };
 
 export type MediaUnderstandingScopeConfig = {
+  /** Fallback action when no scope rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/block rules; first matching rule wins. */
   rules?: MediaUnderstandingScopeRule[];
 };
 
@@ -238,6 +246,7 @@ export type CodeModeConfig =
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
+  /** Exact tool names allowed after the selected profile is applied. */
   allow?: string[];
   /**
    * Additional allowlist entries merged into the effective allowlist.
@@ -246,14 +255,18 @@ export type ToolPolicyConfig = {
    * users to replace/duplicate an existing allowlist or profile.
    */
   alsoAllow?: string[];
+  /** Exact tool names denied after allow/profile expansion; deny wins. */
   deny?: string[];
+  /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
 };
 
 export type GroupToolPolicyConfig = {
+  /** Sender-specific allowlist entries merged into the group tool policy. */
   allow?: string[];
   /** Additional allowlist entries merged into allow. */
   alsoAllow?: string[];
+  /** Sender-specific deny entries; deny wins over allow/profile policy. */
   deny?: string[];
 };
 
@@ -273,6 +286,8 @@ export function parseToolsBySenderTypedKey(
     if (!lowered.startsWith(prefix)) {
       continue;
     }
+    // Preserve the original value casing after the typed prefix; usernames and
+    // display names can be case-sensitive in channel-specific matching code.
     return {
       type,
       value: trimmed.slice(prefix.length),

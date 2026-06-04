@@ -1,3 +1,4 @@
+// Verifies plugin minimum host version compatibility checks.
 import { describe, expect, it } from "vitest";
 import {
   checkMinHostVersion,

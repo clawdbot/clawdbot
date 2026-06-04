@@ -5,6 +5,9 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
+// Steering queue utilities for delivering completed subagent results back into
+// the requester session. Items are leased before injection to avoid duplicate
+// parent-turn prompts.
 const STALE_STEERING_LEASE_MS = 5 * 60 * 1000;
 const MAX_MERGED_STEERING_CHARS = 24_000;
 const MAX_RESULT_CHARS_PER_ITEM = 6_000;
@@ -16,6 +19,7 @@ export type AgentSteeringQueueItem = {
   payload: PendingFinalDeliveryPayload;
 };
 
+/** A batch of leased subagent completions plus the prompt to inject upstream. */
 export type LeasedAgentSteeringBatch = {
   runIds: string[];
   prompt: string;
@@ -26,6 +30,8 @@ function isTerminalDeliveryStatus(status: SubagentCompletionDeliveryState["statu
 }
 
 function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): boolean {
+  // Leases are process-local coordination hints. Stale leases re-enter the queue
+  // so a restarted or failed requester turn does not strand completed results.
   return (
     delivery.status === "in_progress" &&
     typeof delivery.steeringLeasedAt === "number" &&
@@ -54,6 +60,8 @@ function promptLiteral(value: string): string {
 }
 
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {
+  // Deliver oldest completed work first, then use creation time and run id for
+  // deterministic prompt-cache-friendly ordering.
   const aEnded = a.payload.endedAt ?? a.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
   const bEnded = b.payload.endedAt ?? b.entry.endedAt ?? Number.MAX_SAFE_INTEGER;
   if (aEnded !== bEnded) {
@@ -67,6 +75,7 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
   return a.runId.localeCompare(b.runId);
 }
 
+/** List pending completion payloads that should be steered into a requester turn. */
 export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
@@ -99,6 +108,7 @@ export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   return items.toSorted(sortPendingSteeringItems);
 }
 
+/** Build the merged runtime prompt for one or more pending steering items. */
 export function buildMergedAgentSteeringPrompt(
   items: readonly AgentSteeringQueueItem[],
 ): string | undefined {
@@ -149,6 +159,8 @@ function selectPromptBoundedItems(
       continue;
     }
     if (selected.length === 0) {
+      // Always deliver at least one item; its result body is individually
+      // bounded, even if metadata pushes the merged prompt over the soft cap.
       selected.push(item);
     }
     break;
@@ -156,6 +168,9 @@ function selectPromptBoundedItems(
   return selected;
 }
 
+/**
+ * Lease pending steering items and mark them in-progress before prompt injection.
+ */
 export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
@@ -192,6 +207,7 @@ export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   };
 }
 
+/** Acknowledge successfully injected leased steering items. */
 export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   runIds: readonly string[];
@@ -220,6 +236,7 @@ export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
   return updated;
 }
 
+/** Release leased steering items after a failed requester turn or injection path. */
 export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   runIds: readonly string[];
@@ -239,6 +256,7 @@ export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
     delivery.lastError = params.error ?? delivery.lastError ?? null;
     const entry = params.runs.get(runId);
     if (entry && typeof entry.cleanupCompletedAt !== "number") {
+      // Non-finalized runs can be retried by cleanup/delivery after release.
       entry.cleanupHandled = false;
     }
     updated += 1;
@@ -246,6 +264,7 @@ export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
   return updated;
 }
 
+/** Prepend steering runtime data before the current parent-turn prompt. */
 export function prependAgentSteeringPrompt(params: {
   steeringPrompt: string;
   prompt: string;

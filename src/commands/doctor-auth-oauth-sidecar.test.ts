@@ -44,6 +44,14 @@ async function makeTestState(seed = "legacy-oauth-seed"): Promise<OpenClawTestSt
   return state;
 }
 
+function writeLegacyAuthProfiles(
+  state: OpenClawTestState,
+  store: unknown,
+  agentId = "main",
+): Promise<string> {
+  return state.writeJson(path.join("agents", agentId, "agent", "auth-profiles.json"), store);
+}
+
 function encryptLegacySidecarMaterial(params: {
   ref: { source: "openclaw-credentials"; provider: "openai-codex"; id: string };
   profileId: string;
@@ -109,7 +117,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         "openai-codex": profileId,
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {
@@ -183,7 +191,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
 
     const result = await maybeRepairLegacyOAuthSidecarProfiles({
       cfg: {},
@@ -214,7 +222,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const authPath = await state.writeAuthProfiles(auth);
+    const authPath = await writeLegacyAuthProfiles(state, auth);
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {
@@ -432,8 +440,8 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         },
       },
     };
-    const mainAuthPath = await state.writeAuthProfiles(auth, "main");
-    const workerAuthPath = await state.writeAuthProfiles(auth, "worker");
+    const mainAuthPath = await writeLegacyAuthProfiles(state, auth, "main");
+    const workerAuthPath = await writeLegacyAuthProfiles(state, auth, "worker");
     const sidecarPath = await state.writeJson(
       path.join("credentials", "auth-profiles", `${ref.id}.json`),
       {

@@ -1,3 +1,6 @@
+/**
+ * Public SDK facade for Anthropic Vertex implicit provider discovery and config helpers.
+ */
 import type { ModelProviderConfig } from "../config/types.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
@@ -24,12 +27,14 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
+/** Resolves the Anthropic Vertex region through the activated bundled provider facade. */
 export const resolveAnthropicVertexClientRegion: FacadeModule["resolveAnthropicVertexClientRegion"] =
   ((...args) =>
     loadFacadeModule().resolveAnthropicVertexClientRegion(
       ...args,
     )) as FacadeModule["resolveAnthropicVertexClientRegion"];
 
+/** Resolves the Anthropic Vertex project id through the activated provider facade. */
 export const resolveAnthropicVertexProjectId: FacadeModule["resolveAnthropicVertexProjectId"] = ((
   ...args
 ) =>

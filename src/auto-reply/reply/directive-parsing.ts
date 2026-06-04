@@ -1,3 +1,4 @@
+/** Low-level token scanning helpers for inline directive parsers. */
 export function skipDirectiveArgPrefix(raw: string): number {
   let i = 0;
   const len = raw.length;
@@ -13,6 +14,7 @@ export function skipDirectiveArgPrefix(raw: string): number {
   return i;
 }
 
+/** Reads the next non-whitespace directive token and returns the next scan index. */
 export function takeDirectiveToken(
   raw: string,
   startIndex: number,

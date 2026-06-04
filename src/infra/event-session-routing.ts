@@ -1,3 +1,4 @@
+// Resolves event-triggered work to the correct session key and target.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionScope } from "../config/types.base.js";
@@ -13,8 +14,11 @@ import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/s
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 
+// Event session routing maps cron/heartbeat wakeups back to the right main,
+// direct, or global session key while honoring DM allowlists and route policy.
 type UnknownRecord = Record<string, unknown>;
 
+/** Routing policy derived from config and the source session for an event. */
 export type EventSessionRoutingPolicy = {
   mainKey?: string;
   sessionScope?: SessionScope;
@@ -61,6 +65,7 @@ function normalizeEntry(value: string): string | undefined {
   return normalizeLowercaseStringOrEmpty(value) || undefined;
 }
 
+/** Parse an agent direct-session key into channel/account/peer routing parts. */
 export function parseDirectAgentSessionTarget(
   sessionKey: string | undefined | null,
 ): DirectSessionTarget | null {
@@ -87,6 +92,7 @@ export function parseDirectAgentSessionTarget(
   };
 }
 
+/** Resolve the configured DM allowlist that applies to an event session. */
 export function resolveEventSessionAllowFrom(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
@@ -137,6 +143,8 @@ function shouldPreserveDirectSessionKeyFromRoute(params: {
     });
     const { baseSessionKey } = parseThreadSessionSuffix(params.sessionKey);
     const normalizedRouteSessionKey = normalizeLowercaseStringOrEmpty(route.sessionKey);
+    // If the configured route already chose this direct session, keep it rather
+    // than collapsing to main-session scope.
     return (
       route.lastRoutePolicy === "session" &&
       (normalizedRouteSessionKey === normalizeLowercaseStringOrEmpty(params.sessionKey) ||
@@ -148,6 +156,7 @@ function shouldPreserveDirectSessionKeyFromRoute(params: {
   }
 }
 
+/** Build the routing policy used by event wakeups and scoped heartbeat options. */
 export function resolveEventSessionRoutingPolicy(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
@@ -185,6 +194,7 @@ export function resolveEventSessionRoutingPolicy(params: {
   };
 }
 
+/** Resolve a direct DM event session to the configured main session when allowed. */
 export function resolveMainScopedEventSessionKey(params: {
   cfg?: OpenClawConfig;
   sessionKey: string;
@@ -237,6 +247,7 @@ export function resolveMainScopedEventSessionKey(params: {
   });
 }
 
+/** Apply event routing policy to a raw session key. */
 export function resolveEventSessionKeyForPolicy(
   sessionKey: string,
   policy?: EventSessionRoutingPolicy,
@@ -248,6 +259,7 @@ export function resolveEventSessionKeyForPolicy(
   return resolveMainScopedEventSessionKey({ sessionKey, policy }) ?? sessionKey;
 }
 
+/** Apply event routing policy while preserving wake option typing. */
 export function scopedHeartbeatWakeOptionsForPolicy<T extends object>(
   sessionKey: string,
   wakeOptions: T,

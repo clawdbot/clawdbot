@@ -1,3 +1,4 @@
+// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 
+/** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
   x: number;
   y: number;
@@ -188,6 +190,7 @@ function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): P
   ];
 }
 
+/** Tiny in-process RGBA canvas used to avoid runtime image dependencies. */
 class PngCanvas {
   readonly data = Buffer.alloc(WIDTH * HEIGHT * 4);
 
@@ -448,6 +451,7 @@ function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total
   });
 }
 
+/** Renders a prompt context treemap PNG and returns the written file path. */
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;

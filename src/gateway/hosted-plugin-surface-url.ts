@@ -1,8 +1,10 @@
+// Hosted plugin surface URL resolver for gateway-advertised plugin node endpoints.
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isLoopbackHost } from "./net.js";
 
 type HostSource = string | null | undefined;
 
+/** Inputs used to infer the externally reachable plugin surface URL. */
 export type HostedPluginSurfaceUrlParams = {
   port?: number;
   hostOverride?: HostSource;
@@ -61,6 +63,7 @@ const parseForwardedHost = (value: HostSource | HostSource[]) => {
   return raw?.split(",")[0]?.trim();
 };
 
+/** Resolve the URL that plugins should advertise for hosted node surfaces. */
 export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlParams) {
   const port = params.port;
   if (!port) {
@@ -89,6 +92,7 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
 
   let exposedPort = port;
   if (!override && (forwardedHost || requestHost) && port === 18789) {
+    // Behind a proxy, expose the public Host header port instead of the gateway's local port.
     if (advertisedHost.port && advertisedHost.port > 0) {
       exposedPort = advertisedHost.port;
     } else if (scheme === "https") {

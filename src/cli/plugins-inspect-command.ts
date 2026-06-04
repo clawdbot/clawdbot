@@ -1,3 +1,4 @@
+// `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -11,6 +12,7 @@ import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 
+/** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
@@ -111,6 +113,7 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
+/** Inspect one plugin or all plugins using either snapshot-only or runtime-loaded registry data. */
 export async function runPluginsInspectCommand(
   id: string | undefined,
   opts: PluginInspectOptions,

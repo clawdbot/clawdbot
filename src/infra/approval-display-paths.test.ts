@@ -1,3 +1,4 @@
+// Covers path shortening for approval display text.
 import { describe, expect, it } from "vitest";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 

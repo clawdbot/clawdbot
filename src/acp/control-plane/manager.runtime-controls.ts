@@ -1,3 +1,4 @@
+/** Applies runtime mode/config controls to live ACP backend sessions. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -67,6 +68,7 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
+/** Resolves backend-advertised controls plus locally inferred runtime control support. */
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -117,6 +119,7 @@ export async function resolveManagerRuntimeCapabilities(params: {
   };
 }
 
+/** Applies persisted runtime options to a live handle once per unique option signature. */
 export async function applyManagerRuntimeControls(params: {
   sessionKey: string;
   runtime: AcpRuntime;

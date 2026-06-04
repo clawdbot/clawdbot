@@ -1,3 +1,4 @@
+// Gateway readiness checker for channel health and startup sidecar state.
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -9,6 +10,7 @@ import {
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
+/** Snapshot returned by the gateway readiness probe. */
 export type ReadinessResult = {
   ready: boolean;
   failing: string[];
@@ -16,6 +18,7 @@ export type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
 };
 
+/** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
@@ -33,6 +36,7 @@ function shouldIgnoreReadinessFailure(
   return health.reason === "not-running" && accountSnapshot.restartPending === true;
 }
 
+/** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
   startedAt: number;

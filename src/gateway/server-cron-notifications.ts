@@ -19,6 +19,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
+/**
+ * Gateway cron notification delivery for announce and webhook destinations.
+ *
+ * Webhooks are posted through the SSRF guard and logged with redacted URLs
+ * because cron config is user-authored and can point at arbitrary endpoints.
+ */
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
 type CronLogger = {
@@ -49,6 +55,7 @@ function redactOptionalWebhookUrl(url: unknown): string | undefined {
   return normalized ? redactWebhookUrl(normalized) : undefined;
 }
 
+/** Resolves direct webhook delivery and completion-destination webhooks. */
 function resolveCronWebhookTargets(params: {
   delivery?: {
     mode?: string;
@@ -88,6 +95,7 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
   return headers;
 }
 
+/** Posts a cron webhook without throwing back into scheduler completion flow. */
 async function postCronWebhook(params: {
   webhookUrl: string;
   webhookToken?: string;
@@ -138,6 +146,7 @@ async function postCronWebhook(params: {
   }
 }
 
+/** Sends the immediate failure alert for cron jobs that failed before normal completion delivery. */
 export async function sendGatewayCronFailureAlert(params: {
   deps: CliDeps;
   logger: CronLogger;
@@ -206,6 +215,7 @@ export async function sendGatewayCronFailureAlert(params: {
   });
 }
 
+/** Dispatches completion and failure-destination notifications after a cron run finishes. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
@@ -255,6 +265,8 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   if (params.evt.summary) {
     for (const webhookTarget of webhookTargets) {
+      // Completion notification fanout is best-effort; the cron service has
+      // already recorded the run result and must not wait on slow webhooks.
       void (async () => {
         await postCronWebhook({
           webhookUrl: webhookTarget.url,
@@ -312,6 +324,8 @@ function dispatchCronFailureDestinationNotifications(params: {
     if (failureDest.mode === "webhook" && failureDest.to) {
       const webhookUrl = normalizeHttpWebhookUrl(failureDest.to);
       if (webhookUrl) {
+        // Failure destinations mirror completion webhooks: notify in the
+        // background and log failures without rewriting the cron event result.
         void (async () => {
           await postCronWebhook({
             webhookUrl,

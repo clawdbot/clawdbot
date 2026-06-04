@@ -1,3 +1,4 @@
+/** Tests host tool parameter parsers exposed to plugin callbacks. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { deriveToolParams } from "./host-tool-param-parsers.js";

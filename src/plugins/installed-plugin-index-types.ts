@@ -1,3 +1,4 @@
+/** Type contract for the generated installed plugin index persisted on disk. */
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
@@ -8,6 +9,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
 
+/** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_WARNING =
@@ -85,6 +87,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
+/** One manifest-backed plugin entry in the generated installed plugin index. */
 export type InstalledPluginIndexRecord = {
   pluginId: string;
   packageName?: string;
@@ -125,6 +128,7 @@ export type InstalledPluginIndexRecord = {
   compat: readonly PluginCompatCode[];
 };
 
+/** Full installed-index payload used by control-plane plugin registry loading. */
 export type InstalledPluginIndex = {
   version: typeof INSTALLED_PLUGIN_INDEX_VERSION;
   warning?: string;

@@ -1,3 +1,4 @@
+// Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
@@ -26,6 +27,7 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
   return normalizeMessageChannel(value);
 }
 
+/** Loads the persisted session entry referenced by an approval request, if still present. */
 export function resolvePersistedApprovalRequestSessionEntry(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -61,6 +63,7 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   return channel || accountId ? { channel, accountId } : null;
 }
 
+/** Resolves the account id an approval request belongs to for an optional channel filter. */
 export function resolveApprovalRequestAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -88,6 +91,7 @@ export function resolveApprovalRequestAccountId(params: {
   return sessionBinding?.accountId ?? null;
 }
 
+/** Resolves an approval request account only when the request can be routed to a channel. */
 export function resolveApprovalRequestChannelAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -102,10 +106,13 @@ export function resolveApprovalRequestChannelAccountId(params: {
     return resolveApprovalRequestAccountId(params);
   }
 
+  // A conflicting turn-source channel is authoritative for live routing; only
+  // fall back to the persisted session when that stored binding names this channel.
   const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
   return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
 }
 
+/** Checks whether a channel/account pair is eligible to handle an approval request. */
 export function doesApprovalRequestMatchChannelAccount(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;

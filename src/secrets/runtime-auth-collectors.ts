@@ -1,3 +1,4 @@
+/** Collects auth-profile and OAuth secret refs for runtime preparation. */
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -40,6 +41,8 @@ function collectApiKeyProfileAssignment(params: {
   if (!resolvedKeyRef) {
     return;
   }
+  // Inline SecretRefs are normalized into keyRef so runtime snapshots preserve the
+  // explicit auth-profile ref surface instead of leaving a template string in key.
   if (!keyRef && inlineKeyRef) {
     params.profile.keyRef = inlineKeyRef;
   }
@@ -79,6 +82,8 @@ function collectTokenProfileAssignment(params: {
   if (!resolvedTokenRef) {
     return;
   }
+  // Token profiles follow the same precedence contract as API keys: explicit refs win over
+  // plaintext and inline refs are promoted to the dedicated ref field.
   if (!tokenRef && inlineTokenRef) {
     params.profile.tokenRef = inlineTokenRef;
   }
@@ -99,6 +104,7 @@ function collectTokenProfileAssignment(params: {
   });
 }
 
+/** Collects SecretRef assignments from agent auth-profile stores for runtime materialization. */
 export function collectAuthStoreAssignments(params: {
   store: AuthProfileStore;
   context: ResolverContext;

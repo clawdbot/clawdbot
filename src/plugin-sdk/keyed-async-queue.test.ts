@@ -1,3 +1,6 @@
+/**
+ * Tests keyed async queue serialization and cancellation behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 

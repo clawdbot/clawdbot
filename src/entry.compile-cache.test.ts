@@ -1,3 +1,4 @@
+// Tests compile-cache child-process spawning and environment propagation.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";

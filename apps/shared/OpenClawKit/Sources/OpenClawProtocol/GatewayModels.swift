@@ -5478,6 +5478,62 @@ public struct SkillsProposalReviseParams: Codable, Sendable {
     }
 }
 
+public struct SkillsProposalRequestRevisionParams: Codable, Sendable {
+    public let agentid: String?
+    public let targetagentid: String?
+    public let proposalid: String
+    public let instructions: String
+    public let sessionkey: String
+    public let sessionid: String?
+    public let idempotencykey: String
+
+    public init(
+        agentid: String? = nil,
+        targetagentid: String?,
+        proposalid: String,
+        instructions: String,
+        sessionkey: String,
+        sessionid: String?,
+        idempotencykey: String)
+    {
+        self.agentid = agentid
+        self.targetagentid = targetagentid
+        self.proposalid = proposalid
+        self.instructions = instructions
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case targetagentid = "targetAgentId"
+        case proposalid = "proposalId"
+        case instructions
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SkillsProposalRequestRevisionResult: Codable, Sendable {
+    public let runid: String
+    public let status: AnyCodable
+
+    public init(
+        runid: String,
+        status: AnyCodable)
+    {
+        self.runid = runid
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case status
+    }
+}
+
 public struct SkillsProposalActionParams: Codable, Sendable {
     public let agentid: String?
     public let proposalid: String
@@ -6974,6 +7030,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
+    public let suppresscommandinterpretation: Bool?
     public let idempotencykey: String
 
     public init(
@@ -6992,6 +7049,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        suppresscommandinterpretation: Bool?,
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
@@ -7009,6 +7067,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
+        self.suppresscommandinterpretation = suppresscommandinterpretation
         self.idempotencykey = idempotencykey
     }
 
@@ -7028,6 +7087,7 @@ public struct ChatSendParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
+        case suppresscommandinterpretation = "suppressCommandInterpretation"
         case idempotencykey = "idempotencyKey"
     }
 }

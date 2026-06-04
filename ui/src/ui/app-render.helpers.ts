@@ -623,7 +623,11 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
-export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+function switchChatSessionInternal(
+  state: AppViewState,
+  nextSessionKey: string,
+  opts?: { awaitInitialLoad?: boolean },
+): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
   const nextSessionRow =
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
@@ -644,11 +648,33 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     nextSessionKey,
     true,
   );
-  void syncSelectedSessionMessageSubscription(
+  const subscriptionSync = syncSelectedSessionMessageSubscription(
     state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
-  void loadChatHistory(state as unknown as ChatState);
-  void refreshSessionOptions(state);
+  const historyLoad = loadChatHistory(state as unknown as ChatState);
+  const sessionsRefresh = refreshSessionOptions(state);
+  if (opts?.awaitInitialLoad) {
+    void sessionsRefresh;
+    return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
+  }
+  void subscriptionSync;
+  void historyLoad;
+  void sessionsRefresh;
+  return undefined;
+}
+
+export function switchChatSession(state: AppViewState, nextSessionKey: string): void {
+  void switchChatSessionInternal(state, nextSessionKey);
+}
+
+export function switchChatSessionAndWait(
+  state: AppViewState,
+  nextSessionKey: string,
+): Promise<void> {
+  return (
+    switchChatSessionInternal(state, nextSessionKey, { awaitInitialLoad: true }) ??
+    Promise.resolve()
+  );
 }
 
 export function dismissChatError(state: AppViewState) {

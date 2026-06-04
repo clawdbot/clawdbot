@@ -6,7 +6,10 @@ import { WebSocket } from "ws";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+} from "../test-utils/channel-plugins.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
@@ -72,11 +75,7 @@ const createStubChannelPlugin = (params: {
       resolveAccount: () => ({}),
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const createConfiguredChannelPlugin = (params: {
@@ -92,11 +91,7 @@ const createConfiguredChannelPlugin = (params: {
       isConfigured: async () => true,
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const emptyRegistry = createRegistry([]);
@@ -365,10 +360,11 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last channel is webchat", async () => {
+    testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
       lastChannel: "webchat",
-      lastTo: "webchat-room",
+      lastTo: "+1555",
     });
     const res = await rpcReq(ws, "agent", {
       message: "hi",

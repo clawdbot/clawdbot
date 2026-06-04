@@ -512,9 +512,10 @@ The agent-facing `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
-fail-closed by default: only a narrow set of prompt, model, and mention-gating
-paths are agent-tunable. New sensitive config trees are therefore protected
-unless they are deliberately added to the allowlist.
+fail-closed by default: only a narrow set of low-risk runtime tuning,
+mention-gating, and visible-reply paths are agent-tunable. Global model defaults
+and prompt overlays stay operator-controlled. New sensitive config trees are
+therefore protected unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -538,11 +539,11 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Restart the Gateway after plugin changes.
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
-  - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
+  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained plugin packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
-  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
-  - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
+  - `--dangerously-force-unsafe-install` is deprecated and no longer changes plugin install/update behavior.
+  - Configure `security.installPolicy` when operators need a trusted local command to make host-specific allow/block decisions for skill and plugin installs. This policy runs after source material is staged but before installation continues, applies to ClawHub skills too, and is not bypassed by deprecated unsafe flags.
 
 Details: [Plugins](/tools/plugin)
 

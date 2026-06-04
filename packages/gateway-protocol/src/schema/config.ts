@@ -1,6 +1,12 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Gateway config and update protocol schemas.
+ *
+ * These payloads carry raw config text plus optional delivery context so the
+ * gateway can report edits/restarts back to the originating channel.
+ */
 const ConfigSchemaLookupPathString = Type.String({
   minLength: 1,
   maxLength: 1024,
@@ -17,8 +23,10 @@ const ConfigDeliveryContextSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for reading the current raw config. */
 export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Full raw config replacement request with optional base hash guard. */
 export const ConfigSetParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
@@ -27,6 +35,7 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Shared config apply/patch payload with optional restart notification context. */
 const ConfigApplyLikeParamsSchema = Type.Object(
   {
     raw: NonEmptyString,
@@ -39,11 +48,15 @@ const ConfigApplyLikeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Raw config apply request that may schedule a restart. */
 export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+/** Raw config patch request that may schedule a restart. */
 export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
 
+/** Empty request payload for fetching the generated config schema. */
 export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Schema lookup request for one config path. */
 export const ConfigSchemaLookupParamsSchema = Type.Object(
   {
     path: ConfigSchemaLookupPathString,
@@ -51,8 +64,10 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for checking update/restart status. */
 export const UpdateStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
@@ -65,6 +80,7 @@ export const UpdateRunParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** UI metadata attached to config schema paths. */
 export const ConfigUiHintSchema = Type.Object(
   {
     label: Type.Optional(Type.String()),
@@ -80,6 +96,7 @@ export const ConfigUiHintSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full generated config schema response. */
 export const ConfigSchemaResponseSchema = Type.Object(
   {
     schema: Type.Unknown(),
@@ -90,6 +107,7 @@ export const ConfigSchemaResponseSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Child entry returned when looking up a config schema path. */
 export const ConfigSchemaLookupChildSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -106,6 +124,7 @@ export const ConfigSchemaLookupChildSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Schema lookup response for one config path and its immediate children. */
 export const ConfigSchemaLookupResultSchema = Type.Object(
   {
     path: NonEmptyString,

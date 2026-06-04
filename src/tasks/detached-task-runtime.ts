@@ -1,3 +1,4 @@
+// Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedTaskRecoveryAttemptParams,
@@ -30,6 +31,7 @@ const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
 
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
+// Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunFromExecutor,
   createRunningTaskRun: createRunningTaskRunFromExecutor,
@@ -138,6 +140,7 @@ export async function tryRecoverTaskBeforeMarkLost(
   }
   const startedAt = Date.now();
   try {
+    // Recovery hooks are best-effort; invalid/slow/failing hooks must not block mark-lost cleanup.
     const result = await hook(params);
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= DETACHED_TASK_RECOVERY_WARN_MS) {

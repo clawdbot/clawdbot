@@ -1,3 +1,6 @@
+/**
+ * Shared contract fixtures for agent prompt overlay runtime behavior.
+ */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderSystemPromptContributionContext } from "../../../plugins/types.js";
 

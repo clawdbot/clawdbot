@@ -1,3 +1,6 @@
+/**
+ * Shared sandbox backend fixtures for plugin SDK tests.
+ */
 import type {
   SandboxBrowserConfig,
   SandboxPruneConfig,

@@ -1,3 +1,4 @@
+// Tests ACP dispatch delivery routing and visible reply handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";

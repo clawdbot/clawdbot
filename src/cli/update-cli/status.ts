@@ -1,3 +1,4 @@
+// `openclaw update status`: combines install metadata, configured channel, and remote update checks.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -32,6 +33,7 @@ function formatGitStatusLine(params: {
   return parts.join(" · ");
 }
 
+/** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {

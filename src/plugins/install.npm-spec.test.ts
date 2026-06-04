@@ -1,3 +1,4 @@
+// Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -718,7 +719,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(1);
   });
 
-  it("rolls back staged npm pack archives when a forced update is blocked", async () => {
+  it("updates staged npm pack archives when dangerous-looking code is present", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const packageName = "@openclaw/pack-demo";
@@ -765,22 +766,21 @@ describe("installPluginFromNpmSpec", () => {
       },
     ]);
 
-    const blockedUpdate = await installPluginFromNpmPackArchive({
+    const update = await installPluginFromNpmPackArchive({
       archivePath: archiveV2Path,
       npmDir: npmRoot,
       mode: "update",
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(blockedUpdate.ok).toBe(false);
-    if (blockedUpdate.ok) {
+    expect(update.ok).toBe(true);
+    if (!update.ok) {
       return;
     }
-    expect(blockedUpdate.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-    expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+    expect(readTextFileTree(npmProjectRoot)).not.toEqual(projectBefore);
   });
 
-  it("cleans staged npm pack archives when a fresh install is blocked", async () => {
+  it("installs staged npm pack archives with dangerous-looking code", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const packageName = "@openclaw/pack-demo";
@@ -800,24 +800,22 @@ describe("installPluginFromNpmSpec", () => {
       },
     ]);
 
-    const blockedInstall = await installPluginFromNpmPackArchive({
+    const install = await installPluginFromNpmPackArchive({
       archivePath,
       npmDir: npmRoot,
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(blockedInstall.ok).toBe(false);
-    if (blockedInstall.ok) {
+    expect(install.ok).toBe(true);
+    if (!install.ok) {
       return;
     }
-    expect(blockedInstall.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName,
     });
-    expect(fs.existsSync(path.join(npmProjectRoot, "_openclaw-pack-archives"))).toBe(false);
-    expect(fs.existsSync(path.join(npmProjectRoot, "package.json"))).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+    expect(fs.existsSync(path.join(npmProjectRoot, "package.json"))).toBe(true);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
   });
 
   it("installs npm plugins into .openclaw/npm", async () => {
@@ -1023,12 +1021,12 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(path.join(quarantineDir, "package-lock.json"))).toBe(true);
   });
 
-  it("scans rebuilt hoisted dependencies after managed npm project quarantine", async () => {
+  it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const packageName = "unsafe-rebuild-plugin";
     const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-    fs.mkdirSync(path.join(npmProjectRoot, "node_modules", "plain-crypto-js"), {
+    fs.mkdirSync(path.join(npmProjectRoot, "node_modules", "stale-hoisted-helper"), {
       recursive: true,
     });
 
@@ -1039,7 +1037,7 @@ describe("installPluginFromNpmSpec", () => {
       pluginId: packageName,
       npmRoot,
       expectedDependencySpec: "1.0.0",
-      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
+      hoistedDependency: { name: "stale-hoisted-helper", version: "1.0.0" },
     });
     const delegate = runCommandWithTimeoutMock.getMockImplementation();
     if (!delegate) {
@@ -1066,10 +1064,7 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("plain-crypto-js");
-    }
+    expect(result.ok).toBe(true);
     expect(managedInstallAttempts).toBe(2);
   });
 
@@ -1144,7 +1139,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("rejects npm installs with blocked hoisted transitive dependencies", async () => {
+  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -1165,8 +1160,9 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("plain-crypto-js");
-      expect(result.error).toContain(path.join("node_modules", "plain-crypto-js"));
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
+      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
   });
 
@@ -1860,7 +1856,7 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(false);
   });
 
-  it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
+  it("treats dangerouslyForceUnsafeInstall as a no-op for npm-spec installs", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];
     mockNpmViewAndInstall({
@@ -1883,13 +1879,7 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes(
-          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-        ),
-      ),
-    ).toBe(true);
+    expect(warnings).toStrictEqual([]);
     expectNpmInstallIntoProject({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
@@ -2133,18 +2123,23 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify(
         {
           name: "openclaw",
-          overrides: {
-            axios: "1.16.0",
-            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-            nested: {
-              alias: "npm:@scope/alias@1.0.0",
-              semver: "1.2.3",
-            },
-          },
         },
         null,
         2,
       )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(hostRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        "  axios: 1.16.0",
+        '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
+        "  nested:",
+        '    alias: "npm:@scope/alias@1.0.0"',
+        "    semver: 1.2.3",
+        "",
+      ].join("\n"),
       "utf8",
     );
     resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
@@ -2212,7 +2207,7 @@ describe("installPluginFromNpmSpec", () => {
     );
   });
 
-  it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
+  it("keeps installed npm package output when dangerous-looking plugin code is present", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: "dangerous-plugin@1.0.0",
@@ -2229,18 +2224,18 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "dangerous-plugin"))).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "dangerous-plugin"))).toBe(true);
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName: "dangerous-plugin",
     });
     await expect(
       fs.promises.access(path.join(npmProjectRoot, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    ).resolves.toBeUndefined();
   });
 
-  it("leaves a stale legacy shared npm root untouched when a per-plugin update is blocked", async () => {
+  it("leaves a stale legacy shared npm root untouched when a per-plugin update succeeds", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const legacyNodeModulesRoot = path.join(npmRoot, "node_modules");
@@ -2331,8 +2326,6 @@ describe("installPluginFromNpmSpec", () => {
     const legacyManifestBefore = fs.readFileSync(path.join(npmRoot, "package.json"), "utf8");
     const legacyLockfileBefore = fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8");
     const legacyNodeModulesBefore = readTextFileTree(legacyNodeModulesRoot);
-    const projectBefore = readTextFileTree(npmProjectRoot);
-
     mockNpmViewAndInstall({
       spec: "dangerous-plugin@2.0.0",
       packageName: "dangerous-plugin",
@@ -2350,17 +2343,15 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     expectNpmInstallIntoProject({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
       packageName: "dangerous-plugin",
     });
-    expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
     expect(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")).toBe(legacyManifestBefore);
     expect(fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8")).toBe(
       legacyLockfileBefore,
@@ -2393,7 +2384,7 @@ describe("installPluginFromNpmSpec", () => {
   ];
 
   it.each(officialLaunchPluginCases)(
-    "blocks direct official npm plugin $spec with launch code without source provenance",
+    "allows direct official npm plugin $spec with launch code without source provenance",
     async ({ spec, pluginId, indexJs }) => {
       const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const warnings: string[] = [];
@@ -2415,12 +2406,11 @@ describe("installPluginFromNpmSpec", () => {
         },
       });
 
-      expect(result.ok).toBe(false);
-      if (result.ok) {
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
         return;
       }
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, spec))).toBe(false);
+      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, spec))).toBe(true);
       expect(
         warnings.some((warning) =>
           warning.includes("allowed because it is an official OpenClaw package"),

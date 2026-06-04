@@ -1,3 +1,4 @@
+// Runtime bridge for invoking provider hooks supplied by plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

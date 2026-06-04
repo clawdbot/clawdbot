@@ -1,3 +1,4 @@
+// Defines hook configuration matching and command types.
 export type HookMappingMatch = {
   path?: string;
   source?: string;

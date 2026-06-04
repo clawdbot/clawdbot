@@ -1,3 +1,4 @@
+// Covers approval delivery destination labels and reroute notices.
 import { describe, expect, it } from "vitest";
 import {
   describeApprovalDeliveryDestination,

@@ -1,3 +1,6 @@
+/**
+ * Gateway tool-resolution tests.
+ */
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";

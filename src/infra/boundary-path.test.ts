@@ -1,3 +1,4 @@
+// Tests path boundary enforcement for safe file access.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

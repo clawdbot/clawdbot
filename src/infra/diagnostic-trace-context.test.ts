@@ -1,3 +1,4 @@
+// Tests diagnostic trace context propagation and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,

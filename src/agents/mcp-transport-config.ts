@@ -12,6 +12,9 @@ import {
   resolveStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
+// Resolves raw MCP server config into the transport shape used by bundle MCP
+// runtime startup. Stdio is preferred when launch config is valid; otherwise
+// HTTP/SSE transports are attempted with normalized timeout fields.
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
@@ -189,6 +192,7 @@ function resolveHttpTransportConfig(
   };
 }
 
+/** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
@@ -205,6 +209,8 @@ export function resolveMcpTransportConfig(
     },
   });
   if (stdioLaunch.ok) {
+    // A command-bearing server is always treated as stdio even when HTTP-ish
+    // aliases are present, matching existing MCP config precedence.
     return {
       kind: "stdio",
       transportType: "stdio",

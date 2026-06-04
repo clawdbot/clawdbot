@@ -1,5 +1,6 @@
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
+// Normalize raw Gateway events into stable SDK event types and common metadata.
 function asRecord(value: unknown): JsonObject {
   return typeof value === "object" && value !== null ? (value as JsonObject) : {};
 }
@@ -152,6 +153,7 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
   }
 }
 
+/** Normalize a raw Gateway event into the public SDK event shape. */
 export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const payload = asRecord(event.payload);
   const runId = readString(payload.runId);

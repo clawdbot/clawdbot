@@ -1,3 +1,4 @@
+/** Tests Telegram token inheritance in secrets runtime collection. */
 import { describe, expect, it } from "vitest";
 import "./runtime-telegram.test-support.ts";
 import {

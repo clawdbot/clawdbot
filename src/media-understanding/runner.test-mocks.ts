@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 
+/** Builds the auth resolver mock module used by media runner tests. */
 export function createAvailableModelAuthMockModule() {
   class ProviderAuthError extends Error {
     constructor(
@@ -12,6 +13,7 @@ export function createAvailableModelAuthMockModule() {
     }
   }
 
+  // Keep the mock shape aligned with available-model-auth runtime imports.
   return {
     hasAvailableAuthForProvider: vi.fn(() => true),
     resolveApiKeyForProvider: vi.fn(async () => ({
@@ -37,6 +39,7 @@ export function createAvailableModelAuthMockModule() {
   };
 }
 
+/** Builds a plugin capability provider mock with no runtime providers. */
 export function createEmptyCapabilityProviderMockModule() {
   return {
     resolvePluginCapabilityProviders: () => [],

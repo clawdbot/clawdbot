@@ -5,11 +5,13 @@ import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
 import { resolveContextConfigProviderForRuntime } from "./openai-routing.js";
 
+/** Persisted runtime fields used to recover session runtime compatibility. */
 export type SessionRuntimeCompatEntry = Pick<
   SessionEntry,
   "agentHarnessId" | "agentRuntimeOverride"
 >;
 
+/** Resolves the persisted runtime id, preferring explicit overrides. */
 export function resolvePersistedSessionRuntimeId(
   entry?: SessionRuntimeCompatEntry,
 ): string | undefined {
@@ -20,6 +22,7 @@ export function resolvePersistedSessionRuntimeId(
   return normalizeOptionalAgentRuntimeId(entry?.agentHarnessId);
 }
 
+/** Resolves whether a session runtime override applies to the selected provider. */
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider: string;
   entry?: Pick<SessionEntry, "agentRuntimeOverride">;
@@ -35,9 +38,12 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   if (provider === "openai" && runtime === "codex") {
     return "codex";
   }
+  // CLI runtime bindings are provider-specific; an override from another
+  // provider must not leak into this session's model route.
   return resolveCliRuntimeModelBackendBinding({ provider, runtime })?.runtime;
 }
 
+/** Resolves the context config provider for a persisted session runtime route. */
 export function resolveContextConfigProviderForSessionRuntime(params: {
   provider: string;
   entry?: SessionRuntimeCompatEntry;

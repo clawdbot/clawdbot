@@ -1,3 +1,4 @@
+// Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";

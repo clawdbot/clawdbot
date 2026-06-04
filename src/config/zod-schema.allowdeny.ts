@@ -1,3 +1,4 @@
+// Defines allow/deny list Zod schema fragments.
 import { z } from "zod";
 
 const AllowDenyActionSchema = z.union([z.literal("allow"), z.literal("deny")]);

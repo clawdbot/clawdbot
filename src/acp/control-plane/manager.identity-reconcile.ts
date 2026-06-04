@@ -1,3 +1,4 @@
+/** Reconciles ACP runtime identity observations back into persisted session metadata. */
 import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
@@ -17,6 +18,7 @@ import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
+/** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

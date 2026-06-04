@@ -1,3 +1,4 @@
+/** Defensive object guard for values that may have hostile traps. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   try {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -6,6 +7,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   }
 }
 
+/** Read one property from a record-like value without letting traps escape. */
 export function readRecordValue(value: unknown, key: string): unknown {
   if (!isRecord(value)) {
     return undefined;
@@ -17,6 +19,7 @@ export function readRecordValue(value: unknown, key: string): unknown {
   }
 }
 
+/** Copy array entries defensively from values that may throw on length/index access. */
 export function copyArrayEntries(value: unknown): unknown[] {
   let isArray: boolean;
   try {
@@ -47,6 +50,7 @@ export function copyArrayEntries(value: unknown): unknown[] {
   return entries;
 }
 
+/** Copy record entries whose values are also record-shaped. */
 export function copyRecordEntries<T>(value: unknown): Array<[string, T]> {
   if (!isRecord(value)) {
     return [];
@@ -62,6 +66,8 @@ export function copyRecordEntries<T>(value: unknown): Array<[string, T]> {
   const entries: Array<[string, T]> = [];
   for (const key of keys) {
     const entry = readRecordValue(value, key);
+    // Callers use this for nested config maps; non-object leaves are ignored so
+    // later code does not need repeated record guards.
     if (isRecord(entry)) {
       entries.push([key, entry as T]);
     }

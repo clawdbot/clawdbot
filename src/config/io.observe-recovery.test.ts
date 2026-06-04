@@ -1,3 +1,4 @@
+// Covers config IO recovery observation after corrupt or missing files.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";

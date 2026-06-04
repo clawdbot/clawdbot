@@ -14,6 +14,13 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runt
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
+/**
+ * Manifest capability availability checks for media/web-style tools.
+ *
+ * These helpers combine plugin contracts, plugin availability, config signals,
+ * auth profiles, env candidates, and provider base URL guards.
+ */
+/** Manifest contract keys that represent provider-backed tool capabilities. */
 export type CapabilityContractKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
@@ -58,6 +65,7 @@ function listCapabilityAuthSignals(params: {
   if (metadata?.authSignals?.length) {
     return metadata.authSignals;
   }
+  // Older manifests only declare provider ids; derive auth signals from aliases/providers.
   return [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
     (provider) => ({ provider }),
   );
@@ -135,6 +143,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
     ) {
       continue;
     }
+    // A provider is available when either profile auth or a declared env candidate exists.
     if (params.authStore && listProfilesForProvider(params.authStore, signal.provider).length > 0) {
       return true;
     }
@@ -150,6 +159,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
   return false;
 }
 
+/** Returns the active capability metadata snapshot when one is already loaded. */
 export function getCurrentCapabilityMetadataSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -161,6 +171,7 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
   });
 }
 
+/** Loads capability metadata from current config/workspace plugin state. */
 export function loadCapabilityMetadataSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -174,6 +185,7 @@ export function loadCapabilityMetadataSnapshot(params: {
   });
 }
 
+/** Checks whether any available plugin has a configured provider for a capability contract. */
 export function hasSnapshotCapabilityAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -193,6 +205,7 @@ export function hasSnapshotCapabilityAvailability(params: {
   );
 }
 
+/** Checks whether any available plugin exposes env-backed auth for a provider id. */
 export function hasSnapshotProviderEnvAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   providerId: string;
@@ -206,6 +219,7 @@ export function hasSnapshotProviderEnvAvailability(params: {
   );
 }
 
+/** Checks whether a specific provider id is available for a capability contract. */
 export function hasSnapshotCapabilityProviderAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;

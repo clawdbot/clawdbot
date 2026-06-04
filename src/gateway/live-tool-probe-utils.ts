@@ -1,9 +1,14 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+// Live tool probes check whether providers actually read requested files/tools.
+// The retry heuristics distinguish expected nonce output from refusals,
+// malformed tool output, and provider-specific partial nonce echoes.
+/** Returns true when both expected tool-read nonces are present. */
 export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
   return text.includes(nonceA) && text.includes(nonceB);
 }
 
+/** Returns true when the expected exec-read nonce is present. */
 export function hasExpectedSingleNonce(text: string, nonce: string): boolean {
   return text.includes(nonce);
 }
@@ -44,6 +49,7 @@ const PROBE_REFUSAL_MARKERS = [
   "authorizing me to run",
 ];
 
+/** Detects likely safety refusals for authorized nonce probes. */
 export function isLikelyToolNonceRefusal(text: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(text);
   if (PROBE_REFUSAL_MARKERS.some((marker) => lower.includes(marker))) {
@@ -83,6 +89,7 @@ function hasMalformedToolOutput(text: string): boolean {
   return false;
 }
 
+/** Returns true when a file-read tool probe should retry before failing. */
 export function shouldRetryToolReadProbe(params: {
   text: string;
   nonceA: string;
@@ -110,6 +117,7 @@ export function shouldRetryToolReadProbe(params: {
   return false;
 }
 
+/** Returns true when an exec-read probe should retry before failing. */
 export function shouldRetryExecReadProbe(params: {
   text: string;
   nonce: string;

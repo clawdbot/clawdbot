@@ -6,10 +6,14 @@ let inboundSessionRuntimePromise: Promise<
 > | null = null;
 
 function loadInboundSessionRuntime() {
+  // Keep the session writer out of channel startup paths that only need SDK types.
   inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
   return inboundSessionRuntimePromise;
 }
 
+/**
+ * Best-effort inbound session metadata recorder for channel plugin command handlers.
+ */
 export async function recordInboundSessionMetaSafe(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -28,6 +32,7 @@ export async function recordInboundSessionMetaSafe(params: {
       ctx: params.ctx,
     });
   } catch (err) {
+    // Session metadata improves follow-up routing, but command handling should not fail on disk IO.
     params.onError?.(err);
   }
 }

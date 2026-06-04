@@ -1,3 +1,4 @@
+// Defines plugin hook message payload and trace context types.
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { PluginConversationBinding } from "./conversation-binding.types.js";
 

@@ -1,5 +1,8 @@
 import { vi } from "vitest";
 
+/**
+ * Fast mocks for embedded-runner E2E tests that do not need live plugin/runtime boot.
+ */
 type EmbeddedRunnerFastRunMockOptions = {
   runEmbeddedAttempt: (params: unknown) => unknown;
   prepareProviderRuntimeAuth?: (params: {
@@ -16,6 +19,7 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
+/** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
 }): void {
@@ -50,6 +54,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
   }));
 }
 
+/** Installs mocks that route embedded attempts through a caller-provided fast run function. */
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
@@ -170,6 +175,7 @@ function resolveMockHarnessId(params: {
     : "openclaw";
 }
 
+/** Installs deterministic backoff mocks for retry/timeout E2E tests. */
 export function installEmbeddedRunnerBackoffE2eMocks(
   options: EmbeddedRunnerBackoffMockOptions,
 ): void {

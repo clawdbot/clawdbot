@@ -1,6 +1,8 @@
+// Formats provider usage summaries for CLI and status output.
 import { clampPercent } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 
+// Compact reset times for chat/status lines; long windows fall back to a date.
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) {
     return null;
@@ -40,6 +42,7 @@ function formatWindowShort(window: UsageWindow, now?: number): string {
   return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
 }
 
+/** Formats one provider snapshot into a short usage-window summary. */
 export function formatUsageWindowSummary(
   snapshot: ProviderUsageSnapshot,
   opts?: { now?: number; maxWindows?: number; includeResets?: boolean },

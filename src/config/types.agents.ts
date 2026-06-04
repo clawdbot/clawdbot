@@ -1,3 +1,4 @@
+// Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,

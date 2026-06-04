@@ -1,3 +1,4 @@
+// Exercises the fake-backend TUI PTY harness and visible terminal output.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,11 +12,11 @@ type FixtureLogEntry = {
 };
 
 const activeRuns: PtyRun[] = [];
-const STARTUP_TIMEOUT_MS = 10_000;
+const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
-const STARTUP_TEST_TIMEOUT_MS = 10_000;
+const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
 async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
   try {

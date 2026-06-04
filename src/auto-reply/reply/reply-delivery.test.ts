@@ -1,3 +1,4 @@
+// Tests reply delivery routing, payload persistence, and send suppression.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";

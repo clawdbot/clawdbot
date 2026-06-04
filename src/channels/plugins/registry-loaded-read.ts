@@ -4,6 +4,10 @@ import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-c
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
+/**
+ * Minimal loaded-plugin reader for hot outbound/read paths.
+ */
+
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
 ): ChannelPlugin | undefined {
@@ -12,11 +16,16 @@ function coerceLoadedChannelPlugin(
     return undefined;
   }
   if (!plugin.meta || typeof plugin.meta !== "object") {
+    // Normalize optional metadata for callers that inspect labels/capabilities
+    // without requiring a full registry view materialization.
     plugin.meta = {};
   }
   return plugin as ChannelPlugin;
 }
 
+/**
+ * Reads one loaded channel plugin directly from active runtime state.
+ */
 export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

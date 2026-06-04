@@ -1,3 +1,6 @@
+/**
+ * Public SDK helpers for maintaining generated blocks inside Markdown files.
+ */
 export type ManagedMarkdownBlockParams = {
   original: string;
   body: string;
@@ -14,10 +17,12 @@ function isLineWhitespace(value: string): boolean {
   return /^[\t \r\n]*$/.test(value);
 }
 
+/** Ensures generated Markdown content ends with exactly the caller-provided body plus newline. */
 export function withTrailingNewline(content: string): string {
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
+/** Replaces all existing managed blocks with one current block, or appends it if missing. */
 export function replaceManagedMarkdownBlock(params: ManagedMarkdownBlockParams): string {
   const headingPrefix = params.heading ? `${params.heading}\n` : "";
   const managedBlock = `${headingPrefix}${params.startMarker}\n${params.body}\n${params.endMarker}`;

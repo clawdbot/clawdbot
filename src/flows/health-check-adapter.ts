@@ -5,6 +5,8 @@ import type {
 } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
 
+// Adapts legacy split detect/repair checks and newer runnable checks to one runner contract.
+/** Wraps a detect/repair health check in the runnable health-check contract. */
 export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthCheck {
   return {
     id: check.id,
@@ -19,6 +21,7 @@ export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthChec
         : (ctx, findings) => check.repair?.(ctx, findings) ?? Promise.resolve({ changes: [] }),
     async run(ctx, scope): Promise<HealthCheckRunResult> {
       const findings = await check.detect(ctx, scope);
+      // Preview repair returns proposed changes without persisting config updates.
       if (
         findings.length === 0 ||
         check.repair === undefined ||
@@ -49,6 +52,7 @@ export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthChec
   };
 }
 
+/** Normalizes any supported health-check shape before lint/fix execution. */
 export function normalizeHealthCheck(check: HealthCheckInput): RegisteredHealthCheck {
   if (
     "detect" in check &&

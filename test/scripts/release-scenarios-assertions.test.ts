@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-scenarios/assertions.mjs";
@@ -19,14 +20,37 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function runAssertion(args: string[]) {
+function runAssertion(args: string[], env?: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...env,
       NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
     },
   });
+}
+
+function writeAuthProfileStoreSqlite(agentDir: string, store: unknown) {
+  mkdirSync(agentDir, { recursive: true });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS auth_profile_store (
+        store_key TEXT NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db.prepare(
+      `
+        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        VALUES (?, ?, ?)
+      `,
+    ).run("primary", JSON.stringify(store), Date.now());
+  } finally {
+    db.close();
+  }
 }
 
 describe("release scenario assertions", () => {
@@ -126,6 +150,44 @@ describe("release scenario assertions", () => {
       );
 
       const result = runAssertion(["assert-image-generate", outputPath, requestLogPath]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts OpenAI env refs from the SQLite auth profile store", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const home = path.join(root, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    try {
+      writeJson(configPath, {
+        auth: {
+          profiles: {
+            "openai:api-key": { provider: "openai", mode: "api_key" },
+          },
+        },
+      });
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
+
+      const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");

@@ -1,3 +1,4 @@
+// Verifies serialized system-run approval mismatch contract fixtures.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

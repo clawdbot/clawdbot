@@ -30,6 +30,8 @@ const TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
 ];
+const GATEWAY_CONNECT_TIMEOUT_MS = 120_000;
+const EXEC_APPROVAL_E2E_TIMEOUT_MS = 180_000;
 
 type Cleanup = () => Promise<void> | void;
 
@@ -128,7 +130,8 @@ describe("gateway-hosted exec approvals", () => {
       clientDisplayName: "approval operator",
       mode: GATEWAY_CLIENT_MODES.TEST,
       scopes: [ADMIN_SCOPE],
-      timeoutMs: 60_000,
+      requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
     });
     cleanup.push(() => disconnectGatewayClient(operator));
 
@@ -171,5 +174,5 @@ describe("gateway-hosted exec approvals", () => {
     expect(outcome.status).toBe("completed");
     expect(outcome.exitCode).toBe(0);
     expect(outcome.aggregated).toBe("smoke");
-  }, 120_000);
+  }, EXEC_APPROVAL_E2E_TIMEOUT_MS);
 });

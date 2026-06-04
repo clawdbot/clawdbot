@@ -1,3 +1,4 @@
+/** Converts ACP prompt and tool-event shapes into Gateway-friendly text, files, and metadata. */
 import type {
   ContentBlock,
   ImageContent,
@@ -242,6 +243,7 @@ function collectToolLocations(
   }
 }
 
+/** Extracts bounded text content from an ACP prompt block list. */
 export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
   // Track accumulated byte count per block to catch oversized prompts before full concatenation
@@ -275,6 +277,7 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
   return parts.join("\n");
 }
 
+/** Extracts image/file prompt blocks into Gateway attachment payloads. */
 export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAttachment[] {
   const attachments: GatewayAttachment[] = [];
   for (const block of prompt) {
@@ -294,6 +297,7 @@ export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAtt
   return attachments;
 }
 
+/** Builds the display title used for ACP tool-call events. */
 export function formatToolTitle(
   name: string | undefined,
   args: Record<string, unknown> | undefined,
@@ -312,6 +316,7 @@ export function formatToolTitle(
   return escapeInlineControlChars(`${base}: ${parts.join(", ")}`);
 }
 
+/** Infers ACP tool kind from a normalized tool name. */
 export function inferToolKind(name?: string): ToolKind {
   if (!name) {
     return "other";
@@ -341,6 +346,7 @@ export function inferToolKind(name?: string): ToolKind {
   return "other";
 }
 
+/** Extracts textual ACP tool-call content from unknown runtime payloads. */
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
   if (hasNonEmptyString(value)) {
     return value.trim()
@@ -400,6 +406,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   ];
 }
 
+/** Extracts bounded file locations from nested tool-call payloads. */
 export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
   const locations = new Map<string, ToolCallLocation>();
   for (const value of values) {

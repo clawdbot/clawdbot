@@ -14,6 +14,12 @@ import {
 } from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
+/**
+ * Resolves whether a session is sandboxed and why sandbox tool policy blocks a tool.
+ *
+ * This module is used by tool entrypoints before execution, so diagnostics must
+ * be actionable without exposing full session keys.
+ */
 function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
   if (cfg.mode === "off") {
     return false;
@@ -49,6 +55,7 @@ function resolveComparableSessionKeyForSandbox(params: {
   });
 }
 
+/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -126,6 +133,7 @@ function shellEscapeSingleArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/** Formats the user-facing denial message when sandbox tool policy blocks a tool. */
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -157,6 +165,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     ? runtime.toolPolicy.sources.deny
     : runtime.toolPolicy.sources.allow;
   if (params.audit === true) {
+    // Audit only on actual enforcement paths; explain/status calls can format without side effects.
     auditSandboxToolPolicyBlock({
       toolName: tool,
       ruleType: blockedByDeny ? "deny" : "allow",

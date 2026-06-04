@@ -1361,6 +1361,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("keeps explicit non-renderer ui test targets scoped", () => {
+    expect(
+      buildVitestRunPlans([
+        "ui/src/i18n/test/translate.test.ts",
+        "test/scripts/control-ui-i18n.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/control-ui-i18n.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/i18n/test/translate.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes control ui e2e tests to the ui e2e lane", () => {
     expect(buildVitestRunPlans(["ui/src/ui/e2e/chat-flow.e2e.test.ts"])).toEqual([
       {

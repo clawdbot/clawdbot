@@ -1,3 +1,4 @@
+// Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";

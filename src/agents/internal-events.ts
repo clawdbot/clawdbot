@@ -14,6 +14,8 @@ import {
 } from "./internal-runtime-context.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 
+// Formats internal runtime events into prompt blocks. Delimiters and fields are
+// sanitized because child output can be arbitrary model/user text.
 type AgentTaskCompletionInternalEvent = {
   type: typeof AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION;
   source: AgentInternalEventSource;
@@ -114,6 +116,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   return lines.join("\n");
 }
 
+/** Format internal runtime events for the protected runtime-context prompt block. */
 export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";
@@ -139,6 +142,7 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   ].join("\n");
 }
 
+/** Format internal runtime events for plain prompts that lack context delimiters. */
 export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";

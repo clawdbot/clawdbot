@@ -1,3 +1,4 @@
+// Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   finalizeRuntimeSnapshotWrite,

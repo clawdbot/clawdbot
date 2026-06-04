@@ -5,6 +5,8 @@ import type {
 } from "../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
 
+// Cached lookup view for the active channel plugin registry. The cache is keyed
+// by registry object/version so request-time callers avoid rebuilding alias maps.
 export type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: ActivePluginChannelRegistration["plugin"] & {
     id?: string | null;
@@ -74,16 +76,19 @@ function buildRegisteredChannelPluginLookup(): RegisteredChannelPluginLookup {
   return registeredChannelPluginLookup;
 }
 
+/** Lists active channel plugin registrations from the current registry snapshot. */
 export function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
   return buildRegisteredChannelPluginLookup().entries;
 }
 
+/** Finds an active channel plugin registration by normalized id or alias. */
 export function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): RegisteredChannelPluginEntry | undefined {
   return buildRegisteredChannelPluginLookup().byKey.get(normalizedKey);
 }
 
+/** Finds an active channel plugin registration by its canonical plugin id. */
 export function findRegisteredChannelPluginEntryById(
   id: string,
 ): RegisteredChannelPluginEntry | undefined {

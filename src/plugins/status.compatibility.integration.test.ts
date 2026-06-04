@@ -1,3 +1,4 @@
+/** Integration coverage for plugin status compatibility output and installed-index state. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";

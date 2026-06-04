@@ -1,3 +1,4 @@
+/** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -121,6 +122,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
     : undefined;
 }
 
+/** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -236,6 +238,7 @@ export async function ensureSkillSnapshot(params: {
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
 
+/** Increments compaction count and persists the updated session entry. */
 export async function incrementCompactionCount(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

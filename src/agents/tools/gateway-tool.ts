@@ -40,9 +40,7 @@ const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 // trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
 // must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
-  // Agent prompt/model tuning.
-  "agents.defaults.promptOverlays",
-  "agents.defaults.model",
+  // Low-risk agent runtime tuning.
   "agents.defaults.thinkingDefault",
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",

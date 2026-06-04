@@ -1,3 +1,4 @@
+// Compatibility parser for older bundled daemon CLI exports inside generated bundles.
 export const LEGACY_DAEMON_CLI_EXPORTS = [
   "registerDaemonCli",
   "runDaemonInstall",
@@ -10,6 +11,8 @@ export const LEGACY_DAEMON_CLI_EXPORTS = [
 
 type LegacyDaemonCliExport = (typeof LEGACY_DAEMON_CLI_EXPORTS)[number];
 type LegacyDaemonCliRunnerExport = Exclude<LegacyDaemonCliExport, "registerDaemonCli">;
+
+/** Accessor names for legacy daemon bundle exports after minifier/export alias resolution. */
 export type LegacyDaemonCliAccessors = {
   registerDaemonCli: string;
   runDaemonRestart: string;
@@ -53,6 +56,7 @@ function findRegisterContainerSymbol(bundleSource: string): string | null {
   return bundleSource.match(REGISTER_CONTAINER_RE)?.[1] ?? null;
 }
 
+/** Find the accessor for the old `registerDaemonCli` export shape, including esbuild containers. */
 export function resolveLegacyDaemonCliRegisterAccessor(bundleSource: string): string | null {
   const aliases = parseExportAliases(bundleSource);
   if (!aliases) {
@@ -67,6 +71,7 @@ export function resolveLegacyDaemonCliRegisterAccessor(bundleSource: string): st
     : (registerDirectAlias ?? null);
 }
 
+/** Find legacy daemon runner exports in generated bundle source. */
 export function resolveLegacyDaemonCliRunnerAccessors(
   bundleSource: string,
 ): Partial<Record<LegacyDaemonCliRunnerExport, string>> | null {
@@ -102,6 +107,7 @@ export function resolveLegacyDaemonCliRunnerAccessors(
   };
 }
 
+/** Resolve all legacy daemon accessors required to bridge old bundles into current CLI code. */
 export function resolveLegacyDaemonCliAccessors(
   bundleSource: string,
 ): LegacyDaemonCliAccessors | null {

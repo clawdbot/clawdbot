@@ -21,9 +21,21 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
+/**
+ * Agent runtime surface used by realtime voice consults.
+ */
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+
+/**
+ * Speakable text returned to the realtime voice bridge after an agent consult.
+ */
 export type RealtimeVoiceAgentConsultResult = { text: string };
+
+/**
+ * Controls whether voice consults run in a fresh session or fork context from the requester.
+ */
 export type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
+
 export {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -43,6 +55,9 @@ const defaultRealtimeVoiceAgentConsultDeps: RealtimeVoiceAgentConsultDeps = {
 
 let realtimeVoiceAgentConsultDeps = defaultRealtimeVoiceAgentConsultDeps;
 
+/**
+ * Overrides consult runtime dependencies for deterministic tests.
+ */
 export function setRealtimeVoiceAgentConsultDepsForTest(
   deps: Partial<RealtimeVoiceAgentConsultDeps> | null,
 ): void {
@@ -52,6 +67,8 @@ export function setRealtimeVoiceAgentConsultDepsForTest(
 }
 
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
+  // Embedded agent runs expect agent-scoped sandbox keys; keep already-scoped keys intact so
+  // callers can deliberately share a sandbox with an existing agent session.
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
     return trimmed;
@@ -87,6 +104,8 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
 }): DeliveryContext | undefined {
   const requesterSessionKey = params.spawnedBy?.trim();
   try {
+    // Prefer the live requester session, then its base thread, then the voice consult session.
+    // This preserves channel/account/thread routing when a voice bridge delegates back to agent.
     const candidates: string[] = [];
     if (requesterSessionKey) {
       const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
@@ -142,6 +161,8 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       if (entry.sessionId?.trim()) {
         return { ...deliveryFields, updatedAt: now };
       }
+      // Fork only from same-agent requester sessions. Cross-agent parent sessions may carry
+      // incompatible provider state, so they get a fresh consult session with spawnedBy linkage.
       if (shouldFork) {
         const parentEntry = params.agentRuntime.session.getSessionEntry({
           storePath: params.storePath,
@@ -190,6 +211,9 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   throw new Error("realtime voice agent consult session could not be initialized");
 }
 
+/**
+ * Runs an embedded agent consult and returns concise speakable text for realtime voice playback.
+ */
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -221,6 +245,8 @@ export async function consultRealtimeVoiceAgent(params: {
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
   await params.agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
+  // The consult session stores normal session metadata so subsequent voice turns can keep
+  // routing and, in fork mode, recover useful conversation context from the requester.
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
     agentId,
   });
@@ -247,6 +273,8 @@ export async function consultRealtimeVoiceAgent(params: {
   const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,
   });
+  // Voice consults suppress verbose/reasoning output because the bridge needs a short,
+  // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
   const result = await params.agentRuntime.runEmbeddedAgent({
     sessionId,
     sessionKey: params.sessionKey,

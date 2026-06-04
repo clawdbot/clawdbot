@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallTtsConfig } from "./config.js";
 
+// Resolves preferred voice settings from configured TTS provider blocks.
+
+/** Read voice setting aliases from one provider-specific config block. */
 function resolveProviderVoiceSetting(providerConfig: unknown): string | undefined {
   if (!providerConfig || typeof providerConfig !== "object") {
     return undefined;
@@ -19,6 +22,7 @@ function resolveProviderVoiceSetting(providerConfig: unknown): string | undefine
   );
 }
 
+/** Resolve the active provider's preferred voice id/name from voice-call TTS config. */
 export function resolvePreferredTtsVoice(config: { tts?: VoiceCallTtsConfig }): string | undefined {
   const providerId = config.tts?.provider;
   if (!providerId) {

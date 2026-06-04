@@ -1,6 +1,8 @@
 import type { GatewayReloadMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Gateway reload settings are normalized at startup so file watchers and config
+// reload handlers share one debounce/mode contract.
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
@@ -11,6 +13,7 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   debounceMs: 300,
 };
 
+/** Resolves gateway reload mode/debounce from config with bounded defaults. */
 export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =

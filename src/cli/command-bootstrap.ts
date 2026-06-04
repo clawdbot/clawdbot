@@ -1,3 +1,4 @@
+// Shared command preflight: config readiness plus optional plugin registry activation.
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { CliPluginRegistryPolicy } from "./command-catalog.js";
@@ -10,6 +11,7 @@ function loadConfigGuardModule() {
   return configGuardModuleLoader.load();
 }
 
+/** Run the lazy command bootstrap steps selected by command policy. */
 export async function ensureCliCommandBootstrap(params: {
   runtime: RuntimeEnv;
   commandPath: string[];

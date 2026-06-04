@@ -1,3 +1,6 @@
+/**
+ * Gateway runtime service lifecycle tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {

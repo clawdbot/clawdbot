@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel account config merge and snapshot helpers.
+ */
 export {
   createAccountListHelpers,
   describeAccountSnapshot,

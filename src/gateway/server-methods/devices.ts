@@ -1,3 +1,4 @@
+// Gateway RPC handlers for device pairing and device-token lifecycle operations.
 import {
   ErrorCodes,
   errorShape,
@@ -177,6 +178,7 @@ function pairedDeviceHasNonOperatorRole(device: {
   return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }
 
+/** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, client }) => {
     if (!validateDevicePairListParams(params)) {

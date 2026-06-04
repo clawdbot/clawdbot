@@ -25,9 +25,10 @@ OpenClaw has three public release lanes:
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- Every stable OpenClaw release ships the npm package and macOS app together;
-  beta releases normally validate and publish the npm/package path first, with
-  mac app build/sign/notarize reserved for stable unless explicitly requested
+- Every stable OpenClaw release ships the npm package, macOS app, and signed
+  Windows Hub installers together; beta releases normally validate and publish
+  the npm/package path first, with native app build/sign/notarize/promote
+  reserved for stable unless explicitly requested
 
 ## Release cadence
 
@@ -119,7 +120,12 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
     packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
     The macOS publish workflow publishes the signed appcast to public `main`
     automatically after release assets verify; if branch protection blocks the
-    direct push, it opens or updates an appcast PR.
+    direct push, it opens or updates an appcast PR. Stable Windows Hub
+    readiness requires the signed `OpenClawCompanion-Setup-x64.exe`,
+    `OpenClawCompanion-Setup-arm64.exe`, and
+    `OpenClawCompanion-SHA256SUMS.txt` assets on the OpenClaw GitHub release;
+    promote them with the `Windows Node Release` workflow after the matching
+    `openclaw/openclaw-windows-node` release has passed its signing workflow.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, verify the generated GitHub release page,
@@ -232,6 +238,15 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw
   npm publish so the core package is not published before its externalized
   plugins.
+- Run the manual `Windows Node Release` workflow for stable releases after the
+  matching `openclaw/openclaw-windows-node` release exists. It downloads the
+  signed Windows Hub installers from the companion repo, verifies their
+  Authenticode signatures on a Windows runner, writes a SHA-256 manifest, and
+  uploads the installers plus manifest onto the canonical OpenClaw GitHub
+  release. Website download links should target exact OpenClaw release asset
+  URLs for the current stable release, or `releases/latest/download/...` only
+  after verifying GitHub's latest redirect points at that same release; do not
+  link only to the companion repo release page.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
 - `OpenClaw Release Checks` also runs the QA Lab mock parity lane plus the fast

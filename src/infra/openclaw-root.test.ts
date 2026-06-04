@@ -1,3 +1,4 @@
+// Covers OpenClaw package root resolution.
 import actualFs from "node:fs";
 import actualFsPromises from "node:fs/promises";
 import path from "node:path";

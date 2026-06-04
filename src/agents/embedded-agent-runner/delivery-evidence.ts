@@ -1,5 +1,11 @@
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
+/**
+ * Helpers for deciding whether an embedded run produced user-visible or outbound effects.
+ *
+ * Fallback and retry code uses these checks to avoid rerunning a model after messages, media,
+ * cron entries, or spawned sessions have already been delivered.
+ */
 type AgentPayloadLike = {
   text?: unknown;
   mediaUrl?: unknown;
@@ -73,6 +79,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   }
 }
 
+/** Collects media URLs from agent payloads and committed messaging-tool delivery metadata. */
 export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
   const urls = new Set<string>();
   if (Array.isArray(result.payloads)) {
@@ -88,6 +95,7 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
   return Array.from(urls);
 }
 
+/** Collects media URLs recorded by messaging-tool sends and their target attachments. */
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
@@ -107,6 +115,7 @@ function hasPositiveNumber(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+/** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   if (!response || typeof response !== "object") {
     return null;
@@ -134,6 +143,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
   );
 }
 
+/** Returns whether payload metadata contains visible text, media, presentation, or channel data. */
 export function hasVisibleAgentPayload(
   result: Pick<AgentDeliveryEvidence, "payloads">,
   options: { includeErrorPayloads?: boolean; includeReasoningPayloads?: boolean } = {},
@@ -164,12 +174,14 @@ export function hasVisibleAgentPayload(
   });
 }
 
+/** Returns whether the messaging tool attempted or committed an outbound delivery. */
 export function hasMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     result.didSendViaMessagingTool === true || hasCommittedMessagingToolDeliveryEvidence(result)
   );
 }
 
+/** Returns whether messaging-tool metadata proves committed text, media, or target delivery. */
 export function hasCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -183,6 +195,7 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
+/** Returns whether any outbound side effect makes a retry unsafe. */
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
@@ -193,6 +206,7 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
   );
 }
 
+/** Formats an agent-command delivery failure message from delivery status metadata. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
   const status = result.deliveryStatus?.status;
   if (status !== "failed" && status !== "partial_failed") {

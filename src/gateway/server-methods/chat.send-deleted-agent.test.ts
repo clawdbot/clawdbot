@@ -1,3 +1,6 @@
+/**
+ * Tests that chat send rejects deleted-agent sessions before dispatch.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { chatHandlers } from "./chat.js";

@@ -1,8 +1,10 @@
+// Node CLI runtime helpers: terminal theme adaptation and standard error handling.
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { unauthorizedHintForMessage } from "./rpc.js";
 
+/** Return color helpers that degrade to plain text in non-rich terminals. */
 export function getNodesTheme() {
   const rich = isRich();
   const color = (fn: (value: string) => string) => (value: string) => (rich ? fn(value) : value);
@@ -16,6 +18,7 @@ export function getNodesTheme() {
   };
 }
 
+/** Run a node CLI action with standard failure text and authorization hints. */
 export function runNodesCommand(label: string, action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = String(err);

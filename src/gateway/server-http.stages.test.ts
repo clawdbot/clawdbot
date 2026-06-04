@@ -1,3 +1,6 @@
+/**
+ * Tests the staged HTTP request pipeline used by the gateway server.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { runGatewayHttpRequestStages } from "./server-http.js";
 

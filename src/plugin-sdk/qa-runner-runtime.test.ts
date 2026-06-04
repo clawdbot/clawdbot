@@ -1,3 +1,6 @@
+/**
+ * Tests QA runner runtime facade helpers.
+ */
 import path from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Implements ACP session commands and runtime status formatting.
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { requireGatewayClientScope } from "./command-gates.js";

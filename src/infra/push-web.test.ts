@@ -1,3 +1,4 @@
+// Tests web push subscription storage and delivery helpers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

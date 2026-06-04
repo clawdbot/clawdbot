@@ -1,3 +1,6 @@
+/**
+ * Tests for gateway secret resolution and redacted secret method responses.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,

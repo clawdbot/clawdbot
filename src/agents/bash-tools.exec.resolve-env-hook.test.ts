@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
     | {
         hasHooks: ReturnType<typeof vi.fn>;
-        runResolveExecEnv: ReturnType<typeof vi.fn>;
+        runResolveExecEnv?: ReturnType<typeof vi.fn>;
         runBeforeToolCall?: ReturnType<typeof vi.fn>;
       }
     | undefined,
@@ -245,7 +245,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       EXISTING: "request",
     });
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
       EXISTING: "request",
       PLUGIN_SAFE: "yes",
@@ -293,7 +293,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       REQUEST_SAFE: "request",
     });
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
       LAZY_PLUGIN_SAFE: "yes",
       REQUEST_SAFE: "request",
@@ -335,13 +335,13 @@ describe("exec resolve_exec_env hook wiring", () => {
       testExtensionContext,
     );
 
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(2);
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenNthCalledWith(
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenCalledTimes(2);
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ host: "gateway" }),
       expect.anything(),
     );
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenNthCalledWith(
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ host: "node" }),
       expect.anything(),
@@ -386,7 +386,29 @@ describe("exec resolve_exec_env hook wiring", () => {
       testExtensionContext,
     );
 
-    expect(mocks.hookRunner.runResolveExecEnv).not.toHaveBeenCalled();
+    expect(mocks.hookRunner.runResolveExecEnv!).not.toHaveBeenCalled();
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      REQUEST_SAFE: "request",
+    });
+  });
+
+  it("skips stale hook runners that report resolve_exec_env without the runner method", async () => {
+    mocks.hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "resolve_exec_env"),
+    };
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:chat-1",
+    });
+    await tool.execute("call-stale-hook-runner", {
+      command: "echo ok",
+      env: { REQUEST_SAFE: "request" },
+      yieldMs: 120_000,
+    });
+
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
       REQUEST_SAFE: "request",
     });
@@ -431,7 +453,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     expect(mocks.beforeToolCallParams[0]?.env).toEqual({
       REQUEST_SAFE: "request",
     });
-    expect(mocks.hookRunner.runResolveExecEnv).toHaveBeenCalledTimes(1);
+    expect(mocks.hookRunner.runResolveExecEnv!).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
       PLUGIN_SAFE: "yes",
       REQUEST_SAFE: "request",

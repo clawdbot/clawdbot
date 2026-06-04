@@ -1,12 +1,15 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
+// Guardrails for explicit tool allowlists. They collect user/operator sources and
+// explain when allowlist resolution leaves no callable tools.
 type ExplicitToolAllowlistSource = {
   label: string;
   entries: string[];
   enforceWhenToolsDisabled?: boolean;
 };
 
+/** Normalize explicit allowlist sources, dropping empty source entries. */
 export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
@@ -25,6 +28,7 @@ export function collectExplicitToolAllowlistSources(
   });
 }
 
+/** Build an actionable error when explicit allowlists remove every callable tool. */
 export function buildEmptyExplicitToolAllowlistError(params: {
   sources: ExplicitToolAllowlistSource[];
   callableToolNames: string[];

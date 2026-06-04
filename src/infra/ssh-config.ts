@@ -1,3 +1,4 @@
+// Reads effective SSH target config from the local ssh client.
 import { spawn } from "node:child_process";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";

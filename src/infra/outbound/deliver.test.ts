@@ -4,6 +4,7 @@ import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
@@ -28,7 +29,9 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
+    async () => ({ ok: true, sessionFile: "x", messageId: "m" }),
+  ),
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -3068,6 +3071,64 @@ describe("deliverOutboundPayloads", () => {
     expect(appendOptions?.text).toBe("report.pdf");
     expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
     expect(appendOptions?.config).toBe(cfg);
+  });
+
+  it("does not fail the channel send when the post-delivery transcript mirror throws", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("session file changed while embedded prompt lock was released"),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "done" }],
+      deps: { matrix: sendMatrix },
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "done",
+        idempotencyKey: "idem-89626",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toContain(
+      "failed to mirror outbound delivery into session transcript; channel send already succeeded",
+    );
+    expect(warnCall[1]).toMatchObject({ channel: "matrix", sessionKey: "agent:main:main" });
+  });
+
+  it("does not fail the channel send when the transcript mirror reports not-ok", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      reason: "session locked",
+    });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "done" }],
+      deps: { matrix: sendMatrix },
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "done",
+        idempotencyKey: "idem-89626-b",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toContain(
+      "failed to mirror outbound delivery into session transcript; channel send already succeeded",
+    );
   });
 
   it("emits message_sent success for text-only deliveries", async () => {

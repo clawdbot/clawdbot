@@ -26,6 +26,9 @@ import {
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
 
+/**
+ * Central Vitest module mock setup for gateway integration tests.
+ */
 export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
 export {
   agentCommand,

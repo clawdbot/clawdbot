@@ -1,3 +1,4 @@
+// Tests final outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
 import { getDispatcherFinalOutcomeCounts } from "./dispatch-from-config.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";

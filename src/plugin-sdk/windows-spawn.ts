@@ -6,6 +6,7 @@ import {
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
+/** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =
   | "direct"
   | "node-entrypoint"
@@ -13,13 +14,20 @@ export type WindowsSpawnResolution =
   | "shell-fallback";
 
 export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
+
+/** Direct-spawn candidate before shell fallback policy is applied. */
 export type WindowsSpawnProgramCandidate = {
+  /** Executable passed to child_process after wrapper resolution. */
   command: string;
+  /** Arguments prepended before call-site argv, usually a resolved JS entrypoint. */
   leadingArgv: string[];
+  /** Candidate resolution path, or unresolved-wrapper when shell policy must decide. */
   resolution: WindowsSpawnCandidateResolution | "unresolved-wrapper";
+  /** Hide the transient Windows console for Node/exe entrypoint launches. */
   windowsHide?: boolean;
 };
 
+/** Spawn program after Windows wrapper resolution and fallback policy. */
 export type WindowsSpawnProgram = {
   command: string;
   leadingArgv: string[];
@@ -28,6 +36,7 @@ export type WindowsSpawnProgram = {
   windowsHide?: boolean;
 };
 
+/** Fully materialized child_process invocation for a resolved Windows spawn program. */
 export type WindowsSpawnInvocation = {
   command: string;
   argv: string[];
@@ -36,6 +45,7 @@ export type WindowsSpawnInvocation = {
   windowsHide?: boolean;
 };
 
+/** Inputs used to resolve a command into a Windows-safe direct spawn program. */
 export type ResolveWindowsSpawnProgramParams = {
   command: string;
   platform?: NodeJS.Platform;
@@ -314,6 +324,8 @@ export function resolveWindowsSpawnProgramCandidate(
       };
     }
 
+    // Unresolved .cmd/.bat wrappers are not passed through cmd.exe unless the
+    // caller explicitly accepts shell metacharacter parsing with allowShellFallback.
     return {
       command: resolvedCommand,
       leadingArgv: [],

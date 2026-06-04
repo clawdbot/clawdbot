@@ -1,3 +1,4 @@
+// Covers config write preparation, backup, and persistence behavior.
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

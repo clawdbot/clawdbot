@@ -1,3 +1,4 @@
+// Covers script-free npm install args and environment.
 import { describe, expect, it } from "vitest";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 

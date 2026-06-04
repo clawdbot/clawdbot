@@ -1,3 +1,6 @@
+/**
+ * Gateway request context construction tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import {

@@ -10,9 +10,9 @@ import {
 describe("cron MCP cleanup docker client", () => {
   it("rejects malformed probe pid wait limits", () => {
     expect(readCronMcpCleanupProbePidWaitMs({})).toBe(120_000);
-    expect(
-      readCronMcpCleanupProbePidWaitMs({ OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: "250" }),
-    ).toBe(250);
+    expect(readCronMcpCleanupProbePidWaitMs({ OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: "250" })).toBe(
+      250,
+    );
     for (const value of ["1.5", "1e3", "10ms", "0"]) {
       expect(() =>
         readCronMcpCleanupProbePidWaitMs({

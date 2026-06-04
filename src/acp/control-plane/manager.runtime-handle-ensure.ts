@@ -1,3 +1,4 @@
+/** Ensures or recreates a live ACP runtime handle for persisted session metadata. */
 import {
   createIdentityFromEnsure,
   identityEquals,
@@ -26,6 +27,7 @@ import {
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
+/** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
 export async function ensureManagerRuntimeHandle(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

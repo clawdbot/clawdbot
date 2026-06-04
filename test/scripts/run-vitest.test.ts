@@ -243,6 +243,25 @@ describe("scripts/run-vitest", () => {
     }
   });
 
+  it("delegates bare explicit source files to the project router", () => {
+    const file = "extensions/codex/src/app-server/dynamic-tool-profile.ts";
+
+    expect(resolveTestProjectsDelegationArgs([file])).toEqual([file]);
+    expect(resolveTestProjectsDelegationArgs(["run", file, "--reporter=verbose"])).toEqual([
+      file,
+      "--reporter=verbose",
+    ]);
+  });
+
+  it("delegates mixed filters when an explicit file target is present", () => {
+    expect(
+      resolveTestProjectsDelegationArgs(["src/agents", "test/scripts/run-vitest.test.ts"]),
+    ).toEqual(["src/agents", "test/scripts/run-vitest.test.ts"]);
+    expect(
+      resolveTestProjectsDelegationArgs(["src/**/*.test.ts", "src/agents/bash-tools.ts"]),
+    ).toEqual(["src/**/*.test.ts", "src/agents/bash-tools.ts"]);
+  });
+
   it("keeps direct Vitest runs when project routing could change option semantics", () => {
     const directArgvCases = [
       [
@@ -255,10 +274,14 @@ describe("scripts/run-vitest", () => {
       ["--project", "tooling", "test/scripts/run-vitest.test.ts"],
       ["watch", "test/scripts/run-vitest.test.ts"],
       ["dev", "test/scripts/run-vitest.test.ts"],
+      ["related", "src/agents/bash-tools.ts"],
+      ["list", "src/agents/bash-tools.ts"],
+      ["bench", "src/agents/bash-tools.ts"],
       ["--watch", "test/scripts/run-vitest.test.ts"],
       ["--run=false", "test/scripts/run-vitest.test.ts"],
       ["--no-run", "test/scripts/run-vitest.test.ts"],
       ["--run", "false", "test/scripts/run-vitest.test.ts"],
+      ["--diff", "scripts/run-vitest.mjs"],
       ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
       ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
     ];
@@ -280,6 +303,21 @@ describe("scripts/run-vitest", () => {
         fsImpl,
       ),
     ).toEqual(["test/agents/bash-tools.exec.background-abort.test.ts"]);
+  });
+
+  it("reports missing explicit source files before Vitest can fan out by project", () => {
+    const fsImpl = {
+      existsSync: (filePath: string) =>
+        filePath.replaceAll("\\", "/").endsWith("src/agents/bash-tools.ts"),
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["src/agents/bash-tools.ts", "extensions/codex/src/app-server/missing.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["extensions/codex/src/app-server/missing.ts"]);
   });
 
   it("does not treat option values or glob patterns as explicit missing files", () => {
@@ -423,35 +461,40 @@ describe("scripts/run-vitest", () => {
     });
   });
 
-  it("uses a longer default stall watchdog for broad e2e configs", () => {
+  it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
 
-    expect(
-      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
-        "run",
-        "--config",
-        "test/vitest/vitest.e2e.config.ts",
-      ]),
-    ).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
-    });
-    expect(
-      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
-        "run",
-        "--config=./test/vitest/vitest.ui-e2e.config.ts",
-      ]),
-    ).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
-    });
+    for (const configArg of [
+      "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=./test/vitest/vitest.ui-e2e.config.ts",
+      "--config=test/vitest/vitest.full-agentic.config.ts",
+      "--config=test/vitest/vitest.full-core-contracts.config.ts",
+    ]) {
+      expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+      });
+    }
     expect(
       resolveDefaultVitestNoOutputTimeoutMs([
         "run",
         "-c",
         "/repo/test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.full-agentic.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.full-core-contracts.config.ts",
       ]),
     ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });

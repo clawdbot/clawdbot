@@ -14,6 +14,7 @@ const DEFAULT_PARTS = 2;
 // generateSummary uses reasoning: "high" which also consumes context budget.
 export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
 
+/** Decision for whether a summarization stage should run as one chunk or multiple chunks. */
 export type StageSplitPlan =
   | {
       mode: "single";
@@ -23,11 +24,13 @@ export type StageSplitPlan =
       chunks: AgentMessage[][];
     };
 
+/** Messages safe to summarize plus notes for messages too large to fit in a summary request. */
 export type OversizedFallbackPlan = {
   smallMessages: AgentMessage[];
   oversizedNotes: string[];
 };
 
+/** Token accounting and optional prune result for preserving context-window headroom. */
 export type HistoryPrunePlan = {
   summarizableTokens: number;
   newContentTokens: number;
@@ -35,20 +38,24 @@ export type HistoryPrunePlan = {
   pruned?: ReturnType<typeof pruneHistoryForContextShare>;
 };
 
+/** Estimates compaction tokens after removing fields that must not reach summarization. */
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details and runtime-context transcript entries must never enter LLM-facing compaction.
   const safe = sanitizeCompactionMessages(messages);
   return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
+/** Removes runtime-only context and tool-result details before token estimates or summaries. */
 export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessage[] {
   return stripToolResultDetails(stripRuntimeContextCustomMessages(messages));
 }
 
+/** Estimates one message using the same sanitization path as multi-message planning. */
 export function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
+/** Clamps requested split parts to a usable count for the available messages. */
 export function normalizeCompactionParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
@@ -56,6 +63,7 @@ export function normalizeCompactionParts(parts: number, messageCount: number): n
   return Math.min(Math.max(1, Math.floor(parts)), Math.max(1, messageCount));
 }
 
+/** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
 export function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
@@ -85,6 +93,7 @@ export function splitMessagesByTokenShare(
     ) {
       return false;
     }
+    // Keep an assistant tool_use and its following tool_result responses in the same chunk.
     chunks.push(current.slice(0, pendingChunkStartIndex));
     current = current.slice(pendingChunkStartIndex);
     currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
@@ -152,6 +161,7 @@ export function splitMessagesByTokenShare(
   return chunks;
 }
 
+/** Chunks messages by a max-token budget while applying the shared estimator safety margin. */
 export function chunkMessagesByMaxTokens(
   messages: AgentMessage[],
   maxTokens: number,
@@ -228,6 +238,7 @@ export function isOversizedForSummary(msg: AgentMessage, contextWindow: number):
   return tokens > contextWindow * 0.5;
 }
 
+/** Builds sanitized chunks for summarization prompts. */
 export function buildSummaryChunks(params: {
   messages: AgentMessage[];
   maxChunkTokens: number;
@@ -237,6 +248,7 @@ export function buildSummaryChunks(params: {
   return chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
 }
 
+/** Separates messages too large to summarize and emits compact placeholder notes for them. */
 export function buildOversizedFallbackPlan(params: {
   messages: AgentMessage[];
   contextWindow: number;
@@ -259,6 +271,7 @@ export function buildOversizedFallbackPlan(params: {
   return { smallMessages, oversizedNotes };
 }
 
+/** Plans whether to split a summarization stage based on message count and token budget. */
 export function buildStageSplitPlan(params: {
   messages: AgentMessage[];
   maxChunkTokens: number;
@@ -283,6 +296,7 @@ export function buildStageSplitPlan(params: {
   return chunks.length > 1 ? { mode: "split", chunks } : { mode: "single" };
 }
 
+/** Drops oldest token-share chunks until history fits the requested context share. */
 export function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
@@ -350,6 +364,7 @@ export function pruneHistoryForContextShare(params: {
   };
 }
 
+/** Computes whether new content exceeds the history budget and plans pruning when needed. */
 export function buildHistoryPrunePlan(params: {
   messagesToSummarize: AgentMessage[];
   turnPrefixMessages: AgentMessage[];

@@ -49,6 +49,12 @@ import {
   stripToolMessages,
 } from "./sessions-helpers.js";
 
+/**
+ * `sessions_list` tool for visible session discovery and optional transcript hydration.
+ *
+ * Visibility filtering happens before derived titles/last messages are read so sandboxed agents do
+ * not learn metadata from sessions they cannot address.
+ */
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
   limit: optionalPositiveIntegerSchema(),
@@ -75,6 +81,7 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     : undefined;
 }
 
+/** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -180,6 +187,8 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
+        // Gateway listings include pseudo/global rows for UI callers. The tool only exposes real
+        // sessions and the explicit global session when the requester is already global.
         if (key === "unknown") {
           continue;
         }

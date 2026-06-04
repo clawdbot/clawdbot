@@ -1,3 +1,4 @@
+/** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
 import { describe, expect, it } from "vitest";
 import {
   generatedImageAssetFromDataUrl,

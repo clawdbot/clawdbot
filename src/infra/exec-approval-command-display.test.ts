@@ -1,3 +1,4 @@
+// Verifies shell command display strings for exec approval prompts.
 import { describe, expect, it } from "vitest";
 import {
   resolveExecApprovalCommandDisplay,

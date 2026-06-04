@@ -4,6 +4,8 @@ import type { CronServiceContract } from "../cron/service-contract.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { GatewayCronState } from "./server-cron.js";
 
+// Gateway cron is loaded lazily so startup/tests that never touch cron do not
+// materialize scheduler loops or bundled plugin runtime.
 type LazyGatewayCronParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -15,6 +17,7 @@ type LoadedGatewayCronState = {
   started: boolean;
 };
 
+/** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
@@ -48,6 +51,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       }
       resolved.started = true;
       await resolved.state.cron.start();
+      // If stop raced the lazy import/start path, immediately stop the loaded
+      // scheduler so shutdown does not leave a background loop alive.
       if (stopped && resolved.started) {
         resolved.started = false;
         resolved.state.cron.stop();
@@ -61,6 +66,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         return;
       }
       if (loading) {
+        // Stop may happen while the dynamic import is still in flight; attach a
+        // cleanup continuation instead of forcing cron to load synchronously.
         void loading
           .then((resolved) => {
             if (!stopped) {
@@ -113,6 +120,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     },
     wake(opts) {
       if (!loaded) {
+        // A wake should kick off lazy loading but cannot claim success before
+        // cron exists and knows whether the target job is wakeable.
         void load();
         return { ok: false };
       }

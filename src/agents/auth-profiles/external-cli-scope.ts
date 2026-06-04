@@ -6,11 +6,14 @@ import {
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Provider/profile ids that may need external CLI auth discovery. */
 export type ExternalCliAuthScope = {
   providerIds: string[];
   profileIds: string[];
 };
 
+// Include both raw and normalized provider ids so config aliases and canonical
+// provider ids can both match external CLI auth providers.
 function addProviderScopeId(out: Set<string>, value: string | undefined): void {
   const raw = value?.trim();
   if (!raw) {
@@ -23,6 +26,8 @@ function addProviderScopeId(out: Set<string>, value: string | undefined): void {
   }
 }
 
+// Model refs are provider/model strings. Only the provider prefix matters for
+// deciding which external CLI auth source may be queried.
 function addProviderScopeFromModelRef(out: Set<string>, value: string | undefined): void {
   const raw = value?.trim();
   if (!raw) {
@@ -42,6 +47,8 @@ function addProviderScopeFromModelConfig(out: Set<string>, model: AgentModelConf
   }
 }
 
+// Some runtime ids imply an external CLI auth source even when the model ref is
+// not provider-qualified, so include known CLI runtimes in provider scope.
 function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined): void {
   const normalized = normalizeProviderId(value?.trim() ?? "");
   if (
@@ -67,6 +74,7 @@ function addExternalCliRuntimeScopeFromModelMap(
   }
 }
 
+/** Resolves external CLI auth discovery scope from configured auth/model surfaces. */
 export function resolveExternalCliAuthScopeFromConfig(
   cfg: OpenClawConfig,
 ): ExternalCliAuthScope | undefined {

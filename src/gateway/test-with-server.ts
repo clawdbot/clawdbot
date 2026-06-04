@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { connectOk, startServerWithClient, testState } from "./test-helpers.js";
 
+/**
+ * Test helpers for running code against a connected gateway WebSocket server.
+ */
 type StartServerWithClient = typeof startServerWithClient;
 type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
 type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
 
+/** Starts a gateway, connects a client, runs the callback, and closes resources. */
 export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
   const { server, ws, envSnapshot } = await startServerWithClient("secret");
   try {
@@ -16,6 +20,7 @@ export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise
   }
 }
 
+/** Installs a reusable connected Control UI server suite for gateway tests. */
 export function installConnectedControlUiServerSuite(
   onReady: (started: { server: GatewayServer; ws: GatewayWs; port: number }) => void,
 ): void {

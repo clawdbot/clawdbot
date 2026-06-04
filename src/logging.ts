@@ -1,3 +1,4 @@
+// Public logging facade for console logger settings and styling.
 import type { ConsoleLoggerSettings, ConsoleStyle } from "./logging/console.js";
 import {
   enableConsoleCapture,

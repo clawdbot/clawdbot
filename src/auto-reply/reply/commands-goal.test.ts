@@ -1,3 +1,4 @@
+// Tests goal command persistence, status transitions, and reply text.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

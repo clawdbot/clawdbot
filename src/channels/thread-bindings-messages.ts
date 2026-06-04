@@ -1,3 +1,7 @@
+/**
+ * Channel-neutral thread-binding message builders shared by plugins, ACP focus, and subagent flows.
+ * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
@@ -15,6 +19,7 @@ function normalizeThreadBindingDurationMs(raw: unknown): number {
   return durationMs;
 }
 
+/** Formats thread-binding timeout durations for compact user-facing messages. */
 export function formatThreadBindingDurationLabel(durationMs: number): string {
   if (durationMs <= 0) {
     return "disabled";
@@ -29,6 +34,7 @@ export function formatThreadBindingDurationLabel(durationMs: number): string {
   return `${totalMinutes}m`;
 }
 
+/** Builds the native thread name for a focused thread-bound session. */
 export function resolveThreadBindingThreadName(params: {
   agentId?: string;
   label?: string;
@@ -36,9 +42,11 @@ export function resolveThreadBindingThreadName(params: {
   const label = normalizeOptionalString(params.label);
   const base = label || normalizeOptionalString(params.agentId) || "agent";
   const raw = `🤖 ${base}`.replace(/\s+/g, " ").trim();
+  // Native channel thread names have tight limits; keep generated names bounded.
   return raw.slice(0, 100);
 }
 
+/** Builds the system-prefixed intro text posted when a thread binding becomes active. */
 export function resolveThreadBindingIntroText(params: {
   agentId?: string;
   label?: string;
@@ -81,6 +89,7 @@ export function resolveThreadBindingIntroText(params: {
   return prefixSystemMessage(`${intro}\n${details.join("\n")}`);
 }
 
+/** Builds the system-prefixed farewell text posted when a thread binding ends. */
 export function resolveThreadBindingFarewellText(params: {
   reason?: string;
   farewellText?: string;

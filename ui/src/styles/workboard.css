@@ -11,6 +11,27 @@
   --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
 }
 
+.workboard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.workboard-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .workboard-toolbar {
   display: flex;
   justify-content: space-between;

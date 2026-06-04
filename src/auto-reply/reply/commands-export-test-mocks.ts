@@ -1,7 +1,9 @@
+/** Test mocks for export-command session path and store helpers. */
 import type { vi } from "vitest";
 
 type ViLike = Pick<typeof vi, "fn">;
 
+/** Creates hoist-safe mocks used by export command tests. */
 export function createExportCommandSessionMocks(viInstance: ViLike) {
   return {
     resolveDefaultSessionStorePathMock: viInstance.fn(() => "/tmp/target-store/sessions.json"),

@@ -55,6 +55,7 @@ function isAttachmentRecord(value: unknown): value is MediaAttachment {
   return true;
 }
 
+/** Selects attachments for a media-understanding capability under configured ordering limits. */
 export function selectAttachments(params: {
   capability: MediaUnderstandingCapability;
   attachments: MediaAttachment[];
@@ -63,7 +64,7 @@ export function selectAttachments(params: {
   const { capability, attachments, policy } = params;
   const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
   const matches = input.filter((item) => {
-    // Skip already-transcribed audio attachments from preflight
+    // Preflight audio has already been consumed; rerunning STT would duplicate transcript output.
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;
     }

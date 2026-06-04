@@ -1,3 +1,4 @@
+// Verifies host hook cleanup behavior for session-store state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

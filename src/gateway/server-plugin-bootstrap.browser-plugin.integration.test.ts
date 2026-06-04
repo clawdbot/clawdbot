@@ -1,3 +1,6 @@
+/**
+ * Integration tests for browser plugin bootstrap through the gateway server.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";

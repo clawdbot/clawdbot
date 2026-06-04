@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpDiagnostic } from "../plugins/bundle-mcp.js";
 
+// Codex app-server MCP config projection types.
 export type CodexMcpServersConfig = Record<string, Record<string, unknown>>;
 
 export type CodexBundleMcpThreadConfig = {

@@ -111,9 +111,10 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - For fallback correction tags like `vYYYY.M.D-N`, the repo version locations still stay at `YYYY.M.D`.
 - “Bump version everywhere” means all version locations above except `appcast.xml`.
 - Release signing and notary credentials live outside the repo in the private maintainer docs.
-- Every stable OpenClaw release ships the npm package and macOS app together.
-  Beta releases normally ship npm/package artifacts first and skip mac app
-  build/sign/notarize unless the operator requests mac beta validation.
+- Every stable OpenClaw release ships the npm package, macOS app, and signed
+  Windows Hub installers together. Beta releases normally ship npm/package
+  artifacts first and skip native app build/sign/notarize/promote unless the
+  operator requests native beta validation.
 - Do not let the slower macOS signing/notary path block npm publication once
   the npm preflight has passed. Keep mac validation/publish running in
   parallel, publish npm from the successful npm preflight, then start published
@@ -143,6 +144,17 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   at `YYYY.M.D`, but the mac release must use a strictly higher numeric
   `APP_BUILD` / Sparkle build than the original release so existing installs
   see it as newer.
+- Stable Windows Hub release closeout requires the signed
+  `OpenClawCompanion-Setup-x64.exe`, `OpenClawCompanion-Setup-arm64.exe`, and
+  `OpenClawCompanion-SHA256SUMS.txt` assets on the canonical
+  `openclaw/openclaw` GitHub Release. Use the public `Windows Node Release`
+  workflow after the matching `openclaw/openclaw-windows-node` release exists;
+  it verifies Authenticode signatures on Windows before uploading assets.
+- Website Windows Hub download links should target exact canonical
+  `openclaw/openclaw/releases/download/vYYYY.M.D/...` assets for the current
+  stable release, or `releases/latest/download/...` only after verifying the
+  redirect resolves to that same tag, so the installable signed Windows artifact
+  is visible from both the GitHub release page and openclaw.ai.
 
 ## Build changelog-backed release notes
 
@@ -178,6 +190,13 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating
   or editing a release, extract from `## YYYY.M.D` through the line before the
   next level-2 heading and use that complete block as the release notes.
+- To update an existing GitHub Release body, resolve the numeric release id and
+  patch that resource with the notes file as the `body` field:
+  `gh api repos/openclaw/openclaw/releases/tags/vYYYY.M.D --jq .id`, then
+  `gh api -X PATCH repos/openclaw/openclaw/releases/<id> -F body=@/tmp/notes.md`.
+  Do not trust `gh release edit --notes-file` or `--input` JSON if verification
+  disagrees; verify with `gh api repos/openclaw/openclaw/releases/<id>` because
+  the tag lookup and `gh release view` can lag or show stale body text.
 - When preparing release notes, scan `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` for compatibility records
   with `warningStarts` or `removeAfter` within 7 days after the release date.

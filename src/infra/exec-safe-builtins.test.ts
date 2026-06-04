@@ -1,3 +1,4 @@
+// Tests shell builtin detection for safe execution policy.
 import { describe, expect, it } from "vitest";
 import { evaluateExecAllowlist, evaluateShellAllowlist } from "./exec-approvals-allowlist.js";
 import { analyzeArgvCommand } from "./exec-approvals-analysis.js";

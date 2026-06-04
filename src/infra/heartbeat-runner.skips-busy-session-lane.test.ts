@@ -1,3 +1,4 @@
+// Covers heartbeat skipping while session lanes or cron jobs are busy.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import {

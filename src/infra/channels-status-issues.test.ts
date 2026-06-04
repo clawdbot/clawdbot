@@ -1,3 +1,4 @@
+// Covers channel plugin status issue collection.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin, ChannelStatusIssue } from "../channels/plugins/types.public.js";
 import { DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS } from "../gateway/channel-health-policy.js";

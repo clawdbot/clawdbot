@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for lazy reply dispatch and inbound-context helpers.
+ */
 export { resolveChunkMode } from "../auto-reply/chunk.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -23,6 +26,7 @@ const loadProviderDispatcherRuntimeModule = async () => {
   return await providerDispatcherRuntimeModulePromise;
 };
 
+/** Dispatches a reply with buffered block support after lazy-loading the runtime dispatcher. */
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
     const { dispatchReplyWithBufferedBlockDispatcher: dispatch } =
@@ -30,6 +34,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBuffered
     return await dispatch(params);
   };
 
+/** Dispatches a reply through the provider dispatcher after lazy-loading runtime code. */
 export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
   const { dispatchReplyWithDispatcher: dispatch } = await loadProviderDispatcherRuntimeModule();
   return await dispatch(params);

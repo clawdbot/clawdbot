@@ -6,8 +6,16 @@ import {
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
 
+/**
+ * Image-generation-specific facade over the shared media generation task lifecycle.
+ *
+ * This binds shared detached-task behavior to image task labels, event source,
+ * and completion wording used by image_generate.
+ */
+/** Detached image generation task handle. */
 export type ImageGenerationTaskHandle = MediaGenerationTaskHandle;
 
+/** Shared lifecycle instance configured for image generation. */
 export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   toolName: "image_generate",
   taskKind: IMAGE_GENERATION_TASK_KIND,
@@ -20,22 +28,27 @@ export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   completionLabel: "image",
 });
 
+/** Creates an image generation task ledger run. */
 export const createImageGenerationTaskRun = (
   ...params: Parameters<typeof imageGenerationTaskLifecycle.createTaskRun>
 ) => imageGenerationTaskLifecycle.createTaskRun(...params);
 
+/** Records progress for an image generation task. */
 export const recordImageGenerationTaskProgress = (
   ...params: Parameters<typeof imageGenerationTaskLifecycle.recordTaskProgress>
 ) => imageGenerationTaskLifecycle.recordTaskProgress(...params);
 
+/** Completes an image generation task ledger run. */
 export const completeImageGenerationTaskRun = (
   ...params: Parameters<typeof imageGenerationTaskLifecycle.completeTaskRun>
 ) => imageGenerationTaskLifecycle.completeTaskRun(...params);
 
+/** Marks an image generation task ledger run as failed. */
 export const failImageGenerationTaskRun = (
   ...params: Parameters<typeof imageGenerationTaskLifecycle.failTaskRun>
 ) => imageGenerationTaskLifecycle.failTaskRun(...params);
 
+/** Wakes the requester session with image generation completion or failure. */
 export async function wakeImageGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: ImageGenerationTaskHandle | null;

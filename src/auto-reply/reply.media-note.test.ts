@@ -1,3 +1,4 @@
+/** Tests media-note behavior as it appears through reply prompt assembly. */
 import { describe, expect, it } from "vitest";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { buildReplyPromptBodies } from "./reply/prompt-prelude.js";

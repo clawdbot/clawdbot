@@ -1,3 +1,4 @@
+// Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

@@ -1,3 +1,4 @@
+// Verifies config validation rejects unsupported enumerated values.
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { testing, validateConfigObjectRaw } from "./validation.js";

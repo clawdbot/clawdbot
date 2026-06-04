@@ -1,3 +1,4 @@
+// Defines Slack channel configuration types.
 import type {
   ChannelStreamingBlockConfig,
   ChannelStreamingProgressConfig,

@@ -1,3 +1,4 @@
+// Builds documentation baselines from config schema metadata.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";

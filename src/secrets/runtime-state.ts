@@ -1,9 +1,9 @@
+/** Holds active secrets runtime snapshots, refresh context, and cleanup hooks. */
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import { clearLoadedAuthStoreCache } from "../agents/auth-profiles/store-cache.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -21,6 +21,7 @@ import {
 } from "./runtime-web-tools-state.js";
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
+/** Prepared secrets runtime snapshot activated for fast secret resolution. */
 export type PreparedSecretsRuntimeSnapshot = {
   sourceConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -29,6 +30,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   webTools: RuntimeWebToolsMetadata;
 };
 
+/** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
@@ -46,6 +48,9 @@ const preparedSnapshotRefreshContext = new WeakMap<
   SecretsRuntimeRefreshContext
 >();
 
+/**
+ * Clones refresh context while preserving callback identity and isolating mutable maps/config.
+ */
 export function cloneSecretsRuntimeRefreshContext(
   context: SecretsRuntimeRefreshContext,
 ): SecretsRuntimeRefreshContext {
@@ -77,6 +82,9 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
+/**
+ * Associates a prepared snapshot with the refresh context needed after activation.
+ */
 export function setPreparedSecretsRuntimeSnapshotRefreshContext(
   snapshot: PreparedSecretsRuntimeSnapshot,
   context: SecretsRuntimeRefreshContext,
@@ -84,6 +92,9 @@ export function setPreparedSecretsRuntimeSnapshotRefreshContext(
   preparedSnapshotRefreshContext.set(snapshot, cloneSecretsRuntimeRefreshContext(context));
 }
 
+/**
+ * Returns the refresh context stored for a prepared snapshot, if any.
+ */
 export function getPreparedSecretsRuntimeSnapshotRefreshContext(
   snapshot: PreparedSecretsRuntimeSnapshot,
 ): SecretsRuntimeRefreshContext | null {
@@ -91,20 +102,32 @@ export function getPreparedSecretsRuntimeSnapshotRefreshContext(
   return context ? cloneSecretsRuntimeRefreshContext(context) : null;
 }
 
+/**
+ * Returns the active refresh context without exposing mutable runtime state.
+ */
 export function getActiveSecretsRuntimeRefreshContext(): SecretsRuntimeRefreshContext | null {
   return activeRefreshContext ? cloneSecretsRuntimeRefreshContext(activeRefreshContext) : null;
 }
 
+/**
+ * Returns the env used by the active runtime snapshot, falling back to process env.
+ */
 export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
   return {
     ...(activeRefreshContext?.env ?? process.env),
   } as NodeJS.ProcessEnv;
 }
 
+/**
+ * Registers cleanup hooks that run whenever the active secrets runtime snapshot is cleared.
+ */
 export function registerSecretsRuntimeStateClearHook(clearHook: () => void): void {
   clearHooks.add(clearHook);
 }
 
+/**
+ * Atomically activates a prepared secrets snapshot across config, auth-store, and web-tool state.
+ */
 export function activateSecretsRuntimeSnapshotState(params: {
   snapshot: PreparedSecretsRuntimeSnapshot;
   refreshContext: SecretsRuntimeRefreshContext | null;
@@ -125,6 +148,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
   setRuntimeConfigSnapshotRefreshHandler(params.refreshHandler);
 }
 
+/**
+ * Returns a cloned active secrets runtime snapshot for callers that need mutable data.
+ */
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
   if (!activeSnapshot) {
     return null;
@@ -155,6 +181,9 @@ export function getActiveSecretsRuntimeConfigSnapshot(): Pick<
   };
 }
 
+/**
+ * Returns current auth stores, preferring live auth-store snapshots over activation-time clones.
+ */
 export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
   if (!activeSnapshot) {
     return [];
@@ -165,6 +194,9 @@ export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapsho
   }));
 }
 
+/**
+ * Clears active secrets runtime state and all linked config/auth/web-tool snapshots.
+ */
 export function clearSecretsRuntimeSnapshot(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
@@ -172,7 +204,6 @@ export function clearSecretsRuntimeSnapshot(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
-  clearLoadedAuthStoreCache();
   for (const clearHook of clearHooks) {
     clearHook();
   }

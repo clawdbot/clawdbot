@@ -1,3 +1,4 @@
+// Tests reset hook fallback behavior inside the get-reply directive pipeline.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNativeResetContext,

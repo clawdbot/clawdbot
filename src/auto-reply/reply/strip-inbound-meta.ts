@@ -46,6 +46,7 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+/** Fast check for whether text contains any inbound metadata sentinel. */
 export function hasInboundMetadataSentinel(text: string): boolean {
   return Boolean(text && SENTINEL_FAST_RE.test(text));
 }
@@ -195,6 +196,7 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
  * Returns the original string reference unchanged when no metadata is present
  * (fast path — zero allocation).
  */
+/** Strips all injected inbound metadata blocks from user-visible text. */
 export function stripInboundMetadata(text: string): string {
   if (!text) {
     return text;
@@ -266,6 +268,7 @@ export function stripInboundMetadata(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 }
 
+/** Strips only leading inbound metadata blocks while preserving later user text. */
 export function stripLeadingInboundMetadata(text: string): string {
   if (!text || !SENTINEL_FAST_RE.test(text)) {
     return text;
@@ -314,6 +317,7 @@ export function stripLeadingInboundMetadata(text: string): string {
   return strippedRemainder.join("\n");
 }
 
+/** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
   if (!text || !SENTINEL_FAST_RE.test(text)) {
     return null;

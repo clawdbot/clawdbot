@@ -21,6 +21,8 @@ import type {
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
+// Public plugin-state facade over the sqlite-backed store. It validates plugin
+// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
@@ -170,6 +172,8 @@ function assertPlainJsonValue(
       throw invalidInput(`plugin state object at ${path} must be a plain object`);
     }
 
+    // Reject accessors, symbols, sparse arrays, and non-enumerable state so stored
+    // values cannot execute code or round-trip differently through JSON.
     const descriptorEntries = Object.entries(Object.getOwnPropertyDescriptors(objectValue));
     const enumerableKeys = Object.keys(objectValue);
     if (Object.getOwnPropertySymbols(objectValue).length > 0) {
@@ -238,6 +242,8 @@ function assertConsistentOptions(
     existing.maxEntries !== signature.maxEntries ||
     existing.defaultTtlMs !== signature.defaultTtlMs
   ) {
+    // A namespace is a shared storage contract. Reopening it with different
+    // limits would make eviction/TTL behavior depend on call order.
     throw invalidInput(
       `plugin state namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
       "open",
@@ -437,6 +443,7 @@ function createSyncKeyedStoreForPluginId<T>(
   };
 }
 
+/** Opens an async plugin-state namespace for a non-core plugin id. */
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -447,6 +454,7 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+/** Opens a sync plugin-state namespace for a non-core plugin id. */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -457,23 +465,27 @@ export function createPluginStateSyncKeyedStore<T>(
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+/** Opens an async plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
 ): PluginStateKeyedStore<T> {
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
+/** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
 ): PluginStateSyncKeyedStore<T> {
   return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
+/** Clears plugin-state rows and option signatures for tests. */
 export function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
 
+/** Resets plugin-state module/database state for isolated tests. */
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
     closePluginStateDatabase();

@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** systemd cgroup fields used to spot unhealthy gateway service supervision. */
 export type GatewayServiceSystemdRuntime = {
   unit?: string;
   killMode?: string;

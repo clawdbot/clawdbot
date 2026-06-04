@@ -1,3 +1,4 @@
+/** Reads official external plugin/channel/provider catalogs into manifest-like metadata. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
@@ -53,6 +54,7 @@ export type OfficialExternalWebSearchProvider = {
   autoDetectOrder?: number;
 };
 
+/** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
   plugin?: {
     id?: string;
@@ -69,6 +71,7 @@ export type OfficialExternalPluginCatalogManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
+/** Raw official external catalog entry loaded from generated catalog JSON. */
 export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
@@ -101,6 +104,7 @@ function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultCh
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
+/** Returns manifest metadata from an official external catalog entry when present. */
 export function getOfficialExternalPluginCatalogManifest(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogManifest | undefined {

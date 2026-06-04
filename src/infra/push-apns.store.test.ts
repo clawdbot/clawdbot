@@ -1,3 +1,4 @@
+// Tests APNS push token store persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

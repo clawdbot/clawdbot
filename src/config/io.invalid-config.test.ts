@@ -1,3 +1,4 @@
+// Verifies invalid-config errors include stable codes and details.
 import { describe, expect, it, vi } from "vitest";
 import {
   createInvalidConfigError,

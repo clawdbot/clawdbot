@@ -3,6 +3,8 @@ import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
 
+// Emits bounded audit logs when tool allow/deny policies remove or block tools.
+// Sanitizing here keeps logs single-line and safe for arbitrary tool names.
 const MAX_AUDIT_TOOL_NAMES = 50;
 const MAX_AUDIT_FIELD_LENGTH = 160;
 const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
@@ -154,6 +156,7 @@ function matchedPolicyRules(params: {
   return [...rules].toSorted();
 }
 
+/** Log tools removed by an allow/deny policy filter step. */
 export function auditToolPolicyFilter(params: {
   stepLabel: string;
   policy: ToolPolicyLike;
@@ -201,6 +204,7 @@ export function auditToolPolicyFilter(params: {
   }
 }
 
+/** Log a sandbox tool blocked by policy before execution. */
 export function auditSandboxToolPolicyBlock(params: {
   toolName: string;
   ruleType: "allow" | "deny";

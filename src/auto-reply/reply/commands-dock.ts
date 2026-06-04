@@ -1,3 +1,4 @@
+// Implements dock commands that bind sessions to local workspaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

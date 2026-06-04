@@ -1,15 +1,19 @@
 import type { GatewayEvent } from "./types.js";
 
+// Async event hub with bounded replay for SDK event streams.
 type Listener<T> = (event: T) => void;
 
+/** Replay settings for EventHub streams. */
 export type EventHubOptions = {
   replayLimit?: number;
 };
 
+/** Per-stream options for including replayed events. */
 export type EventStreamOptions = {
   replay?: boolean;
 };
 
+/** Small publish/subscribe hub used by SDK transports and normalized events. */
 export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];

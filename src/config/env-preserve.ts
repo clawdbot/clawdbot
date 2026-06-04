@@ -1,3 +1,4 @@
+// Normalizes preserved environment-variable config for subprocess launches.
 import { isPlainObject } from "../infra/plain-object.js";
 
 /**

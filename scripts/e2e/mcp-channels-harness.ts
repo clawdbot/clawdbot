@@ -1,22 +1,19 @@
 // Shared MCP-channel Docker E2E harness helpers.
 // The mounted test harness imports packaged dist modules so bridge assertions run
 // against the OpenClaw npm tarball installed in the functional image.
-import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { WebSocket } from "ws";
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
-import { rawDataToString } from "../../dist/infra/ws.js";
 import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
+import { createGatewayWsClient, type GatewayEventFrame } from "../lib/gateway-ws-client.ts";
+import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { createMcpClientTempState, type McpClientTempState } from "./mcp-client-temp-state.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
-import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
-import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -136,116 +133,43 @@ async function connectGatewayOnce(params: {
   url: string;
   token: string;
 }): Promise<GatewayRpcClient> {
-  const ws = new WebSocket(params.url);
-  await waitForWebSocketOpen(ws, GATEWAY_WS_OPEN_TIMEOUT_MS, "gateway ws open timeout");
-
-  const pending = new Map<
-    string,
-    {
-      resolve: (value: unknown) => void;
-      reject: (error: Error) => void;
-    }
-  >();
   const requestedScopes = ["operator.read", "operator.write", "operator.pairing", "operator.admin"];
   const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
-
-  ws.on("message", (data) => {
-    let frame: unknown;
-    try {
-      frame = JSON.parse(rawDataToString(data));
-    } catch {
-      return;
-    }
-    if (!frame || typeof frame !== "object") {
-      return;
-    }
-    const typed = frame as {
-      type?: unknown;
-      event?: unknown;
-      payload?: unknown;
-      id?: unknown;
-      ok?: unknown;
-      result?: unknown;
-      error?: { message?: unknown } | null;
-    };
-    if (typed.type === "event" && typeof typed.event === "string") {
+  const gatewayClient = createGatewayWsClient({
+    handshakeTimeoutMs: GATEWAY_WS_OPEN_TIMEOUT_MS,
+    onEvent(event: GatewayEventFrame) {
       pushBounded(
         events,
         {
-          event: typed.event,
+          event: event.event,
           payload:
-            typed.payload && typeof typed.payload === "object"
-              ? (typed.payload as Record<string, unknown>)
+            event.payload && typeof event.payload === "object"
+              ? (event.payload as Record<string, unknown>)
               : {},
         },
         GATEWAY_EVENT_RETAIN_LIMIT,
       );
-      return;
-    }
-    if (typed.type !== "res" || typeof typed.id !== "string") {
-      return;
-    }
-    const match = pending.get(typed.id);
-    if (!match) {
-      return;
-    }
-    pending.delete(typed.id);
-    if (typed.ok === true) {
-      match.resolve(resolveGatewaySuccessPayload(typed));
-      return;
-    }
-    match.reject(
-      new Error(
-        typed.error && typeof typed.error.message === "string"
-          ? typed.error.message
-          : "gateway request failed",
-      ),
-    );
+    },
+    openTimeoutMs: GATEWAY_WS_OPEN_TIMEOUT_MS,
+    openTimeoutMessage: "gateway ws open timeout",
+    url: params.url,
   });
-
-  ws.once("close", (code, reason) => {
-    const error = new Error(`gateway closed (${code}): ${rawDataToString(reason)}`);
-    for (const entry of pending.values()) {
-      entry.reject(error);
-    }
-    pending.clear();
-  });
+  await gatewayClient.waitOpen();
 
   const sendGatewayRequest = <T = unknown>(
     method: string,
     requestParams: unknown,
     timeoutMs: number,
   ): Promise<T> => {
-    const id = randomUUID();
-    const frame = JSON.stringify({
-      type: "req",
-      id,
-      method,
-      params: requestParams ?? {},
-    });
-    return new Promise<T>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`gateway request timeout: ${method}`));
-      }, timeoutMs);
-      timeout.unref?.();
-      pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timeout);
-          resolve(value as T);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      });
-      try {
-        ws.send(frame);
-      } catch (error) {
-        clearTimeout(timeout);
-        pending.delete(id);
-        reject(error instanceof Error ? error : new Error(String(error)));
+    return gatewayClient.request(method, requestParams ?? {}, timeoutMs).then((response) => {
+      if (response.ok) {
+        return resolveGatewaySuccessPayload(response) as T;
       }
+      throw new Error(
+        response.error && typeof response.error === "object" && "message" in response.error
+          ? String(response.error.message)
+          : "gateway request failed",
+      );
     });
   };
 
@@ -281,18 +205,7 @@ async function connectGatewayOnce(params: {
     },
     events,
     async close() {
-      if (ws.readyState === WebSocket.CLOSED) {
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(resolve, 2_000);
-        timeout.unref?.();
-        ws.once("close", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-        ws.close();
-      });
+      gatewayClient.close();
     },
   };
 }
@@ -304,6 +217,7 @@ function isRetryableGatewayConnectError(error: Error): boolean {
     message.includes("gateway connect timeout") ||
     message.includes("closed before open") ||
     message.includes("gateway closed") ||
+    message.includes("gateway websocket closed") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up")
   );

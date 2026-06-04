@@ -111,6 +111,9 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // The provider stream failed before yielding a terminal event. Emit a
+            // synthetic error event once so callers still receive a normal stream
+            // shape and iterator completion.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +138,11 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Wraps provider streams so raw "Unhandled stop reason" failures are rewritten
+ * into stable error messages. Recovery covers synchronous creation failures,
+ * async stream creation failures, iterator errors, and `result()` errors.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {

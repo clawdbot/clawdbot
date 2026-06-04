@@ -6,6 +6,12 @@ import type { ModelFallbackResultClassification } from "../model-fallback.js";
 import { hasOutboundDeliveryEvidence, hasVisibleAgentPayload } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
+/**
+ * Classifies embedded-agent terminal results for model fallback decisions.
+ *
+ * The classifier only flags failed invisible outcomes; delivered messages, deliberate silent
+ * replies, hook blocks, and aborts must not trigger another model attempt.
+ */
 const EMPTY_TERMINAL_REPLY_RE = /Agent couldn't generate a response/i;
 const PLAN_ONLY_TERMINAL_REPLY_RE = /Agent stopped after repeated plan-only turns/i;
 
@@ -57,6 +63,7 @@ function classifyHarnessResult(params: {
   }
 }
 
+/** Maps provider error payloads to fallback-safe business reasons. */
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
   provider: string,
@@ -75,6 +82,7 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
+/** Returns a fallback classification when an embedded run failed without user-visible output. */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -100,6 +108,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (params.result.meta.error?.kind === "hook_block") {
+    // Hook blocks intentionally suppress normal agent output. Retrying on another model would
+    // bypass a policy decision rather than recover a malformed model result.
     return null;
   }
 

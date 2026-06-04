@@ -1,10 +1,15 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { GatewayRequestContext } from "./types.js";
 
+/**
+ * Optional model-catalog loader for methods where metadata improves the result
+ * but should never block the primary session response path.
+ */
 const OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 const loggedSlowCatalogKeys = new Set<string>();
 
+/** Loads the gateway model catalog with a short timeout and one-time slow logs. */
 export async function loadOptionalServerMethodModelCatalog(
   context: GatewayRequestContext,
   surface: string,

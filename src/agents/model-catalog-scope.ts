@@ -5,10 +5,14 @@ import {
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Scope refs feed provider discovery and model catalog lookups. Keep the
+// ordering deterministic so prompt/cache inputs do not drift across runs.
 function dedupeCatalogScopeRefs(values: Array<string | undefined>): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
+// Accept provider/model refs in addition to separate provider fields so aliases
+// and user-entered model refs discover the owning provider catalog.
 function providerFromModelRef(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -33,6 +37,7 @@ function providerConfigDeclaresModel(
   );
 }
 
+/** Resolves provider/model refs used to scope model catalog discovery. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -50,6 +55,7 @@ export function resolveModelCatalogScope(params: {
   };
 }
 
+/** Extracts provider ids from resolved catalog scope refs for discovery calls. */
 export function resolveProviderDiscoveryProviderIdsForCatalogScope(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];

@@ -1,3 +1,4 @@
+// Covers config IO permission-denied errors and recovery messaging.
 import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
 

@@ -720,6 +720,21 @@ describe("skills cli commands", () => {
     });
   });
 
+  it("exits nonzero when a tracked ClawHub skill update fails", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        error: "blocked by install policy: calendar is not approved",
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("blocked by install policy: calendar is not approved");
+    expect(runtimeLogs).toStrictEqual([]);
+  });
+
   it("rejects using --global and --agent together for updates", async () => {
     await expect(
       runCommand(["skills", "update", "--all", "--global", "--agent", "main"]),

@@ -1,3 +1,4 @@
+/** Tests fuzzy /model directive matching and ambiguous alias handling. */
 import { describe, expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection-shared.js";
 import { resolveModelDirectiveSelection } from "./reply/model-selection-directive.js";

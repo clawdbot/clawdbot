@@ -1,3 +1,4 @@
+// Verifies owner display secrets stay redacted in config IO paths.
 import { describe, expect, it } from "vitest";
 import {
   type OwnerDisplaySecretRuntimeState,

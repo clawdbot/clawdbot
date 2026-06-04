@@ -52,6 +52,8 @@ export {
   isCodeModeControlTool,
 } from "./code-mode-control-tools.js";
 
+// Host-side Code Mode controller. It compacts tool catalogs, starts the QuickJS
+// worker, stores suspended snapshots, and resumes pending bridged tool calls.
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -64,6 +66,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
+/** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
@@ -383,6 +386,8 @@ function readRunId(args: unknown): string {
 }
 
 function maskCodeLiteralsAndComments(code: string): string {
+  // Module access detection should ignore strings and comments so examples or
+  // prose containing `import`/`require` do not reject otherwise valid code.
   let masked = "";
   let index = 0;
   while (index < code.length) {
@@ -758,6 +763,8 @@ function createPendingBridgeStates(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): PendingBridgeState[] {
   return params.pendingRequests.map((request) => {
+    // Bridge calls start immediately while the VM snapshot is stored. Their
+    // settled values are later replayed into QuickJS by the wait tool.
     const promise = runBridgeRequest({
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
@@ -945,6 +952,8 @@ async function settleCodeModeResult(params: {
   const output = params.output;
   let namespaceRounds = 0;
   const settleDeadline = Date.now() + params.config.timeoutMs;
+  // Namespace calls are trusted synchronous-looking plugin helpers. Resolve
+  // them inline when possible so the model avoids unnecessary wait turns.
   while (
     result.status === "waiting" &&
     result.pendingRequests.length > 0 &&
@@ -1115,6 +1124,7 @@ async function runWait(params: {
   }
 }
 
+/** Create the exec/wait control tools for one Code Mode run context. */
 export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
@@ -1182,6 +1192,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   return [execTool, waitTool];
 }
 
+/** Compact normal tools behind Code Mode exec/wait controls. */
 export function applyCodeModeCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -1235,6 +1246,7 @@ export function applyCodeModeCatalog(params: {
   return compacted;
 }
 
+/** Move client-side tool definitions into the active Code Mode catalog. */
 export function addClientToolsToCodeModeCatalog(params: {
   tools: ToolDefinition[];
   config?: OpenClawConfig;

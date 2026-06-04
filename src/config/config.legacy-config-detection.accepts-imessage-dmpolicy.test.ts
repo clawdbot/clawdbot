@@ -1,3 +1,4 @@
+// Regresses accepted legacy iMessage dmPolicy config detection.
 import { describe, expect, it } from "vitest";
 import {
   expectSchemaConfigValue,

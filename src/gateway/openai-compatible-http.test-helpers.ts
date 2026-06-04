@@ -1,6 +1,10 @@
+/**
+ * OpenAI-compatible HTTP gateway startup helper for tests.
+ */
 type StartGatewayServer = typeof import("./server.js").startGatewayServer;
 type GatewayServerOptions = NonNullable<Parameters<StartGatewayServer>[1]>;
 
+/** Starts a local gateway with only the OpenAI-compatible HTTP surface configured. */
 export async function startOpenAiCompatGatewayServer(options: {
   startGatewayServer: StartGatewayServer;
   port: number;

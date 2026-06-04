@@ -1,3 +1,5 @@
+// Command-specific secret target policy. Each exported helper returns the config secret IDs
+// a command may inspect, with optional concrete-path filters for selected providers/accounts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -206,6 +208,7 @@ function pathPatternMatchesConcretePath(pathPattern: string, path: string): bool
   return pathIndex === pathSegments.length;
 }
 
+// Registry entries use wildcard path patterns; command inputs often identify one concrete config path.
 function targetIdsForConfigPath(path: string): string[] {
   return listSecretTargetRegistryEntries()
     .filter((entry) => pathPatternMatchesConcretePath(entry.pathPattern ?? entry.id, path))
@@ -521,6 +524,8 @@ function addSelectedProviderCredentialTargets<
   }) => void;
   hasConfiguredCredential: (provider: Provider) => boolean;
 }): boolean {
+  // A selected provider can own a direct path and a plugin-scoped path; include both so
+  // secret filtering does not hide the credential a provider actually resolved from config.
   if (params.provider.credentialPath.trim()) {
     addConfigPathTargets({
       path: params.provider.credentialPath,
@@ -662,6 +667,8 @@ function getCapabilityWebProviderAutoDetectTargets<
   if (fallbackTargetIds.size === 0) {
     return { targetIds };
   }
+  // Fallback credentials are optional unless their concrete path is already configured;
+  // this prevents auto-detect from forcing unrelated provider credentials active.
   const allowedPaths = mergeConfiguredAllowedPaths({
     config: params.config,
     baseTargetIds: params.baseTargetIds,
@@ -816,6 +823,7 @@ function pathTargetsScopedChannelAccount(params: {
   return accountId === params.accountId;
 }
 
+/** Return channel secret targets, optionally narrowed to one channel account subtree. */
 export function getScopedChannelsCommandSecretTargets(params: {
   config: OpenClawConfig;
   channel?: string | null;
@@ -846,14 +854,17 @@ export function getScopedChannelsCommandSecretTargets(params: {
   return { targetIds, allowedPaths };
 }
 
+/** Secret targets needed by QR remote pairing flows. */
 export function getQrRemoteCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_QR_REMOTE_TARGET_IDS);
 }
 
+/** All registered channel secret targets, regardless of current config. */
 export function getChannelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCommandSecretTargets().channels);
 }
 
+/** Channel secret targets contributed by channels currently present in config/read-only plugins. */
 export function getConfiguredChannelsCommandSecretTargetIds(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -861,18 +872,22 @@ export function getConfiguredChannelsCommandSecretTargetIds(
   return toTargetIdSet(getConfiguredChannelSecretTargetIds(config, env));
 }
 
+/** Model-provider credential targets used by commands that can touch provider config. */
 export function getModelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
 }
 
+/** Credential targets required by memory embedding flows. */
 export function getMemoryEmbeddingCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MEMORY_EMBEDDING_TARGET_IDS);
 }
 
+/** Credential targets required by text-to-speech flows. */
 export function getTtsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_TTS_TARGET_IDS);
 }
 
+/** Agent runtime credential targets, optionally including all channel credential targets. */
 export function getAgentRuntimeCommandSecretTargetIds(params?: {
   includeChannelTargets?: boolean;
 }): Set<string> {
@@ -882,6 +897,7 @@ export function getAgentRuntimeCommandSecretTargetIds(params?: {
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }
 
+/** Static web-fetch capability targets plus plugin-provided web-fetch credential targets. */
 export function getCapabilityWebFetchCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCapabilityWebFetchTargetIds());
 }
@@ -933,6 +949,7 @@ function getCapabilityWebCommandSecretTargets(
   };
 }
 
+/** Web-fetch target scope for selected/auto-detected providers and configured fallback paths. */
 export function getCapabilityWebFetchCommandSecretTargets(
   config: OpenClawConfig,
   options?: {
@@ -950,10 +967,12 @@ export function getCapabilityWebFetchCommandSecretTargets(
   });
 }
 
+/** Static web-search capability targets plus plugin-provided web-search credential targets. */
 export function getCapabilityWebSearchCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCapabilityWebSearchTargetIds());
 }
 
+/** Web-search target scope for selected/auto-detected providers and configured fallback paths. */
 export function getCapabilityWebSearchCommandSecretTargets(
   config: OpenClawConfig,
   options?: {
@@ -971,6 +990,7 @@ export function getCapabilityWebSearchCommandSecretTargets(
   });
 }
 
+/** Status command targets; channel targets can be limited to configured channel plugins. */
 export function getStatusCommandSecretTargetIds(
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -985,6 +1005,7 @@ export function getStatusCommandSecretTargetIds(
   return toTargetIdSet([...STATIC_STATUS_TARGET_IDS, ...channelTargetIds]);
 }
 
+/** Secret targets that the security audit command is allowed to inspect. */
 export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCommandSecretTargets().securityAudit);
 }

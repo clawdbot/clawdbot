@@ -1,3 +1,4 @@
+// Normalizes raw agent output into sendable reply text and metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";

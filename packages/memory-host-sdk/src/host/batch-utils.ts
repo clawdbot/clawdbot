@@ -1,15 +1,20 @@
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
+// Common HTTP and grouping helpers for remote embedding batch clients.
+
+/** Minimal HTTP client config needed by batch providers. */
 export type BatchHttpClientConfig = {
   baseUrl?: string;
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
 };
 
+/** Normalize batch API base URLs by removing one trailing slash. */
 export function normalizeBatchBaseUrl(client: BatchHttpClientConfig): string {
   return client.baseUrl?.replace(/\/$/, "") ?? "";
 }
 
+/** Build request headers, preserving caller auth and controlling JSON/form content type. */
 export function buildBatchHeaders(
   client: Pick<BatchHttpClientConfig, "headers">,
   params: { json: boolean },
@@ -26,6 +31,7 @@ export function buildBatchHeaders(
   return headers;
 }
 
+/** Split provider requests into max-sized groups while preserving order. */
 export function splitBatchRequests<T>(requests: T[], maxRequests: number): T[][] {
   if (requests.length <= maxRequests) {
     return [requests];

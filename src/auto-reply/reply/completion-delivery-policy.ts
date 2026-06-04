@@ -1,3 +1,4 @@
+// Resolves whether completed replies should send visibly or stay tool-only.
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";

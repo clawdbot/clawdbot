@@ -1,6 +1,8 @@
+/** Auto-reply status/help message builders for commands, status, and tool inventory output. */
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
+
 export {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -46,6 +48,7 @@ function formatVerboseToolDescription(tool: ToolsMessageItem): string {
   });
 }
 
+/** Formats the effective tool inventory shown by /tools. */
 export function buildToolsMessage(
   result: EffectiveToolInventoryResult,
   options?: { verbose?: boolean },

@@ -1,9 +1,12 @@
+// Speaker-selection compatibility helpers for plugins that renamed voice fields
+// over time but still need one normalized config object.
 export type SpeakerSelectionConfig = Record<string, unknown>;
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Populate canonical and legacy speaker voice fields together. */
 export function withSpeakerSelectionCompat(
   config: SpeakerSelectionConfig | undefined,
 ): SpeakerSelectionConfig {
@@ -27,6 +30,7 @@ export function withSpeakerSelectionCompat(
   return next;
 }
 
+/** Fill legacy speaker fields only when callers have not set them explicitly. */
 export function withSpeakerSelectionFallbackCompat(
   config: SpeakerSelectionConfig | undefined,
 ): SpeakerSelectionConfig {

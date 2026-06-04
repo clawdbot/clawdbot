@@ -1,3 +1,4 @@
+// Verifies markdown table config schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { MarkdownTableModeSchema } from "./zod-schema.core.js";
 

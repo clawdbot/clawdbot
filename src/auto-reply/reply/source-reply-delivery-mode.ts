@@ -1,3 +1,4 @@
+/** Source-reply visibility and suppression policy for auto-reply delivery. */
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import { resolveCommandTurnContext, type CommandTurnContext } from "../command-t
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
+/** Minimal inbound context needed for source-reply delivery decisions. */
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   InboundEventKind?: InboundEventKind;
@@ -20,6 +22,7 @@ export type SourceReplyDeliveryModeContext = {
   BotUsername?: string;
 };
 
+/** Returns true when the turn explicitly invoked a source-visible command. */
 export function isExplicitSourceReplyCommand(
   ctx: SourceReplyDeliveryModeContext,
   cfg: OpenClawConfig,
@@ -27,6 +30,7 @@ export function isExplicitSourceReplyCommand(
   return isExplicitCommandTurnContext(ctx, cfg);
 }
 
+/** Returns true for text slash commands that lack authorization metadata. */
 export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   return (
@@ -40,6 +44,7 @@ function isInternalRoomEvent(ctx: SourceReplyDeliveryModeContext): boolean {
   return ctx.InboundEventKind === "room_event" && isInternalSourceReplyChannel(ctx);
 }
 
+/** Returns true for internal message-channel turns that should remain local. */
 export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext): boolean {
   const providerChannel = normalizeMessageChannel(ctx.Provider);
   const surfaceChannel = normalizeMessageChannel(ctx.Surface);
@@ -51,6 +56,7 @@ export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext
   );
 }
 
+/** Resolves whether normal final text should auto-deliver or require the message tool. */
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -98,6 +104,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   return mode;
 }
 
+/** Full source-reply suppression decision consumed by run and hook code. */
 export type SourceReplyVisibilityPolicy = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
   sendPolicyDenied: boolean;
@@ -109,6 +116,7 @@ export type SourceReplyVisibilityPolicy = {
   deliverySuppressionReason: string;
 };
 
+/** Resolves source delivery, hooks, lifecycle, and typing suppression flags. */
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;

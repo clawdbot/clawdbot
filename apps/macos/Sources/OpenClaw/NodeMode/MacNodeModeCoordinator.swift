@@ -139,7 +139,10 @@ final class MacNodeModeCoordinator {
         locationMode: OpenClawLocationMode,
         connectionMode: AppState.ConnectionMode) -> [String]
     {
-        var caps: [String] = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps: [String] = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+        ]
         if browserControlEnabled, connectionMode == .local {
             caps.append(OpenClawCapability.browser.rawValue)
         }

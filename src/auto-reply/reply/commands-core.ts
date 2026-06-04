@@ -1,3 +1,4 @@
+// Dispatches chat commands to registered handlers and formats their results.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";

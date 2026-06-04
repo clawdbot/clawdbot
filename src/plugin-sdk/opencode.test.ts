@@ -1,3 +1,6 @@
+/**
+ * Tests OpenCode SDK helpers and provider-facing OpenCode contracts.
+ */
 import { describe, expect, it } from "vitest";
 import { createOpencodeCatalogApiKeyAuthMethod } from "./opencode.js";
 

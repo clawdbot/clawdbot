@@ -1,3 +1,4 @@
+// Resolves additional CA certificate settings for Node child processes.
 import fs from "node:fs";
 
 export const LINUX_CA_BUNDLE_PATHS = [

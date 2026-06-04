@@ -1,3 +1,4 @@
+// Covers web-search provider config parsing and provider defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as webSearchTesting } from "../agents/tools/web-search.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";

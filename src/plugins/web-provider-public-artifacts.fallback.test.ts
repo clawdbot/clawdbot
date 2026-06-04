@@ -1,3 +1,4 @@
+/** Tests web provider fallback loading from bundled public artifacts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

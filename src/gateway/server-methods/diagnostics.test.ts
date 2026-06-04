@@ -1,3 +1,6 @@
+/**
+ * Tests for gateway diagnostics methods and their request-handler responses.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,

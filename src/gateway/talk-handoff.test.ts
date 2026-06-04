@@ -1,3 +1,6 @@
+/**
+ * Tests talk handoff coordination between gateway sessions and realtime state.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelTalkHandoffTurn,

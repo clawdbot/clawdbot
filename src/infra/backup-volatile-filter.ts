@@ -1,3 +1,4 @@
+// Filters volatile files from backup manifests.
 import path from "node:path";
 
 /**

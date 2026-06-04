@@ -6,6 +6,9 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { SkillSnapshot } from "../../skills/types.js";
 import { cliBackendLog } from "./log.js";
 
+/**
+ * Materializes selected OpenClaw skills as a temporary Claude CLI plugin.
+ */
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const OPENCLAW_CLAUDE_PLUGIN_NAME = "openclaw-skills";
 
@@ -31,6 +34,7 @@ function sanitizeSkillDirName(name: string, used: Set<string>): string {
   return candidate;
 }
 
+/** Returns whether a resolved skill file is readable before linking it into the Claude plugin. */
 export function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
   try {
     accessSync(skillFilePath);
@@ -75,6 +79,8 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
       process.platform === "win32" ? "junction" : "dir",
     );
   } catch {
+    // Symlinks are preferred to avoid copying skill trees, but Windows/TCC/filesystem policy can
+    // reject them. Copying preserves the session-scoped plugin contract.
     await fs.cp(params.sourceDir, params.targetDir, {
       recursive: true,
       force: true,
@@ -83,6 +89,7 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
   }
 }
 
+/** Prepares Claude CLI `--plugin-dir` args for the current session skill snapshot. */
 export async function prepareClaudeCliSkillsPlugin(params: {
   backendId: string;
   skillsSnapshot?: SkillSnapshot;

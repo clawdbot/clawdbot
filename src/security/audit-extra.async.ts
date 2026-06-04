@@ -15,6 +15,7 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -708,41 +709,49 @@ export async function collectStateDeepFilesystemFindings(params: {
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const authPerms = await inspectPathPermissions(authPath, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
-    });
-    if (authPerms.ok) {
-      if (authPerms.worldWritable || authPerms.groupWritable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_writable",
-          severity: "critical",
-          title: "auth-profiles.json is writable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; another user could inject credentials.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
-      } else if (authPerms.worldReadable || authPerms.groupReadable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_readable",
-          severity: "warn",
-          title: "auth-profiles.json is readable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; auth-profiles.json contains API keys and OAuth tokens.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
+    const authTargets = [
+      { path: path.join(agentDir, "auth-profiles.json"), label: "legacy auth-profiles.json" },
+      ...resolveAuthProfileDatabaseFilePaths(agentDir).map((targetPath) => ({
+        path: targetPath,
+        label: "auth profile SQLite store",
+      })),
+    ];
+    for (const authTarget of authTargets) {
+      const authPerms = await inspectPathPermissions(authTarget.path, {
+        env: params.env,
+        platform: params.platform,
+        exec: params.execIcacls,
+      });
+      if (authPerms.ok) {
+        if (authPerms.worldWritable || authPerms.groupWritable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_writable",
+            severity: "critical",
+            title: `${authTarget.label} is writable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        } else if (authPerms.worldReadable || authPerms.groupReadable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_readable",
+            severity: "warn",
+            title: `${authTarget.label} is readable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        }
       }
     }
 

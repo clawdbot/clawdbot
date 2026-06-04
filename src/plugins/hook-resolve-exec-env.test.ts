@@ -1,3 +1,4 @@
+// Verifies plugin hook exec environment resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks, addTestHook } from "./hooks.test-helpers.js";

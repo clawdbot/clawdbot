@@ -1,3 +1,4 @@
+// Dispatches reply turns through ACP runtimes and projects their events.
 import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
 import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
 import {

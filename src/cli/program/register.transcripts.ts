@@ -1,3 +1,4 @@
+// `openclaw transcripts`: local state inspector for stored transcript metadata and summaries.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -44,6 +45,7 @@ function sessionDir(date: string, sessionId: string): string {
   return path.join(stateRootDir(), date, safeSegment(sessionId));
 }
 
+// Selectors are date-qualified when duplicate session ids can exist across transcript days.
 function readDateFromSessionDir(sessionDirValue: string): string {
   const candidate = path.basename(path.dirname(sessionDirValue));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
@@ -286,6 +288,7 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
   writeLine(selectedPath);
 }
 
+/** Register transcript list/show/path inspection commands. */
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 

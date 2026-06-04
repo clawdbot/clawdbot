@@ -16,6 +16,12 @@ import {
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
+/**
+ * Resolves the model configuration used by the PDF tool.
+ *
+ * PDF handling can use explicit PDF config, image-model config, native PDF
+ * provider support, generic vision models, or document text-extraction fallbacks.
+ */
 function formatProviderModelRef(providerId: string, modelId: string): string {
   const slash = modelId.indexOf("/");
   if (slash > 0 && modelId.slice(0, slash).trim() === providerId) {
@@ -57,6 +63,7 @@ function resolveImageCandidateRefs(params: {
   authStore?: AuthProfileStore;
   filter?: (providerId: string) => boolean;
 }): string[] {
+  // Candidate refs only include providers with usable auth so the tool avoids dead fallbacks.
   return resolveAutoMediaKeyProviders({
     capability: "image",
     cfg: params.cfg,
@@ -193,6 +200,7 @@ export function resolvePdfModelConfigForTool(params: {
 }): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
+    // PDF-specific config wins over generic image model config.
     return resolveConfiguredImageModelRefs({
       cfg: params.cfg,
       imageModelConfig: explicitPdf,
@@ -279,6 +287,7 @@ export function resolvePdfModelConfigForTool(params: {
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
+    // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = providerKey.trim();
       const documentImageModel = providerId
@@ -327,6 +336,7 @@ export function resolvePdfModelConfigForTool(params: {
     : [...nativePdfCandidates, ...genericImageCandidates, ...textExtractionCandidates];
 
   if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
+    // Google native PDF handling is preferred when auth and a configured vision model are present.
     preferred = providerVision;
   } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;

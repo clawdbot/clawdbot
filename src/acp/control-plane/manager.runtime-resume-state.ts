@@ -1,3 +1,4 @@
+/** Recovery helpers for stale ACP persistent session ids and early runtime exits. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,6 +12,7 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 
+/** Detects acpx exits that are safe to retry with a fresh runtime handle. */
 export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }
@@ -23,6 +25,7 @@ function isRecoverableMissingManagerPersistentSessionError(message: string): boo
   );
 }
 
+/** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
 export async function prepareFreshManagerRuntimeHandleRetry(params: {
   attempt: number;
   cfg: OpenClawConfig;
@@ -129,6 +132,7 @@ async function clearPersistedRuntimeResumeState(params: {
   return true;
 }
 
+/** Clears persisted runtime resume identifiers while preserving the manager session shell. */
 export async function discardPersistedManagerRuntimeState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

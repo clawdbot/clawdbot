@@ -1,3 +1,4 @@
+// Tests fatal unhandled rejection detection in process bootstrap.
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 

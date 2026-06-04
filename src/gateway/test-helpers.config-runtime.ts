@@ -13,8 +13,12 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
+/**
+ * Config module mock factory used by gateway integration tests.
+ */
 type GatewayConfigModule = typeof import("../config/config.js");
 
+/** Wraps the real config module with gateway-test runtime overrides. */
 export function createGatewayConfigModuleMock(actual: GatewayConfigModule): GatewayConfigModule {
   const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 

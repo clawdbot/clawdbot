@@ -1,3 +1,4 @@
+// Tests exported HTML transcript escaping and template safety.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

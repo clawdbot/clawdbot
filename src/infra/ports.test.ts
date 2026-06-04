@@ -1,3 +1,4 @@
+// Covers gateway port availability and diagnostics behavior.
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";

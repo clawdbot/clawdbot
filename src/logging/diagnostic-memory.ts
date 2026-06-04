@@ -6,6 +6,7 @@ import {
 import { writeDiagnosticMemoryPressureBundleSync } from "./diagnostic-stability-bundle.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
+// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
 const DEFAULT_RSS_CRITICAL_BYTES = 3072 * MB;
@@ -44,6 +45,7 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
+// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -153,6 +155,7 @@ function shouldEmitPressure(
 ): boolean {
   const key = `${pressure.level}:${pressure.reason}`;
   const lastAt = state.lastPressureAtByKey.get(key);
+  // Pressure events can repeat during sustained memory spikes; throttle per level/reason pair.
   if (lastAt !== undefined && now - lastAt < repeatMs) {
     return false;
   }
@@ -223,6 +226,7 @@ export function emitDiagnosticMemorySample(options?: {
     const writeCriticalBundle = options?.writeCriticalBundle === true;
     logMemoryPressure({ pressure, writeCriticalBundle });
     if (pressure.level === "critical" && writeCriticalBundle) {
+      // Critical snapshots are opt-in because bundle writes can add IO during memory pressure.
       const sessionStorePaths = options?.sessionStorePaths ?? options?.resolveSessionStorePaths?.();
       const result = writeDiagnosticMemoryPressureBundleSync({
         pressure,
@@ -246,6 +250,7 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
+/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.lastSample = null;
   state.lastPressureAtByKey.clear();

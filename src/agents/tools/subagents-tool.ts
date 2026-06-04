@@ -11,6 +11,12 @@ import { buildSubagentList } from "../subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 
+/**
+ * Factory for the `subagents` status/debugging tool.
+ *
+ * The tool is intentionally read-only; spawning and completion handoff live in
+ * sessions_spawn/sessions_yield so polling loops are discouraged.
+ */
 const SUBAGENT_ACTIONS = ["list"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
@@ -19,6 +25,7 @@ const SubagentsToolSchema = Type.Object({
   recentMinutes: optionalPositiveIntegerSchema(),
 });
 
+/** Creates the subagents list tool scoped to the caller's controlled session tree. */
 export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Subagents",
@@ -39,6 +46,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         cfg,
         agentSessionKey: opts?.agentSessionKey,
       });
+      // The caller only sees subagents controlled by its effective controller session.
       const runs = listControlledSubagentRuns(controller.controllerSessionKey);
 
       if (action === "list") {

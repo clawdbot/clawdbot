@@ -1,3 +1,4 @@
+// Discovers, validates, and loads plugin metadata and runtime entrypoints.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

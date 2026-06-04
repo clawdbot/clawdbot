@@ -3,6 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { expect, vi } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 
+// Test helpers for sessions_spawn. They install a mocked runtime barrel so
+// spawn tests can exercise orchestration without touching the real gateway or
+// session stores.
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
   mockImplementation: (implementation: (opts: { method?: string }) => Promise<unknown>) => unknown;
@@ -20,6 +23,7 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
@@ -48,6 +52,7 @@ export function createSubagentSpawnTestConfig(
   };
 }
 
+/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
     if (opts.method === "sessions.patch") {
@@ -75,6 +80,7 @@ function createDefaultSessionHelperMocks() {
   };
 }
 
+/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -97,6 +103,7 @@ export function installSessionStoreCaptureMock(
   );
 }
 
+/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -119,6 +126,7 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
+/** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
@@ -189,6 +197,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
+    // The helper rewires module imports with vi.doMock, so each test starts from
+    // a fresh module graph unless explicitly sharing mocks.
     vi.resetModules();
   }
 

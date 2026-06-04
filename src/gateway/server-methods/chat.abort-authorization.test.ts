@@ -1,3 +1,6 @@
+/**
+ * Tests chat abort authorization checks for gateway clients and session owners.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createActiveRun,

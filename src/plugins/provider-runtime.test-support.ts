@@ -1,3 +1,4 @@
+// Provides shared assertions for provider plugin runtime tests.
 import { expect } from "vitest";
 
 const openaiCodexCatalogEntries = [

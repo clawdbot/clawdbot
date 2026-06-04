@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for registering and watching channel runtime contexts.
+ */
 export {
   getChannelRuntimeContext,
   registerChannelRuntimeContext,

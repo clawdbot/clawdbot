@@ -43,6 +43,7 @@ const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
+/** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
   const trimmed = fileName?.trim();
   const baseName = trimmed ? path.basename(trimmed) : "audio";
@@ -57,6 +58,7 @@ export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?
   return baseName;
 }
 
+/** Builds provider-compatible multipart form data for audio transcription requests. */
 export function buildAudioTranscriptionFormData(params: {
   buffer: Buffer;
   fileName?: string;
@@ -78,12 +80,14 @@ export function buildAudioTranscriptionFormData(params: {
   return form;
 }
 
+/** Shared absolute deadline state for long-running provider operations and polling loops. */
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
   label: string;
   timeoutMs?: number;
 };
 
+/** Static or per-call timeout resolver used by provider HTTP helpers. */
 export type ProviderOperationTimeoutMs = number | (() => number);
 
 type GuardedProviderRequestParams = {
@@ -100,6 +104,7 @@ type GuardedProviderRequestParams = {
   mode?: GuardedFetchMode;
 };
 
+/** Creates a timer-safe absolute operation deadline from an optional total timeout. */
 export function createProviderOperationDeadline(params: {
   timeoutMs?: number;
   label: string;
@@ -121,6 +126,7 @@ export function createProviderOperationDeadline(params: {
   };
 }
 
+/** Resolves a per-request timeout without exceeding the remaining operation deadline. */
 export function resolveProviderOperationTimeoutMs(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
@@ -137,6 +143,7 @@ export function resolveProviderOperationTimeoutMs(params: {
   return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
 }
 
+/** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
 export function createProviderOperationTimeoutResolver(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
@@ -144,6 +151,7 @@ export function createProviderOperationTimeoutResolver(params: {
   return () => resolveProviderOperationTimeoutMs(params);
 }
 
+/** Waits for the next poll interval while respecting the total provider operation deadline. */
 export async function waitProviderOperationPollInterval(params: {
   deadline: ProviderOperationDeadline;
   pollIntervalMs: number;

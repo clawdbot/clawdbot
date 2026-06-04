@@ -7,8 +7,9 @@ title: "Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
 ---
 
-CLI onboarding is the **recommended** way to set up OpenClaw on macOS,
-Linux, or Windows (via WSL2; strongly recommended).
+CLI onboarding is the **recommended** terminal setup path for OpenClaw on
+macOS, Linux, or Windows. Windows desktop users can also start with
+[Windows Hub](/platforms/windows).
 It configures a local Gateway or a remote Gateway connection, plus channels, skills,
 and workspace defaults in one guided flow.
 

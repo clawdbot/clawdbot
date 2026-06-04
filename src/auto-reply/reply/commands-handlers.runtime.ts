@@ -1,3 +1,4 @@
+// Loads command handlers behind a runtime boundary for the command dispatcher.
 import { handleAcpCommand } from "./commands-acp.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";

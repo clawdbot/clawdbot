@@ -1,3 +1,4 @@
+// Covers legacy state migration detection and repair behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

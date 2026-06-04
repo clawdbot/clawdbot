@@ -1,3 +1,4 @@
+/** Tests legacy X search secret resolution compatibility in the runtime matrix. */
 import { describe, expect, it, vi } from "vitest";
 import {
   asConfig,

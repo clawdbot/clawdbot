@@ -1,3 +1,4 @@
+// Verifies runtime channel pinning for plugin activation.
 import { afterEach, describe, expect, it } from "vitest";
 import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";

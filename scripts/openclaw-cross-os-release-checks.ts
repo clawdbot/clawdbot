@@ -10,7 +10,10 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  closeSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -53,6 +56,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   600,
 );
 export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
+const CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES = 2 * 1024 * 1024;
 const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
@@ -3276,12 +3280,8 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   if (!/Agent output did not contain the expected OK marker/u.test(message)) {
     return false;
   }
-  try {
-    const log = readFileSync(logPath, "utf8");
-    return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
-  } catch {
-    return false;
-  }
+  const log = readLogTextTail(logPath);
+  return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
@@ -3313,7 +3313,7 @@ export function agentTurnUsedEmbeddedFallback(result, options = {}) {
     typeof options.logText === "string"
       ? options.logText
       : typeof options.logPath === "string"
-        ? safeReadTextFile(options.logPath)
+        ? readLogTextTail(options.logPath)
         : "";
   return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
@@ -3330,12 +3330,8 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   if (typeof options.logPath !== "string") {
     return false;
   }
-  try {
-    const logTexts = parseAgentPayloadTexts(readFileSync(options.logPath, "utf8"));
-    return logTexts.some((text) => text.trim() === "OK");
-  } catch {
-    return false;
-  }
+  const logTexts = parseAgentPayloadTexts(readLogTextTail(options.logPath));
+  return logTexts.some((text) => text.trim() === "OK");
 }
 
 function readLogFileSize(logPath) {
@@ -3347,18 +3343,51 @@ function readLogFileSize(logPath) {
 }
 
 function readLogTextSince(logPath, offsetBytes) {
+  return readLogTextWindow(logPath, {
+    offsetBytes,
+    maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
+  });
+}
+
+function readLogTextTail(logPath) {
+  return readLogTextWindow(logPath, {
+    maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
+  });
+}
+
+function readLogTextWindow(logPath, options = {}) {
+  const maxBytes = Math.max(
+    1,
+    Math.floor(options.maxBytes ?? CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES),
+  );
+  const offsetBytes =
+    typeof options.offsetBytes === "number" && Number.isFinite(options.offsetBytes)
+      ? Math.max(0, Math.floor(options.offsetBytes))
+      : 0;
+  let stat;
   try {
-    return readFileSync(logPath).subarray(offsetBytes).toString("utf8");
+    stat = statSync(logPath);
   } catch {
     return "";
   }
-}
-
-function safeReadTextFile(logPath) {
-  try {
-    return readFileSync(logPath, "utf8");
-  } catch {
+  if (!stat.isFile() || stat.size <= 0) {
     return "";
+  }
+
+  const tailStart = Math.max(0, stat.size - maxBytes);
+  const start = Math.min(stat.size, Math.max(offsetBytes, tailStart));
+  const length = stat.size - start;
+  if (length <= 0) {
+    return "";
+  }
+
+  const fd = openSync(logPath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
   }
 }
 

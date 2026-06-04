@@ -1,3 +1,4 @@
+// Tests gateway process argv parsing for diagnostics.
 import { describe, expect, it } from "vitest";
 import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
 

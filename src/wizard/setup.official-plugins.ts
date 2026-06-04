@@ -14,6 +14,8 @@ import type { WizardPrompter } from "./prompts.js";
 
 const SKIP_VALUE = "__skip__";
 
+// Official plugin onboarding lists generic official plugins not already
+// configured and installs the selected ones through the trusted install flow.
 export type OfficialPluginOnboardingInstallEntry = {
   pluginId: string;
   label: string;
@@ -84,6 +86,8 @@ export function resolveOfficialPluginOnboardingInstallEntries(params: {
   return entries.toSorted((left, right) => left.label.localeCompare(right.label));
 }
 
+// Prompt for optional official plugin installs during onboarding. The skip entry
+// is explicit so users can leave every plugin unselected without ambiguity.
 export async function setupOfficialPluginInstalls(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;

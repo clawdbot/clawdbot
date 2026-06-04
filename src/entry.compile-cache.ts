@@ -1,3 +1,4 @@
+// Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";

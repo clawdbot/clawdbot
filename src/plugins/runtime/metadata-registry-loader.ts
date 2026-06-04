@@ -10,6 +10,7 @@ import {
   type PluginRuntimeLoadContext,
 } from "./load-context.js";
 
+/** Loads a non-activated plugin metadata registry snapshot for validation/status callers. */
 export function loadPluginMetadataRegistrySnapshot(options?: {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

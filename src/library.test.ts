@@ -1,3 +1,4 @@
+// Tests library entrypoint exports and package boundary behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

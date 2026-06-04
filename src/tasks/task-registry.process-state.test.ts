@@ -1,3 +1,4 @@
+// Verifies process-state persistence across fresh task registry module loads.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 

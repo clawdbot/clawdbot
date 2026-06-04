@@ -48,7 +48,8 @@ class CanvasController {
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
-  private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
+  private val scaffoldAssetUrl = CanvasActionTrust.scaffoldAssetUrl
+  private val localA2uiAssetUrl = CanvasActionTrust.localA2uiAssetUrl
 
   private fun clampJpegQuality(quality: Double?): Int {
     val q = (quality ?: 0.82).coerceIn(0.1, 1.0)
@@ -84,6 +85,13 @@ class CanvasController {
     val trimmed = url.trim()
     this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
     _currentUrl.value = this.url
+    reload()
+  }
+
+  /** Shows the app-owned A2UI renderer that is allowed to dispatch native actions. */
+  fun showLocalA2ui() {
+    this.url = localA2uiAssetUrl
+    _currentUrl.value = localA2uiAssetUrl
     reload()
   }
 

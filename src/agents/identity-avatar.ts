@@ -17,6 +17,9 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.j
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
+// Agent avatar resolution for UI/public surfaces. Remote/data sources are
+// allowed directly; local files must stay inside the agent workspace and satisfy
+// shared avatar policy limits.
 export type AgentAvatarResolution =
   | { kind: "none"; reason: string; source?: string }
   | { kind: "local"; filePath: string; source: string }
@@ -40,6 +43,8 @@ function resolveAvatarSource(
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
   if (opts?.includeUiOverride) {
+    // UI override only wins for the default agent unless callers explicitly ask
+    // for it as a final fallback for non-default agents.
     if (normalizedAgentId === defaultAgentId && fromUiConfig) {
       return fromUiConfig;
     }
@@ -77,6 +82,8 @@ function resolveLocalAvatarPath(params: {
       ? resolveUserPath(raw)
       : path.resolve(workspaceRoot, raw);
   const realPath = resolveExistingPath(resolved);
+  // Resolve symlinks before the workspace check so local avatar paths cannot
+  // escape the workspace through link traversal.
   if (!isPathWithinRoot(workspaceRoot, realPath)) {
     return { ok: false, reason: "outside_workspace" };
   }
@@ -112,6 +119,7 @@ function isSafeRelativeAvatarSource(source: string): boolean {
   return parts.every((part) => part !== "..");
 }
 
+/** Return a safe public description of the configured avatar source. */
 export function resolvePublicAgentAvatarSource(
   resolved: AgentAvatarPublicSourceInput,
 ): string | undefined {
@@ -120,6 +128,7 @@ export function resolvePublicAgentAvatarSource(
     return undefined;
   }
   if (isAvatarDataUrl(source)) {
+    // Data URLs can be large and sensitive; expose only the media/header prefix.
     const commaIndex = source.indexOf(",");
     const header =
       commaIndex > 0
@@ -133,6 +142,7 @@ export function resolvePublicAgentAvatarSource(
   return isSafeRelativeAvatarSource(source) ? source : undefined;
 }
 
+/** Resolve the effective avatar for an agent, including config and IDENTITY.md. */
 export function resolveAgentAvatar(
   cfg: OpenClawConfig,
   agentId: string,

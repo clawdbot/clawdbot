@@ -5,6 +5,8 @@ import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 
+// Ensures runtime plugin registries are loaded for agent execution. Startup
+// plugin IDs from metadata scope the load when available.
 type StartupScopedPluginSnapshot = NonNullable<
   ReturnType<typeof getCurrentPluginMetadataSnapshot>
 > & {
@@ -28,6 +30,7 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
+/** Ensure standalone runtime plugins are loaded for the current agent context. */
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;

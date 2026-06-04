@@ -1,3 +1,4 @@
+// Verifies plugin SDK alias resolution for public import paths.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

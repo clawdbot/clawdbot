@@ -177,6 +177,7 @@ export function createTelegramDraftStream(params: {
         textSnapshot: renderedText,
         parseMode: renderedParseMode,
         visibleSinceMs,
+        retain: true,
       });
       return true;
     }

@@ -1,3 +1,4 @@
+// Covers plugin enablement decisions and disabled-state handling.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { enablePluginInConfig } from "./enable.js";

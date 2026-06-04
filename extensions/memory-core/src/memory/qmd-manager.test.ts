@@ -15,9 +15,13 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
 }));
 const { watchMock } = vi.hoisted(() => ({
   watchMock: vi.fn(() => {
-    const watcher = new EventEmitter();
+    const watcher = new EventEmitter() as EventEmitter & {
+      watchedEntries: Record<string, string[]>;
+    };
+    watcher.watchedEntries = {};
     return Object.assign(watcher, {
       close: vi.fn(async () => undefined),
+      getWatched: vi.fn(() => watcher.watchedEntries),
     });
   }),
 }));
@@ -534,8 +538,8 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as {
-      emit: (event: string, ...args: unknown[]) => boolean;
+    const watcher = watchMock.mock.results[0]?.value as EventEmitter & {
+      watchedEntries: Record<string, string[]>;
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
@@ -549,6 +553,11 @@ describe("QmdMemoryManager", () => {
     expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
+    watcher.watchedEntries = {
+      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+    };
+    watcher.emit("ready");
+    expectMockMessageContains(logWarnMock, "Memory file watching is tracking 2002 paths.");
 
     const notesPath = path.join(workspaceDir, "notes.md");
     await fs.writeFile(notesPath, "hello");

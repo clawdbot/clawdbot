@@ -1,3 +1,4 @@
+/** Resolves effective plugin ids from config, installed records, and activation metadata. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -140,6 +141,7 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
   return [pluginId];
 }
 
+/** Lists plugin ids that are effectively enabled for a config/discovery context. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

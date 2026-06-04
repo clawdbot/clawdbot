@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for asserting envelope timestamp normalization in channel tests.
+ */
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,

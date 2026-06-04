@@ -1,6 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/**
+ * Rejects `connect` after the WebSocket handshake already established identity.
+ */
 export const connectHandlers: GatewayRequestHandlers = {
   connect: ({ respond }) => {
     respond(

@@ -297,6 +297,7 @@ export type WorkboardMetadata = {
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;
+  lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
 };
 

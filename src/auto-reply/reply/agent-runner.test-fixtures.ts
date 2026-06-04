@@ -1,3 +1,4 @@
+// Shared fixtures for agent runner tests and temporary session files.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionEntry } from "../../config/sessions.js";

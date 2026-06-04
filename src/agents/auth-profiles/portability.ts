@@ -1,17 +1,21 @@
 import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileSecretsStore, AuthProfileStore } from "./types.js";
 
+/** Reason a credential is or is not portable into an agent copy. */
 export type AuthProfilePortabilityReason =
   | "portable-static-credential"
   | "non-portable-oauth-refresh-token"
   | "credential-opted-out"
   | "oauth-provider-opted-in";
 
+/** Portability decision for copying credentials into an agent-local store. */
 export type AuthProfilePortability = {
   portable: boolean;
   reason: AuthProfilePortabilityReason;
 };
 
+// OAuth refresh material is not copied by default because it can be tied to a
+// local profile/keychain flow. Static credentials are portable unless opted out.
 function hasAgentCopyOverride(credential: AuthProfileCredential): boolean | undefined {
   return typeof credential.copyToAgents === "boolean" ? credential.copyToAgents : undefined;
 }
@@ -25,6 +29,7 @@ function hasCopyableOAuthMaterial(credential: AuthProfileCredential): boolean {
   );
 }
 
+/** Resolves whether a credential can be copied into an agent-local store. */
 export function resolveAuthProfilePortability(
   credential: AuthProfileCredential,
 ): AuthProfilePortability {
@@ -43,12 +48,14 @@ export function resolveAuthProfilePortability(
   return { portable: true, reason: "portable-static-credential" };
 }
 
+/** Returns true when a credential can be copied into an agent-local store. */
 export function isAuthProfileCredentialPortableForAgentCopy(
   credential: AuthProfileCredential,
 ): boolean {
   return resolveAuthProfilePortability(credential).portable;
 }
 
+/** Builds an agent-copy store containing only portable credentials. */
 export function buildPortableAuthProfileSecretsStoreForAgentCopy(store: AuthProfileStore): {
   store: AuthProfileSecretsStore;
   copiedProfileIds: string[];

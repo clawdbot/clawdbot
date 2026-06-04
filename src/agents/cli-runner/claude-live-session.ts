@@ -32,6 +32,12 @@ import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
+/**
+ * Live Claude CLI stdio session manager.
+ *
+ * This keeps a bounded pool of long-lived Claude CLI processes and routes individual turns through
+ * stream-json stdin/stdout while preserving exec permission state and diagnostic tool events.
+ */
 type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
 >;
@@ -117,6 +123,7 @@ function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+/** Closes all live Claude CLI sessions and clears creation promises for tests. */
 export function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
@@ -145,6 +152,7 @@ async function waitForManagedRunExit(managedRun: ManagedRun): Promise<void> {
   }
 }
 
+/** Closes the live Claude session associated with a prepared run context, if one exists. */
 export async function closeClaudeLiveSessionForContext(
   context: PreparedCliRunContext,
 ): Promise<void> {
@@ -157,6 +165,7 @@ export async function closeClaudeLiveSessionForContext(
   liveSessionCreates.delete(key);
 }
 
+/** Returns whether a prepared backend context is eligible for Claude live stdio reuse. */
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
     context.backendResolved.id === "claude-cli" &&
@@ -215,6 +224,7 @@ function stripLiveProcessArgs(
   return stripped;
 }
 
+/** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
 export function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
@@ -242,6 +252,8 @@ export function buildClaudeLiveArgs(params: {
     ),
     "--replay-user-messages",
   );
+  // Live sessions always speak stream-json over stdin/stdout. Strip stale one-shot args above, then
+  // force the live protocol flags so resume and non-resume turns share the same process contract.
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
@@ -1197,6 +1209,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   });
 }
 
+/** Runs one prompt through a reusable Claude CLI live session. */
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
   args: string[];
@@ -1238,6 +1251,8 @@ export async function runClaudeLiveSessionTurn(params: {
   };
   let session = liveSessions.get(key) ?? null;
   if (session && resumeCapable && !params.useResume) {
+    // Non-resume turns must start from a fresh process when the backend supports resume; otherwise
+    // Claude could inherit conversation state from the previous live turn.
     closeLiveSession(session, "restart");
     session = null;
   }

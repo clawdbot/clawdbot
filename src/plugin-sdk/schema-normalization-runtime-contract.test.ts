@@ -1,3 +1,6 @@
+/**
+ * Contract tests for schema normalization runtime behavior exposed to plugins.
+ */
 import {
   createNativeOpenAICodexResponsesModel,
   createNativeOpenAIResponsesModel,

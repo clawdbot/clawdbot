@@ -1,3 +1,4 @@
+// Start-time service repair: rebuilds stale service definitions before starting Gateway.
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
@@ -14,6 +15,7 @@ import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
+/** Repair a loaded but stale Gateway service definition and report the start result. */
 export async function repairLoadedGatewayServiceForStart(params: {
   service: GatewayService;
   state: GatewayServiceState;

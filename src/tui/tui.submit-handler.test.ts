@@ -1,3 +1,4 @@
+// Covers TUI submit handler behavior for chat input and slash commands.
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { CustomEditor } from "./components/custom-editor.js";

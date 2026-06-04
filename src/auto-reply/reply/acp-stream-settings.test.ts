@@ -1,3 +1,4 @@
+/** Tests ACP stream settings normalization from config. */
 import { describe, expect, it } from "vitest";
 import {
   isAcpTagVisible,

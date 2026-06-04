@@ -1,3 +1,4 @@
+// Verifies plugin startup trace segment sanitization.
 import { describe, expect, it } from "vitest";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 

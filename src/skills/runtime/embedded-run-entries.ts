@@ -3,6 +3,7 @@ import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
 
+/** Resolves skill entries embedded into a run payload into runtime-visible entries. */
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   config?: OpenClawConfig;

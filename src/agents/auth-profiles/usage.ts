@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
@@ -37,14 +38,7 @@ const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
 
-// Invoked once per recorded auth-profile failure. Gateway startup wires this
-// to clearCurrentProviderAuthState so the next model-listing call recomputes
-// against the real auth state.
-let onAuthProfileFailureHook: (() => void) | undefined;
-
-export function setAuthProfileFailureHook(hook: (() => void) | undefined): void {
-  onAuthProfileFailureHook = hook;
-}
+export { setAuthProfileFailureHook };
 
 export const testing = {
   setDepsForTest(
@@ -763,7 +757,7 @@ export async function markAuthProfileFailure(params: {
       });
     }
     try {
-      onAuthProfileFailureHook?.();
+      notifyAuthProfileFailureHook();
     } catch (err) {
       // Hook errors must not break failure recording; log and continue.
       authProfileUsageLog.warn("auth profile failure hook threw", {
@@ -814,7 +808,7 @@ export async function markAuthProfileFailure(params: {
     now,
   });
   try {
-    onAuthProfileFailureHook?.();
+    notifyAuthProfileFailureHook();
   } catch (err) {
     // Hook errors must not break failure recording; log and continue.
     authProfileUsageLog.warn("auth profile failure hook threw", {

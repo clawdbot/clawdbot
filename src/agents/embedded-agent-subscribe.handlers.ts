@@ -20,12 +20,15 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 
+/** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (
     evt: EmbeddedAgentSubscribeEvent,
     handler: () => void | Promise<void>,
     options?: { detach?: boolean },
   ): void => {
+    // Most stream events must preserve order across async formatting and flush
+    // work. A detached event may run after the chain without blocking delivery.
     const run = () => {
       try {
         return handler();

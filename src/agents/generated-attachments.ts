@@ -2,6 +2,8 @@ import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
+// Shared helpers for generated media/file attachments returned by tools or
+// subagents. They normalize paths/URLs for prompt text and delivery routing.
 export type AgentGeneratedAttachment = {
   type?: "image" | "audio" | "video" | "file";
   path?: string;
@@ -12,6 +14,7 @@ export type AgentGeneratedAttachment = {
   name?: string;
 };
 
+/** Resolve the first usable path or URL reference for a generated attachment. */
 export function generatedAttachmentReference(
   attachment: AgentGeneratedAttachment,
 ): string | undefined {
@@ -20,6 +23,7 @@ export function generatedAttachmentReference(
   );
 }
 
+/** Return unique media URLs/paths from generated attachments. */
 export function mediaUrlsFromGeneratedAttachments(
   attachments: readonly AgentGeneratedAttachment[] | undefined,
 ): string[] {
@@ -28,6 +32,7 @@ export function mediaUrlsFromGeneratedAttachments(
   );
 }
 
+/** Resolve a display name from attachment metadata or path basename. */
 export function nameFromGeneratedAttachment(
   attachment: AgentGeneratedAttachment,
 ): string | undefined {
@@ -37,6 +42,7 @@ export function nameFromGeneratedAttachment(
   );
 }
 
+/** Format generated attachment metadata as prompt-safe text lines. */
 export function formatGeneratedAttachmentLines(
   attachments: readonly AgentGeneratedAttachment[] | undefined,
 ): string[] {

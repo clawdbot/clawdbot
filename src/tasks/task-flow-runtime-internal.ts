@@ -1,3 +1,4 @@
+// Internal task-flow registry facade for runtime modules.
 export {
   createTaskFlowForTask,
   createManagedTaskFlow,

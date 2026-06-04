@@ -1,6 +1,8 @@
 import { listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
+// Builds compact references for currently running background process sessions.
+// These references are surfaced to agents so they can reconnect to prior work.
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
 
@@ -27,6 +29,7 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+/** List active background process sessions for one scope key, newest first. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
   now?: number;

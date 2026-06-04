@@ -4,12 +4,15 @@ import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+/** Validation error for SecretRef usage in OAuth auth profiles. */
 type OAuthSecretRefPolicyViolation = {
   profileId: string;
   path: string;
   reason: string;
 };
 
+// OAuth credentials are runtime-mutated during refresh. SecretRef-backed OAuth
+// fields would split mutable state across stores, so validation rejects them.
 function pushViolation(
   violations: OAuthSecretRefPolicyViolation[],
   profileId: string,
@@ -124,6 +127,7 @@ function collectOAuthSecretRefPolicyViolations(params: {
   return violations;
 }
 
+/** Throws when OAuth profiles contain unsupported SecretRef fields. */
 export function assertNoOAuthSecretRefPolicyViolations(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;

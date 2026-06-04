@@ -6,6 +6,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
 const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
+// Claude CLI stores project state under a sanitized workspace key. Add a stable
+// hash when the key is truncated so long paths do not collide silently.
 function simpleHash36(input: string): string {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -22,6 +24,8 @@ function sanitizeClaudeCliProjectKey(workspaceDir: string): string {
   return `${sanitized.slice(0, MAX_SANITIZED_PROJECT_LENGTH)}-${simpleHash36(workspaceDir)}`;
 }
 
+// Realpath when possible so symlinked workspaces reuse the same Claude project
+// directory as their canonical path.
 function canonicalizeWorkspaceDir(workspaceDir: string): string {
   const resolved = path.resolve(workspaceDir).normalize("NFC");
   try {
@@ -31,6 +35,7 @@ function canonicalizeWorkspaceDir(workspaceDir: string): string {
   }
 }
 
+/** Resolves Claude CLI's per-workspace project directory. */
 export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
   homeDir?: string;

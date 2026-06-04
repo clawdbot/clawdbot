@@ -1,3 +1,4 @@
+/** Verifies hook callbacks receive agent context and scoped plugin metadata. */
 import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,

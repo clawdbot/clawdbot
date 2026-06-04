@@ -1,3 +1,4 @@
+// Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
@@ -21,13 +22,13 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
-import { createNullWriter } from "./response.js";
 import {
   runServiceRestart,
   runServiceStart,
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
+import { createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -257,6 +258,7 @@ async function restartGatewayWithoutServiceManager(
   };
 }
 
+/** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -267,6 +269,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
+/** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
   return await runServiceStart({
@@ -289,6 +292,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
+/** Stop the managed Gateway service or verified unmanaged listener fallback. */
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
   let gatewayPortPromise: Promise<number> | undefined;
@@ -306,11 +310,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
-/**
- * Restart the gateway service service.
- * @returns `true` if restart succeeded, `false` if the service was not loaded.
- * Throws/exits on check or restart failures.
- */
+/** Restart the Gateway service or a verified unmanaged listener, then prove health. */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   if (opts.skipDeferral && !opts.safe) {
     throw new Error("--skip-deferral requires --safe");
@@ -354,6 +354,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
+        // SIGUSR1 restarts have no service-manager state to watch; use listener health only.
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
           attempts: restartHealthAttempts,
@@ -391,6 +392,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       });
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {
+        // On Windows service restarts can leave stale listeners behind; kill verified stale
+        // Gateway pids once, restart again, then re-run the same health proof.
         const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
         warnings.push(staleMsg);
         if (!json) {

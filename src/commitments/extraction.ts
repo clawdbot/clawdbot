@@ -1,3 +1,4 @@
+// Extracts user commitments from conversation text through model prompts.
 import {
   asFiniteNumber,
   timestampMsToIsoString,

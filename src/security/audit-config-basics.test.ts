@@ -1,3 +1,4 @@
+// Covers baseline config security audit findings.
 import { describe, expect, it } from "vitest";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { collectElevatedFindings, runSecurityAudit } from "./audit.js";

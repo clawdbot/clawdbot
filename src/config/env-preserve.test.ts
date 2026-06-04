@@ -1,3 +1,4 @@
+// Covers preserved environment-variable config normalization.
 import { describe, it, expect } from "vitest";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 

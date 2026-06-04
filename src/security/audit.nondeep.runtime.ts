@@ -1,3 +1,4 @@
+/** Non-deep audit facade for cheap summary/config findings. */
 export {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,

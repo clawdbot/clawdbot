@@ -1,3 +1,4 @@
+// Applies fast-lane reply directives before normal delivery processing.
 import type { ReplyPayload } from "../types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";

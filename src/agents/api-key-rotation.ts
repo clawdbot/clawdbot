@@ -10,6 +10,8 @@ import {
 } from "../provider-runtime/operation-retry.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
+// API-key rotation wrapper for provider calls. It tries configured keys in order
+// on rate-limit-like failures and can also retry transient errors on the same key.
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;
@@ -29,6 +31,7 @@ function dedupeApiKeys(raw: string[]): string[] {
   return normalizeUniqueStringEntries(raw);
 }
 
+/** Collect primary and live-discovered provider keys in stable de-duped order. */
 export function collectProviderApiKeysForExecution(params: {
   provider: string;
   primaryApiKey?: string;
@@ -37,6 +40,10 @@ export function collectProviderApiKeysForExecution(params: {
   return dedupeApiKeys([primaryApiKey?.trim() ?? "", ...collectProviderApiKeys(provider)]);
 }
 
+/**
+ * Execute a provider operation with key rotation and optional same-key transient
+ * retries.
+ */
 export async function executeWithApiKeyRotation<T>(
   params: ExecuteWithApiKeyRotationOptions<T>,
 ): Promise<T> {
@@ -61,6 +68,8 @@ export async function executeWithApiKeyRotation<T>(
           : isApiKeyRateLimitError(message);
 
         if (rotateKey) {
+          // A rotation signal consumes the current key and moves to the next key
+          // without running same-key transient retry logic.
           if (apiKeyIndex + 1 >= keys.length) {
             break;
           }
@@ -84,6 +93,8 @@ export async function executeWithApiKeyRotation<T>(
         }
 
         const delayMs = resolveTransientProviderDelayMs(transientRetry, attemptNumber);
+        // Same-key transient retries are bounded by provider policy and keep the
+        // current key stable so auth rotation only handles key-specific failures.
         const sleep = transientRetry.sleep ?? sleepWithAbort;
         await sleep(delayMs, transientRetry.signal);
       }
@@ -97,6 +108,8 @@ export async function executeWithApiKeyRotation<T>(
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  // Preserve thrown object properties for callers/tests while still satisfying
+  // Error-only throw lint expectations.
   if (value instanceof Error) {
     return value;
   }

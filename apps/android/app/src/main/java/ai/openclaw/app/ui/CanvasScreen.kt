@@ -152,9 +152,8 @@ fun CanvasScreen(
           }
         }
 
-      // The listener accepts any WebView origin at registration time because
-      // gateway A2UI URLs are dynamic; CanvasActionTrust validates the live URL
-      // before forwarding each message.
+      // The listener accepts any WebView origin at registration time; native
+      // dispatch still requires the live URL to be an app-owned bundled page.
       val bridge =
         CanvasA2UIActionBridge(
           isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },

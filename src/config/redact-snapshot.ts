@@ -1,3 +1,4 @@
+// Redacts runtime config snapshots before diagnostics or UI exposure.
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,
@@ -580,6 +581,8 @@ function maybeRestoreSecretRefId(params: {
 
   const originalObj = toObjectRecord(params.original);
   if (!isSecretRefWithProvider(originalObj)) {
+    // Automatic restore needs provider as part of the identity; source+id alone can match the
+    // wrong secret provider after config edits.
     if (isSecretRefShape(originalObj)) {
       throw new RedactionError(
         params.path,
@@ -593,6 +596,8 @@ function maybeRestoreSecretRefId(params: {
   }
 
   if (!isSecretRefWithProvider(incomingObj)) {
+    // A redacted id is only restorable when the incoming object still carries the stable SecretRef
+    // identity fields that were visible in the redacted snapshot.
     throw new RedactionError(
       params.path,
       `SecretRef at ${params.path} must include source, provider, and id when redacted placeholders are present.`,
@@ -600,6 +605,8 @@ function maybeRestoreSecretRefId(params: {
   }
 
   if (incomingObj.source !== originalObj.source || incomingObj.provider !== originalObj.provider) {
+    // Changing source/provider while keeping a redacted id would silently bind the old secret id to
+    // a different backend. Require an explicit id for that edit.
     throw new RedactionError(
       params.path,
       `SecretRef at ${params.path} changed source/provider while id is redacted. Provide an explicit id when changing source/provider.`,

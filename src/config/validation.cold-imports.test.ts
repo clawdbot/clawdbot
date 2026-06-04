@@ -1,3 +1,4 @@
+// Guards config validation modules against expensive cold imports.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -1,3 +1,4 @@
+// Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";

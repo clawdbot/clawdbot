@@ -1,10 +1,16 @@
 import { expect, vi } from "vitest";
 
+/**
+ * Shared supervisor adapter assertions for the SIGTERM -> SIGKILL fallback
+ * contract. Kept outside individual adapter tests so child and pty backends
+ * prove the same timer semantics.
+ */
 type WaitResult = {
   code: number | null;
   signal: number | NodeJS.Signals | null;
 };
 
+/** Assert fallback SIGKILL resolves only after the grace timer expires. */
 export async function expectWaitStaysPendingUntilSigkillFallback(
   waitPromise: Promise<WaitResult>,
   triggerKill: () => void,
@@ -24,6 +30,7 @@ export async function expectWaitStaysPendingUntilSigkillFallback(
   await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
 }
 
+/** Assert a real process exit beats the fallback timer and stays idempotent. */
 export async function expectRealExitWinsOverSigkillFallback(params: {
   waitPromise: Promise<WaitResult>;
   triggerKill: () => void;

@@ -1,3 +1,4 @@
+// Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {

@@ -1,3 +1,4 @@
+// Implements session commands for list, show, fork, reset, and routing state.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,

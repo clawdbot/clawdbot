@@ -11,7 +11,10 @@ import {
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
-import { createMcpClientTempState } from "./mcp-client-temp-state.ts";
+import {
+  connectMcpClientWithPairingReconnect,
+  createMcpClientTempState,
+} from "./mcp-client-temp-state.ts";
 
 function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
   return (rows ?? []).map((entry) => ({
@@ -107,23 +110,17 @@ async function main() {
       "expected seeded gateway deliveryContext target",
     );
 
-    mcpHandle = await connectMcpClient({
-      gatewayUrl,
-      gatewayToken,
+    mcpHandle = await connectMcpClientWithPairingReconnect({
       tempState: mcpTempState,
+      connect: (tempState) =>
+        connectMcpClient({
+          gatewayUrl,
+          gatewayToken,
+          tempState,
+        }),
+      maybeApprovePairing: () => maybeApprovePendingBridgePairing(gateway),
     });
-    let mcp = mcpHandle.client;
-
-    if (await maybeApprovePendingBridgePairing(gateway)) {
-      await Promise.allSettled([mcp.close(), mcpHandle.transport.close()]);
-      mcpHandle.cleanup();
-      mcpHandle = await connectMcpClient({
-        gatewayUrl,
-        gatewayToken,
-        tempState: mcpTempState,
-      });
-      mcp = mcpHandle.client;
-    }
+    const mcp = mcpHandle.client;
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
       mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 

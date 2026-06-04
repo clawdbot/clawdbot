@@ -1,3 +1,4 @@
+/** Builds manifest registry records from installed plugin index snapshots. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

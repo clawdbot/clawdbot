@@ -1,3 +1,4 @@
+// Verifies plugin scope parsing and boundary checks.
 import { describe, expect, it } from "vitest";
 import { normalizePluginIdScope } from "./plugin-scope.js";
 

@@ -1,3 +1,6 @@
+/**
+ * Tests native approval routing helpers and target matching logic.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createChannelApproverDmTargetResolver,

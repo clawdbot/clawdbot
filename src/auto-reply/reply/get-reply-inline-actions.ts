@@ -1,3 +1,4 @@
+/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -120,6 +121,7 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
+/** Result of attempting to handle an inbound message as an inline action. */
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -177,6 +179,7 @@ function extractBlockedToolReason(result: unknown): string | null {
   return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
+/** Handles inline actions or returns continue when the message should become a model turn. */
 export async function handleInlineActions(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;

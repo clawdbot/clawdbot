@@ -1,3 +1,4 @@
+// Verifies task executor delivery policy and terminal message formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatTaskBlockedFollowupMessage,

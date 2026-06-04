@@ -1,3 +1,10 @@
+/**
+ * Forced-consult dedupe coordinator for realtime voice sessions.
+ *
+ * The relay may synthesize an OpenClaw consult when the model hesitates, but a
+ * native provider tool call can still arrive later. This coordinator prevents
+ * duplicate consults and keeps late native calls correlated to forced handles.
+ */
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   matchRealtimeVoiceConsultQuestions,
@@ -7,24 +14,29 @@ import {
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_LIMIT = 12;
 
+/** Timer abstraction used so tests can inject deterministic fake timers. */
 export type RealtimeVoiceForcedConsultTimer = {
   clear(): void;
 };
 
+/** Coordinator tuning and injectable clock/timer/matcher hooks. */
 export type RealtimeVoiceForcedConsultCoordinatorOptions = {
   limit?: number;
+  /** Window for matching late native consults to forced consult handles. */
   nativeDedupeMs?: number;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => RealtimeVoiceForcedConsultTimer;
   questionsMatch?: (left: string | undefined, right: string | undefined) => boolean;
 };
 
+/** Stable handle for one forced consult lifecycle. */
 export type RealtimeVoiceForcedConsultHandle<TContext = unknown> = {
   id: string;
   question: string;
   context?: TContext;
 };
 
+/** Classification of a native provider consult relative to forced consult state. */
 export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
   | { kind: "none"; question?: string }
   | { kind: "pending"; question?: string; handle: RealtimeVoiceForcedConsultHandle<TContext> }
@@ -36,9 +48,11 @@ export type RealtimeVoiceForcedConsultNativeMatch<TContext = unknown> =
     };
 
 export type RealtimeVoiceForcedConsultNativeRecentOptions = {
+  /** Treat native calls without readable questions as recent generic consults. */
   allowUnknownQuestion?: boolean;
 };
 
+/** Public state machine for forced/native consult dedupe in a voice session. */
 export type RealtimeVoiceForcedConsultCoordinator<TContext = unknown> = {
   prepare(
     question: string,
@@ -91,6 +105,7 @@ type RecentNativeConsult = {
   at: number;
 };
 
+/** Create an in-memory forced-consult coordinator for one realtime session. */
 export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
   options: RealtimeVoiceForcedConsultCoordinatorOptions = {},
 ): RealtimeVoiceForcedConsultCoordinator<TContext> {
@@ -117,6 +132,8 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
 
   const scheduleCleanup = (stored: StoredForcedConsult<TContext>) => {
     stored.cleanupTimer?.clear();
+    // Delivered/cancelled handles remain visible briefly so late provider tool
+    // calls can be matched and suppressed instead of spoken twice.
     stored.cleanupTimer = setTimer(() => {
       if (state.get(stored.handle.id) === stored) {
         state.delete(stored.handle.id);
@@ -140,6 +157,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (!first) {
         return;
       }
+      // Bound memory/timer use for long calls with repeated forced consults.
       first.timer?.clear();
       first.cleanupTimer?.clear();
       state.delete(first.handle.id);
@@ -171,6 +189,8 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     if (stored.questions.some((candidate) => questionsMatch(candidate, trimmed))) {
       return;
     }
+    // Provider rewrites can use prompt/query aliases; remembering all observed
+    // question variants improves later dedupe matching.
     stored.questions.push(trimmed);
   };
 
@@ -239,6 +259,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
             run(handle);
           }
         },
+        // Clamp pathological delays before they reach Node timer APIs.
         resolveTimerTimeoutMs(delayMs, 0, 0),
       );
     },
@@ -252,6 +273,8 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     },
     consumePending(question) {
       const pendingCandidates = [...state.values()].filter((candidate) => candidate.pending);
+      // If there is exactly one pending forced consult, allow callers that do
+      // not have readable question text to consume it unambiguously.
       const stored =
         !question && pendingCandidates.length === 1
           ? pendingCandidates[0]
@@ -281,6 +304,8 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     recordNativeConsult(args, nativeCallId) {
       const question = readRealtimeVoiceConsultQuestion(args);
       recordRecentNativeConsult(question);
+      // Native calls win over scheduled forced calls when they match a pending
+      // question; the pending timer is cleared and the handle remains for dedupe.
       const pending = [...state.values()]
         .toReversed()
         .find(

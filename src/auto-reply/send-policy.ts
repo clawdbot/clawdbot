@@ -1,3 +1,4 @@
+/** Parsing for the /send override command embedded in inbound auto-reply text. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCommandBody } from "./commands-registry.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
@@ -18,6 +19,7 @@ function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | 
   return undefined;
 }
 
+/** Parses /send commands and maps user-facing aliases to allow, deny, or inherit. */
 export function parseSendPolicyCommand(raw?: string): {
   hasCommand: boolean;
   mode?: SendPolicyOverride | "inherit";

@@ -1,3 +1,4 @@
+/** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -7,16 +7,19 @@ const fetchClawHubSkillDetailMock = vi.fn();
 const downloadClawHubSkillArchiveMock = vi.fn();
 const listClawHubSkillsMock = vi.fn();
 const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
+const isDefaultClawHubBaseUrlMock = vi.fn((baseUrl?: string) => !baseUrl);
 const searchClawHubSkillsMock = vi.fn();
 const archiveCleanupMock = vi.fn();
 const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
+const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   listClawHubSkills: listClawHubSkillsMock,
+  isDefaultClawHubBaseUrl: isDefaultClawHubBaseUrlMock,
   resolveClawHubBaseUrl: resolveClawHubBaseUrlMock,
   searchClawHubSkills: searchClawHubSkillsMock,
 }));
@@ -28,6 +31,14 @@ vi.mock("../../infra/install-flow.js", () => ({
 vi.mock("../../infra/install-package-dir.js", () => ({
   installPackageDir: installPackageDirMock,
 }));
+
+vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/install-security-scan.js")>();
+  return {
+    ...actual,
+    evaluateSkillInstallPolicy: (...args: unknown[]) => evaluateSkillInstallPolicyMock(...args),
+  };
+});
 
 vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: pathExistsMock,
@@ -46,6 +57,19 @@ function expectInstallPackageSourceDir(sourceDir: string) {
     throw new Error("expected installPackageDir call");
   }
   expect(call[0]?.sourceDir).toBe(sourceDir);
+}
+
+function installPolicyInput() {
+  const call = evaluateSkillInstallPolicyMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected evaluateSkillInstallPolicy call");
+  }
+  return call[0] as
+    | {
+        origin?: { registry?: string };
+        source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
+      }
+    | undefined;
 }
 
 function expectInstalledSkill(
@@ -134,15 +158,18 @@ describe("skills-clawhub", () => {
     downloadClawHubSkillArchiveMock.mockReset();
     listClawHubSkillsMock.mockReset();
     resolveClawHubBaseUrlMock.mockReset();
+    isDefaultClawHubBaseUrlMock.mockReset();
     searchClawHubSkillsMock.mockReset();
     archiveCleanupMock.mockReset();
     withExtractedArchiveRootMock.mockReset();
     installPackageDirMock.mockReset();
+    evaluateSkillInstallPolicyMock.mockReset();
     pathExistsMock.mockReset();
 
     resolveClawHubBaseUrlMock.mockImplementation((baseUrl?: string) =>
       (baseUrl ?? "https://clawhub.ai").replace(/\/+$/, ""),
     );
+    isDefaultClawHubBaseUrlMock.mockImplementation((baseUrl?: string) => !baseUrl);
     pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
     fetchClawHubSkillDetailMock.mockResolvedValue({
       skill: {
@@ -171,6 +198,7 @@ describe("skills-clawhub", () => {
       ok: true,
       targetDir: "/tmp/workspace/skills/agentreceipt",
     });
+    evaluateSkillInstallPolicyMock.mockResolvedValue(undefined);
   });
 
   it("installs ClawHub skills from flat-root archives", async () => {
@@ -185,12 +213,33 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
     });
     expectInstallPackageSourceDir("/tmp/extracted-skill");
+    expect(installPolicyInput()).toMatchObject({
+      origin: { registry: "https://clawhub.ai" },
+      source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+    });
     expectInstalledSkill(result, {
       slug: "agentreceipt",
       version: "1.0.0",
       targetDir: "/tmp/workspace/skills/agentreceipt",
     });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks custom ClawHub skill registries as third-party install policy authority", async () => {
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      baseUrl: "https://clawhub.internal.example",
+    });
+
+    expectInstalledSkill(result, {
+      slug: "agentreceipt",
+      version: "1.0.0",
+    });
+    expect(installPolicyInput()).toMatchObject({
+      origin: { registry: "https://clawhub.internal.example" },
+      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
+    });
   });
 
   it.each(["skill.md", "skills.md", "SKILL.MD"])(

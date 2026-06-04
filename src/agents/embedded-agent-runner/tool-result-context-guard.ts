@@ -324,6 +324,7 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
@@ -427,11 +428,14 @@ export function installContextEngineLoopHook(params: {
       });
       if (
         assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages !== providerMessages
+        Array.isArray(assembled.messages)
       ) {
-        lastAssembledView = assembled.messages;
-        return assembled.messages;
+        const repairedMessages =
+          params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
+        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
+          lastAssembledView = repairedMessages;
+          return repairedMessages;
+        }
       }
       lastAssembledView = null;
     } catch {

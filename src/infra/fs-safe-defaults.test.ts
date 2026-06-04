@@ -1,3 +1,4 @@
+// Covers OpenClaw's default fs-safe Python helper configuration.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { configureFsSafePython } = vi.hoisted(() => ({

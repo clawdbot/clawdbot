@@ -1,6 +1,8 @@
+// Resolves provider authentication modes for plugin setup prompts.
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
+/** Prompt copy overrides for provider secret input mode selection. */
 export type SecretInputModePromptCopy = {
   modeMessage?: string;
   plaintextLabel?: string;
@@ -9,6 +11,7 @@ export type SecretInputModePromptCopy = {
   refHint?: string;
 };
 
+/** Resolves provider secret input mode from explicit option or wizard selection. */
 export async function resolveSecretInputModeForEnvSelection(params: {
   prompter: Pick<WizardPrompter, "select">;
   explicitMode?: SecretInputMode;

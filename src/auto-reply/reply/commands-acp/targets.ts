@@ -1,3 +1,4 @@
+// Resolves ACP command target sessions from user text and active state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { callGateway } from "../../../gateway/call.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";

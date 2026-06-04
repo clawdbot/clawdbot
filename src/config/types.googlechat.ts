@@ -1,3 +1,4 @@
+// Defines Google Chat channel configuration types.
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,

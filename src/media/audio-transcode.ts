@@ -42,6 +42,7 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+/** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
   inputExtension?: string;
@@ -100,6 +101,7 @@ export async function transcodeAudioBufferToOpus(params: {
   );
 }
 
+/** Outcome for lightweight container transcodes that may be unsupported or intentionally skipped. */
 export type AudioContainerTranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
@@ -113,6 +115,7 @@ export type AudioContainerTranscodeOutcome =
       detail?: string;
     };
 
+/** Transcodes known audio container pairs, currently using macOS afconvert recipes where needed. */
 export async function transcodeAudioBuffer(params: {
   audioBuffer: Buffer;
   sourceExtension: string;
@@ -135,6 +138,7 @@ export async function transcodeAudioBuffer(params: {
     return { ok: false, reason: "platform-unsupported" };
   }
 
+  // afconvert is macOS-only and writes native Messages-compatible voice containers.
   const tmp = tempWorkspaceSync({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",

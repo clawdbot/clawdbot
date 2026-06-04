@@ -1,3 +1,4 @@
+// Covers pending pairing rejection helper behavior.
 import { describe, expect, it, vi } from "vitest";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 

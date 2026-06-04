@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for command authorization and control-command gating.
+ */
 export type {
   CommandAuthorizer,
   CommandGatingModeWhenAccessGroupsOff,

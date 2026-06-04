@@ -1,5 +1,6 @@
 import { canonicalizeBase64 } from "./base64.js";
 
+/** Prefix used to distinguish inline data URLs from remote/local image references. */
 export const INLINE_IMAGE_DATA_URL_PREFIX = "data:";
 
 const IMAGE_SIGNATURES: Array<{
@@ -47,6 +48,7 @@ function startsWithDataUrl(value: string): boolean {
   );
 }
 
+/** Sniffs supported inline image formats from decoded bytes. */
 export function sniffInlineImageMime(buffer: Buffer): string | undefined {
   return IMAGE_SIGNATURES.find((signature) => signature.matches(buffer))?.mime;
 }
@@ -79,6 +81,7 @@ function metadataAllowsImageBase64(metadata: string[]): boolean {
   return isImageMimeType && options.some((part) => part.toLowerCase() === "base64");
 }
 
+/** Canonicalizes trusted inline image data URLs and rejects malformed or non-image payloads. */
 export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
   const parsed = parseInlineImageDataUrl(imageUrl);
   if (!parsed) {
@@ -99,5 +102,6 @@ export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined
   if (!sniffedMimeType) {
     return undefined;
   }
+  // Trust the byte signature over caller-supplied metadata before reinlining.
   return `data:${sniffedMimeType};base64,${canonicalPayload}`;
 }

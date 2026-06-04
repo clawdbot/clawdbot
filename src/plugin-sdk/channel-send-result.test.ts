@@ -1,3 +1,6 @@
+/**
+ * Tests channel send result normalization and adapter wrapping helpers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   attachChannelToResult,

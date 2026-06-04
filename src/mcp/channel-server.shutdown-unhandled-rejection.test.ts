@@ -46,7 +46,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "test",
 }));
 

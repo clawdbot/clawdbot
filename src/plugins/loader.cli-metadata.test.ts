@@ -1,3 +1,4 @@
+// Covers plugin loader CLI metadata without activating plugin runtimes.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

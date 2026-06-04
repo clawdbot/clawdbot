@@ -1,3 +1,4 @@
+// Normalizes tool result content for chat transcript rendering.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_USE_ID_FIELDS = [

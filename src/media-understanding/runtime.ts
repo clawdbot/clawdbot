@@ -63,6 +63,8 @@ function buildFileContext(params: {
     chatType?: string;
   };
 }) {
+  // Runtime file calls reuse message-context media plumbing so scope, local roots, and
+  // remote URL handling stay identical to normal channel-triggered media understanding.
   const scopeFields = {
     ...(params.scopeContext?.sessionKey ? { SessionKey: params.scopeContext.sessionKey } : {}),
     ...(params.scopeContext?.channel
@@ -125,6 +127,7 @@ function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"
   return input.some((entry) => entry.type === "image");
 }
 
+/** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -226,12 +229,14 @@ export async function runMediaUnderstandingFile(
   }
 }
 
+/** Describes one image file or URL through the configured image-understanding pipeline. */
 export async function describeImageFile(
   params: DescribeImageFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "image" });
 }
 
+/** Describes one image with an explicit provider/model, bypassing configured media model selection. */
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -304,6 +309,7 @@ async function readImageDescriptionInput(params: {
   }
 }
 
+/** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!hasStructuredImageInput(params.input)) {
@@ -333,12 +339,14 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   });
 }
 
+/** Describes one video file or URL through the configured video-understanding pipeline. */
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
 }
 
+/** Transcribes one audio file or URL through the configured audio-understanding pipeline. */
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {

@@ -1,3 +1,4 @@
+// Tests volatile path filtering for backup operations.
 import { describe, expect, it } from "vitest";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 

@@ -1,3 +1,4 @@
+// Resolves Homebrew Node binary paths to stable symlink targets.
 import fs from "node:fs/promises";
 import path from "node:path";
 

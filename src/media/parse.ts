@@ -1,5 +1,3 @@
-// Shared helpers for parsing MEDIA tokens from command/stdout text.
-
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -13,9 +11,10 @@ import {
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
-// Allow optional wrapping backticks and punctuation after the token; capture the core token.
+/** Captures legacy MEDIA: attachment directives from model/tool output. */
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
+/** Ordered output segment emitted after visible text and extracted media are separated. */
 export type ParsedMediaOutputSegment =
   | {
       type: "text";
@@ -26,12 +25,14 @@ export type ParsedMediaOutputSegment =
       url: string;
     };
 
+/** Controls which non-MEDIA syntaxes may be lifted into media attachments. */
 export type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
 };
 
-export function normalizeMediaSource(src: string) {
+/** Converts file URLs into plain local paths before downstream media validation. */
+export function normalizeMediaSource(src: string): string {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
@@ -476,6 +477,7 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 
+/** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
@@ -522,13 +524,13 @@ export function splitMediaFromOutput(
   const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
   const fenceSpans = hasFenceMarkers ? parseFenceSpans(trimmedRaw) : [];
 
-  // Collect tokens line by line so we can strip them cleanly.
+  // Line-wise parsing preserves visible text while letting MEDIA-only lines disappear cleanly.
   const lines = trimmedRaw.split("\n");
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
-    // Skip MEDIA extraction if this line is inside a fenced code block
+    // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
       pushTextSegment(line);
@@ -607,6 +609,7 @@ export function splitMediaFromOutput(
         /\s/.test(payloadValue) &&
         looksLikeLocalPath
       ) {
+        // A single valid split plus invalid leftovers can be one local path containing spaces.
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);

@@ -3,8 +3,10 @@ import path from "node:path";
 import { appendRegularFile } from "../infra/fs-safe.js";
 import type { MemoryDreamingPhaseName } from "./dreaming.js";
 
+/** Workspace-relative JSONL audit log for memory recall, promotion, and dream events. */
 export const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = path.join("memory", ".dreams", "events.jsonl");
 
+/** Event emitted when a recall query records the selected memory snippets. */
 export type MemoryHostRecallRecordedEvent = {
   type: "memory.recall.recorded";
   timestamp: string;
@@ -18,6 +20,7 @@ export type MemoryHostRecallRecordedEvent = {
   }>;
 };
 
+/** Event emitted when deep-dream candidates are promoted into durable memory. */
 export type MemoryHostPromotionAppliedEvent = {
   type: "memory.promotion.applied";
   timestamp: string;
@@ -33,6 +36,7 @@ export type MemoryHostPromotionAppliedEvent = {
   }>;
 };
 
+/** Event emitted after a dreaming phase writes inline memory and/or reports. */
 export type MemoryHostDreamCompletedEvent = {
   type: "memory.dream.completed";
   timestamp: string;
@@ -43,15 +47,18 @@ export type MemoryHostDreamCompletedEvent = {
   storageMode: "inline" | "separate" | "both";
 };
 
+/** Append-only memory host event schema stored as JSONL. */
 export type MemoryHostEvent =
   | MemoryHostRecallRecordedEvent
   | MemoryHostPromotionAppliedEvent
   | MemoryHostDreamCompletedEvent;
 
+/** Resolve the event log path inside a workspace without touching the filesystem. */
 export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
   return path.join(workspaceDir, MEMORY_HOST_EVENT_LOG_RELATIVE_PATH);
 }
 
+/** Append one memory host event, creating the dreams directory with symlink-safe writes. */
 export async function appendMemoryHostEvent(
   workspaceDir: string,
   event: MemoryHostEvent,
@@ -65,6 +72,7 @@ export async function appendMemoryHostEvent(
   });
 }
 
+/** Read recent memory host events, ignoring corrupt JSONL lines left by partial writes. */
 export async function readMemoryHostEvents(params: {
   workspaceDir: string;
   limit?: number;
@@ -87,6 +95,8 @@ export async function readMemoryHostEvents(params: {
       try {
         return [JSON.parse(line) as MemoryHostEvent];
       } catch {
+        // The log is best-effort diagnostics; one malformed line must not hide
+        // later valid events or break memory status rendering.
         return [];
       }
     });

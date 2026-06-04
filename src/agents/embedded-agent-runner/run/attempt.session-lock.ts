@@ -801,17 +801,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      // Clearing `heldLock` transfers release ownership to this block. Fence reads can
+      // throw after that transfer; release the underlying file lock anyway so later
+      // turns do not wait for the maxHoldMs watchdog.
+      try {
+        const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+        const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+        fenceFingerprint = fingerprint;
+        fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+        fenceGeneration =
+          ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+            ? ownedWrite.generation
+            : (trustedGeneration ?? fenceGeneration);
+        fenceActive = true;
+      } finally {
+        await lock.release();
+      }
     } finally {
       finishHeldLockDrain(drainOwner);
     }

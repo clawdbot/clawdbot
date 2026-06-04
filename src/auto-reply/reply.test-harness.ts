@@ -1,3 +1,4 @@
+/** Shared reply test harness with mocked agent/runtime dependencies and temp HOME isolation. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -129,6 +130,7 @@ const HOME_ENV_KEYS = [
   "OPENCLAW_AGENT_DIR",
 ] as const;
 
+/** Creates a per-test HOME fixture and restores environment variables after each case. */
 export function createTempHomeHarness(options: { prefix: string; beforeEachCase?: () => void }) {
   let fixtureRoot = "";
   let caseId = 0;
@@ -172,6 +174,7 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
   return { withTempHome };
 }
 
+/** Builds a minimal reply config rooted in a temp HOME fixture. */
 export function makeReplyConfig(home: string) {
   return withFastReplyConfig({
     agents: {
@@ -189,6 +192,7 @@ export function makeReplyConfig(home: string) {
   });
 }
 
+/** Creates fresh runtime mocks for reply tests. */
 export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   return {
     runEmbeddedAgent: vi.fn(),
@@ -199,10 +203,12 @@ export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   };
 }
 
+/** Installs runtime mocks into the hoisted Vitest module state. */
 export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   replyRuntimeMockState.mocks = mocks;
 }
 
+/** Resets mock call history and default model catalog responses. */
 export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   mocks.runEmbeddedAgent.mockClear();
   mocks.loadModelCatalog.mockClear();
@@ -211,6 +217,7 @@ export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   ]);
 }
 
+/** Builds the minimal embedded-agent text result consumed by reply tests. */
 export function makeEmbeddedTextResult(text: string) {
   return {
     payloads: [{ text }],

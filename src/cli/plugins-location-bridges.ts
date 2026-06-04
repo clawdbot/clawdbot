@@ -1,3 +1,4 @@
+// Bridge builder for users upgrading from bundled plugins to external plugin packages.
 import type { ExternalizedBundledPluginBridge } from "../plugins/externalized-bundled-plugins.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
@@ -48,6 +49,7 @@ function buildBridgeFromPersistedBundledRecord(
   };
 }
 
+/** List install bridges inferred from the persisted plugin index before current discovery runs. */
 export async function listPersistedBundledPluginLocationBridges(options: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;

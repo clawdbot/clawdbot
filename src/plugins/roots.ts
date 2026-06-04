@@ -1,3 +1,4 @@
+// Resolves plugin root directories for bundled and installed plugins.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";

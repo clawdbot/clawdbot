@@ -1,3 +1,4 @@
+/** Sanitizes pending final delivery text before channel-visible output. */
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -8,6 +9,7 @@ import {
 } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 
+/** Sanitizes final pending-delivery text and removes silent control tokens. */
 export function sanitizePendingFinalDeliveryText(text: string): string {
   let stripped = stripInternalMetadataForDisplay(text).trim();
   if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
@@ -18,6 +20,7 @@ export function sanitizePendingFinalDeliveryText(text: string): string {
     if (hasLeadingSilentToken) {
       stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
     }
+    // Remove stray silent tokens only after confirming the payload is not entirely silent.
     if (
       hasLeadingSilentToken ||
       stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())

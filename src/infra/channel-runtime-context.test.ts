@@ -1,3 +1,4 @@
+// Tests channel runtime context assembly and hook inputs.
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import {

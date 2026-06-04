@@ -12,46 +12,29 @@ import kotlinx.serialization.json.JsonPrimitive
 class A2UIHandler(
   private val canvas: CanvasController,
   private val json: Json,
-  private val getNodeCanvasHostUrl: () -> String?,
-  private val getOperatorCanvasHostUrl: () -> String?,
 ) {
-  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean =
-    CanvasActionTrust.isTrustedCanvasActionUrl(
-      rawUrl = rawUrl,
-      trustedA2uiUrls = listOfNotNull(resolveA2uiHostUrl()),
-    )
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = CanvasActionTrust.isTrustedCanvasActionUrl(rawUrl)
 
-  fun resolveA2uiHostUrl(): String? {
-    val nodeRaw = getNodeCanvasHostUrl()?.trim().orEmpty()
-    val operatorRaw = getOperatorCanvasHostUrl()?.trim().orEmpty()
-    // Prefer node-advertised canvas host; operator URL is a fallback for older hello payloads.
-    val raw = if (nodeRaw.isNotBlank()) nodeRaw else operatorRaw
-    if (raw.isBlank()) return null
-    val base = raw.trimEnd('/')
-    return "$base/__openclaw__/a2ui/?platform=android"
-  }
-
-  suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {
-    try {
-      val already = canvas.eval(a2uiReadyCheckJS)
-      if (already == "true") return true
-    } catch (_: Throwable) {
-      // ignore
+  suspend fun ensureA2uiReady(): Boolean {
+    if (canvas.currentUrl()?.trim() == CanvasActionTrust.localA2uiAssetUrl && isA2uiReady()) {
+      return true
     }
 
-    canvas.navigate(a2uiUrl)
-    // A2UI host bootstraps asynchronously after navigation; poll briefly before failing the command.
+    canvas.showLocalA2ui()
+    // The bundled A2UI host bootstraps asynchronously after navigation; poll briefly before failing the command.
     repeat(50) {
-      try {
-        val ready = canvas.eval(a2uiReadyCheckJS)
-        if (ready == "true") return true
-      } catch (_: Throwable) {
-        // ignore
-      }
+      if (isA2uiReady()) return true
       delay(120)
     }
     return false
   }
+
+  private suspend fun isA2uiReady(): Boolean =
+    try {
+      canvas.eval(a2uiReadyCheckJS) == "true"
+    } catch (_: Throwable) {
+      false
+    }
 
   fun decodeA2uiMessages(
     command: String,

@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 
+// Input provenance marks whether a user-role message actually came from an
+// external user, another session, or an internal system/tool handoff.
 export const INPUT_PROVENANCE_KIND_VALUES = [
   "external_user",
   "inter_session",
@@ -50,6 +52,8 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   };
 }
 
+// Only attach provenance to user messages that do not already carry it. Existing
+// provenance is preserved because upstream channel/runtime code owns that fact.
 export function applyInputProvenanceToUserMessage(
   message: AgentMessage,
   inputProvenance: InputProvenance | undefined,
@@ -107,6 +111,9 @@ export function hasInterSessionUserProvenance(
   return isInterSessionInputProvenance(message.provenance);
 }
 
+// Prefix text is model-facing safety context for inter-session handoffs. It
+// states source metadata and explicitly prevents treating the payload as direct
+// end-user instruction.
 export function buildInterSessionPromptPrefix(
   inputProvenance: InputProvenance | undefined,
 ): string {
@@ -151,6 +158,8 @@ export function stripInterSessionPromptPrefixForDisplay(text: string): string {
   return removeFirstInterSessionPromptPrefix(text);
 }
 
+// Idempotently moves the generated provenance envelope to the top of prompt
+// text so later decoration cannot bury the safety instruction.
 export function annotateInterSessionPromptText(
   text: string,
   inputProvenance: InputProvenance | undefined,

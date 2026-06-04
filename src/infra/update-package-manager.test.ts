@@ -1,3 +1,4 @@
+// Covers package manager resolution for update build flows.
 import { describe, expect, it } from "vitest";
 import {
   resolveUpdateBuildManager,

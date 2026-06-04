@@ -1,3 +1,4 @@
+// Verifies plugin import specifier normalization and rejection cases.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toSafeImportPath } from "./import-specifier.js";
 

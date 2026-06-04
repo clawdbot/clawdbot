@@ -1,3 +1,4 @@
+/** Loads manifest and installed-index contributions used to build plugin registry snapshots. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

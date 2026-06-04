@@ -1,3 +1,6 @@
+/**
+ * Tests channel streaming helper lifecycle and event forwarding.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,

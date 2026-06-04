@@ -1,3 +1,4 @@
+// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
@@ -104,6 +105,7 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
   );
 }
 
+/** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
 export function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
@@ -113,6 +115,7 @@ export function isPluginOwnedChannelHintPath(path: string): boolean {
 
 export { isSensitiveConfigPath };
 
+/** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
   const hints: ConfigUiHints = {};
   for (const [group, label] of Object.entries(GROUP_LABELS)) {
@@ -146,6 +149,7 @@ export function buildBaseHints(): ConfigUiHints {
   return applyDerivedTags(hints);
 }
 
+/** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */
 export function applySensitiveHints(
   hints: ConfigUiHints,
   allowedKeys?: ReadonlySet<string>,
@@ -164,6 +168,7 @@ export function applySensitiveHints(
   return next;
 }
 
+/** Add the sensitive-url tag to hint paths that carry URLs with credential risk. */
 export function applySensitiveUrlHints(
   hints: ConfigUiHints,
   allowedKeys?: ReadonlySet<string>,
@@ -185,6 +190,7 @@ export function applySensitiveUrlHints(
   return next;
 }
 
+/** Walk a Zod schema and collect concrete/wildcard paths accepted by `matchesPath`. */
 export function collectMatchingSchemaPaths(
   schema: z.ZodType,
   path: string,
@@ -255,6 +261,7 @@ function isUnwrappable(object: unknown): object is ZodDummy {
   );
 }
 
+/** Walk a Zod schema and mark hints for fields registered with the sensitive schema marker. */
 export function mapSensitivePaths(
   schema: z.ZodType,
   path: string,

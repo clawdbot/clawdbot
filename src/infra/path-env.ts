@@ -1,3 +1,4 @@
+// Builds PATH values for OpenClaw child processes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,11 +10,17 @@ import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
 type EnsureOpenClawPathOpts = {
+  /** Executable whose directory should stay first for shebang-compatible child processes. */
   execPath?: string;
+  /** Working directory used only when project-local bin fallback is explicitly enabled. */
   cwd?: string;
+  /** Home directory used for package-manager and user-bin fallback candidates. */
   homeDir?: string;
+  /** Platform override for tests and platform-specific candidate filtering. */
   platform?: NodeJS.Platform;
+  /** Existing PATH value to merge with; defaults to process.env.PATH. */
   pathEnv?: string;
+  /** Opt-in to append cwd/node_modules/.bin after trusted system paths. */
   allowProjectLocalBin?: boolean;
 };
 
@@ -153,6 +160,8 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {
     return;
   }
+  // Mark before filesystem probing so repeated calls from nested bootstraps do
+  // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";

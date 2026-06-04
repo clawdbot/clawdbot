@@ -1,3 +1,4 @@
+// Covers plugin hooks that run before agent finalization.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";

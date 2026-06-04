@@ -1,3 +1,4 @@
+// Provides root logger helpers and themed terminal output.
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
 import { getLogger } from "./logging/logger.js";

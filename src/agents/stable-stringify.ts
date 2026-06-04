@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 
+/** Deterministically stringifies unknown values for cache keys and diagnostics. */
 export function stableStringify(value: unknown): string {
   return stringifyStableValue(value, new WeakSet());
 }

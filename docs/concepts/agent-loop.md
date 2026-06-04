@@ -97,7 +97,7 @@ These run inside the agent loop or gateway pipeline:
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
-- **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
+- **`before_install`**: inspect install context and optionally block skill or plugin installs after operator install policy runs.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.

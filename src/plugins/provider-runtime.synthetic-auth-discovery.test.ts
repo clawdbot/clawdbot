@@ -1,3 +1,4 @@
+/** Verifies provider runtime discovery includes synthetic-auth provider hooks. */
 import { describe, expect, it, vi } from "vitest";
 
 const resolveProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));

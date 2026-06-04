@@ -19,6 +19,8 @@ import type { ToolDefinition } from "./sessions/index.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+// Tool Search compacts large tool catalogs behind a small search/describe/call
+// surface, with an optional isolated code runner for multi-step catalog use.
 export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
@@ -58,6 +60,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   onUpdate?: AgentToolUpdateCallback;
 }) => Promise<AgentToolResult<unknown>>;
 
+/** Transcript projection for target tool calls made through Tool Search. */
 export type ToolSearchTargetTranscriptProjection = {
   parentToolCallId?: string;
   toolCallId: string;
@@ -68,6 +71,7 @@ export type ToolSearchTargetTranscriptProjection = {
   timestamp?: number;
 };
 
+/** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
@@ -76,6 +80,7 @@ export type ToolSearchConfig = {
   maxSearchLimit: number;
 };
 
+/** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -88,6 +93,7 @@ export type ToolSearchToolContext = {
   executeTool?: ToolSearchCatalogToolExecutor;
 };
 
+/** Catalog entry retained behind compacted Tool Search control tools. */
 export type ToolSearchCatalogEntry = {
   id: string;
   source: CatalogSource;
@@ -217,6 +223,8 @@ function buildModelScriptSource(code) {
 }
 
 function buildControllerSource() {
+  // The controller returns promise-like bridge handles. The model code can await
+  // them naturally, while the parent process serializes real tool calls.
   return (
     '"use strict";\n' +
     "(() => {\n" +
@@ -521,6 +529,8 @@ function catalogToolIdentity(tool: CatalogTool): number {
 }
 
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
+  // Fingerprints include object identity for executable tools because function
+  // bodies are not JSON-stable but catalog reuse must not bind stale executors.
   return entries
     .map((entry) =>
       [
@@ -827,10 +837,12 @@ export function projectToolSearchTargetTranscriptMessages(
   return projected;
 }
 
+/** Create an explicit catalog holder for callers that cannot rely on session keys. */
 export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
   return {};
 }
 
+/** Replace visible tools with Tool Search controls and register hidden catalog entries. */
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -857,6 +869,7 @@ export function applyToolSearchCatalog(params: {
   });
 }
 
+/** Move client-provided tools into an existing Tool Search catalog. */
 export function addClientToolsToToolSearchCatalog(params: {
   tools: ToolDefinition[];
   config?: OpenClawConfig;
@@ -872,6 +885,7 @@ export function addClientToolsToToolSearchCatalog(params: {
   });
 }
 
+/** Register catalog entries under run/session keys and optional direct refs. */
 export function registerToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -913,6 +927,7 @@ export function registerToolSearchCatalog(params: {
   return next;
 }
 
+/** Clear Tool Search catalog state for a run/session/ref. */
 export function clearToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -1225,6 +1240,7 @@ export class ToolSearchRuntime {
   }
 }
 
+/** Compact a native tool list into visible control tools plus hidden catalog entries. */
 export function applyToolCatalogCompaction(params: {
   tools: AnyAgentTool[];
   enabled: boolean;
@@ -1348,6 +1364,7 @@ export function applyToolCatalogCompaction(params: {
   };
 }
 
+/** Append client-side tool definitions to an already registered catalog. */
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
@@ -1562,6 +1579,8 @@ function runCodeModeChild(params: {
         );
       };
       if (code === 0 && signal === null) {
+        // A clean exit can race the final IPC result. Wait briefly before
+        // treating it as failure so flushed bridge/result messages can arrive.
         exitRejectionTimer = setTimeout(rejectOnExit, 250);
         return;
       }
@@ -1645,6 +1664,7 @@ function readCode(args: unknown): string {
   return code;
 }
 
+/** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config);

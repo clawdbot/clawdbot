@@ -1,3 +1,4 @@
+// Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

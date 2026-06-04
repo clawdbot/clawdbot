@@ -11,6 +11,7 @@ import type {
 } from "../../tasks/task-registry.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
+/** Aggregate task-run counts exposed to plugin task views. */
 export type TaskRunAggregateSummary = {
   total: number;
   active: number;
@@ -20,6 +21,7 @@ export type TaskRunAggregateSummary = {
   byRuntime: TaskRuntimeCounts;
 };
 
+/** Public task run summary exposed through plugin runtime task APIs. */
 export type TaskRunView = {
   id: string;
   runtime: TaskRuntime;
@@ -48,8 +50,10 @@ export type TaskRunView = {
   terminalOutcome?: TaskTerminalOutcome;
 };
 
+/** Detailed task run view; currently equal to the summary view. */
 export type TaskRunDetail = TaskRunView;
 
+/** Result returned when cancelling a task run. */
 export type TaskRunCancelResult = {
   found: boolean;
   cancelled: boolean;
@@ -57,6 +61,7 @@ export type TaskRunCancelResult = {
   task?: TaskRunDetail;
 };
 
+/** Public task flow summary exposed through plugin runtime task APIs. */
 export type TaskFlowView = {
   id: string;
   ownerKey: string;
@@ -71,6 +76,7 @@ export type TaskFlowView = {
   endedAt?: number;
 };
 
+/** Detailed task flow view with state, wait, blocked, and task summary data. */
 export type TaskFlowDetail = TaskFlowView & {
   state?: JsonValue;
   wait?: JsonValue;

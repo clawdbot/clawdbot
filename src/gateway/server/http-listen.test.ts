@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { listenGatewayHttpServer } from "./http-listen.js";
 
+/**
+ * Gateway HTTP listener retry tests for lock contention and listen failures.
+ */
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
 vi.mock("../../utils.js", () => ({

@@ -315,7 +315,7 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
-  it("does not rebind to an old message when forceNewMessage races an in-flight send", async () => {
+  it("retains an old message when forceNewMessage races an in-flight send", async () => {
     let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
     const firstSend = new Promise<{ message_id: number }>((resolve) => {
       resolveFirstSend = resolve;
@@ -326,16 +326,11 @@ describe("createTelegramDraftStream", () => {
       deleteMessage: vi.fn().mockResolvedValue(true),
     };
     const onSupersededPreview = vi.fn();
-    const stream = createTelegramDraftStream({
-      api: api as unknown as Bot["api"],
-      chatId: 123,
-      onSupersededPreview,
-    });
+    const stream = createDraftStream(api, { onSupersededPreview });
 
     stream.update("Message A partial");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
 
-    // Rotate to message B before message A send resolves.
     stream.forceNewMessage();
     stream.update("Message B partial");
 
@@ -349,6 +344,7 @@ describe("createTelegramDraftStream", () => {
       textSnapshot: "Message A partial",
       parseMode: undefined,
       visibleSinceMs: supersededPreview.visibleSinceMs,
+      retain: true,
     });
     expect(typeof supersededPreview.visibleSinceMs).toBe("number");
     expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);

@@ -1,3 +1,4 @@
+// Evaluates tool descriptors against runtime availability constraints.
 import type {
   JsonObject,
   JsonPrimitive,
@@ -9,6 +10,12 @@ import type {
   ToolDescriptor,
 } from "./types.js";
 
+/**
+ * Tool availability evaluator for descriptor-driven tool planning.
+ *
+ * Descriptors express why a tool can be shown as small signals; this module
+ * turns those signals into diagnostics without knowing any concrete tool owner.
+ */
 function isRecord(value: JsonValue | undefined): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -37,6 +44,7 @@ function hasConfiguredValue(params: {
     return false;
   }
   if ((signal.check ?? "exists") === "available") {
+    // "available" delegates semantic checks, for example provider auth that is configured but stale.
     return (
       params.context.isConfigValueAvailable?.({
         value,
@@ -142,6 +150,7 @@ function evaluateExpression(
       ];
     }
     const diagnostics = expression.anyOf.map((entry) => evaluateExpression(entry, context));
+    // anyOf is available when at least one branch has no diagnostics; otherwise preserve all reasons.
     return diagnostics.some((entries) => entries.length === 0) ? [] : diagnostics.flat();
   }
   return [
@@ -152,6 +161,7 @@ function evaluateExpression(
   ];
 }
 
+/** Evaluate one descriptor against runtime context and return hidden-tool diagnostics. */
 export function evaluateToolAvailability(params: {
   descriptor: ToolDescriptor;
   context?: ToolAvailabilityContext;

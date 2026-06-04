@@ -1,3 +1,4 @@
+// Tests heartbeat event emission and listener cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitHeartbeatEvent,

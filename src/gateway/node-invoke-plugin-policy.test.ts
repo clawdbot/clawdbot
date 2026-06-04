@@ -1,3 +1,6 @@
+/**
+ * Node invoke plugin-policy regression tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,

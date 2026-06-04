@@ -2,6 +2,11 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { AgentParamsSchema } from "./agent.js";
 
+/**
+ * Regression coverage for agent-run schema payloads that carry internal
+ * completion events. These events are produced by child automation and consumed
+ * by parent agent runs, so the fixture mirrors the cross-runtime boundary.
+ */
 type AgentInternalEvent = {
   type: "task_completion";
   source: string;
@@ -17,6 +22,7 @@ type AgentInternalEvent = {
   replyInstruction?: string;
 };
 
+/** Builds the smallest valid agent request that embeds one internal event. */
 function makeAgentParamsWithInternalEvent(event: AgentInternalEvent) {
   return {
     message: "A music generation task finished. Process the completion update now.",
@@ -26,6 +32,7 @@ function makeAgentParamsWithInternalEvent(event: AgentInternalEvent) {
   };
 }
 
+/** Representative generated-media completion event from a child task. */
 const musicCompletionEvent: AgentInternalEvent = {
   type: "task_completion",
   source: "music_generation",

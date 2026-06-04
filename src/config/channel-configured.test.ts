@@ -1,3 +1,4 @@
+// Covers channel-configured checks from bootstrap and plugin metadata.
 import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 

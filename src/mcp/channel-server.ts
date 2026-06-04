@@ -6,8 +6,15 @@ import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
 import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-tools.js";
 
+/**
+ * MCP stdio server assembly for OpenClaw channel conversations.
+ *
+ * This module wires config, the Gateway bridge, protocol notifications, and
+ * registered tools into a lifecycle that callers can either embed or serve.
+ */
 export { OpenClawChannelBridge } from "./channel-bridge.js";
 
+/** Options accepted by the channel MCP server factory and stdio entry point. */
 export type OpenClawMcpServeOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -25,6 +32,7 @@ async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<Ope
   return getRuntimeConfig();
 }
 
+/** Create an in-process channel MCP server plus explicit start and close hooks. */
 export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptions = {}): Promise<{
   server: McpServer;
   bridge: OpenClawChannelBridge;
@@ -70,6 +78,7 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
   };
 }
 
+/** Serve the channel MCP server over stdio until transport or process shutdown. */
 export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}): Promise<void> {
   const { server, start, close } = await createOpenClawChannelMcpServer(opts);
   const transport = new StdioServerTransport();
@@ -89,6 +98,7 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
+    // The MCP SDK exposes transport close as a mutable handler rather than an EventEmitter API.
     transport["onclose"] = undefined;
     close().then(resolveClosed, resolveClosed);
   };

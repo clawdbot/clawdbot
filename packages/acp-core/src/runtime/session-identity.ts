@@ -2,6 +2,9 @@ import { normalizeText } from "../normalize-text.js";
 import type { SessionAcpIdentity, SessionAcpIdentitySource, SessionAcpMeta } from "../types.js";
 import type { AcpRuntimeHandle, AcpRuntimeStatus } from "./types.js";
 
+// ACP session identity merge and extraction helpers for resume-safe runtime state.
+
+/** Normalize a stored identity state value from metadata. */
 function normalizeIdentityState(value: unknown): SessionAcpIdentity["state"] | undefined {
   if (value !== "pending" && value !== "resolved") {
     return undefined;
@@ -9,6 +12,7 @@ function normalizeIdentityState(value: unknown): SessionAcpIdentity["state"] | u
   return value;
 }
 
+/** Normalize where an ACP identity observation came from. */
 function normalizeIdentitySource(value: unknown): SessionAcpIdentitySource | undefined {
   if (value !== "ensure" && value !== "status" && value !== "event") {
     return undefined;
@@ -16,6 +20,7 @@ function normalizeIdentitySource(value: unknown): SessionAcpIdentitySource | und
   return value;
 }
 
+/** Normalize an identity object and infer pending/resolved state from stable ids. */
 function normalizeIdentity(
   identity: SessionAcpIdentity | undefined,
 ): SessionAcpIdentity | undefined {
@@ -49,6 +54,7 @@ function normalizeIdentity(
 
 type IdentityIds = Pick<SessionAcpIdentity, "acpxRecordId" | "acpxSessionId" | "agentSessionId">;
 
+/** Read identity ids from a runtime handle shape. */
 function readIdentityIdsFromHandle(handle: AcpRuntimeHandle): IdentityIds {
   return {
     acpxRecordId: normalizeText((handle as { acpxRecordId?: unknown }).acpxRecordId),
@@ -57,6 +63,7 @@ function readIdentityIdsFromHandle(handle: AcpRuntimeHandle): IdentityIds {
   };
 }
 
+/** Build an identity only when at least one stable id is known. */
 function buildSessionIdentity(params: {
   ids: IdentityIds;
   state: SessionAcpIdentity["state"];
@@ -77,6 +84,7 @@ function buildSessionIdentity(params: {
   };
 }
 
+/** Resolve normalized ACP identity from persisted session metadata. */
 export function resolveSessionIdentityFromMeta(
   meta: SessionAcpMeta | undefined,
 ): SessionAcpIdentity | undefined {
@@ -86,10 +94,12 @@ export function resolveSessionIdentityFromMeta(
   return normalizeIdentity(meta.identity);
 }
 
+/** Return true when an identity has a backend or agent session id. */
 export function identityHasStableSessionId(identity: SessionAcpIdentity | undefined): boolean {
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
 
+/** Resolve the runtime resume id, preferring agent session id over ACP backend id. */
 export function resolveRuntimeResumeSessionId(
   identity: SessionAcpIdentity | undefined,
 ): string | undefined {
@@ -99,6 +109,7 @@ export function resolveRuntimeResumeSessionId(
   return normalizeText(identity.agentSessionId) ?? normalizeText(identity.acpxSessionId);
 }
 
+/** Return true when identity is absent or still pending. */
 export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
   if (!identity) {
     return true;
@@ -106,6 +117,7 @@ export function isSessionIdentityPending(identity: SessionAcpIdentity | undefine
   return identity.state === "pending";
 }
 
+/** Compare identities ignoring lastUpdatedAt timestamp churn. */
 export function identityEquals(
   left: SessionAcpIdentity | undefined,
   right: SessionAcpIdentity | undefined,
@@ -127,6 +139,7 @@ export function identityEquals(
   );
 }
 
+/** Merge current and incoming identity observations without downgrading resolved ids. */
 export function mergeSessionIdentity(params: {
   current: SessionAcpIdentity | undefined;
   incoming: SessionAcpIdentity | undefined;
@@ -174,6 +187,7 @@ export function mergeSessionIdentity(params: {
   return next;
 }
 
+/** Create a pending identity from an ensure-session handle. */
 export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
@@ -186,6 +200,7 @@ export function createIdentityFromEnsure(params: {
   });
 }
 
+/** Create an identity from a runtime event handle. */
 export function createIdentityFromHandleEvent(params: {
   handle: AcpRuntimeHandle;
   now: number;
@@ -199,6 +214,7 @@ export function createIdentityFromHandleEvent(params: {
   });
 }
 
+/** Create an identity from runtime status output. */
 export function createIdentityFromStatus(params: {
   status: AcpRuntimeStatus | undefined;
   now: number;
@@ -230,6 +246,7 @@ export function createIdentityFromStatus(params: {
   };
 }
 
+/** Convert ACP identity ids into runtime handle resume identifiers. */
 export function resolveRuntimeHandleIdentifiersFromIdentity(
   identity: SessionAcpIdentity | undefined,
 ): { backendSessionId?: string; agentSessionId?: string } {

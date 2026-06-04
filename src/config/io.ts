@@ -1,3 +1,4 @@
+// Loads, validates, migrates, snapshots, and writes OpenClaw config files.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

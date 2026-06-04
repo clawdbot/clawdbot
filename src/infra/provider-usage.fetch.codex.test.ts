@@ -1,3 +1,4 @@
+// Covers Codex provider usage fetch parsing.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";

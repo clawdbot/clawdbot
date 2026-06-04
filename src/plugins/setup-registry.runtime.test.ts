@@ -1,3 +1,4 @@
+// Verifies runtime setup registry loading and lazy boundaries.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,

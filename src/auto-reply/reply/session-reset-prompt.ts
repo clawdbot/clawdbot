@@ -1,3 +1,4 @@
+// Builds reset prompts that preserve session context and bootstrap mode.
 import { resolveBootstrapMode, type BootstrapMode } from "../../agents/bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,

@@ -80,6 +80,12 @@ import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.j
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.js";
 
+/**
+ * Public factory barrel for the built-in coding and read-only session tools.
+ *
+ * Keep grouped creators here so callers can request stable tool sets without importing each
+ * individual implementation module.
+ */
 export type Tool = AgentTool;
 export type ToolDef = ToolDefinition;
 export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
@@ -103,6 +109,7 @@ export interface ToolsOptions {
   ls?: LsToolOptions;
 }
 
+/** Creates one tool definition by stable built-in tool name. */
 export function createToolDefinition(
   toolName: ToolName,
   cwd: string,
@@ -128,6 +135,7 @@ export function createToolDefinition(
   }
 }
 
+/** Creates one executable built-in tool by stable tool name. */
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
   switch (toolName) {
     case "read":
@@ -149,6 +157,7 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
   }
 }
 
+/** Creates the mutable coding tool definitions used by agent coding sessions. */
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
   return [
     createReadToolDefinition(cwd, options?.read),
@@ -158,6 +167,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
   ];
 }
 
+/** Creates read-only discovery tool definitions for restricted sessions. */
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
   return [
     createReadToolDefinition(cwd, options?.read),
@@ -167,6 +177,7 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
   ];
 }
 
+/** Creates all built-in tool definitions keyed by tool name. */
 export function createAllToolDefinitions(
   cwd: string,
   options?: ToolsOptions,
@@ -182,6 +193,7 @@ export function createAllToolDefinitions(
   };
 }
 
+/** Creates the mutable coding tools used by local agent sessions. */
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
   return [
     createReadTool(cwd, options?.read),
@@ -191,6 +203,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
   ];
 }
 
+/** Creates read-only discovery tools for restricted sessions. */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
   return [
     createReadTool(cwd, options?.read),
@@ -200,6 +213,7 @@ export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[]
   ];
 }
 
+/** Creates all built-in tools keyed by tool name. */
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
   return {
     read: createReadTool(cwd, options?.read),

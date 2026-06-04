@@ -1,3 +1,6 @@
+/**
+ * Tests plugin runtime mock helpers stay aligned with channel runtime contracts.
+ */
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
 

@@ -1,8 +1,10 @@
+// Resolves task runtime scope for agent harness launches.
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const scopeRegistryKey = Symbol.for("openclaw.agentHarnessTaskRuntimeScope.registry");
 
+// Host-issued scopes prevent plugins from fabricating requester ownership for task runs.
 type ScopeRegistry = {
   hostIssuedScopes: WeakSet<object>;
 };
@@ -24,6 +26,7 @@ export type AgentHarnessTaskRuntimeScope = {
   readonly requesterOrigin?: DeliveryContext;
 };
 
+/** Creates a host-issued task runtime scope for agent harness task execution. */
 export function createAgentHarnessTaskRuntimeScope(params: {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;

@@ -1,3 +1,5 @@
+// Number parsing facade for legacy infra imports; implementation lives in
+// normalization-core so config, timers, and CLI parsing share one contract.
 export {
   parseFiniteNumber,
   parseStrictFiniteNumber,

@@ -1,3 +1,4 @@
+// Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

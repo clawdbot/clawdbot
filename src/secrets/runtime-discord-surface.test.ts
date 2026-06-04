@@ -1,3 +1,4 @@
+/** Tests Discord secret surfaces in runtime preparation. */
 import { describe, expect, it } from "vitest";
 import "./runtime-discord.test-support.ts";
 import {

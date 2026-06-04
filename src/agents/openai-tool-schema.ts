@@ -2,6 +2,12 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 
+/**
+ * OpenAI strict-tool-schema normalization and diagnostics.
+ *
+ * Strict schemas need all object properties required and `additionalProperties: false`; model
+ * compatibility settings can also remove unsupported schema constructs before strict checks run.
+ */
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
   omitEmptyArrayItems?: unknown;
@@ -65,6 +71,7 @@ export function clearOpenAIToolSchemaCacheForTest(): void {
   strictOpenAISchemaCache = new WeakMap();
 }
 
+/** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */
 export function normalizeStrictOpenAIJsonSchema(
   schema: unknown,
   modelCompat?: ToolSchemaCompatInput | null,
@@ -86,6 +93,8 @@ export function normalizeStrictOpenAIJsonSchema(
   return rememberStrictOpenAISchema(
     schemaInput,
     cacheKey,
+    // Cache by input object and compatibility key so repeated inventory generation preserves object
+    // identity without mixing schemas normalized for different provider limitations.
     normalizeStrictOpenAIJsonSchemaRecursive(
       normalizeToolParameterSchema(schemaInput, {
         modelCompat: resolveToolSchemaModelCompat(modelCompat),
@@ -141,6 +150,7 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   return changed ? normalized : schema;
 }
 
+/** Normalizes tool parameters using strict OpenAI rules only when strict mode is active. */
 export function normalizeOpenAIStrictToolParameters<T>(
   schema: T,
   strict: boolean,
@@ -153,6 +163,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
   return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
 }
 
+/** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
@@ -163,6 +174,7 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
+/** Returns strict-schema violation paths for each incompatible tool definition. */
 export function findOpenAIStrictToolSchemaDiagnostics(
   tools: readonly ToolWithParameters[],
 ): OpenAIStrictToolSchemaDiagnostic[] {
@@ -297,6 +309,7 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
   return violations;
 }
 
+/** Resolves the strict flag to advertise for a tool inventory after compatibility checks. */
 export function resolveOpenAIStrictToolFlagForInventory(
   tools: readonly ToolWithParameters[],
   strict: boolean | null | undefined,

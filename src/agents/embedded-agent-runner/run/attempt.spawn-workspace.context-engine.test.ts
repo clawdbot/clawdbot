@@ -1740,6 +1740,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
+  it("repairs tool-result pairing after context engine assembly", async () => {
+    let promptMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "assembled context", timestamp: 1 },
+            {
+              role: "toolResult",
+              toolCallId: "call_orphan",
+              toolUseId: "call_orphan",
+              toolName: "read",
+              content: [{ type: "text", text: "orphaned result" }],
+              timestamp: 2,
+            },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        promptMessages = session.messages.map((message) => message as AgentMessage);
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(promptMessages).toContainEqual(
+      expect.objectContaining({ role: "user", content: "assembled context" }),
+    );
+    expect(promptMessages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(JSON.stringify(promptMessages)).not.toContain("orphaned result");
+  });
+
   it("honors context engines that opt into preassembly overflow authority", async () => {
     const lockEvents = trackSessionWriteLocks();
     let sawPrompt = false;

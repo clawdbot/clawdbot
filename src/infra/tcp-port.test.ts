@@ -1,3 +1,4 @@
+// Covers TCP port parsing boundaries.
 import { describe, expect, it } from "vitest";
 import { parseTcpPort } from "./tcp-port.js";
 

@@ -34,6 +34,12 @@ function hasRoutableDeliveryContext(context?: {
   return Boolean(context?.channel && context?.to);
 }
 
+/**
+ * Extracts the routable delivery context and thread id for a persisted session key.
+ *
+ * Thread/topic keys first try their exact store entry, then fall back to the base session when
+ * the thread entry has no delivery route of its own.
+ */
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
   options?: { cfg?: OpenClawConfig },
@@ -161,6 +167,8 @@ function findSessionEntryInStore(
       acceptCandidate(store[trimmed]);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
+      // Build the normalized index only after direct/exact probes fail; large session stores can
+      // stay on the cheap path when the queried key already has routable delivery context.
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
       if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
@@ -247,6 +255,8 @@ function loadDeliverySessionEntry(params: {
       continue;
     }
     fallback ??= { entry, baseEntry };
+    // Prefer the first store that can actually route delivery; keep a non-routable fallback only
+    // so callers can still inspect thread ids when no target-bearing session exists.
     if (
       hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
       hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))

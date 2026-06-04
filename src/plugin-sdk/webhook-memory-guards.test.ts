@@ -1,3 +1,6 @@
+/**
+ * Tests webhook memory guard counters, rate limits, and anomaly tracking.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createBoundedCounter,

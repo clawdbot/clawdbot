@@ -1,3 +1,4 @@
+// Covers shared config schema fragments and defaults.
 import { describe, expect, it } from "vitest";
 import { findWildcardHintMatch, schemaHasChildren } from "./schema.shared.js";
 

@@ -1,3 +1,4 @@
+// Exercises the slower TUI local-mode PTY smoke path.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";

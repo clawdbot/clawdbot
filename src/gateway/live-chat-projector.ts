@@ -11,6 +11,8 @@ import {
   isSuppressedControlReplyText,
 } from "./control-reply-text.js";
 
+// Live chat projection converts streaming assistant runtime events into display
+// text while suppressing commentary/control replies and silent-token prefixes.
 export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 function capLiveAssistantBuffer(text: string): string {
@@ -20,6 +22,7 @@ function capLiveAssistantBuffer(text: string): string {
   return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
+/** Merges assistant full-text and delta events into a capped live buffer. */
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -43,6 +46,7 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
+/** Removes runtime-only context/directive tags from live assistant event text. */
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
   text: string;
   delta: string;
@@ -56,6 +60,7 @@ export function normalizeLiveAssistantEventText(params: { text: string; delta?: 
   };
 }
 
+/** Projects buffered assistant text into display text or a suppressed/pending state. */
 export function projectLiveAssistantBufferedText(
   rawText: string,
   options?: { suppressLeadFragments?: boolean },
@@ -85,6 +90,7 @@ export function projectLiveAssistantBufferedText(
   return { text, suppress: false, pendingLeadFragment: false };
 }
 
+/** Returns true when an assistant event phase should not appear in live chat. */
 export function shouldSuppressAssistantEventForLiveChat(data: unknown): boolean {
   return resolveAssistantEventPhase(data) === "commentary";
 }

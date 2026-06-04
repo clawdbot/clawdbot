@@ -1,3 +1,4 @@
+// Defines sandbox execution configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
 export type SandboxDockerSettings = {

@@ -234,6 +234,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
   return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
+/** Accepts ISO dates plus Perplexity `M/D/YYYY` dates and returns canonical ISO dates. */
 export function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
   if (ISO_DATE_PATTERN.test(trimmed)) {
@@ -248,6 +249,7 @@ export function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
+/** Parses optional date range filters and returns provider-facing validation errors. */
 export function parseIsoDateRange(params: {
   rawDateAfter?: string;
   rawDateBefore?: string;
@@ -292,6 +294,7 @@ export function parseIsoDateRange(params: {
   return { dateAfter, dateBefore };
 }
 
+/** Converts shared freshness names into provider-specific Brave or Perplexity values. */
 export function normalizeFreshness(
   value: string | undefined,
   provider: WebSearchFreshnessProvider,
@@ -315,6 +318,7 @@ export function normalizeFreshness(
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
+      // Brave accepts explicit ISO ranges; Perplexity only supports recency buckets here.
       if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
         return `${start}to${end}`;
       }
@@ -324,6 +328,7 @@ export function normalizeFreshness(
   return undefined;
 }
 
+/** Parses freshness/date filters while rejecting combinations providers cannot express safely. */
 export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessProvider>(params: {
   rawFreshness?: string;
   rawDateAfter?: string;
@@ -392,17 +397,20 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     : parsedDateRange;
 }
 
+/** Reads a search cache payload and marks it so provider responses can disclose cache hits. */
 export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
   const cached = readCache(SEARCH_CACHE, cacheKey);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 
+/** Builds a normalized cache key from provider-specific search dimensions. */
 export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
   return normalizeCacheKey(
     parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
   );
 }
 
+/** Stores one provider search payload with its provider-selected TTL. */
 export function writeCachedSearchPayload(
   cacheKey: string,
   payload: Record<string, unknown>,

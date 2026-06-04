@@ -1,3 +1,4 @@
+// Covers web fetch provider runtime hooks supplied by plugins.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 

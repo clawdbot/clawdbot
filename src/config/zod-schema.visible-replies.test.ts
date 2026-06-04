@@ -1,3 +1,4 @@
+// Covers visible-reply config schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 

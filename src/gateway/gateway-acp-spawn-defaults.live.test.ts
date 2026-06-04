@@ -1,3 +1,6 @@
+/**
+ * Live tests for default ACP spawn settings used by gateway sessions.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";

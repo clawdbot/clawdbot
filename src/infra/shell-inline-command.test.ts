@@ -1,3 +1,4 @@
+// Covers shell inline command flag parsing.
 import { describe, expect, it } from "vitest";
 import {
   POSIX_INLINE_COMMAND_FLAGS,

@@ -10,26 +10,44 @@ import {
   type TalkTransport,
 } from "./talk-events.js";
 
+/**
+ * Why a turn-scoped Talk operation could not emit an event.
+ */
 export type TalkTurnFailureReason = "no_active_turn" | "stale_turn";
 
+/**
+ * Successful turn operation with the emitted Talk event.
+ */
 export type TalkTurnSuccess = {
   event: TalkEvent;
   ok: true;
   turnId: string;
 };
 
+/**
+ * Failed turn operation when the requested turn does not match controller state.
+ */
 export type TalkTurnFailure = {
   ok: false;
   reason: TalkTurnFailureReason;
 };
 
+/**
+ * Result for ending or cancelling an active Talk turn.
+ */
 export type TalkTurnResult = TalkTurnSuccess | TalkTurnFailure;
 
+/**
+ * Result for operations that ensure a turn exists and may emit a start event.
+ */
 export type TalkEnsureTurnResult = {
   event?: TalkEvent;
   turnId: string;
 };
 
+/**
+ * Stateful Talk event controller for one session's turns, output audio, and recent event buffer.
+ */
 export type TalkSessionController = {
   readonly activeTurnId: string | undefined;
   readonly context: TalkEventContext;
@@ -45,11 +63,17 @@ export type TalkSessionController = {
   startOutputAudio(params?: { payload?: unknown; turnId?: string }): TalkEnsureTurnResult;
 };
 
+/**
+ * Session context plus controller retention settings.
+ */
 export type TalkSessionControllerParams = TalkEventContext & {
   maxRecentEvents?: number;
   turnIdPrefix?: string;
 };
 
+/**
+ * Optional controller hooks and sequencer overrides for tests and observers.
+ */
 export type TalkSessionControllerOptions = {
   now?: () => Date | string;
   onEvent?: (event: TalkEvent) => void;
@@ -60,6 +84,9 @@ function defaultTalkEventPayload(payload: unknown): unknown {
   return payload === undefined ? {} : payload;
 }
 
+/**
+ * Creates a per-session Talk controller that emits correlated turn and output-audio events.
+ */
 export function createTalkSessionController(
   params: TalkSessionControllerParams,
   options: TalkSessionControllerOptions = {},
@@ -72,6 +99,8 @@ export function createTalkSessionController(
   let turnSeq = 0;
 
   const remember = <TPayload>(event: TalkEvent<TPayload>): TalkEvent<TPayload> => {
+    // Keep only recent events for diagnostics; the authoritative transcript lives with
+    // downstream observers/loggers, so this bounded buffer must not grow with session length.
     recentEvents.push(event as TalkEvent);
     if (recentEvents.length > maxRecentEvents) {
       recentEvents.splice(0, recentEvents.length - maxRecentEvents);
@@ -89,6 +118,7 @@ export function createTalkSessionController(
   };
 
   const resolveActiveTurn = (requestedTurnId: string | undefined): string | TalkTurnFailure => {
+    // Caller-supplied turn ids protect async output callbacks from closing a newer turn.
     if (!activeTurnId) {
       return { ok: false, reason: "no_active_turn" };
     }
@@ -185,6 +215,8 @@ export function createTalkSessionController(
     startOutputAudio(paramsForOutput = {}) {
       const turn = ensureTurn({ turnId: paramsForOutput.turnId, payload: {} });
       if (outputAudioActive) {
+        // Providers can emit duplicate start notifications; return the active turn without
+        // emitting a second start event so observers see one output-audio span.
         return { turnId: turn.turnId };
       }
       outputAudioActive = true;
@@ -200,6 +232,9 @@ export function createTalkSessionController(
   };
 }
 
+/**
+ * Normalizes legacy realtime transport names into Talk transport families.
+ */
 export function normalizeTalkTransport(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {

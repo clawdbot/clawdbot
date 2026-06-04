@@ -1,6 +1,9 @@
+// Resolves commitment runtime configuration from agent and user settings.
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { OpenClawConfig } from "../config/config.js";
 
+// Configuration defaults for hidden follow-up commitment extraction and
+// heartbeat delivery limits.
 const DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS = 15_000;
 const DEFAULT_COMMITMENT_BATCH_MAX_ITEMS = 8;
 export const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
@@ -30,6 +33,7 @@ function positiveInt(value: unknown, fallback: number): number {
     : fallback;
 }
 
+/** Resolves commitment extraction config with conservative defaults. */
 export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
   const raw = cfg?.commitments;
   return {
@@ -46,6 +50,7 @@ export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitme
   };
 }
 
+/** Resolves the timezone used when interpreting inferred commitment dates. */
 export function resolveCommitmentTimezone(cfg?: OpenClawConfig): string {
   return resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
 }

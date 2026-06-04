@@ -1,3 +1,4 @@
+/** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { logVerbose } from "../../globals.js";
 import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "../runtime/errors.js";
@@ -47,6 +48,7 @@ type ApplyRuntimeControls = (params: {
   meta: SessionAcpMeta;
 }) => Promise<void>;
 
+/** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
   sessionKey: string;

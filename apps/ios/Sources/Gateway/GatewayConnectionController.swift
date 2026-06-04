@@ -990,7 +990,10 @@ extension GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+        ]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =

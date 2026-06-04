@@ -1,3 +1,4 @@
+// Tests allowlist command edits across legacy and scoped channel configuration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Tests provider usage loading from plugin-provided sources.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 

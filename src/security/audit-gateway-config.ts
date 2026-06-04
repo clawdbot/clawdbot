@@ -1,3 +1,4 @@
+// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import {
   normalizeLowercaseStringOrEmpty,

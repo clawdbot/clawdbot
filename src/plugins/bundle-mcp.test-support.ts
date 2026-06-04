@@ -1,3 +1,4 @@
+// Provides test support for bundled MCP plugin packaging checks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -6,8 +6,15 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
+/**
+ * Read-only command default resolution from installed plugin manifests.
+ */
+
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
+/**
+ * Native command/skill auto-enable defaults exposed by channel manifests.
+ */
 export type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
@@ -15,10 +22,16 @@ export type ChannelCommandDefaults = Pick<
 
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
 
+/**
+ * Returns whether a manifest channel id is safe for own-property lookup.
+ */
 export function isSafeManifestChannelId(channelId: string): boolean {
   return SAFE_MANIFEST_CHANNEL_ID_PATTERN.test(channelId) && !isBlockedObjectKey(channelId);
 }
 
+/**
+ * Reads an own record property while blocking prototype-polluting keys.
+ */
 export function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
   if (isBlockedObjectKey(key) || !Object.hasOwn(record, key)) {
     return undefined;
@@ -26,6 +39,9 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
+/**
+ * Normalizes manifest command defaults down to supported boolean fields.
+ */
 export function normalizeChannelCommandDefaults(
   value: ChannelCommandDefaults | undefined,
 ): ChannelCommandDefaults | undefined {
@@ -51,6 +67,9 @@ export function normalizeChannelCommandDefaults(
   return defaults;
 }
 
+/**
+ * Resolves command defaults from enabled installed plugin metadata without loading plugins.
+ */
 export function resolveReadOnlyChannelCommandDefaults(
   channelId: string,
   options: {
@@ -79,6 +98,8 @@ export function resolveReadOnlyChannelCommandDefaults(
     if (!isInstalledPluginEnabled(resolvedSnapshot.index, record.id, options.config)) {
       continue;
     }
+    // Manifest channelConfigs are untrusted object data, so read the channel key
+    // through the guarded helper instead of indexing directly.
     const channelConfigValue = record.channelConfigs
       ? readOwnRecordValue(record.channelConfigs as Record<string, unknown>, normalizedChannelId)
       : undefined;

@@ -376,6 +376,7 @@ function broadcastChatClassEvents(
 ) {
   broadcast("chat", chatPayload());
   broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+  broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
   broadcast("chat.side_result", chatSideResultPayload());
 }
 
@@ -427,10 +428,10 @@ describe("gateway broadcaster", () => {
 
     expect(pairingSocket.send).not.toHaveBeenCalled();
     expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(3);
-    expect(writeSocket.send).toHaveBeenCalledTimes(3);
-    expect(adminSocket.send).toHaveBeenCalledTimes(3);
-    const expectedEvents = ["chat", "agent", "chat.side_result"];
+    expect(readSocket.send).toHaveBeenCalledTimes(4);
+    expect(writeSocket.send).toHaveBeenCalledTimes(4);
+    expect(adminSocket.send).toHaveBeenCalledTimes(4);
+    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
     expectSentEvents(readSocket, expectedEvents);
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);

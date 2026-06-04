@@ -1,3 +1,9 @@
+/**
+ * Public barrel for descriptor-driven tool planning.
+ *
+ * Runtime owners import this surface to define tools, evaluate availability,
+ * build visible/hidden plans, and convert descriptors to protocol payloads.
+ */
 export { evaluateToolAvailability } from "./availability.js";
 export { defineToolDescriptor, defineToolDescriptors } from "./descriptors.js";
 export { ToolPlanContractError } from "./diagnostics.js";

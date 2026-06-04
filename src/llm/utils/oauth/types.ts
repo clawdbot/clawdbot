@@ -1,3 +1,4 @@
+// OAuth type facade for core and provider login integrations.
 export type {
   OAuthAuthInfo,
   OAuthCredentials,

@@ -1,3 +1,4 @@
+// Tests session reset cleanup for stale files and persisted state.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   enqueueSystemEvent,

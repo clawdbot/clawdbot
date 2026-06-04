@@ -34,6 +34,12 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
+/**
+ * Executes shell commands on a named node through the Gateway approval/invoke path.
+ *
+ * The node host differs from local exec because approval policy can come from
+ * both the caller config and the remote node policy.
+ */
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
 function resolveNodeAutoReviewReason(params: {
@@ -74,6 +80,7 @@ function nodePolicyBlocksAutoReview(params: {
   nodeSecurity?: ExecSecurity;
   nodeAsk?: "off" | "on-miss" | "always";
 }): boolean {
+  // Remote node policy can be stricter than local host policy; do not auto-approve across that gap.
   return (
     !params.nodeApprovalPolicyKnown ||
     params.nodeAsk === "always" ||
@@ -82,6 +89,7 @@ function nodePolicyBlocksAutoReview(params: {
   );
 }
 
+/** Executes a command on a remote node, requesting approval when policy requires it. */
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -238,6 +246,7 @@ export async function executeNodeHostCommand(
     }
 
     if (!inlineApprovedByAsk) {
+      // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
       const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
         warnings: params.warnings,
         approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -360,6 +369,7 @@ export async function executeNodeHostCommand(
           }
 
           try {
+            // Approved follow-up invocations need approval scopes because they mutate remote node state.
             const raw = await callGatewayTool(
               "node.invoke",
               { timeoutMs: target.invokeTimeoutMs },

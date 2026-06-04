@@ -5,6 +5,12 @@ import {
   validateExecApprovalsSetParams,
 } from "./index.js";
 
+/**
+ * Exec approval validator regressions for gateway and node-scoped policy
+ * writes. The fixtures pin runtime-owned allowlist metadata and command-span
+ * bounds because those contracts are consumed by approval UI and replay logic.
+ */
+
 describe("exec approvals protocol validators", () => {
   it("accepts runtime-owned allowlist metadata on gateway and node set payloads", () => {
     const file = {

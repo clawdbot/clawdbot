@@ -1,3 +1,4 @@
+/** Ensures bundled plugin command manifests are scanned without loading command runtimes. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

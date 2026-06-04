@@ -5,6 +5,12 @@ import type {
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
 
+/**
+ * Input facts used to build the agent portion of plugin hook events.
+ *
+ * Only stable run/session/model facts are forwarded to plugin hooks; config remains a local
+ * construction input so hooks do not accidentally depend on mutable raw configuration.
+ */
 export type AgentHarnessHookContext = {
   runId: string;
   trace?: DiagnosticTraceContext;
@@ -24,6 +30,7 @@ export type AgentHarnessHookContext = {
   config?: OpenClawConfig;
 };
 
+/** Builds the sparse hook context object passed to agent harness plugin hooks. */
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
   return {
     runId: params.runId,

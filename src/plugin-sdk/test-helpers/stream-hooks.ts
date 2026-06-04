@@ -1,3 +1,6 @@
+/**
+ * Stream hook test helpers for capturing provider thinking config.
+ */
 import type { StreamFn } from "../../agents/runtime/index.js";
 
 export function createCapturedThinkingConfigStream() {

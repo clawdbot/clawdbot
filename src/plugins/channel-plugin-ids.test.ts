@@ -1,3 +1,4 @@
+/** Tests channel plugin id resolution from config, manifests, and installed state. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";

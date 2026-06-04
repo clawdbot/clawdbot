@@ -1,3 +1,4 @@
+// CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
 import { Readable, Writable } from "node:stream";
 import {
   invokeNativeHookRelayBridge,
@@ -11,6 +12,7 @@ import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 
+/** User-facing flags for the native hook relay command. */
 export type NativeHookRelayCliOptions = {
   provider?: string;
   relayId?: string;
@@ -28,6 +30,7 @@ type NativeHookRelayCliDeps = {
   callGateway?: typeof callGateway;
 };
 
+/** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
 export async function runNativeHookRelayCli(
   opts: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliDeps = {},
@@ -144,10 +147,12 @@ function formatRelayCliError(prefix: string, error: unknown): string {
   return `${prefix}: ${message}\n`;
 }
 
+/** Create a readable text stream for relay CLI tests. */
 export function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
 }
 
+/** Create a writable stream that exposes captured text for relay CLI tests. */
 export function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => string } {
   const chunks: Buffer[] = [];
   const stream = new Writable({

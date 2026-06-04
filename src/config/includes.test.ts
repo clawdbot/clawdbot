@@ -1,3 +1,4 @@
+// Covers config include scanning and include-file merge behavior.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

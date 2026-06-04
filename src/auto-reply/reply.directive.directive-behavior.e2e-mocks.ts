@@ -1,3 +1,4 @@
+/** Shared E2E mocks for directive behavior tests that exercise reply-agent dispatch. */
 import { vi, type Mock } from "vitest";
 
 export const runEmbeddedAgentMock: Mock = vi.fn();
@@ -21,6 +22,7 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
   const replyToCurrentPattern = /\[\[\s*reply_to_current\s*\]\]/gi;
   const hasReplyToCurrent = replyToCurrentPattern.test(text);
   const currentMessageId = objectRecord(objectRecord(params)?.sessionCtx)?.MessageSid;
+  // Directive tests encode reply targets in text markers so mocked agents can stay lightweight.
   const cleanedText = text
     .replace(replyToCurrentPattern, "")
     .replace(/\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/gi, "")
@@ -53,6 +55,7 @@ async function runMockedReplyAgent(runParams: unknown, params: unknown) {
   return normalized.length === 1 ? normalized[0] : normalized;
 }
 
+/** Runs the mocked reply agent using the follow-up run payload from directive tests. */
 export async function runDirectiveBehaviorReplyAgent(params: unknown) {
   const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
   return await runMockedReplyAgent(runParams, params);
@@ -60,6 +63,7 @@ export async function runDirectiveBehaviorReplyAgent(params: unknown) {
 
 export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
 
+/** Runs the mocked prepared-reply path with the resolved model and elevation settings. */
 export async function runDirectiveBehaviorPreparedReply(params: unknown) {
   const input = objectRecord(params) ?? {};
   const runParams = {

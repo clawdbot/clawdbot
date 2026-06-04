@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK fetch runtime helpers and fixture path behavior.
+ */
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";

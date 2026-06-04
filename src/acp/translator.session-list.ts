@@ -6,6 +6,7 @@ const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
 const ACP_LIST_SESSIONS_MAX_PAGE_SIZE = 100;
 const ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET = 10_000;
 
+/** Maximum rows fetched to satisfy ACP session-list pagination plus next-page detection. */
 export const ACP_LIST_SESSIONS_MAX_FETCH_LIMIT =
   ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET + ACP_LIST_SESSIONS_MAX_PAGE_SIZE + 1;
 

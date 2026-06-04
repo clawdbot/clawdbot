@@ -1,3 +1,4 @@
+// Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {

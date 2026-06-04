@@ -1,3 +1,7 @@
+/**
+ * Runtime barrel for channel secret collectors used by bundled channel contracts.
+ * Keep channel packages on this narrow surface instead of deep runtime modules.
+ */
 export {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,

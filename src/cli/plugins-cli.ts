@@ -151,7 +151,7 @@ export function registerPluginsCli(program: Command) {
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .option(
@@ -182,7 +182,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would change without writing", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      "Deprecated no-op; install policy and plugin hooks may still block",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {

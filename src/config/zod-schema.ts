@@ -1,3 +1,4 @@
+// Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -100,6 +101,32 @@ const SecuritySchema = z
               })
               .strict(),
           )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    installPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        targets: z
+          .array(z.union([z.literal("skill"), z.literal("plugin")]))
+          .min(1)
+          .optional(),
+        exec: z
+          .object({
+            source: z.literal("exec"),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional(),
+            timeoutMs: z.number().int().min(1).optional(),
+            noOutputTimeoutMs: z.number().int().min(1).optional(),
+            maxOutputBytes: z.number().int().min(1).optional(),
+            env: z.record(z.string(), z.string().register(sensitive)).optional(),
+            passEnv: z.array(z.string()).optional(),
+            trustedDirs: z.array(z.string()).optional(),
+            allowInsecurePath: z.boolean().optional(),
+            allowSymlinkCommand: z.boolean().optional(),
+          })
+          .strict()
           .optional(),
       })
       .strict()

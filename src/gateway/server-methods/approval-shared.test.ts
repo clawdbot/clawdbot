@@ -1,3 +1,6 @@
+/**
+ * Tests shared approval helpers used by gateway method handlers.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";

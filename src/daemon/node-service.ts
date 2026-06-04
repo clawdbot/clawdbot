@@ -9,6 +9,7 @@ import {
 import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
 import { resolveGatewayService } from "./service.js";
 
+// Wraps the generic gateway service with node-specific service identifiers and env.
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {

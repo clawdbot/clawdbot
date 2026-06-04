@@ -1,3 +1,6 @@
+/**
+ * Tests for usage-report gateway methods and aggregation responses.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 

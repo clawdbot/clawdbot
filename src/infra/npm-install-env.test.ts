@@ -1,3 +1,4 @@
+// Covers npm install env and freshness bypass args.
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";

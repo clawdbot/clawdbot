@@ -187,40 +187,41 @@ describe("bench-cli-startup", () => {
   });
 
   it("writes a config fixture for config get benchmarks", () => {
-    expect(
-      withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
-        testing.buildConfigFixture({
-          id: "configGetGatewayPort",
-          name: "config get gateway.port",
-          args: ["config", "get", "gateway.port"],
-          presets: ["real"],
-        }),
-      ),
-    ).toEqual({
+    const expectedFixture = {
       gateway: {
         auth: { mode: "none" },
         bind: "loopback",
         mode: "local",
         port: 32123,
       },
-    });
-    expect(
-      withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
-        testing.buildConfigFixture({
-          id: "gatewayHealthJson",
-          name: "gateway health --json",
-          args: ["gateway", "health", "--json"],
-          presets: ["real"],
-        }),
-      ),
-    ).toEqual({
-      gateway: {
-        auth: { mode: "none" },
-        bind: "loopback",
-        mode: "local",
-        port: 32123,
+    };
+    for (const commandCase of [
+      {
+        id: "configGetGatewayPort",
+        name: "config get gateway.port",
+        args: ["config", "get", "gateway.port"],
+        presets: ["real"],
       },
-    });
+      {
+        id: "gatewayHealthJson",
+        name: "gateway health --json",
+        args: ["gateway", "health", "--json"],
+        presets: ["real"],
+      },
+      { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
+      {
+        id: "healthJson",
+        name: "health --json",
+        args: ["health", "--json"],
+        presets: ["startup"],
+      },
+    ]) {
+      expect(
+        withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+          testing.buildConfigFixture(commandCase),
+        ),
+      ).toEqual(expectedFixture);
+    }
   });
 
   it("parses config fixture gateway ports strictly from env", () => {

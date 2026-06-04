@@ -1,3 +1,4 @@
+// Tests auth profile directive handling and provider override selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/config.js";

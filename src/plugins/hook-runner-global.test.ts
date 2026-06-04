@@ -1,3 +1,4 @@
+/** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 

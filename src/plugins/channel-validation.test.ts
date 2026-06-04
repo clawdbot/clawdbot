@@ -1,3 +1,4 @@
+// Covers plugin channel validation from manifest metadata.
 import { describe, expect, it } from "vitest";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";

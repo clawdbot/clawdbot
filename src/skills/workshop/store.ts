@@ -29,6 +29,7 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
+/** Maximum bytes accepted for a proposal draft. */
 export const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILE_BYTES = 256 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
@@ -63,6 +64,7 @@ export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
 };
 type SkillProposalWriteGuard = (manifest: SkillProposalManifest) => Promise<void> | void;
 
+/** Creates a stable proposal id from skill name, date, and random suffix. */
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
   const date = now.toISOString().slice(0, 10).replaceAll("-", "");

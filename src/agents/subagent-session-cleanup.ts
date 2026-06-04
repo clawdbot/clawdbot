@@ -3,6 +3,7 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 type CallGateway = typeof defaultCallGateway;
 
+/** Deletes a child subagent session and optionally emits session-mode lifecycle hooks. */
 export async function deleteSubagentSessionForCleanup(params: {
   callGateway: CallGateway;
   childSessionKey: string;

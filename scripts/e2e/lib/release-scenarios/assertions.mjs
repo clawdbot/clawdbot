@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -81,9 +82,41 @@ function authProfilesPath() {
   );
 }
 
+function authProfilesDatabasePath() {
+  return path.join(
+    process.env.HOME ?? "",
+    ".openclaw",
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+}
+
+function readAuthProfileStoreSqliteText() {
+  const dbPath = authProfilesDatabasePath();
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
+
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return paths.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  return [...paths.map((file) => fs.readFileSync(file, "utf8")), readAuthProfileStoreSqliteText()]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function configureMockOpenAi() {

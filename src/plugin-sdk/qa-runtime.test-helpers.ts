@@ -1,3 +1,6 @@
+/**
+ * Shared fixtures for QA Lab runtime facade tests.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,12 +12,14 @@ type QaRuntimeModule = {
 
 type SurfaceLoaderMock = ReturnType<typeof vi.fn>;
 
+/** Removes temporary source roots created by QA runtime tests. */
 export function cleanupTempDirs(tempDirs: string[]): void {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/** Restores the private QA CLI env flag after a test mutates it. */
 export function restorePrivateQaCliEnv(originalPrivateQaCli: string | undefined): void {
   if (originalPrivateQaCli === undefined) {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
@@ -23,6 +28,7 @@ export function restorePrivateQaCliEnv(originalPrivateQaCli: string | undefined)
   }
 }
 
+/** Creates a minimal source checkout shape that enables private QA runtime loading. */
 export function makePrivateQaSourceRoot(tempDirs: string[], prefix: string): string {
   const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(sourceRoot);
@@ -40,6 +46,7 @@ function makeQaRuntimeSurface() {
   };
 }
 
+/** Asserts that the public QA Lab runtime facade loads from the bundled plugin surface. */
 export async function expectQaLabRuntimeSurfaceLoad(params: {
   importRuntime: () => Promise<QaRuntimeModule>;
   loadBundledPluginPublicSurfaceModuleSync: SurfaceLoaderMock;
@@ -56,6 +63,7 @@ export async function expectQaLabRuntimeSurfaceLoad(params: {
   });
 }
 
+/** Asserts private QA loading rewrites bundled plugin lookup to the source extensions root. */
 export async function expectPrivateQaLabRuntimeSurfaceLoad(params: {
   tempDirs: string[];
   importRuntime: () => Promise<QaRuntimeModule>;

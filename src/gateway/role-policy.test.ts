@@ -1,3 +1,6 @@
+/**
+ * Tests role-policy helpers that normalize gateway-visible message roles.
+ */
 import { describe, expect, test } from "vitest";
 import {
   isRoleAuthorizedForMethod,

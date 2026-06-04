@@ -6,6 +6,8 @@ import type { AuthProfileStore } from "./types.js";
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
   "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
 
+// Qwen Portal OAuth changed credential behavior; old profiles need an explicit
+// local hint before falling back to provider plugin doctor hints.
 function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: string): boolean {
   const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
   return profiles.some(
@@ -14,6 +16,7 @@ function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: st
   );
 }
 
+/** Formats provider-specific auth doctor guidance for a profile/store. */
 export async function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;

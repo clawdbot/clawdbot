@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for chat abort gateway method tests.
+ */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";

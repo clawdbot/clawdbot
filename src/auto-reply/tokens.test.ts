@@ -1,3 +1,4 @@
+/** Tests silent-reply and heartbeat token parsing helpers. */
 import { describe, it, expect } from "vitest";
 import {
   isSilentReplyPrefixText,

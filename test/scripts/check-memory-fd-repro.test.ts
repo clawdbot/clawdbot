@@ -266,6 +266,31 @@ describe("check-memory-fd-repro", () => {
     expect(killProcess).not.toHaveBeenCalled();
   });
 
+  it("force-kills a gateway child that survives listener cleanup", async () => {
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    };
+    const findGatewayPidFn = vi.fn().mockReturnValueOnce(1234).mockReturnValue(null);
+    const killProcess = vi.fn();
+
+    await expect(
+      stopGatewayWithRuntime({
+        child,
+        childExitPolls: 0,
+        findGatewayPidFn,
+        killProcess,
+        listenerSettleDelayMs: 0,
+        port: 9,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGINT");
+    expect(killProcess).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+
   it("bounds gateway readiness output while keeping newest logs", () => {
     const first = updateGatewayReadyOutputState({ tail: "abc", readySeen: false }, "def", 8);
     expect(first).toEqual({ tail: "abcdef", readySeen: false });

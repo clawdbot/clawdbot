@@ -21,6 +21,7 @@ import {
   resolveSessionConversationRef,
 } from "./plugins/session-conversation.js";
 
+/** Resolved model override for a channel conversation plus the config key that matched. */
 export type ChannelModelOverride = {
   channel: string;
   model: string;
@@ -75,6 +76,7 @@ function buildChannelCandidates(
       parentConversationId: rawParentConversation?.rawId,
     }) ?? [];
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey, {
+    // Bundled parsing is only a fallback when the loaded plugin did not provide candidates.
     bundledFallback: parentOverrideFallbacks.length === 0,
   });
   const groupConversationKind =
@@ -154,6 +156,7 @@ function resolveDirectChannelModelMatch(params: {
   return { model, matchKey: match.matchKey, matchSource: match.matchSource };
 }
 
+/** Resolves a channel-scoped model override from direct, parent, and wildcard config entries. */
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
 ): ChannelModelOverride | null {

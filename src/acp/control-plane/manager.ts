@@ -1,3 +1,4 @@
+/** Public singleton facade for the ACP session manager control plane. */
 import { AcpSessionManager } from "./manager.core.js";
 
 export { AcpSessionManager } from "./manager.core.js";
@@ -15,6 +16,7 @@ export type {
 
 let ACP_SESSION_MANAGER_SINGLETON: AcpSessionManager | null = null;
 
+/** Returns the process-wide ACP session manager singleton. */
 export function getAcpSessionManager(): AcpSessionManager {
   if (!ACP_SESSION_MANAGER_SINGLETON) {
     ACP_SESSION_MANAGER_SINGLETON = new AcpSessionManager();

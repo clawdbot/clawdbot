@@ -1,3 +1,4 @@
+// Tests bash stop command handling and active-process cancellation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";

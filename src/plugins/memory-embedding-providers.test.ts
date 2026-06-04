@@ -1,3 +1,4 @@
+// Covers plugin-provided memory embedding provider registration.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,

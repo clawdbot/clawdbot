@@ -1,3 +1,4 @@
+/** Tests inbound envelope formatting, timestamps, and sender labels. */
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {

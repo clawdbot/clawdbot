@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
 
+// Channel plugin reload targeting maps a channel id, plugin id, and aliases to
+// config path prefixes so hot reload can decide whether a change affects a
+// specific channel runtime.
 export type ChannelPluginReloadTarget = {
   channelId: ChannelId;
   pluginId?: string | null;
@@ -14,6 +17,7 @@ function addNormalizedTarget(targets: Set<string>, value: string | null | undefi
   }
 }
 
+/** Lists all config ids that should trigger reload for a channel plugin target. */
 export function listChannelPluginConfigTargetIds(
   target: ChannelPluginReloadTarget,
 ): ReadonlySet<string> {
@@ -26,6 +30,7 @@ export function listChannelPluginConfigTargetIds(
   return targets;
 }
 
+/** Returns true when changed config paths affect any target plugin/channel id. */
 export function pluginConfigTargetsChanged(
   targetIds: Iterable<string>,
   changedPaths: readonly string[],

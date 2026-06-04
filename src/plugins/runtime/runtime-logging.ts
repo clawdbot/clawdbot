@@ -15,6 +15,7 @@ function writeRuntimeLog(
   log(message);
 }
 
+/** Creates the plugin runtime logging facade. */
 export function createRuntimeLogging(): PluginRuntime["logging"] {
   return {
     shouldLogVerbose,

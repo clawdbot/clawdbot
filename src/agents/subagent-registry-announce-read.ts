@@ -12,6 +12,7 @@ import {
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+/** Resolves the requester session and origin for a child subagent session. */
 export function resolveRequesterForChildSession(childSessionKey: string): {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -29,10 +30,12 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
+/** True when a subagent session still has an active run record. */
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   return isSubagentSessionRunActiveFromRuns(subagentRuns, childSessionKey);
 }
 
+/** True when post-completion announce should be skipped for a child session. */
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -40,6 +43,7 @@ export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: st
   );
 }
 
+/** Lists subagent runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
   options?: { requesterRunId?: string },
@@ -47,6 +51,7 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
+/** Counts pending descendant subagent runs below a root session. */
 export function countPendingDescendantRuns(rootSessionKey: string): number {
   return countPendingDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -54,6 +59,7 @@ export function countPendingDescendantRuns(rootSessionKey: string): number {
   );
 }
 
+/** Counts pending descendant runs while excluding one run id. */
 export function countPendingDescendantRunsExcludingRun(
   rootSessionKey: string,
   excludeRunId: string,

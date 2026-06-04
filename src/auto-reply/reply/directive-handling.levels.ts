@@ -1,5 +1,7 @@
+// Parses directive level values for reasoning, verbosity, and elevated mode.
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 
+/** Resolves current directive levels from session, agent, and config defaults. */
 export async function resolveCurrentDirectiveLevels(params: {
   sessionEntry?: {
     thinkingLevel?: unknown;

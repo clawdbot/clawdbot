@@ -1,3 +1,4 @@
+/** Tests context report command output and generated report files. */
 import { readFile, unlink } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";

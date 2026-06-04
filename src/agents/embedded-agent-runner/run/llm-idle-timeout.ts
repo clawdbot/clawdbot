@@ -109,8 +109,9 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
 }
 
 /**
- * Resolves the LLM idle timeout from configuration.
- * @returns Idle timeout in milliseconds, or 0 to disable
+ * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
+ * provider request timeouts and bounded run/agent timeouts cap the watchdog;
+ * local provider base URLs disable the implicit cloud-provider default.
  */
 export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
@@ -200,13 +201,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
 }
 
 /**
- * Wraps a stream function with idle timeout detection.
- * If no token is received within the specified timeout, the request is aborted.
- *
- * @param baseFn - The base stream function to wrap
- * @param timeoutMs - Idle timeout in milliseconds
- * @param onIdleTimeout - Optional callback invoked when idle timeout triggers
- * @returns A wrapped stream function with idle timeout detection
+ * Wraps a stream function with idle timeout detection for both stream creation
+ * and iterator progress. Each successful `next()` resets the timer; a timeout
+ * aborts the provider request and surfaces the same Error to the caller.
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
@@ -225,6 +222,8 @@ export function streamWithIdleTimeout(
       }
     };
     const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    // Mirror caller cancellation into the provider request while still allowing
+    // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
       abortFromSourceSignal();
     } else {
@@ -292,7 +291,7 @@ export function streamWithIdleTimeout(
               clearTimer();
 
               try {
-                // Race between the actual next() and the timeout
+                // Arm the watchdog only while waiting for provider progress.
                 const result = await Promise.race([
                   streamIterator.next(),
                   createTimeoutPromise((timer) => {
@@ -341,6 +340,8 @@ export function streamWithIdleTimeout(
         }
       };
 
+      // Some providers return a pending Promise before the stream object exists;
+      // protect that creation phase with the same idle watchdog.
       return Promise.race([
         Promise.resolve(maybeStream),
         createTimeoutPromise((timer) => {

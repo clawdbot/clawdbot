@@ -1,7 +1,9 @@
+// Provides PTY harness helpers for TUI end-to-end tests.
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
 import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
 
+// Shared PTY harness utilities for fake-backend and local TUI smoke tests.
 type NodePtyRuntimeModule = typeof nodePty & {
   default?: Partial<typeof nodePty>;
 };
@@ -10,6 +12,7 @@ type KillablePtyHandle = PtyHandle & {
   kill?: (signal?: string) => void;
 };
 
+/** Handle returned by PTY tests for input, output waits, and cleanup. */
 export type PtyRun = {
   output: () => string;
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
@@ -18,6 +21,7 @@ export type PtyRun = {
   dispose: () => void;
 };
 
+/** Polls until a reader returns a value or the timeout expires. */
 export function waitFor<T>(params: {
   timeoutMs: number;
   read: () => T | null;
@@ -47,6 +51,7 @@ export function waitFor<T>(params: {
   });
 }
 
+/** Async sleep used to simulate slower PTY typing. */
 export function sleep(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -86,6 +91,7 @@ async function writePtyInput(
     return;
   }
   const chunkSize = readPositiveIntegerEnv("OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE") ?? 1;
+  // Chunked writes reproduce paste/type races without making every PTY test slow by default.
   for (let idx = 0; idx < data.length; idx += chunkSize) {
     pty.write(data.slice(idx, idx + chunkSize));
     if (idx + chunkSize < data.length) {
@@ -102,6 +108,7 @@ function mirrorPtyOutput(data: string) {
   appendFileSync(mirrorPath, data, "utf8");
 }
 
+/** Starts a PTY process and exposes deterministic output/exit wait helpers. */
 export function startPty(
   command: string,
   args: string[],

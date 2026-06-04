@@ -1,3 +1,4 @@
+// Covers safe plugin install path normalization and boundary checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

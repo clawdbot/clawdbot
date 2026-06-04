@@ -1,11 +1,14 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { RuntimeEnv } from "../../runtime.js";
 
+// Armable idle watchdog for long-running channel transports. It only starts
+// timing after arm(), so callers can construct it before connection activity.
 export type StallWatchdogTimeoutMeta = {
   idleMs: number;
   timeoutMs: number;
 };
 
+/** Public control surface for a transport stall watchdog instance. */
 export type ArmableStallWatchdog = {
   arm: (atMs?: number) => void;
   touch: (atMs?: number) => void;
@@ -14,6 +17,7 @@ export type ArmableStallWatchdog = {
   isArmed: () => boolean;
 };
 
+/** Creates a watchdog that reports once when an armed transport goes idle. */
 export function createArmableStallWatchdog(params: {
   label: string;
   timeoutMs: number;
@@ -81,6 +85,8 @@ export function createArmableStallWatchdog(params: {
     if (idleMs < timeoutMs) {
       return;
     }
+    // Disarm before invoking onTimeout so retries or teardown cannot fire a
+    // second timeout from the same idle interval.
     disarm();
     params.runtime?.error?.(
       `[${params.label}] transport watchdog timeout: idle ${Math.round(idleMs / 1000)}s (limit ${Math.round(timeoutMs / 1000)}s)`,

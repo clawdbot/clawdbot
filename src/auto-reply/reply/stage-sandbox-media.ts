@@ -1,3 +1,4 @@
+// Stages inbound media into sandbox workspaces before agent execution.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";

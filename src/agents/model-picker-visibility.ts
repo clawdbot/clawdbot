@@ -3,8 +3,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listCliRuntimeProviderIds } from "./cli-backends.js";
 import { isCliRuntimeProvider } from "./model-runtime-aliases.js";
 
+// Retired provider ids and CLI runtime aliases are implementation surfaces, not
+// model picker choices. Hide them while keeping real provider/model refs visible.
 const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
 
+/** Creates a provider visibility predicate for model picker rendering. */
 export function createModelPickerVisibleProviderPredicate(
   params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
 ): (provider: string) => boolean {
@@ -21,6 +24,7 @@ export function createModelPickerVisibleProviderPredicate(
   };
 }
 
+/** Returns whether a provider id should appear in the model picker. */
 export function isModelPickerVisibleProvider(provider: string): boolean {
   const normalized = normalizeProviderId(provider);
   return (
@@ -29,6 +33,7 @@ export function isModelPickerVisibleProvider(provider: string): boolean {
   );
 }
 
+/** Returns whether a provider/model ref should appear in the model picker. */
 export function isModelPickerVisibleModelRef(ref: string): boolean {
   const separatorIndex = ref.indexOf("/");
   if (separatorIndex <= 0) {

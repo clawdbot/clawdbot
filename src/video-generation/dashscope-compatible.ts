@@ -21,6 +21,8 @@ import type {
   VideoGenerationSourceAsset,
 } from "./types.js";
 
+// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
+// poll task status, then download generated video URLs with byte limits.
 export const DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL = "wan2.6-t2v";
 export const DASHSCOPE_WAN_VIDEO_MODELS = [
   DEFAULT_DASHSCOPE_WAN_VIDEO_MODEL,
@@ -100,6 +102,8 @@ export function buildDashscopeVideoGenerationInput(params: {
   const unsupported = [...(params.req.inputImages ?? []), ...(params.req.inputVideos ?? [])].some(
     (asset) => !asset.url?.trim() && asset.buffer,
   );
+  // DashScope accepts remote references in this path; buffer uploads require a
+  // different provider-specific flow, so fail before silently dropping refs.
   if (unsupported) {
     throw new Error(
       `${params.providerLabel} video generation currently requires remote http(s) URLs for reference images/videos.`,
@@ -157,6 +161,8 @@ export function buildDashscopeVideoGenerationParameters(
   return Object.keys(parameters).length > 0 ? parameters : undefined;
 }
 
+// DashScope may return videos in results[] or a top-level output.video_url.
+// De-dupe so downstream downloads produce one asset per unique URL.
 export function extractDashscopeVideoUrls(payload: DashscopeVideoGenerationResponse): string[] {
   const urls = [
     ...(payload.output?.results?.map((entry) => entry.video_url).filter(Boolean) ?? []),
@@ -197,6 +203,8 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
     if (status === "SUCCEEDED") {
       return payload;
     }
+    // Terminal failure statuses carry provider messages; nonterminal statuses
+    // continue until the shared operation deadline or max poll attempts wins.
     if (status === "FAILED" || status === "CANCELED") {
       throw new Error(
         payload.output?.message?.trim() ||
@@ -299,6 +307,8 @@ export async function runDashscopeVideoGenerationTask(params: {
   }
 }
 
+// Downloads task result URLs into generated video assets. The byte limit comes
+// from OpenClaw media config so provider URLs cannot overfill memory.
 export async function downloadDashscopeGeneratedVideos(params: {
   providerLabel: string;
   urls: string[];

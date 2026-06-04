@@ -1,3 +1,9 @@
+/**
+ * Shared subagent registry mocks.
+ *
+ * Tests import this module to hoist gateway/event mocks consistently before
+ * registry modules resolve their runtime dependencies.
+ */
 import { vi } from "vitest";
 
 const noop = () => {};

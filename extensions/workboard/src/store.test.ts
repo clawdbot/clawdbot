@@ -77,6 +77,9 @@ describe("WorkboardStore", () => {
         fileName: "large-proof.bin",
         contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
       });
+      await store.update(card.id, {
+        metadata: { lifecycleStatusSourceUpdatedAt: 1234 },
+      });
       const attachmentId = attached.metadata?.attachments?.[0]?.id;
       const subscription = await store.subscribeNotifications({
         boardId: board.id,
@@ -118,6 +121,7 @@ describe("WorkboardStore", () => {
         labels: ["sqlite", "doctor"],
         metadata: {
           automation: { boardId: "planning" },
+          lifecycleStatusSourceUpdatedAt: 1234,
           comments: [expect.objectContaining({ body: "round trip" })],
           attachments: expect.arrayContaining([
             expect.objectContaining({ fileName: "proof.txt" }),
@@ -332,6 +336,224 @@ describe("WorkboardStore", () => {
     });
     expect(rolledBack.startedAt).toBeUndefined();
     expect(rolledBack.completedAt).toBeUndefined();
+  });
+
+  it("tracks lifecycle status provenance and clears it on manual status changes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Sync status provenance" });
+
+    const zeroSourceLifecycle = await store.update(card.id, {
+      status: "running",
+      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
+    });
+    expect(zeroSourceLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(0);
+
+    const lifecycleMoved = await store.update(card.id, {
+      status: "running",
+      metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+    });
+    expect(lifecycleMoved.metadata?.lifecycleStatusSourceUpdatedAt).toBe(1000);
+
+    const newerLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
+    });
+    expect(newerLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
+
+    const manual = await store.move(card.id, "running", 2000);
+    expect(manual.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleZeroLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
+    });
+    expect(staleZeroLifecycle).toEqual(manual);
+    expect(staleZeroLifecycle.status).toBe("running");
+    expect(staleZeroLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+    });
+    expect(staleLifecycle).toEqual(manual);
+    expect(staleLifecycle.status).toBe("running");
+    expect(staleLifecycle.updatedAt).toBe(manual.updatedAt);
+    expect(staleLifecycle.events).toHaveLength(manual.events?.length ?? 0);
+    expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const freshLifecycleSourceUpdatedAt = Date.now() + 1000;
+    const freshLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: freshLifecycleSourceUpdatedAt },
+    });
+    expect(freshLifecycle.status).toBe("review");
+    expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(
+      freshLifecycleSourceUpdatedAt,
+    );
+  });
+
+  it("keeps creation status from stale lifecycle patches", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Initial running status",
+        status: "running",
+      });
+
+      const staleLifecycle = await store.update(card.id, {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+      });
+      expect(staleLifecycle).toEqual(card);
+      expect(staleLifecycle.status).toBe("running");
+      expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+      const freshLifecycle = await store.update(card.id, {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
+      });
+      expect(freshLifecycle.status).toBe("review");
+      expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let one stale bulk lifecycle patch strip later card updates", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1000);
+      const store = new WorkboardStore(createMemoryStore());
+      const staleCard = await store.create({ title: "Stale bulk target" });
+      const freshCard = await store.create({ title: "Fresh bulk target" });
+      vi.setSystemTime(3000);
+      await store.move(staleCard.id, "running", 1000);
+
+      const patch = {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      } as const;
+      const result = await store.bulkUpdate({
+        ids: [staleCard.id, freshCard.id],
+        patch,
+      });
+
+      expect(result.cards[0]).toMatchObject({ id: staleCard.id, status: "running" });
+      expect(result.cards[0]?.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+      expect(result.cards[1]).toMatchObject({ id: freshCard.id, status: "review" });
+      expect(result.cards[1]?.metadata?.lifecycleStatusSourceUpdatedAt).toBe(2000);
+      expect(patch).toEqual({
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps non-status fields from stale lifecycle patches", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Keep stale sync details",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        runId: "run-1",
+        startedAt: 1,
+        updatedAt: 1000,
+      },
+    });
+    const lifecycleMoved = await store.update(card.id, {
+      status: "review",
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: {
+          detectedAt: 1000,
+          lastSessionUpdatedAt: 1000,
+          reason: "Session has not reported recent activity.",
+        },
+      },
+    });
+    const manual = await store.update(card.id, {
+      status: "running",
+      metadata: lifecycleMoved.metadata,
+    });
+
+    const synced = await store.update(card.id, {
+      status: "review",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "done",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        runId: "run-1",
+        startedAt: 1,
+        updatedAt: 2000,
+      },
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: null,
+      },
+    });
+
+    expect(manual.metadata?.stale).toBeDefined();
+    expect(synced.status).toBe("running");
+    expect(synced.execution).toMatchObject({
+      runId: "run-1",
+      status: "done",
+      updatedAt: 2000,
+    });
+    expect(synced.metadata?.stale).toBeUndefined();
+    expect(synced.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+    expect(synced.events?.at(-1)).toMatchObject({
+      kind: "attempt_updated",
+      runId: "run-1",
+    });
+  });
+
+  it("clears copied lifecycle provenance on manual status patches", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Clear copied provenance" });
+    const lifecycleMoved = await store.update(card.id, {
+      status: "review",
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: {
+          kind: "session",
+          status: "done",
+          updatedAt: 1000,
+          observedAt: 1000,
+        },
+      },
+    });
+
+    const manual = await store.update(card.id, {
+      status: "running",
+      metadata: {
+        ...lifecycleMoved.metadata,
+        stale: null,
+      },
+    });
+
+    expect(manual.status).toBe("running");
+    expect(manual.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+    });
+    expect(staleLifecycle.status).toBe("running");
+    expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
   });
 
   it("keeps execution session links aligned with edited card links", async () => {

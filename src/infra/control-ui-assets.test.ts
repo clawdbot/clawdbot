@@ -1,3 +1,4 @@
+// Tests Control UI asset discovery and expected bundled files.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

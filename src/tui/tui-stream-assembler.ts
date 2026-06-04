@@ -1,3 +1,4 @@
+// Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
@@ -5,6 +6,7 @@ import {
   resolveFinalAssistantText,
 } from "./tui-formatters.js";
 
+// Per-run state used to merge streaming deltas with final assistant messages.
 type RunStreamState = {
   thinkingText: string;
   contentText: string;
@@ -15,6 +17,7 @@ type RunStreamState = {
 
 type BoundaryDropMode = "off" | "streamed-only" | "streamed-or-incoming";
 
+// Pull text blocks out of provider-style content arrays while remembering non-text blocks.
 function extractTextBlocksAndSignals(message: unknown): {
   textBlocks: string[];
   sawNonTextContentBlocks: boolean;
@@ -57,6 +60,7 @@ function extractTextBlocksAndSignals(message: unknown): {
   return { textBlocks, sawNonTextContentBlocks };
 }
 
+// Detects final messages that dropped streamed boundary text around a non-text block.
 function isDroppedBoundaryTextBlockSubset(params: {
   streamedTextBlocks: string[];
   finalTextBlocks: string[];
@@ -77,6 +81,7 @@ function isDroppedBoundaryTextBlockSubset(params: {
   return finalTextBlocks.every((block, index) => streamedTextBlocks[suffixStart + index] === block);
 }
 
+// Some providers omit text adjacent to images/files in the final message; preserve streamed text.
 function shouldPreserveBoundaryDroppedText(params: {
   boundaryDropMode: BoundaryDropMode;
   streamedSawNonTextContentBlocks: boolean;
@@ -100,6 +105,7 @@ function shouldPreserveBoundaryDroppedText(params: {
   });
 }
 
+/** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
@@ -160,6 +166,7 @@ export class TuiStreamAssembler {
     state.displayText = displayText;
   }
 
+  /** Ingests a streaming delta and returns updated display text only when it changed. */
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
     const state = this.getOrCreateRun(runId);
     const previousDisplayText = state.displayText;
@@ -174,6 +181,7 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
+  /** Finalizes a run, combines any error text, and drops stored stream state. */
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
     const state = this.getOrCreateRun(runId);
     const streamedDisplayText = state.displayText;
@@ -199,6 +207,7 @@ export class TuiStreamAssembler {
     return finalText;
   }
 
+  /** Drops stored stream state for an aborted or discarded run. */
   drop(runId: string) {
     this.runs.delete(runId);
   }

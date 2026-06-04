@@ -1,3 +1,4 @@
+// Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

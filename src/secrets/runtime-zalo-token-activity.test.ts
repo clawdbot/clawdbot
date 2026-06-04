@@ -1,3 +1,4 @@
+/** Tests Zalo token activity secret discovery in runtime config. */
 import { describe, expect, it } from "vitest";
 import "./runtime-zalo.test-support.ts";
 import {

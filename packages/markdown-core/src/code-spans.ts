@@ -1,7 +1,10 @@
 import { scanFenceSpans, type FenceScanState, type FenceSpan } from "./fences.js";
 
+/** Incremental inline-code scanner state carried across chunk boundaries. */
 export type InlineCodeState = {
+  /** Whether the current scan is inside an unterminated inline code span. */
   open: boolean;
+  /** Backtick run length required to close the current inline code span. */
   ticks: number;
 };
 
@@ -16,8 +19,11 @@ type InlineCodeSpansResult = {
 };
 
 type CodeSpanIndex = {
+  /** Inline-code state to carry into the next streamed chunk. */
   inlineState: InlineCodeState;
+  /** Fenced-code state to carry into the next streamed chunk. */
   fenceState: FenceScanState;
+  /** True when an offset is inside fenced code or inline code. */
   isInside: (index: number) => boolean;
 };
 

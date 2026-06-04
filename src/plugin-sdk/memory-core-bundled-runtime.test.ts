@@ -1,3 +1,6 @@
+/**
+ * Tests bundled memory core runtime facade loading.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

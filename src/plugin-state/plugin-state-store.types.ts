@@ -1,3 +1,5 @@
+// Public plugin-state store contracts. Stores are keyed by plugin id and
+// namespace, persist JSON-compatible values, and enforce per-namespace limits.
 export type PluginStateEntry<T> = {
   key: string;
   value: T;
@@ -5,6 +7,7 @@ export type PluginStateEntry<T> = {
   expiresAt?: number;
 };
 
+/** Async plugin state API exposed to plugin runtimes. */
 export type PluginStateKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
@@ -20,6 +23,7 @@ export type PluginStateKeyedStore<T> = {
   clear(): Promise<void>;
 };
 
+/** Sync plugin state API used by trusted core/plugin bootstrap paths. */
 export type PluginStateSyncKeyedStore<T> = {
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
@@ -35,6 +39,7 @@ export type PluginStateSyncKeyedStore<T> = {
   clear(): void;
 };
 
+/** Options for opening a keyed plugin-state namespace. */
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
@@ -72,6 +77,7 @@ export type PluginStateStoreErrorOptions = {
   cause?: unknown;
 };
 
+/** Typed error thrown for plugin-state validation and sqlite failures. */
 export class PluginStateStoreError extends Error {
   readonly code: PluginStateStoreErrorCode;
   readonly operation: PluginStateStoreOperation;

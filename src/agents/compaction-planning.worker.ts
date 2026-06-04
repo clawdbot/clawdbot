@@ -11,6 +11,8 @@ import {
 } from "./compaction-planning.js";
 import type { AgentMessage } from "./runtime/index.js";
 
+// Worker entry point for CPU-heavy compaction planning. Inputs are validated
+// before delegating to pure planning helpers so failures serialize cleanly.
 export type CompactionPlanningWorkerInput =
   | {
       kind: "summaryChunks";
@@ -108,6 +110,7 @@ function isWorkerInput(value: unknown): value is CompactionPlanningWorkerInput {
   }
 }
 
+/** Run one compaction planning request and return a serializable result. */
 export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlanningWorkerResult {
   if (!isWorkerInput(input)) {
     return {
@@ -173,6 +176,7 @@ export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlan
 }
 
 if (parentPort) {
+  // Worker-thread mode: process the single workerData payload and post one result.
   const sendToParent: (message: CompactionPlanningWorkerResult) => void =
     parentPort.postMessage.bind(parentPort);
   sendToParent(runCompactionPlanningWorkerInput(workerData));

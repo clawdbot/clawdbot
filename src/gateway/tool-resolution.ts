@@ -1,3 +1,4 @@
+// Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   resolveEffectiveToolPolicy,
@@ -32,6 +33,7 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
+/** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -111,6 +113,7 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
+  // HTTP callers start with a stricter denylist than loopback callers because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),

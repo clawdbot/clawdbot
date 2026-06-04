@@ -1,3 +1,4 @@
+// Guards post-compaction config schema behavior against regressions.
 import { describe, expect, it } from "vitest";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";

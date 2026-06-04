@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+/** Writes a minimal plugin fixture that exposes one bundled skill. */
 export async function writePluginWithSkill(params: {
   pluginRoot: string;
   pluginId: string;

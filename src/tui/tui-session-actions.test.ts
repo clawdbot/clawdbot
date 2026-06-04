@@ -1,3 +1,4 @@
+// Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";

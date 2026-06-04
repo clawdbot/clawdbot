@@ -259,17 +259,27 @@ snapshots:
   });
 
   it("bounds successful bulk advisory response bodies", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       responseBodyMaxBytes: 4,
       fetchImpl: async () =>
-        new Response("{}", {
+        new Response(body, {
           status: 200,
           headers: { "content-length": "5" },
         }),
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(cancelled).toBe(true);
   });
 
   it("fails closed on empty successful bulk advisory response bodies", async () => {

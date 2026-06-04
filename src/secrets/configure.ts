@@ -1,3 +1,4 @@
+/** Interactive and noninteractive secrets configure workflow. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
@@ -47,6 +48,7 @@ import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
+/** Result returned after interactive secrets configure builds and preflights an apply plan. */
 export type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
@@ -814,6 +816,7 @@ async function configureProvidersInteractive(
   }
 }
 
+/** Runs interactive secrets configuration and returns changed config/auth-store state. */
 export async function runSecretsConfigureInteractive(
   params: {
     env?: NodeJS.ProcessEnv;

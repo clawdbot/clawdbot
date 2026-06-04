@@ -1,3 +1,4 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
 import type {
   ChannelCapabilities,
   ChannelId,
@@ -7,6 +8,7 @@ import type {
 } from "../channels/plugins/types.public.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
+/** Registry entry shape used by channel tests without loading real plugins. */
 export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
@@ -82,6 +84,17 @@ export const createChannelTestPluginBase = (params: {
     resolveAccount: () => ({}),
     ...params.config,
   },
+});
+
+export const createDirectOutboundTestAdapter = (params: {
+  channel: ChannelId;
+  messageId?: string;
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+  sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+  sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
 });
 
 export const createMSTeamsTestPluginBase = (): Pick<

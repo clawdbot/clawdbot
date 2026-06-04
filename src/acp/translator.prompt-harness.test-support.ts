@@ -12,6 +12,7 @@ type PendingPromptHarness = {
   runId: string;
 };
 
+// Shared prompt harness used by translator cancellation and lifecycle tests.
 const DEFAULT_SESSION_ID = "session-1";
 export const DEFAULT_SESSION_KEY = "agent:main:main";
 const DEFAULT_PROMPT_TEXT = "hello";

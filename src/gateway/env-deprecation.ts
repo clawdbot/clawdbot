@@ -1,10 +1,13 @@
 import { isVitestRuntimeEnv } from "../infra/env.js";
 
+// Legacy env warnings are process-wide and intentionally one-shot so normal
+// gateway startup is noisy enough to notice but not spammed by repeated imports.
 const LEGACY_ENV_PREFIXES = ["CLAWDBOT_", "MOLTBOT_"] as const;
 type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
 
 let warned = false;
 
+/** Emits a one-time warning when ignored legacy CLAWDBOT_/MOLTBOT_ env vars are present. */
 export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env): void {
   if (warned || isVitestRuntimeEnv(env)) {
     return;
@@ -37,6 +40,7 @@ export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env):
   warned = true;
 }
 
+/** Resets the one-shot legacy env warning latch for tests. */
 export function resetLegacyOpenClawEnvWarningForTest(): void {
   warned = false;
 }

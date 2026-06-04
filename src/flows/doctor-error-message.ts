@@ -1,5 +1,7 @@
+// Shared sanitization for doctor/lint/repair errors shown in terminal output.
 const ERR_MESSAGE_MAX_LEN = 256;
 
+/** Removes control characters and caps error messages before doctor prints them. */
 export function scrubDoctorErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   let stripped = "";

@@ -1,3 +1,4 @@
+// Defines cron scheduling configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
 /** Error types that can trigger retries for one-shot jobs. */

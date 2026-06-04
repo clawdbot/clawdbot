@@ -1,5 +1,7 @@
 import { AUTH_RATE_LIMIT_SCOPE_DEFAULT, normalizeRateLimitClientIp } from "./auth-rate-limit.js";
 
+// Rate-limit attempts for the same IP/scope are serialized so concurrent auth
+// failures cannot race the shared limiter state and undercount a burst.
 const pendingAttempts = new Map<string, Promise<void>>();
 
 function normalizeScope(scope: string | undefined): string {
@@ -10,6 +12,7 @@ function buildSerializationKey(ip: string | undefined, scope: string | undefined
   return `${normalizeScope(scope)}:${normalizeRateLimitClientIp(ip)}`;
 }
 
+/** Runs one rate-limit attempt after prior attempts for the same IP/scope finish. */
 export async function withSerializedRateLimitAttempt<T>(params: {
   ip: string | undefined;
   scope: string | undefined;

@@ -1,3 +1,4 @@
+// Builds the trust plan for exec wrappers before commands are launched.
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   resolveDispatchWrapperTrustPlan,
@@ -62,6 +63,11 @@ function finalizeExecWrapperTrustPlan(
   return plan;
 }
 
+/**
+ * Resolves transparent dispatch wrappers into the executable that policy should inspect.
+ * Shell multiplexers keep their original argv as the trust target while exposing the
+ * nested shell command for shell-specific approval checks.
+ */
 export function resolveExecWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
@@ -109,7 +115,7 @@ export function resolveExecWrapperTrustPlan(
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
       wrapperChain.push(shellMultiplexerUnwrap.wrapper);
       if (!sawShellMultiplexer) {
-        // Preserve the real executable target for trust checks.
+        // Trust policy must see the multiplexer applet, not only the shell it launches.
         policyArgv = current;
         sawShellMultiplexer = true;
       }

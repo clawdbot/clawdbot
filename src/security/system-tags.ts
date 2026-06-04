@@ -1,3 +1,4 @@
+// Detects suspicious system-style tags in external content.
 const BRACKETED_SYSTEM_TAG_RE = /\[\s*(System\s*Message|System|Assistant|Internal)\s*\]/gi;
 const LINE_SYSTEM_PREFIX_RE = /^(\s*)System:(?=\s|$)/gim;
 

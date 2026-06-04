@@ -1,3 +1,4 @@
+/** Tests SecretRef provider resolution for env, file, and exec sources. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

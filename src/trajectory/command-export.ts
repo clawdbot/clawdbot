@@ -4,6 +4,8 @@ import { pathExists } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 
+// CLI-facing trajectory export wrapper: resolves safe workspace-local paths,
+// writes the diagnostic bundle, and formats the terse success summary.
 export type TrajectoryCommandExportSummary = {
   outputDir: string;
   displayPath: string;
@@ -98,6 +100,8 @@ export async function resolveTrajectoryCommandOutputDir(params: {
     existingParent = next;
   }
   const realExistingParent = await fsp.realpath(existingParent);
+  // Validate the first existing ancestor by realpath so a missing child cannot
+  // be smuggled through a symlinked parent outside the export root.
   if (!isPathInside(realBase, realExistingParent)) {
     throw new Error("Output path must stay inside the real trajectory exports directory");
   }
@@ -147,6 +151,8 @@ export async function exportTrajectoryForCommand(params: {
   };
 }
 
+// Human CLI output contract. Keep this stable for docs/tests that snapshot the
+// command text, but keep raw paths in the structured summary above.
 export function formatTrajectoryCommandExportSummary(
   summary: TrajectoryCommandExportSummary,
 ): string {

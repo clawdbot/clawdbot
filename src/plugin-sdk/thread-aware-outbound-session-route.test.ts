@@ -1,3 +1,6 @@
+/**
+ * Tests thread-aware outbound session route helpers exposed by the SDK.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildThreadAwareOutboundSessionRoute,

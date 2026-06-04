@@ -2,6 +2,9 @@ import { postJson } from "./post-json.js";
 import { retryAsync } from "./retry-utils.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
+// JSON POST helper for batch APIs with provider-style transient retry.
+
+/** POST JSON and retry provider 429/5xx failures with bounded backoff. */
 export async function postJsonWithRetry<T>(params: {
   url: string;
   headers: Record<string, string>;

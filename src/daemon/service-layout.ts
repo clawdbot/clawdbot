@@ -4,6 +4,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
+/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;

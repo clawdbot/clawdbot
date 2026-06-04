@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for realtime transcription provider types and session helpers.
+ */
 export type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeTranscriptionProviderConfig,

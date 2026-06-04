@@ -1,3 +1,4 @@
+/** Tests inline secret refs discovered from runtime auth stores. */
 import { describe, expect, it } from "vitest";
 import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import {

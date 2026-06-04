@@ -10,6 +10,8 @@ import type {
 
 export type { WizardI18nParams, WizardLocale, WizardTranslationMap };
 
+// Wizard i18n uses dotted keys with English fallback. Locale selection is
+// intentionally small because setup copy is maintained in-tree.
 export type SetupTranslator = (key: string, params?: WizardI18nParams) => string;
 
 const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
@@ -25,6 +27,8 @@ function normalizeLocaleToken(raw: string | undefined): string {
   return (raw ?? "").trim().split(".")[0]?.split("@")[0]?.replaceAll("_", "-") ?? "";
 }
 
+// Resolve shell/browser locale strings such as zh_Hant_TW.UTF-8 into supported
+// setup locales, falling back to English for unknown languages.
 export function resolveWizardLocale(value: string | undefined): WizardLocale {
   const normalized = normalizeLocaleToken(value);
   if (!normalized) {
@@ -82,6 +86,8 @@ export function wizardT(
 
 export const t = wizardT;
 
+// Prefix-aware translator for setup subflows. Common and wizard keys remain
+// absolute so shared copy can be reused from any subflow.
 export function createSetupTranslator(options?: {
   locale?: WizardLocale;
   keyPrefix?: string;

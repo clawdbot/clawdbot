@@ -7,6 +7,9 @@ import {
   resolveCompiledBindingChannel,
 } from "./configured-binding-match.js";
 
+/**
+ * Resolves a configured binding record from a stateful target session key.
+ */
 export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
   registry: CompiledConfiguredBindingRegistry;
   sessionKey: string;
@@ -42,6 +45,8 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
       if (accountMatchPriority === 0) {
         continue;
       }
+      // Materialize candidate targets before matching because wildcard rules can derive
+      // provider-specific target session keys from parsed session-key facts.
       const materializedTarget = materializeConfiguredBindingRecord({
         rule,
         accountId: parsed.accountId,
@@ -56,6 +61,7 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
         }) ?? materializedTarget.record.targetSessionKey === sessionKey;
       if (matchesSessionKey) {
         if (accountMatchPriority === 2) {
+          // Exact account matches outrank wildcard account bindings for the same session key.
           exactMatch = materializedTarget;
           break;
         }

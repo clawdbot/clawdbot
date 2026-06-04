@@ -1,3 +1,4 @@
+// Wraps external content with source tags and random boundary tokens.
 import { randomBytes } from "node:crypto";
 export {
   isExternalHookSession,

@@ -1,3 +1,4 @@
+// Covers config cache utility invalidation and snapshot behavior.
 import { describe, expect, it } from "vitest";
 import { createExpiringMapCache, resolveCacheTtlMs } from "./cache-utils.js";
 

@@ -1,3 +1,6 @@
+/**
+ * Tests Telegram session recreation helpers and persisted session mapping.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";

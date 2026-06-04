@@ -1,3 +1,4 @@
+// Tests execution wrapper resolution for shell commands.
 import { describe, expect, test } from "vitest";
 import {
   basenameLower,

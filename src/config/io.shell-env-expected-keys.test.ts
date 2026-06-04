@@ -1,3 +1,4 @@
+// Verifies shell environment key metadata used by config IO.
 import { describe, expect, it, vi } from "vitest";
 
 const listKnownChannelEnvVarNames = vi.hoisted(() => vi.fn(() => ["DISCORD_BOT_TOKEN"]));

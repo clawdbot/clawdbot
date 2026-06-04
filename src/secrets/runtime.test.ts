@@ -1,3 +1,4 @@
+/** Tests runtime SecretRef resolution across core config and auth-profile surfaces. */
 import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 

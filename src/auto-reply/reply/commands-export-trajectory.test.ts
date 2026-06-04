@@ -1,3 +1,4 @@
+// Tests trajectory export command output and filesystem writes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

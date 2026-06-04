@@ -1,13 +1,18 @@
+/**
+ * Tracks whether an embedded run can be replayed after compaction or retry.
+ */
 export type EmbeddedRunReplayState = {
   replayInvalid: boolean;
   hadPotentialSideEffects: boolean;
 };
 
+/** Serializable replay metadata stored with run results. */
 export type EmbeddedRunReplayMetadata = {
   hadPotentialSideEffects: boolean;
   replaySafe: boolean;
 };
 
+/** Creates a normalized replay state from partial caller metadata. */
 export function createEmbeddedRunReplayState(
   state?: Partial<EmbeddedRunReplayState>,
 ): EmbeddedRunReplayState {
@@ -17,6 +22,7 @@ export function createEmbeddedRunReplayState(
   };
 }
 
+/** Merges replay state monotonically so unsafe observations cannot be cleared accidentally. */
 export function mergeEmbeddedRunReplayState(
   current: EmbeddedRunReplayState,
   next?: Partial<EmbeddedRunReplayState>,
@@ -31,11 +37,14 @@ export function mergeEmbeddedRunReplayState(
   };
 }
 
+/** Applies result metadata to the current replay state. */
 export function observeReplayMetadata(
   current: EmbeddedRunReplayState,
   metadata?: EmbeddedRunReplayMetadata | null,
 ): EmbeddedRunReplayState {
   if (!metadata) {
+    // Missing metadata means the caller cannot prove replay safety. Treat it as side-effectful so
+    // compaction/retry code avoids duplicating actions after an opaque run.
     return mergeEmbeddedRunReplayState(current, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -47,6 +56,7 @@ export function observeReplayMetadata(
   });
 }
 
+/** Converts internal replay state into the compact metadata persisted with run results. */
 export function replayMetadataFromState(state: EmbeddedRunReplayState): EmbeddedRunReplayMetadata {
   return {
     hadPotentialSideEffects: state.hadPotentialSideEffects,

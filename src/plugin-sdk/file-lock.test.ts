@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK file lock retry, stale lock, and cleanup behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

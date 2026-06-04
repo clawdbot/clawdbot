@@ -1,3 +1,4 @@
+/** Tests ACP client permission handling, env sanitization, and spawn invocation resolution. */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";

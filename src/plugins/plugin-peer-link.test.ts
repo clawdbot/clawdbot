@@ -1,3 +1,4 @@
+// Covers plugin peer linking for development installs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

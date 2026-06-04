@@ -1,3 +1,4 @@
+// Covers event session routing policy resolution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

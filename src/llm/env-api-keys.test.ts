@@ -1,3 +1,4 @@
+// Covers API-key discovery from environment and key files.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

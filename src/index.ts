@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Re-exports the OpenClaw CLI entry point for package execution.
+// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";

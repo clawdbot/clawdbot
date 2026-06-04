@@ -1,3 +1,4 @@
+/** Tests ACP policy gates for enablement, dispatch, and allowed agents. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

@@ -151,7 +151,7 @@ export async function modelsAuthListCommand(
   }
 
   runtime.log(`Agent: ${agentId}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   if (providerFilter.provider) {
     runtime.log(`Provider: ${providerFilter.provider}`);
   }

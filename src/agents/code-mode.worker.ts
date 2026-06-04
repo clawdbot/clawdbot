@@ -8,6 +8,8 @@ const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
+// QuickJS worker for Code Mode. It runs guest code, exposes host bridge stubs,
+// snapshots suspended VMs, and restores them after host tool calls settle.
 type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
 
 type CodeModeConfig = {
@@ -399,6 +401,8 @@ function createHostRequestHandler(params: {
       args = [];
     }
     const id = `bridge:${params.pendingRequests.length + 1}:${randomUUID()}`;
+    // The guest receives only an opaque id. Host-side tool execution and policy
+    // happen after the worker returns a waiting snapshot.
     params.pendingRequests.push({
       id,
       method,
@@ -622,6 +626,8 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
+        // Pending host work suspends the VM instead of blocking in-worker; the
+        // host resumes with settled bridge results via runResume.
         return waitingResult({ vm, pendingRequests, output, config: input.config });
       }
       if (resultHandle.isPromise && resultHandle.promiseState === 0) {

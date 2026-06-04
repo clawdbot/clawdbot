@@ -1,3 +1,6 @@
+/**
+ * Lazy gateway server entrypoint tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalTrace = process.env.OPENCLAW_GATEWAY_STARTUP_TRACE;

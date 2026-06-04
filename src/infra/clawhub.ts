@@ -1,3 +1,4 @@
+// Fetches and validates ClawHub package metadata and artifacts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -765,8 +766,13 @@ async function readClawHubResponseBytes(params: {
   });
 }
 
+/** Resolves the configured ClawHub base URL, falling back to the default public host. */
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
+}
+
+export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
+  return normalizeBaseUrl(baseUrl) === normalizeBaseUrl(DEFAULT_CLAWHUB_URL);
 }
 
 function buildVersionOrTagSearch(params: {
@@ -812,6 +818,7 @@ function safePackageTarballName(name: string, version: string): string {
   return `${base || "package"}-${version}.tgz`;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into Subresource Integrity format. */
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -839,6 +846,7 @@ export function normalizeClawHubSha256Integrity(value: string): string | null {
   return null;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into lowercase hex form. */
 export function normalizeClawHubSha256Hex(value: string): string | null {
   const trimmed = value.trim();
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
@@ -1270,10 +1278,12 @@ export async function downloadClawHubSkillArchive(params: {
   };
 }
 
+/** Resolves the preferred latest package version from detail metadata. */
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
 }
 
+/** Detects package or skill detail payloads that represent skill-family packages. */
 export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
   if ("package" in detail) {
     return detail.package?.family === "skill";
@@ -1281,6 +1291,7 @@ export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkill
   return Boolean(detail.skill);
 }
 
+/** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,
   pluginApiRange?: string | null,
@@ -1291,6 +1302,7 @@ export function satisfiesPluginApiRange(
   return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
+/** Checks whether the current gateway version satisfies a package minimum gateway version. */
 export function satisfiesGatewayMinimum(
   currentVersion: string,
   minGatewayVersion?: string | null,

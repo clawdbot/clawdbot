@@ -1,3 +1,4 @@
+// Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,6 +6,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
+// Restart handoff files let a supervisor explain a recent gateway restart after
+// the old process exits. The file is short-lived, bounded, and regular-file only.
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
   "gateway-supervisor-restart-handoff.json";
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
@@ -77,6 +80,7 @@ function formatDiagnosticValue(value: string): string {
   return normalized.trimEnd();
 }
 
+/** Format a compact diagnostic for a recently consumed restart handoff. */
 export function formatGatewayRestartHandoffDiagnostic(
   handoff: GatewayRestartHandoff,
   now = Date.now(),
@@ -110,6 +114,7 @@ function unlinkRegularFileSync(filePath: string): boolean {
   }
 }
 
+/** Remove the restart handoff file when it is a regular single-link file. */
 export function clearGatewayRestartHandoffSync(env: NodeJS.ProcessEnv = process.env): void {
   unlinkRegularFileSync(resolveGatewayRestartHandoffPath(env));
 }
@@ -268,6 +273,8 @@ function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null
   const handoffPath = resolveGatewayRestartHandoffPath(env);
   try {
     const stat = fs.lstatSync(handoffPath);
+    // Handoff reads ignore symlinks, hardlinks, and oversized files because the
+    // state directory may be user-writable on some installs.
     if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
       return null;
     }
@@ -277,6 +284,7 @@ function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null
   }
 }
 
+/** Write the bounded supervisor restart handoff atomically. */
 export function writeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
   pid?: number;
@@ -350,6 +358,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   }
 }
 
+/** Read the current unexpired restart handoff without consuming it. */
 export function readGatewayRestartHandoffSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
@@ -365,6 +374,7 @@ export function readGatewayRestartHandoffSync(
   return payload;
 }
 
+/** Consume a handoff only when it belongs to the just-exited process. */
 export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
   env?: NodeJS.ProcessEnv;
   exitedPid?: number;
@@ -376,6 +386,8 @@ export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
   let raw: string | null = null;
   try {
     const stat = fs.lstatSync(handoffPath);
+    // Consume uses the same regular-file guard as reads, then clears the file
+    // even if parsing fails so stale handoffs do not repeat.
     if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
       return null;
     }

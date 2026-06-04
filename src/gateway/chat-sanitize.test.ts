@@ -1,3 +1,6 @@
+/**
+ * Tests gateway chat sanitization helpers for model-visible payloads.
+ */
 import { describe, expect, test } from "vitest";
 import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
 

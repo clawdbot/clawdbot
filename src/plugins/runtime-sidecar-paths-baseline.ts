@@ -1,3 +1,4 @@
+// Loads runtime sidecar path baselines for bundled plugin checks.
 import fs from "node:fs";
 import path from "node:path";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -35,6 +36,7 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
   return excluded;
 }
 
+/** Collects bundled runtime sidecar paths that should ship with the root package. */
 export function collectBundledRuntimeSidecarPaths(params?: {
   rootDir?: string;
 }): readonly string[] {
@@ -56,6 +58,7 @@ export function collectBundledRuntimeSidecarPaths(params?: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Writes or checks the bundled runtime sidecar path baseline JSON file. */
 export async function writeBundledRuntimeSidecarPathBaseline(params: {
   repoRoot: string;
   check: boolean;

@@ -1,3 +1,4 @@
+// Sends session maintenance warnings before warn-only cleanup.
 import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,6 +8,8 @@ import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/m
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
+// Session maintenance warnings notify an active session before warn-only
+// cleanup would prune it, with per-session dedupe and system-event fallback.
 type WarningParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -100,6 +103,7 @@ function resolveWarningDeliveryTarget(entry: SessionEntry): {
   };
 }
 
+/** Deliver or enqueue a warn-only session maintenance notification. */
 export async function deliverSessionMaintenanceWarning(params: WarningParams): Promise<void> {
   if (!shouldSendWarning()) {
     return;
@@ -109,6 +113,8 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   if (warnedContexts.get(params.sessionKey) === contextKey) {
     return;
   }
+  // Dedupe by effective warning context so repeated maintenance scans do not
+  // spam the same session, but changed limits still produce a fresh warning.
   warnedContexts.set(params.sessionKey, contextKey);
 
   const text = buildWarningText(params.warning);

@@ -1,3 +1,4 @@
+/** Runtime lookup helpers for plugin setup CLI backend descriptors. */
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,6 +40,7 @@ let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
 let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
 let cachedBundledSetupCliBackends: SetupCliBackendDescriptorCache | undefined;
 
+/** Test hooks for resetting setup-registry runtime module caches. */
 export const testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;

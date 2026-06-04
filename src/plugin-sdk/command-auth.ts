@@ -109,7 +109,12 @@ export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js"
 export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export type { StoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Inputs for legacy sender command authorization.
+ * Kept for plugins that still compose command auth from DM/group allowlists instead of channel ingress.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
   rawBody: string;
@@ -131,7 +136,11 @@ export type ResolveSenderCommandAuthorizationParams = {
   }) => boolean;
 };
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Injectable runtime hooks for legacy command authorization tests and channel adapters.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export type CommandAuthorizationRuntime = {
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   resolveCommandAuthorizedFromAuthorizers: (params: {
@@ -140,7 +149,11 @@ export type CommandAuthorizationRuntime = {
   }) => boolean;
 };
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Legacy command authorization params with runtime hooks grouped for dependency injection.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
   ResolveSenderCommandAuthorizationParams,
   "shouldComputeCommandAuthorized" | "resolveCommandAuthorizedFromAuthorizers"
@@ -148,7 +161,11 @@ export type ResolveSenderCommandAuthorizationWithRuntimeParams = Omit<
   runtime: CommandAuthorizationRuntime;
 };
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Classify direct-DM command handling after sender authorization has been computed.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export function resolveDirectDmAuthorizationOutcome(params: {
   isGroup: boolean;
   dmPolicy: string;
@@ -166,7 +183,11 @@ export function resolveDirectDmAuthorizationOutcome(params: {
   return "allowed";
 }
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Resolve legacy command authorization using an injected runtime object.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export async function resolveSenderCommandAuthorizationWithRuntime(
   params: ResolveSenderCommandAuthorizationWithRuntimeParams,
 ): ReturnType<typeof resolveSenderCommandAuthorization> {
@@ -177,7 +198,12 @@ export async function resolveSenderCommandAuthorizationWithRuntime(
   });
 }
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Resolve whether a sender may run slash/control commands under legacy DM/group policy.
+ * Returns effective allowlists so callers can report the exact source set used for authorization.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export async function resolveSenderCommandAuthorization(
   params: ResolveSenderCommandAuthorizationParams,
 ): Promise<{
@@ -188,6 +214,8 @@ export async function resolveSenderCommandAuthorization(
   commandAuthorized: boolean | undefined;
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
+  // Pairing-store allowlists apply to DM sender authorization only; group commands
+  // must rely on configured group allowlists or access-group expansion.
   const storeAllowFrom =
     !params.isGroup && params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
       ? await params.readAllowFromStore().catch(() => [])

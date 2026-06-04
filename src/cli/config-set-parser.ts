@@ -1,3 +1,4 @@
+// Mode resolver for `openclaw config set`; keeps mutually exclusive builders out of action code.
 type ConfigSetMode = "value" | "json" | "ref_builder" | "provider_builder" | "batch";
 
 type ConfigSetModeResolution =
@@ -10,6 +11,7 @@ type ConfigSetModeResolution =
       error: string;
     };
 
+/** Resolve the config-set input mode or return the exact flag-conflict error. */
 export function resolveConfigSetMode(params: {
   hasBatchMode: boolean;
   hasRefBuilderOptions: boolean;

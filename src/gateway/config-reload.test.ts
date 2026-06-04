@@ -158,7 +158,10 @@ describe("buildGatewayReloadPlan", () => {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    reload: {
+      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      noopPrefixes: ["channels.whatsapp"],
+    },
   };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
@@ -217,6 +220,25 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+  });
+
+  it("restarts the channel when a per-account config field changes (more specific configPrefix wins over the broad noop prefix)", () => {
+    const changedPaths = [
+      "channels.whatsapp.accounts.default.enabled",
+      "channels.whatsapp.accounts.default.authDir",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("keeps other channels.whatsapp.* changes as hot no-ops", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.replyToMode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {

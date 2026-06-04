@@ -1,3 +1,4 @@
+/** Test helper for OpenAI file-backed secret fixtures. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";

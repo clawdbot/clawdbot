@@ -1,3 +1,4 @@
+// Covers channel account metadata security audit findings.
 import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";

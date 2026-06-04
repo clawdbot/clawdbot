@@ -1,10 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { createGatewayWsClient } from "../../../lib/gateway-ws-client.ts";
 import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
-import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
 import { readPositiveIntEnv } from "./limits.mjs";
 
@@ -49,77 +48,26 @@ async function waitFor(label, predicate, timeoutMs) {
   throw new Error(`timeout waiting for ${label}`);
 }
 
-function wsDataToString(data) {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 async function connectGateway() {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await waitForWebSocketOpen(ws, 45_000, "gateway ws open timeout");
-
-  const pending = new Map();
-  ws.on("message", (data) => {
-    let frame;
-    try {
-      frame = JSON.parse(wsDataToString(data));
-    } catch {
-      return;
-    }
-    if (frame?.type === "event" && typeof frame.event === "string") {
-      return;
-    }
-    if (frame?.type !== "res" || typeof frame.id !== "string") {
-      return;
-    }
-    const match = pending.get(frame.id);
-    if (!match) {
-      return;
-    }
-    pending.delete(frame.id);
-    if (frame.ok === true) {
-      match.resolve(resolveGatewaySuccessPayload(frame));
-      return;
-    }
-    match.reject(new Error(frame.error?.message ?? "gateway request failed"));
+  const gatewayClient = createGatewayWsClient({
+    handshakeTimeoutMs: 45_000,
+    openTimeoutMs: 45_000,
+    openTimeoutMessage: "gateway ws open timeout",
+    url: `ws://127.0.0.1:${port}`,
   });
-  ws.once("close", (code, reason) => {
-    const error = new Error(`gateway closed (${code}): ${wsDataToString(reason)}`);
-    for (const entry of pending.values()) {
-      entry.reject(error);
-    }
-    pending.clear();
-  });
+  await gatewayClient.waitOpen();
 
-  function request(method, params, opts = {}) {
-    const id = randomUUID();
+  async function request(method, params, opts = {}) {
     const timeoutMs = opts.timeoutMs ?? 60_000;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`gateway request timeout: ${method}`));
-      }, timeoutMs);
-      timer.unref?.();
-      pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(toLintErrorObject(error, "Non-Error rejection"));
-        },
-      });
-      ws.send(JSON.stringify({ type: "req", id, method, params: params ?? {} }));
-    });
+    const response = await gatewayClient.request(method, params ?? {}, timeoutMs);
+    if (response.ok) {
+      return resolveGatewaySuccessPayload(response);
+    }
+    throw new Error(
+      response.error && typeof response.error === "object" && "message" in response.error
+        ? String(response.error.message)
+        : "gateway request failed",
+    );
   }
 
   await request(
@@ -146,18 +94,7 @@ async function connectGateway() {
   return {
     request,
     async close() {
-      if (ws.readyState === WebSocket.CLOSED) {
-        return;
-      }
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 2_000);
-        timer.unref?.();
-        ws.once("close", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        ws.close();
-      });
+      gatewayClient.close();
     },
   };
 }
@@ -236,18 +173,4 @@ try {
   );
 } finally {
   await gateway.close();
-}
-
-function toLintErrorObject(value, fallbackMessage) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

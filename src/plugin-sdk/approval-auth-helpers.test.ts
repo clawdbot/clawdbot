@@ -1,3 +1,6 @@
+/**
+ * Tests approval auth helper decisions and implicit same-chat authorization markers.
+ */
 import { describe, expect, it } from "vitest";
 import {
   createResolvedApproverActionAuthAdapter,

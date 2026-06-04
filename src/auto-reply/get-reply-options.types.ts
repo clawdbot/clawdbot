@@ -1,3 +1,4 @@
+/** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -18,6 +19,7 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+/** Typing indicator class for channel-owned UX policy. */
 export type TypingPolicy =
   | "auto"
   | "user_message"
@@ -25,6 +27,7 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+/** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
   /** Override implicit reply-to-current behavior for the current turn. */
   implicitCurrentMessage?: "default" | "allow" | "deny";
@@ -32,20 +35,24 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+/** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
   begin: () => (() => void) | void;
 };
 
+/** Lifecycle hooks for queued follow-up replies. */
 export type QueuedReplyLifecycle = {
   onEnqueued?: () => void;
   onComplete?: () => void;
 };
 
+/** Partial assistant payload emitted during streaming or replacement updates. */
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
 };
 
+/** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -197,6 +204,8 @@ export type GetReplyOptions = {
   queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+  /** Called when a suppressed source reply mode observes visible delivery through another path. */
+  onObservedReplyDelivery?: () => Promise<void> | void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

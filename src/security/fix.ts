@@ -1,6 +1,8 @@
+// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
@@ -362,6 +364,9 @@ export async function collectSecurityPermissionTargets(params: {
     targets.push({ path: agentRoot, mode: 0o700, require: "dir" });
     targets.push({ path: agentDir, mode: 0o700, require: "dir" });
 
+    for (const databasePath of resolveAuthProfileDatabaseFilePaths(agentDir)) {
+      targets.push({ path: databasePath, mode: 0o600, require: "file" });
+    }
     const authPath = path.join(agentDir, "auth-profiles.json");
     targets.push({ path: authPath, mode: 0o600, require: "file" });
 

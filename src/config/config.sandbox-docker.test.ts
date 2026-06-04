@@ -1,3 +1,4 @@
+// Verifies Docker sandbox config parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
   DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS,

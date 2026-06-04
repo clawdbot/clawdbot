@@ -5,6 +5,9 @@ import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fiel
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
+/**
+ * Builds the safe account snapshot shown by CLI, gateway, and status summaries.
+ */
 export function buildChannelAccountSnapshot(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -23,6 +26,9 @@ export function buildChannelAccountSnapshot(params: {
   };
 }
 
+/**
+ * Formats allowFrom entries with a plugin formatter when one exists.
+ */
 export function formatChannelAllowFrom(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -39,6 +45,9 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
+/**
+ * Resolves whether a channel account should be treated as enabled.
+ */
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -51,6 +60,9 @@ export function resolveChannelAccountEnabled(params: {
   return enabled !== false;
 }
 
+/**
+ * Resolves whether a channel account has enough configuration to run.
+ */
 export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -61,6 +73,8 @@ export async function resolveChannelAccountConfigured(params: {
     return await params.plugin.config.isConfigured(params.account, params.cfg);
   }
   if (params.readAccountConfiguredField) {
+    // Status inspection can project an explicit configured=false marker. Normal runtime
+    // account objects default to configured unless the plugin owns a stricter check.
     const configured = isRecord(params.account) ? params.account.configured : undefined;
     return configured !== false;
   }

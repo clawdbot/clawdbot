@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
@@ -107,6 +109,34 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
+  const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
+  const match = script.match(
+    /(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u,
+  );
+  if (!match) {
+    throw new Error("resolve_default_cleanup_platform was not found");
+  }
+  return execFileSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_cleanup_platform`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PATH: process.env.PATH ?? "",
+        FAKE_UNAME_ARCH: hostArch,
+        ...env,
+      },
+    },
+  );
+}
+
 describe("docker build helper", () => {
   it("forces BuildKit for centralized Docker builds", () => {
     const helper = readFileSync(HELPER_PATH, "utf8");
@@ -152,6 +182,15 @@ describe("docker build helper", () => {
     );
     expect(installE2eSmoke).toContain("docker_e2e_docker_run_cmd run --rm \\");
     expect(installE2eSmoke).not.toContain("docker run --rm \\");
+  });
+
+  it("runs cleanup smoke on the native ARM platform instead of pulling an amd64 tag", () => {
+    expect(runCleanupDefaultPlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
+    expect(runCleanupDefaultPlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
+    expect(runCleanupDefaultPlatform({}, "arm64")).toBe("linux/arm64");
+    expect(
+      runCleanupDefaultPlatform({ OPENCLAW_CLEANUP_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
+    ).toBe("linux/s390x");
   });
 
   it("lets Testbox fall back to building when a reused Docker image is missing", () => {
@@ -288,6 +327,105 @@ output="$(docker_build_run e2e-build -t demo-image .)"
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the tracked build command without retrying when interrupted", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-signal-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash
+set -euo pipefail
+count=0
+if [ -f "$TMPDIR/docker-count" ]; then
+  count="$(<"$TMPDIR/docker-count")"
+fi
+count="$((count + 1))"
+printf '%s\\n' "$count" >"$TMPDIR/docker-count"
+printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
+printf 'rpc error: code = Unavailable\\n'
+trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+while true; do
+  /bin/sleep 1
+done
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      writeFileSync(
+        join(workDir, "runner.sh"),
+        `#!/bin/bash
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_RETRIES=3
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_run e2e-build -t demo-image .
+`,
+      );
+      chmodSync(join(workDir, "runner.sh"), 0o755);
+
+      const waitForFile = async (filePath: string) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          if (existsSync(filePath)) {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`file was not written: ${filePath}`);
+      };
+      const waitForExit = async (child: ReturnType<typeof spawn>) =>
+        await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+        });
+      const waitForDead = async (pid: number) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          try {
+            process.kill(pid, 0);
+          } catch {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`process stayed alive: ${pid}`);
+      };
+      const runInterruptedBuild = async (signal: NodeJS.Signals, expectedCode: number) => {
+        rmSync(join(workDir, "docker.pid"), { force: true });
+        rmSync(join(workDir, "docker.term"), { force: true });
+        rmSync(join(workDir, "docker-count"), { force: true });
+        const runner = spawn(join(workDir, "runner.sh"), {
+          env: { ...process.env, TMPDIR: workDir },
+          stdio: "ignore",
+        });
+        try {
+          const pidPath = join(workDir, "docker.pid");
+          await waitForFile(pidPath);
+          const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+
+          runner.kill(signal);
+          const exit = await waitForExit(runner);
+
+          expect(exit).toEqual({ code: expectedCode, signal: null });
+          await waitForFile(join(workDir, "docker.term"));
+          expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
+          await waitForDead(buildPid);
+        } finally {
+          if (runner.exitCode === null && runner.signalCode === null) {
+            runner.kill("SIGKILL");
+          }
+        }
+      };
+
+      await runInterruptedBuild("SIGTERM", 143);
+      await runInterruptedBuild("SIGINT", 130);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -1236,9 +1374,19 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 
     expect(sweep).toContain("cleanup() {");
     expect(sweep).toContain("openclaw_plugins_cleanup_fixture_servers");
+    expect(sweep).toContain(
+      'resource_dir="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-matrix.XXXXXX")"',
+    );
+    expect(sweep).toContain('tarball_v1="$resource_dir/lifecycle-claw-1.0.0.tgz"');
+    expect(sweep).toContain('tarball_v2="$resource_dir/lifecycle-claw-2.0.0.tgz"');
+    expect(sweep).toContain('inspect_v1="$resource_dir/plugin-lifecycle-inspect-v1.json"');
+    expect(sweep).toContain('pack_root="$(mktemp -d "$resource_dir/pack.XXXXXX")"');
+    expect(sweep).toContain('registry_root="$(mktemp -d "$resource_dir/registry.XXXXXX")"');
     expect(sweep).toContain('rm -rf "$resource_dir"');
-    expect(sweep).toContain('rm -rf "$pack_root"');
-    expect(sweep).toContain('rm -rf "$registry_root"');
+    expect(sweep).not.toContain('resource_dir="/tmp/openclaw-plugin-lifecycle-matrix"');
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-1.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-2.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/plugin-lifecycle-inspect-v1.json");
     expect(sweep.match(/trap cleanup EXIT/g)).toHaveLength(2);
   });
 
@@ -2143,7 +2291,9 @@ output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured co
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
+    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
     expect(scenario).toContain('openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360');
+    expect(scenario).not.toContain("fetch('http://127.0.0.1:${MOCK_PORT}/health')");
     expect(scenario).not.toContain('kill "$gateway_pid"');
     expect(scenario).not.toContain('kill "$mock_pid"');
     expect(scenario).not.toContain('node "$entry" gateway --port "$PORT"');

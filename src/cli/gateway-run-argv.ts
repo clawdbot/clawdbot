@@ -1,3 +1,4 @@
+// Fast-path argv parser for `openclaw gateway ...` without full Commander registration.
 import { isValueToken } from "../infra/cli-root-options.js";
 
 const GATEWAY_RUN_VALUE_FLAGS = new Set([
@@ -26,6 +27,7 @@ const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
   "--raw-stream",
 ]);
 
+/** Return how many argv tokens a gateway-run option consumes, or 0 when not recognized. */
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
   const arg = args[index];
   if (!arg || arg === "--" || !arg.startsWith("-")) {
@@ -45,6 +47,7 @@ export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index:
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
 
+/** Return how many root fast-path tokens are consumed before the `gateway` command. */
 export function consumeGatewayFastPathRootOptionToken(
   args: ReadonlyArray<string>,
   index: number,
@@ -65,6 +68,7 @@ export function consumeGatewayFastPathRootOptionToken(
   return 0;
 }
 
+/** Resolve the gateway command path from raw argv for catalog/policy lookups. */
 export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
   const args = argv.slice(2);
   let sawGateway = false;

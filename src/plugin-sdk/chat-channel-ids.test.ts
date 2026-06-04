@@ -1,3 +1,6 @@
+/**
+ * Tests chat channel id normalization and matching helpers.
+ */
 import { describe, expect, it } from "vitest";
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import {

@@ -1,3 +1,6 @@
+/**
+ * Shared Vitest mocks for Node builtin modules used by plugin tests.
+ */
 import { vi } from "vitest";
 
 type MockFactory<TModule extends object> =

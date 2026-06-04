@@ -110,6 +110,7 @@ async function isVersionManagedRealNodePath(
   }
 }
 
+/** True when a Node path lives under a known user version-manager root. */
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
@@ -118,6 +119,7 @@ export function isVersionManagedNodePath(
   return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/** True when a Node path matches known system install candidates for the platform. */
 export function isSystemNodePath(
   nodePath: string,
   env: Record<string, string | undefined> = process.env,
@@ -130,6 +132,7 @@ export function isSystemNodePath(
   });
 }
 
+/** Resolves the first available system Node candidate for the platform. */
 export async function resolveSystemNodePath(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -146,6 +149,7 @@ export async function resolveSystemNodePath(
   return null;
 }
 
+/** Resolves system Node info, preferring a supported non-version-managed install. */
 export async function resolveSystemNodeInfo(params: {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
@@ -178,6 +182,7 @@ export async function resolveSystemNodeInfo(params: {
   return firstAvailable;
 }
 
+/** Renders a warning when the system Node exists but is below the supported floor. */
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
@@ -191,6 +196,7 @@ export function renderSystemNodeWarning(
 }
 export { resolveStableNodePath };
 
+/** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
@@ -212,6 +218,7 @@ export async function resolvePreferredNodePath(params: {
       if (!isVersionManagedNodePath(currentExecPath, platform)) {
         return stableCurrentPath;
       }
+      // Prefer system Node over a version-manager shim so daemon launch survives shell setup.
       const systemNode = await resolveSystemNodeInfo({
         env: params.env,
         platform,
@@ -224,7 +231,7 @@ export async function resolvePreferredNodePath(params: {
     }
   }
 
-  // Fall back to system node.
+  // Fall back to system Node when the current executable is unsupported or not Node.
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

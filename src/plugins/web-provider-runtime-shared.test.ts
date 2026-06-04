@@ -1,3 +1,4 @@
+// Covers shared web provider runtime helpers.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

@@ -1,10 +1,16 @@
+/** Default outbound image payload cap shared by media loaders and adapters. */
 export const MAX_IMAGE_BYTES = 6 * 1024 * 1024; // 6MB
+/** Default outbound audio payload cap shared by media loaders and adapters. */
 export const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // 16MB
+/** Default outbound video payload cap shared by media loaders and adapters. */
 export const MAX_VIDEO_BYTES = 16 * 1024 * 1024; // 16MB
+/** Default outbound document payload cap shared by media loaders and adapters. */
 export const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024; // 100MB
 
+/** Media families that share size-policy and MIME-classification behavior. */
 export type MediaKind = "image" | "audio" | "video" | "document";
 
+/** Maps a MIME type to the media family used for size limits and routing. */
 export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (!mime) {
     return undefined;
@@ -30,6 +36,7 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   return undefined;
 }
 
+/** Returns the default byte cap for a classified media family. */
 export function maxBytesForKind(kind: MediaKind): number {
   switch (kind) {
     case "image":

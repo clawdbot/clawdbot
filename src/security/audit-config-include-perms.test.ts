@@ -1,3 +1,4 @@
+// Covers config include-file permission audit findings.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 
+/** Packs a test package directory into a gzipped tar archive. */
 export async function packToArchive(params: {
   pkgDir: string;
   outDir: string;
@@ -25,6 +26,7 @@ export async function packToArchive(params: {
   return dest;
 }
 
+/** Lists archive entries for a flat-root package fixture. */
 export function listFlatRootArchiveEntries(pkgDir: string): string[] {
   const externalEntries = listFindFlatRootArchiveEntries(pkgDir);
   if (externalEntries) {
@@ -45,6 +47,7 @@ function listFindFlatRootArchiveEntries(pkgDir: string): string[] | null {
   if (result.status !== 0) {
     return null;
   }
+  // Prefer find output on Unix so fixture archives preserve symlink names without stat-following.
   return result.stdout
     .split("\n")
     .map((line) => line.trim())

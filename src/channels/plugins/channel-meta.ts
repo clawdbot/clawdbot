@@ -5,6 +5,9 @@ import type { ChannelMeta } from "./types.core.js";
 type ArrayFieldMode = "defined" | "non-empty";
 type OptionalStringMode = "defined" | "truthy";
 
+/**
+ * Builds normalized channel metadata from a plugin manifest channel declaration.
+ */
 export function buildManifestChannelMeta(params: {
   id: string;
   channel: PluginPackageChannel;
@@ -46,6 +49,8 @@ export function buildManifestChannelMeta(params: {
     ...(params.channel.markdownCapable !== undefined
       ? { markdownCapable: params.channel.markdownCapable }
       : {}),
+    // Exposure defaults and validation live in the shared exposure helper so setup and catalog
+    // metadata stay aligned across bundled and external channels.
     exposure: resolveChannelExposure(params.channel),
     ...(params.channel.quickstartAllowFrom !== undefined
       ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }

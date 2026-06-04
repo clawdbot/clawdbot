@@ -1,3 +1,4 @@
+// Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -40,6 +41,7 @@ function getStepLabel(step: UpdateStepInfo): string {
   return STEP_LABELS[step.name] ?? step.name;
 }
 
+/** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
@@ -107,11 +109,13 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   return hints;
 }
 
+/** Runner-facing progress callbacks plus terminal spinner cleanup. */
 export type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
 };
 
+/** Create a progress adapter for the updater runner without coupling runner code to terminal UI. */
 export function createUpdateProgress(enabled: boolean): ProgressController {
   if (!enabled) {
     return {
@@ -175,6 +179,7 @@ type PrintResultOptions = UpdateCommandOptions & {
   hideSteps?: boolean;
 };
 
+/** Render a completed updater run as JSON or terminal output. */
 export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
   if (opts.json) {
     defaultRuntime.writeJson(result);

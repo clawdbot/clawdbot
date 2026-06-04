@@ -1,19 +1,23 @@
+/** Timing for one named stage, including both stage duration and run-relative elapsed time. */
 export type EmbeddedRunStageTiming = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
+/** Snapshot of all marked stages plus total elapsed time at snapshot creation. */
 export type EmbeddedRunStageSummary = {
   totalMs: number;
   stages: EmbeddedRunStageTiming[];
 };
 
+/** Lightweight monotonic-ish stage tracker used for embedded run startup diagnostics. */
 export type EmbeddedRunStageTracker = {
   mark: (name: string) => void;
   snapshot: () => EmbeddedRunStageSummary;
 };
 
+/** Canonical stage names for dispatch-time embedded attempt diagnostics. */
 export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
   workspace: "attempt-workspace",
   prompt: "attempt-prompt",
@@ -24,6 +28,11 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
+/**
+ * Creates an append-only stage tracker. `mark` records time since the previous
+ * mark while `snapshot` reports current total elapsed time without mutating the
+ * recorded stage list.
+ */
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
 }): EmbeddedRunStageTracker {
@@ -53,6 +62,7 @@ export function createEmbeddedRunStageTracker(options?: {
   };
 }
 
+/** Returns true when either total runtime or any single stage exceeds warning thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,
   options?: {
@@ -68,6 +78,7 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
+/** Formats stage timing into compact log text for startup/attempt diagnostics. */
 export function formatEmbeddedRunStageSummary(
   prefix: string,
   summary: EmbeddedRunStageSummary,

@@ -1,3 +1,4 @@
+// Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {

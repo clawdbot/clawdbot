@@ -157,13 +157,11 @@ is available, then fall back to `latest`.
     `--pin` applies to npm installs only. It is not supported with `git:` installs; use an explicit git ref such as `git:github.com/acme/plugin@v1.2.3` when you want a pinned source. It is not supported with `--marketplace`, because marketplace installs persist marketplace source metadata instead of an npm spec.
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install">
-    `--dangerously-force-unsafe-install` is a break-glass option for false positives in the built-in dangerous-code scanner. It allows the install to continue even when the built-in scanner reports `critical` findings, but it does **not** bypass plugin `before_install` hook policy blocks and does **not** bypass scan failures.
+    `--dangerously-force-unsafe-install` is deprecated and is now a no-op. OpenClaw no longer runs built-in install-time dangerous-code blocking for plugin installs.
 
-    Install scans ignore common test files and directories such as `tests/`, `__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks; declared plugin runtime entrypoints are still scanned even if they use one of those names.
+    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks and `security.installPolicy` can still block installs.
 
-    This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
-
-    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
+    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -185,7 +183,7 @@ is available, then fall back to `latest`.
   <Accordion title="Git repositories">
     Use `git:<repo>` to install directly from a git repository. Supported forms include `git:github.com/owner/repo`, `git:owner/repo`, full `https://`, `ssh://`, `git://`, `file://`, and `git@host:owner/repo.git` clone URLs. Add `@<ref>` or `#<ref>` to check out a branch, tag, or commit before install.
 
-    Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer. That means manifest validation, dangerous-code scanning, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
+    Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer. That means manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
 
     After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, execute that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
 
@@ -267,6 +265,10 @@ For local paths and archives, OpenClaw auto-detects:
 - Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude component layout)
 - Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
 
+Managed local installs must be plugin directories or archives. Standalone `.js`,
+`.mjs`, `.cjs`, and `.ts` plugin files are not copied into the managed plugin
+root by `plugins install`; list them explicitly in `plugins.load.paths` instead.
+
 <Note>
 Compatible bundles install into the normal plugin root and participate in the same list/info/enable/disable flow. Today, bundle skills, Claude command-skills, Claude `settings.json` defaults, Claude `.lsp.json` / manifest-declared `lspServers` defaults, Cursor command-skills, and compatible Codex hook directories are supported; other detected bundle capabilities are shown in diagnostics/info but are not yet wired into runtime execution.
 </Note>
@@ -320,13 +322,17 @@ For runtime hook debugging:
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
 - Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
-Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
+Use `--link` to avoid copying a local plugin directory (adds to `plugins.load.paths`):
 
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
 
-Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
+Standalone plugin files must be listed in `plugins.load.paths` rather than
+installed with `plugins install` or placed directly in `~/.openclaw/extensions`
+or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin
+package or bundle directories, while top-level script files are treated as local
+helpers and skipped.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not
@@ -399,7 +405,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
-    `--dangerously-force-unsafe-install` is also available on `plugins update` as a break-glass override for built-in dangerous-code scan false positives during plugin updates. It still does not bypass plugin `before_install` policy blocks or scan-failure blocking, and it only applies to plugin updates, not hook-pack updates.
+    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` and plugin `before_install` hooks can still block updates.
   </Accordion>
 </AccordionGroup>
 

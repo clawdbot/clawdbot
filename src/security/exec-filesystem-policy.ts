@@ -1,3 +1,4 @@
+// Resolves filesystem policy for exec and sandbox tool use.
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -10,6 +11,7 @@ import type { AgentToolsConfig, ExecToolConfig } from "../config/types.tools.js"
 const MUTATING_FS_TOOLS = ["write", "edit", "apply_patch"] as const;
 const RUNTIME_TOOLS = ["exec", "process"] as const;
 
+/** Scope where exec-like tools remain available while mutating filesystem tools are disabled. */
 export type ExecFilesystemPolicyDriftHit = {
   scopeLabel: string;
   runtimeTools: string[];
@@ -70,6 +72,7 @@ function isExecFilesystemConstrained(params: {
   return params.sandboxWorkspaceAccess !== "rw";
 }
 
+/** Find policy scopes where exec can still mutate files despite disabled fs tools. */
 export function collectExecFilesystemPolicyDriftHits(
   cfg: OpenClawConfig,
 ): ExecFilesystemPolicyDriftHit[] {
@@ -98,6 +101,8 @@ export function collectExecFilesystemPolicyDriftHits(
       globalExec,
       agentExec: context.tools?.exec,
     });
+    // Sandboxed all-mode with non-rw workspace access constrains local exec
+    // mutations enough that disabling write/edit/apply_patch is not misleading.
     if (
       isExecFilesystemConstrained({
         sandboxMode: sandbox.mode,
@@ -119,6 +124,8 @@ export function collectExecFilesystemPolicyDriftHits(
       continue;
     }
 
+    // Drift means every explicit mutating filesystem tool is disabled while a
+    // runtime path that can still mutate files remains allowed.
     const disabledFilesystemTools = MUTATING_FS_TOOLS.filter(
       (tool) => !isToolAllowedByPolicies(tool, policies),
     );

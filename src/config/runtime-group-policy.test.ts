@@ -1,3 +1,4 @@
+// Covers runtime group-policy resolution from config and context.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   GROUP_POLICY_BLOCKED_LABEL,

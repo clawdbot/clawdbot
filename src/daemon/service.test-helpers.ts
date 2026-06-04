@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayService } from "./service.js";
 
+/** Creates a mock gateway service implementation for daemon service tests. */
 export function createMockGatewayService(overrides: Partial<GatewayService> = {}): GatewayService {
   return {
     label: "LaunchAgent",

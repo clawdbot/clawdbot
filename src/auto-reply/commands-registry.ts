@@ -1,3 +1,4 @@
+/** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -53,6 +54,7 @@ type NativeCommandProviderLookupOptions = {
   includeBundledChannelFallback?: boolean;
 };
 
+/** Resolves provider-specific native command names while preserving registry defaults. */
 function resolveNativeName(
   command: ChatCommandDefinition,
   provider?: string,
@@ -110,6 +112,7 @@ function listNativeSpecsFromCommands(
           description: spec.description,
           acceptsArgs: spec.acceptsArgs,
         };
+        // Native aliases carry the same payload shape but are marked for channel registration.
         if (index > 0) {
           nativeSpec.isAlias = true;
         }
@@ -124,6 +127,7 @@ function listNativeSpecsFromCommands(
     });
 }
 
+/** Lists native command specs registered for a provider, including skill commands. */
 export function listNativeCommandSpecs(params?: {
   skillCommands?: SkillCommandSpec[];
   provider?: string;
@@ -134,6 +138,7 @@ export function listNativeCommandSpecs(params?: {
   );
 }
 
+/** Lists native command specs that are enabled for the provided config. */
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
   params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
@@ -141,6 +146,7 @@ export function listNativeCommandSpecsForConfig(
   return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
 }
 
+/** Finds a command definition by provider-native command name or native alias. */
 export function findCommandByNativeName(
   name: string,
   provider?: string,
@@ -159,6 +165,7 @@ export function findCommandByNativeName(
   );
 }
 
+/** Formats a command and optional raw argument string as slash-command text. */
 export function buildCommandText(commandName: string, args?: string): string {
   const trimmedArgs = args?.trim();
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
@@ -177,6 +184,7 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
       break;
     }
     if (definition.captureRemaining) {
+      // CaptureRemaining keeps freeform prompts intact after the fixed leading args.
       values[definition.name] = tokens.slice(index).join(" ");
       break;
     }
@@ -213,6 +221,7 @@ function formatPositionalArgs(
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
+/** Parses raw command arguments according to the command definition. */
 export function parseCommandArgs(
   command: ChatCommandDefinition,
   raw?: string,
@@ -230,6 +239,7 @@ export function parseCommandArgs(
   };
 }
 
+/** Serializes parsed command arguments back into a raw argument string. */
 export function serializeCommandArgs(
   command: ChatCommandDefinition,
   args?: CommandArgs,
@@ -250,6 +260,7 @@ export function serializeCommandArgs(
   return formatPositionalArgs(command.args, args.values);
 }
 
+/** Builds slash-command text from a command definition and parsed args. */
 export function buildCommandTextFromArgs(
   command: ChatCommandDefinition,
   args?: CommandArgs,
@@ -275,6 +286,7 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
 
 export type ResolvedCommandArgChoice = { value: string; label: string };
 
+/** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(params: {
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
@@ -307,6 +319,7 @@ export function resolveCommandArgChoices(params: {
   );
 }
 
+/** Resolves the next argument menu to show for commands with selectable choices. */
 export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
@@ -366,6 +379,7 @@ export function resolveCommandArgMenu(params: {
   return { arg, choices, title };
 }
 
+/** Formats the prompt title shown before an argument-choice menu. */
 export function formatCommandArgMenuTitle(params: {
   command: ChatCommandDefinition;
   menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
@@ -388,6 +402,7 @@ export function formatCommandArgMenuTitle(params: {
   return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
 }
 
+/** Returns true for normalized slash-command text. */
 export function isCommandMessage(raw: string): boolean {
   const trimmed = normalizeCommandBody(raw);
   return trimmed.startsWith("/");

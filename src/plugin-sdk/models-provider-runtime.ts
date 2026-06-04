@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for building model-provider command replies.
+ */
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,

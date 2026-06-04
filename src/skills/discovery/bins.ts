@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SkillEntry } from "../types.js";
 
+/** Collects all binary names a set of skills may require or install. */
 export function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {

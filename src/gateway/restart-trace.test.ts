@@ -1,3 +1,6 @@
+/**
+ * Tests restart trace formatting and persisted restart metadata.
+ */
 import { describe, expect, it } from "vitest";
 import {
   collectGatewayProcessMemoryUsageMb,

@@ -1,3 +1,4 @@
+/** Tests plugin loader cache state keys, invalidation, and reset behavior. */
 import { describe, expect, it } from "vitest";
 import { PluginLoaderCacheState, PluginLoadReentryError } from "./loader-cache-state.js";
 

@@ -1,3 +1,4 @@
+// Coordinates active plugin runtime registries and event hooks.
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {

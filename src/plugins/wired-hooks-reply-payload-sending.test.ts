@@ -1,3 +1,4 @@
+/** Tests reply payload sending through wired plugin hook flows. */
 import { describe, expect, it, vi } from "vitest";
 import {
   getReplyPayloadMetadata,

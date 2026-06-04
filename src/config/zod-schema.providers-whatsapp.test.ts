@@ -1,3 +1,4 @@
+// Verifies WhatsApp provider schema parsing and defaults.
 import { describe, it, expect } from "vitest";
 import { WhatsAppConfigSchema, WhatsAppAccountSchema } from "./zod-schema.providers-whatsapp.js";
 

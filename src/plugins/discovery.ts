@@ -1,3 +1,4 @@
+/** Discovers plugin candidates from bundled, workspace, global, package, and bundle roots. */
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -63,6 +64,7 @@ const packageManifestProcessCache = new Map<
   { mtimeMs: number; size: number; manifest: PackageManifest | null }
 >();
 
+/** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
   source: string;
@@ -87,6 +89,7 @@ export type PluginCandidate = {
   rawPackageManifest?: PackageManifest;
 };
 
+/** Discovery candidates plus warnings/errors emitted while scanning roots. */
 export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];

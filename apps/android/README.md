@@ -253,9 +253,9 @@ Pre-req checklist:
 4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
 5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
 6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
 8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
 
 ```bash
 openclaw devices list
@@ -287,8 +287,8 @@ Common failure quick-fixes:
 
 - `pairing required` before tests start:
   - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
+- `A2UI host not reachable` / `A2UI_HOST_UNAVAILABLE`:
+  - keep the app foregrounded on the **Screen** tab and rerun. A2UI commands use the bundled app-owned A2UI page; the Gateway Canvas host is still needed for remote Canvas checks, but not for A2UI message application.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 

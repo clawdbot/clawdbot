@@ -8,6 +8,11 @@ import {
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
+
+const SCAN_CHUNK_BYTES = 64 * 1024;
+const SCAN_CARRY_CHARS = 256;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
@@ -31,6 +36,41 @@ function readPositiveInt(raw, fallback) {
   }
   const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
@@ -134,8 +174,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function rememberPluginInstallPath() {

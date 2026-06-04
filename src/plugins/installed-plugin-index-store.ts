@@ -1,3 +1,4 @@
+/** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -40,6 +41,7 @@ export {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
+/** Freshness state for the persisted installed plugin index. */
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
 export type InstalledPluginIndexStoreInspection = {

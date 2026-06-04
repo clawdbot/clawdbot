@@ -1,3 +1,4 @@
+/** Tests system.run allowlist planning, output truncation, and argv resolution. */
 import { describe, expect, it } from "vitest";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";

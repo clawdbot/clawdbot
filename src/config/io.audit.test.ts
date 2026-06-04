@@ -1,3 +1,4 @@
+// Covers config audit reporting for files, paths, and values.
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";

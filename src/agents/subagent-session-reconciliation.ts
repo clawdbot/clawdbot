@@ -15,8 +15,11 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 
+// Reconcile subagent lifecycle events with persisted session store state. This
+// lets parent sessions announce completion even if registry updates arrive late.
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
 
+/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
@@ -68,6 +71,7 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   return undefined;
 }
 
+/** Load a child session entry using the agent-specific session store path. */
 export function loadSubagentSessionEntry(params: {
   childSessionKey: string;
   storeCache?: SubagentSessionStoreCache;
@@ -88,6 +92,7 @@ export function loadSubagentSessionEntry(params: {
   return findSessionEntryByKey(store, key);
 }
 
+/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
@@ -158,6 +163,7 @@ export function resolveCompletionFromSessionEntry(
   return null;
 }
 
+/** Resolve child completion by reading its persisted session entry. */
 export function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
   fallbackEndedAt: number;
@@ -176,6 +182,7 @@ export function resolveSubagentSessionCompletion(params: {
   );
 }
 
+/** Resolve a fresh child session start time for lifecycle reconciliation. */
 export function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
   notBeforeMs?: number;

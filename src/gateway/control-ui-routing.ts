@@ -1,3 +1,4 @@
+// Control UI route classifier for base-path and root-mounted SPA serving.
 import { isReadHttpMethod } from "./control-ui-http-utils.js";
 
 type ControlUiRequestClassification =
@@ -8,6 +9,7 @@ type ControlUiRequestClassification =
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
 
+/** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
   basePath: string;
   pathname: string;

@@ -381,4 +381,15 @@ describe("runtime api guardrails", () => {
       'export { setMatrixRuntime } from "./src/runtime.js";',
     ]);
   });
+
+  it("keeps Feishu's narrow runtime-setter entrypoint pinned to a single export", () => {
+    const setterFile = bundledPluginFile({
+      rootDir: ROOT_DIR,
+      pluginId: "feishu",
+      relativePath: "runtime-setter-api.ts",
+    });
+    expect(readExportStatements(setterFile)).toEqual([
+      'export { setFeishuRuntime } from "./src/runtime.js";',
+    ]);
+  });
 });

@@ -1,3 +1,7 @@
+/**
+ * iMessage channel config types shared by core schema, bundled plugin runtime, and plugin SDK exports.
+ * Root fields apply to the default account; `accounts` entries override them per account.
+ */
 import type {
   BlockStreamingCoalesceConfig,
   ContextVisibilityMode,
@@ -12,6 +16,7 @@ import type {
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/** Private-API and helper actions the iMessage runtime may expose to agents. */
 export type IMessageActionConfig = {
   reactions?: boolean;
   edit?: boolean;
@@ -26,8 +31,10 @@ export type IMessageActionConfig = {
   sendAttachment?: boolean;
 };
 
+/** Inbound tapback notification policy. */
 export type IMessageReactionNotificationMode = "off" | "own" | "all";
 
+/** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -166,6 +173,7 @@ export type IMessageAccountConfig = {
   responsePrefix?: string;
 };
 
+/** Top-level iMessage config, with optional account map layered over default account fields. */
 export type IMessageConfig = {
   /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;

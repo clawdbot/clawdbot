@@ -1,3 +1,4 @@
+// Tests local port probing and availability detection.
 import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { tryListenOnPort } from "./ports-probe.js";

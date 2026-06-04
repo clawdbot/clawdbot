@@ -1,3 +1,4 @@
+// Thread command registration, including channel-specific create request normalization.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
@@ -24,6 +25,7 @@ function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   };
 }
 
+/** Register thread create/list/reply commands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 

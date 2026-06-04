@@ -1,3 +1,4 @@
+/** Tests context command behavior and token reporting. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildCommandContext } from "./commands-context.js";

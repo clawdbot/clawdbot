@@ -1,3 +1,4 @@
+/** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import {

@@ -23,6 +23,8 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+// Effective inventory is the operator-facing view of the current tool surface:
+// runtime-compatible tools plus warnings for tools quarantined by schema policy.
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (
@@ -45,6 +47,8 @@ function summarizeToolDescription(tool: AnyAgentTool): string {
   });
 }
 
+// Tool metadata may be attached to the normalized tool or the raw fallback
+// before schema projection. Check both so owner attribution survives cloning.
 function resolveEffectiveToolSource(
   tool: AnyAgentTool,
   fallbackTool?: AnyAgentTool,
@@ -70,6 +74,8 @@ function resolveEffectiveToolSource(
   return { source: "core" };
 }
 
+// Unsupported-schema notices need owner context when available so operators know
+// whether to disable a plugin/channel or fix core tool definitions.
 function buildUnsupportedToolSchemaNotice(params: {
   diagnostic: RuntimeToolSchemaDiagnostic;
   tool: AnyAgentTool | undefined;
@@ -118,6 +124,8 @@ function readMatchingTool(
   }
 }
 
+// Raw tool arrays can contain getters/proxies from plugin boundaries. Read
+// defensively; projection diagnostics handle the exact unreadable entry later.
 function buildReadableRawToolsByName(
   tools: readonly AnyAgentTool[],
 ): ReadonlyMap<string, AnyAgentTool> {
@@ -139,6 +147,8 @@ function buildReadableRawToolsByName(
   return toolsByName;
 }
 
+// Duplicate labels are ambiguous in inventory UIs; add the owner/id only where
+// needed so unique entries keep their concise display names.
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -153,6 +163,7 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
   });
 }
 
+/** Builds effective inventory entries from already runtime-compatible tools. */
 export function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
@@ -194,6 +205,7 @@ export function buildEffectiveToolInventoryEntries(
   );
 }
 
+/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
 export function buildRuntimeCompatibleToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;

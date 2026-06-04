@@ -1,3 +1,6 @@
+/**
+ * Tests startup task registration and gateway startup side effects.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 

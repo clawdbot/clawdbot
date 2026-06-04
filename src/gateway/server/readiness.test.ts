@@ -4,6 +4,9 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "../server-channels.js";
 import { createReadinessChecker } from "./readiness.js";
 
+/**
+ * Readiness checker tests for startup grace, channel health, and stale sockets.
+ */
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
 

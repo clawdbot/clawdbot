@@ -1,3 +1,4 @@
+// Tests usage-line formatting for agent runner completion summaries.
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";

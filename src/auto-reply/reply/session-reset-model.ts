@@ -1,3 +1,4 @@
+/** Applies model override tokens embedded in reset/new command text. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -18,6 +19,7 @@ import {
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
 
+/** Result of applying a reset-message model override. */
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
   cleanedBody?: string;
@@ -136,6 +138,8 @@ function applySelectionToSession(params: {
   }
 }
 
+/** Applies a model override embedded in a reset command body. */
+/** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -202,6 +206,7 @@ export async function applyResetModelOverride(params: {
   let consumed = 0;
 
   if (providers.has(normalizeProviderId(first)) && second) {
+    // Support reset bodies like `openai gpt-5.5 rest of prompt`.
     const composite = `${normalizeProviderId(first)}/${second}`;
     const resolved = resolveSelection(composite);
     if (resolved.selection) {

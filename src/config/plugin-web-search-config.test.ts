@@ -1,3 +1,4 @@
+// Covers plugin web-search config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { resolvePluginWebSearchConfig } from "./plugin-web-search-config.js";
 

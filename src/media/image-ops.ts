@@ -13,6 +13,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 export type { ImageMetadata, ImageProbe };
 
+/** OpenClaw-facing image backend availability error, preserving the failed operation and causes. */
 export class ImageProcessorUnavailableError extends Error {
   readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
   readonly operation: string;
@@ -28,6 +29,7 @@ export class ImageProcessorUnavailableError extends Error {
   }
 }
 
+/** JPEG resize request passed through the media-runtime/plugin SDK surface. */
 export type ResizeToJpegParams = {
   buffer: Buffer;
   maxSide: number;
@@ -35,6 +37,7 @@ export type ResizeToJpegParams = {
   withoutEnlargement?: boolean;
 };
 
+/** PNG resize request passed through the media-runtime/plugin SDK surface. */
 export type ResizeToPngParams = {
   buffer: Buffer;
   maxSide: number;
@@ -42,9 +45,12 @@ export type ResizeToPngParams = {
   withoutEnlargement?: boolean;
 };
 
+/** Ordered JPEG quality ladder used when shrinking generated or attached images. */
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
+/** Shared input/output pixel cap for Rastermill-backed image operations. */
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
+/** Creates a Rastermill processor with OpenClaw temp-dir, pixel-limit, and command trust policy. */
 export function createImageProcessor() {
   return createRastermill({
     execution: "auto",
@@ -61,10 +67,12 @@ export function createImageProcessor() {
   });
 }
 
+/** Detects either OpenClaw's wrapper error or Rastermill's native unavailable error. */
 export function isImageProcessorUnavailableError(err: unknown): boolean {
   return err instanceof ImageProcessorUnavailableError || isRastermillUnavailableError(err);
 }
 
+/** Builds a descending, de-duplicated max-side search grid for iterative image resizing. */
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
     .map((value) => Math.min(maxSide, value))
@@ -72,10 +80,12 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
+/** Reads dimensions from image header bytes without invoking a full image decode. */
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
   return readRastermillImageMetadataFromHeader(buffer);
 }
 
+/** Reads image probe data from header bytes without invoking a full image decode. */
 export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
   return readRastermillImageProbeFromHeader(buffer);
 }
@@ -87,11 +97,13 @@ function wrapRastermillUnavailable(operation: string, error: unknown): never {
   throw error;
 }
 
+/** Fully probes image dimensions through Rastermill when header-only metadata is insufficient. */
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
   const info = await createImageProcessor().probe(buffer);
   return info ? { width: info.width, height: info.height } : null;
 }
 
+/** Normalizes EXIF orientation when possible while leaving bytes unchanged if the backend is unavailable. */
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
   try {
     const rastermill = createImageProcessor();
@@ -111,6 +123,7 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
   }
 }
 
+/** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   try {
     return (
@@ -128,6 +141,7 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
   }
 }
 
+/** Converts HEIC/HEIF-like image bytes into JPEG through the shared image processor. */
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   try {
     return (await createImageProcessor().encode(buffer, { format: "jpeg" })).data;
@@ -136,10 +150,12 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   }
 }
 
+/** Detects alpha support using a full transparency probe, falling back to trusted header metadata. */
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   try {
     return (await createImageProcessor().transparency(buffer)).hasAlphaChannel;
   } catch (error) {
+    // Some callers only need the header-declared alpha bit; keep that usable when decode fails.
     const headerHasAlpha = readRastermillImageProbeFromHeader(buffer)?.hasAlpha === true;
     if (isRastermillUnavailableError(error)) {
       return headerHasAlpha;
@@ -155,6 +171,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   }
 }
 
+/** Resizes or encodes image bytes as PNG through the shared image processor. */
 export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   try {
     return (
@@ -174,6 +191,7 @@ export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   }
 }
 
+/** Optimizes PNG bytes under a target size and returns the chosen search parameters. */
 export async function optimizeImageToPng(
   buffer: Buffer,
   maxBytes: number,

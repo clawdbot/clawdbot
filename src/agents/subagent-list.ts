@@ -29,6 +29,8 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
+// Builds the sessions_list subagent view from registry runs and persisted
+// session metadata. The text and structured items share one indexing path.
 type SubagentListItem = {
   index: number;
   line: string;
@@ -66,6 +68,7 @@ function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSession
   });
 }
 
+/** Resolve persisted session metadata for a session key, caching per store path. */
 export function resolveSessionEntryForKey(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -84,6 +87,7 @@ export function resolveSessionEntryForKey(params: {
   };
 }
 
+/** Build child-session indexes from the latest run associated with each child key. */
 export function buildLatestSubagentRunIndex(
   runs: Map<string, SubagentRunRecord>,
   options?: { now?: number },
@@ -114,6 +118,8 @@ export function buildLatestSubagentRunIndex(
         now,
       })
     ) {
+      // Completed child links age out unless active descendants still depend on
+      // the controller relationship.
       continue;
     }
     const existing = childSessionsByController.get(controllerSessionKey);
@@ -133,6 +139,7 @@ export function buildLatestSubagentRunIndex(
   };
 }
 
+/** Create a cached descendant counter for repeated list rendering checks. */
 export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
@@ -146,6 +153,7 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
   };
 }
 
+/** Return whether a run should be shown in the active subagent section. */
 export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
@@ -214,6 +222,7 @@ function buildListText(params: {
   return lines.join("\n");
 }
 
+/** Build structured and text views for active and recent subagent runs. */
 export function buildSubagentList(params: {
   cfg: OpenClawConfig;
   runs: SubagentRunRecord[];
@@ -228,6 +237,8 @@ export function buildSubagentList(params: {
     if (seenChildSessionKeys.has(entry.childSessionKey)) {
       continue;
     }
+    // Multiple records can point at one child session after steering or retry;
+    // the sorted first entry is the display authority.
     seenChildSessionKeys.add(entry.childSessionKey);
     dedupedRuns.push(entry);
   }

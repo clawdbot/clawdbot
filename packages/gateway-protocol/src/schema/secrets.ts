@@ -1,8 +1,16 @@
 import { Type, type Static } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Secret-provider protocol schemas.
+ *
+ * These payloads request secret materialization from the gateway while keeping
+ * caller scope, allowed paths, and provider overrides explicit.
+ */
+/** Empty request payload for reloading configured secret providers. */
 export const SecretsReloadParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Request payload for resolving the secrets needed by one command invocation. */
 export const SecretsResolveParamsSchema = Type.Object(
   {
     commandName: NonEmptyString,
@@ -23,8 +31,10 @@ export const SecretsResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Static type for secret resolution requests. */
 export type SecretsResolveParams = Static<typeof SecretsResolveParamsSchema>;
 
+/** One resolved secret assignment path plus its provider-owned value. */
 export const SecretsResolveAssignmentSchema = Type.Object(
   {
     path: Type.Optional(NonEmptyString),
@@ -34,6 +44,7 @@ export const SecretsResolveAssignmentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Secret resolution response with assignments and safe diagnostics. */
 export const SecretsResolveResultSchema = Type.Object(
   {
     ok: Type.Optional(Type.Boolean()),
@@ -44,4 +55,5 @@ export const SecretsResolveResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Static type for secret resolution responses. */
 export type SecretsResolveResult = Static<typeof SecretsResolveResultSchema>;

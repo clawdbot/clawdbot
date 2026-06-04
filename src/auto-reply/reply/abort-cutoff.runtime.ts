@@ -1,7 +1,9 @@
+/** Runtime persistence helper for clearing abort-cutoff state from sessions. */
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyAbortCutoffToSessionEntry, hasAbortCutoff } from "./abort-cutoff.js";
 
+/** Clears abort cutoff state in memory and persisted session storage. */
 export async function clearAbortCutoffInSessionRuntime(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;

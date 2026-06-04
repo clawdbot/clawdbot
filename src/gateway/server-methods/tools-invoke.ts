@@ -9,6 +9,9 @@ import {
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/**
+ * RPC adapter for invoking gateway-visible tools from connected clients.
+ */
 function resolveRpcErrorCode(params: {
   type: "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
   requiresApproval?: boolean;
@@ -29,6 +32,7 @@ function resolveRpcErrorCode(params: {
   return "internal_error";
 }
 
+/** Handles `tools.invoke` with protocol-shaped success and failure payloads. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async ({ params, respond, context }) => {
     if (!validateToolsInvokeParams(params)) {

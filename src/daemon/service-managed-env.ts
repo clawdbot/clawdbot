@@ -4,6 +4,7 @@ import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
 
+// Tracks which service environment keys OpenClaw owns across reinstall/start flows.
 type ServiceEnvCommand = {
   environment?: Record<string, string | undefined>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;

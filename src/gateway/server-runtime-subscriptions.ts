@@ -1,3 +1,4 @@
+// Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -10,6 +11,7 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 
+/** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
@@ -30,6 +32,7 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
   > | null = null;
   const getAgentEventHandler = () => {
+    // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
     agentEventHandlerPromise ??= Promise.all([
       import("./server-chat.js"),
       import("./server-session-key.js"),

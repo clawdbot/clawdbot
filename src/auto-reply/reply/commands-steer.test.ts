@@ -1,3 +1,4 @@
+// Tests steer command persistence and retrieval for session guidance.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";

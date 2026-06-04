@@ -1,3 +1,4 @@
+/** Tests raw body handling for command and reply prompt paths. */
 import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";

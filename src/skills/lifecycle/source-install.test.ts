@@ -55,6 +55,43 @@ async function runGitOk(repoDir: string, args: string[]) {
   return result.stdout.trim();
 }
 
+async function writeCapturePolicyScript(root: string) {
+  const scriptPath = path.join(root, "capture-policy.cjs");
+  await fs.writeFile(
+    scriptPath,
+    [
+      "const fs = require('node:fs');",
+      "let input = '';",
+      "process.stdin.on('data', (chunk) => { input += chunk; });",
+      "process.stdin.on('end', () => {",
+      "  fs.writeFileSync(process.env.CAPTURE_PATH, input);",
+      "  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: 'allow' }));",
+      "});",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+  return scriptPath;
+}
+
+function capturePolicyConfig(params: { scriptPath: string; capturePath: string }) {
+  return {
+    security: {
+      installPolicy: {
+        enabled: true,
+        exec: {
+          source: "exec" as const,
+          command: process.execPath,
+          args: [params.scriptPath],
+          env: { CAPTURE_PATH: params.capturePath },
+          allowInsecurePath: true,
+          allowSymlinkCommand: true,
+        },
+      },
+    },
+  };
+}
+
 describe("installSkillFromSource", () => {
   it("installs a local skill directory using the SKILL.md frontmatter name", async () => {
     await withTempDir({ prefix: "openclaw-skill-source-local-" }, async (root) => {
@@ -286,6 +323,51 @@ describe("installSkillFromSource", () => {
       ).resolves.toContain("Feature branch skill");
     });
   });
+
+  it.each([
+    {
+      name: "default branch",
+      ref: undefined,
+      expectedMutable: true,
+    },
+    {
+      name: "full commit",
+      ref: "commit",
+      expectedMutable: false,
+    },
+  ] as const)(
+    "reports $name git skill sources with expected mutability to policy",
+    async (entry) => {
+      await withTempDir({ prefix: "openclaw-skill-source-git-policy-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const repoDir = path.join(root, "repo");
+        await fs.mkdir(repoDir, { recursive: true });
+        await initGitSkillRepo(repoDir);
+        const commit = await runGitOk(repoDir, ["rev-parse", "HEAD"]);
+        const scriptPath = await writeCapturePolicyScript(root);
+        const capturePath = path.join(root, "policy-stdin.json");
+        const ref = entry.ref === "commit" ? commit : entry.ref;
+
+        const result = await installSkillFromSource({
+          workspaceDir,
+          spec: `git:file://${repoDir}${ref ? `@${ref}` : ""}`,
+          config: capturePolicyConfig({ scriptPath, capturePath }),
+        });
+
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        expect(result.ok).toBe(true);
+        const payload = JSON.parse(await fs.readFile(capturePath, "utf8")) as {
+          source?: { kind?: string; mutable?: boolean };
+        };
+        expect(payload.source).toMatchObject({
+          kind: "git",
+          mutable: entry.expectedMutable,
+        });
+      });
+    },
+  );
 
   it("removes stale ClawHub lock tracking after source installs", async () => {
     await withTempDir({ prefix: "openclaw-skill-source-untrack-" }, async (root) => {

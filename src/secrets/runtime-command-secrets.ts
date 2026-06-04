@@ -1,3 +1,4 @@
+/** Resolves command-scoped secrets, including web provider override credentials. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,8 +20,11 @@ import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 export type { CommandSecretAssignment } from "./command-config.js";
 
+/** Provider selections applied only while resolving command-scoped web secrets. */
 export type CommandSecretProviderOverrides = {
+  /** Temporary web-search provider id for this command request. */
   webSearch?: string;
+  /** Temporary web-fetch provider id for this command request. */
   webFetch?: string;
 };
 
@@ -179,6 +183,8 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (!isWebCommandSecretPath(target.path)) {
       continue;
     }
+    // Provider overrides can make a web SecretRef active for this command only. Other web refs
+    // must be restored from source config so assignment analysis keeps them inactive.
     const { ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
@@ -260,6 +266,8 @@ function mirrorResolvedProviderCredentialToDirectPath(params: {
   if (directValue === undefined) {
     return;
   }
+  // Legacy direct provider targets still exist for command assignment discovery; mirror the
+  // plugin-owned resolved value only when the source config declares that direct path.
   const resolvedValue = getPath(params.resolvedConfig, [
     "plugins",
     "entries",
@@ -392,11 +400,21 @@ async function resolveForcedActiveCommandSecretTargets(params: {
   }
 }
 
+/**
+ * Resolves command-scoped SecretRef assignments from the active runtime snapshot.
+ * Provider overrides are evaluated against cloned snapshot config.
+ */
+/** Resolves command secret assignments from the active prepared runtime snapshot. */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
+  /** Command name used in diagnostics returned to gateway/tool callers. */
   commandName: string;
+  /** Secret target registry ids the command is allowed to resolve. */
   targetIds: ReadonlySet<string>;
+  /** Optional exact config paths allowed inside `targetIds`. */
   allowedPaths?: ReadonlySet<string>;
+  /** Inactive paths to force active because command-local provider overrides select them. */
   forcedActivePaths?: ReadonlySet<string>;
+  /** Inactive paths that may stay unresolved without diagnostics. */
   optionalActivePaths?: ReadonlySet<string>;
   providerOverrides?: CommandSecretProviderOverrides;
 }): Promise<{

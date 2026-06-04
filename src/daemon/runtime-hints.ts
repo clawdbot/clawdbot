@@ -1,6 +1,7 @@
 import { toPosixPath } from "./output.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
+// macOS display paths should not keep Windows drive prefixes from mocked envs.
 function toDarwinDisplayPath(value: string): string {
   return toPosixPath(value).replace(/^[A-Za-z]:/, "");
 }

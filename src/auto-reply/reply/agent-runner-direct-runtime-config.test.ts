@@ -1,3 +1,4 @@
+// Tests direct runtime config overrides passed into agent runner execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";

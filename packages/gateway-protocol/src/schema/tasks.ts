@@ -1,6 +1,13 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Task ledger protocol schemas.
+ *
+ * Tasks represent long-running SDK/agent operations exposed through the gateway;
+ * these schemas keep list/get/cancel payloads bounded and status values closed.
+ */
+/** Closed task lifecycle statuses visible in the gateway task ledger. */
 export const TaskLedgerStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -12,6 +19,7 @@ export const TaskLedgerStatusSchema = Type.Union([
 
 const TimestampSchema = Type.Union([Type.String(), Type.Integer({ minimum: 0 })]);
 
+/** Public task summary returned by task list/get/cancel responses. */
 export const TaskSummarySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -39,6 +47,7 @@ export const TaskSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Task list filters with bounded pagination. */
 export const TasksListParamsSchema = Type.Object(
   {
     status: Type.Optional(Type.Union([TaskLedgerStatusSchema, Type.Array(TaskLedgerStatusSchema)])),
@@ -50,6 +59,7 @@ export const TasksListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Task list page response. */
 export const TasksListResultSchema = Type.Object(
   {
     tasks: Type.Array(TaskSummarySchema),
@@ -58,6 +68,7 @@ export const TasksListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lookup request for one task id. */
 export const TasksGetParamsSchema = Type.Object(
   {
     taskId: NonEmptyString,
@@ -65,6 +76,7 @@ export const TasksGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lookup result for one task summary. */
 export const TasksGetResultSchema = Type.Object(
   {
     task: TaskSummarySchema,
@@ -72,6 +84,7 @@ export const TasksGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Cancel request for one task id with optional operator reason. */
 export const TasksCancelParamsSchema = Type.Object(
   {
     taskId: NonEmptyString,
@@ -80,6 +93,7 @@ export const TasksCancelParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Cancel result, including the task snapshot when it was found. */
 export const TasksCancelResultSchema = Type.Object(
   {
     found: Type.Boolean(),

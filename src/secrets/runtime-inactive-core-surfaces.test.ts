@@ -1,3 +1,4 @@
+/** Tests inactive core SecretRefs remain unresolved and diagnostic-only. */
 import { describe, expect, it } from "vitest";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 

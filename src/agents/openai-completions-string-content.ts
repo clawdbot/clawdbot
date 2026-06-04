@@ -1,3 +1,5 @@
+// OpenAI Chat Completions compatibility helpers. Some providers only accept
+// role/content messages with plain string content instead of text block arrays.
 function flattenStringOnlyCompletionContent(content: unknown): unknown {
   if (!Array.isArray(content)) {
     return content;
@@ -17,6 +19,7 @@ function flattenStringOnlyCompletionContent(content: unknown): unknown {
   return textParts.join("\n");
 }
 
+/** Flatten string-only text block content arrays into newline-joined strings. */
 export function flattenCompletionMessagesToStringContent(messages: unknown[]): unknown[] {
   return messages.map((message) => {
     if (!message || typeof message !== "object") {
@@ -34,6 +37,7 @@ export function flattenCompletionMessagesToStringContent(messages: unknown[]): u
   });
 }
 
+/** Strip completion messages to role/content fields for strict providers. */
 export function stripCompletionMessagesToRoleContent(messages: unknown[]): unknown[] {
   return messages.map((message) => {
     if (!message || typeof message !== "object" || Array.isArray(message)) {

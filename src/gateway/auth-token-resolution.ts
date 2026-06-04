@@ -6,9 +6,12 @@ import {
   type SecretInputUnresolvedReasonStyle,
 } from "./resolve-configured-secret-input-string.js";
 
+// Single-token resolver for local gateway auth consumers that need to know
+// whether the winning token came from explicit args, config, SecretRef, or env.
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+/** Resolves gateway.auth.token with configurable env fallback and SecretRef diagnostics. */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -71,6 +74,8 @@ export async function resolveGatewayAuthToken(params: {
       secretRefConfigured: true,
     };
   }
+  // Env fallback after a configured SecretRef is intentionally opt-in so
+  // callers can fail closed when unresolved secrets should block startup.
   if (envFallback === "always" && envToken) {
     return {
       token: envToken,

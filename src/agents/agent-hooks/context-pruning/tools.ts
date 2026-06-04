@@ -2,10 +2,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../glob-pattern.js";
 import type { ContextPruningToolMatch } from "./settings.js";
 
+// Tool-name matcher used by context pruning to decide which tool-result blocks
+// are safe to prune.
 function normalizeGlob(value: string) {
   return normalizeLowercaseStringOrEmpty(value ?? "");
 }
 
+/** Build a deny-first allowlist predicate for context-prunable tool names. */
 export function makeToolPrunablePredicate(
   match: ContextPruningToolMatch,
 ): (toolName: string) => boolean {

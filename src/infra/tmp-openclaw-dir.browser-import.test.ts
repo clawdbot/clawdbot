@@ -1,3 +1,4 @@
+// Covers browser-safe importing of temp-dir helpers with fs shims.
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
 import { build, type Plugin } from "esbuild";

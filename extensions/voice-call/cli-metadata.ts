@@ -1,5 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
+// Lightweight CLI metadata entry for exposing the voicecall command.
+
 export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",

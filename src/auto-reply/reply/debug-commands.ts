@@ -1,3 +1,4 @@
+// Implements debug command toggles used by maintainers during reply runs.
 import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 
 export type DebugCommand =

@@ -1,3 +1,4 @@
+// Covers system-run approval binding normalization and matching.
 import { describe, expect, it } from "vitest";
 import {
   buildSystemRunApprovalBinding,

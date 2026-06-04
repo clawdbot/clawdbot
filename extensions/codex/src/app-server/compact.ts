@@ -4,13 +4,14 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  defaultCodexAppServerClientFactory,
+  defaultLeasedCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
@@ -177,7 +178,8 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
 
-  const clientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
+  const shouldReleaseDefaultLease = !options.clientFactory;
+  const clientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
   const client = await clientFactory(
     appServer.start,
     requestedAuthProfileId ?? binding.authProfileId,
@@ -211,6 +213,10 @@ async function compactCodexNativeThread(
       compacted: false,
       reason: formatCompactionError(error),
     };
+  } finally {
+    if (shouldReleaseDefaultLease) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
   }
   const resultDetails: JsonObject = {
     backend: "codex-app-server",

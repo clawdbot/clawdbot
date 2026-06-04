@@ -1,3 +1,6 @@
+/**
+ * Tests gateway talk node state exposed through server events.
+ */
 import { describe, expect, it } from "vitest";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 import { hasConnectedTalkNode } from "./server-talk-nodes.js";

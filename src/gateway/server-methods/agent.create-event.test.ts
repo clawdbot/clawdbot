@@ -1,3 +1,6 @@
+/**
+ * Tests agent creation event emission from gateway agent methods.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Tracks migration of legacy doctor contributions into structured health checks.
 export type DoctorHealthConversionKind =
   | "already-detect"
   | "detect-only"
@@ -7,6 +8,7 @@ export type DoctorHealthConversionKind =
   | "terminal-side-effect"
   | "interactive-maintenance";
 
+/** Describes one legacy doctor contribution and the structured health target replacing it. */
 export interface DoctorHealthConversionRule {
   readonly contributionId: string;
   readonly conversion: DoctorHealthConversionKind;
@@ -14,6 +16,7 @@ export interface DoctorHealthConversionRule {
   readonly rule: string;
 }
 
+/** Ordered conversion map used by tests and maintainers to keep doctor migration explicit. */
 export const doctorHealthConversionRules = [
   {
     contributionId: "doctor:gateway-config",

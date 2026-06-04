@@ -1,3 +1,4 @@
+/** Tests inactive Telegram SecretRefs remain unresolved and diagnostic-only. */
 import { describe, expect, it } from "vitest";
 import "./runtime-telegram.test-support.ts";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";

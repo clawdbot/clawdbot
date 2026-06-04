@@ -1,3 +1,6 @@
+/**
+ * Node command policy regression tests.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,

@@ -1,3 +1,4 @@
+// Covers scope requirements for node pairing approvals.
 import { describe, expect, it } from "vitest";
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 

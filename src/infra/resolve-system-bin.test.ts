@@ -1,3 +1,4 @@
+// Covers trusted system binary resolution across platform install roots.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

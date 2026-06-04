@@ -1,3 +1,4 @@
+// Extracts web provider public artifacts from plugin entrypoints.
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizePluginId } from "./config-state.js";

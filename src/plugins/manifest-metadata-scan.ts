@@ -1,3 +1,4 @@
+// Scans plugin manifest metadata without importing runtime entrypoints.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -162,6 +163,7 @@ function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
   );
 }
 
+/** Lists plugin manifest metadata from installed, bundled, and global plugin roots. */
 export function listOpenClawPluginManifestMetadata(
   env: NodeJS.ProcessEnv = process.env,
 ): PluginManifestMetadataRecord[] {

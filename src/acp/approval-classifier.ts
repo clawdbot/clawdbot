@@ -1,3 +1,4 @@
+/** Classifies ACP tool permission requests into auto-approved and prompt-required risk buckets. */
 import { homedir } from "node:os";
 import path from "node:path";
 import { asRecord } from "@openclaw/acp-core/record-shared";
@@ -185,6 +186,7 @@ function isReadToolCallScopedToCwd(
   return isPathInside(path.resolve(cwd), absolutePath);
 }
 
+/** Resolves the ACP approval class for one tool call, failing closed on spoofed tool identity. */
 export function classifyAcpToolApproval(params: {
   toolCall?: {
     title?: string | null;

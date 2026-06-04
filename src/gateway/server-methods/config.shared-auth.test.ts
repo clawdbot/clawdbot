@@ -1,3 +1,6 @@
+/**
+ * Tests shared gateway auth behavior across config method updates.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -29,8 +32,6 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
-    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
-    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
     replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: unknown }) => {
       await writeConfigFileMock(params.nextConfig, params.writeOptions);
@@ -45,6 +46,25 @@ vi.mock("../../config/config.js", async () => {
         followUp: { mode: "auto", requiresRestart: false },
       };
     },
+  };
+});
+
+vi.mock("../../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
+  return {
+    ...actual,
+    createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
+  };
+});
+
+vi.mock("../../config/validation.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
+    "../../config/validation.js",
+  );
+  return {
+    ...actual,
+    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   };
 });
 

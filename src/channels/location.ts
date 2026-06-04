@@ -1,5 +1,7 @@
+/** Normalized source kind for channel-provided geographic locations. */
 export type LocationSource = "pin" | "place" | "live";
 
+/** Channel-neutral location payload passed from plugins into shared prompt rendering. */
 export type NormalizedLocation = {
   latitude: number;
   longitude: number;
@@ -11,12 +13,14 @@ export type NormalizedLocation = {
   caption?: string;
 };
 
+/** Location payload after default source and live-state inference. */
 type ResolvedLocation = NormalizedLocation & {
   source: LocationSource;
   isLive: boolean;
 };
 
 function resolveLocation(location: NormalizedLocation): ResolvedLocation {
+  // Infer once so text formatting and structured context agree on pin/place/live semantics.
   const source =
     location.source ??
     (location.isLive ? "live" : location.name || location.address ? "place" : "pin");
@@ -35,6 +39,12 @@ function formatCoords(latitude: number, longitude: number): string {
   return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 }
 
+/**
+ * Formats the safe inline location body shown to the model.
+ *
+ * Channel-provided labels, addresses, and captions are intentionally excluded
+ * here; `toLocationContext` carries them into the untrusted metadata block.
+ */
 export function formatLocationText(location: NormalizedLocation): string {
   const resolved = resolveLocation(location);
   const coords = formatCoords(resolved.latitude, resolved.longitude);
@@ -47,6 +57,7 @@ export function formatLocationText(location: NormalizedLocation): string {
   return `📍 ${coords}${accuracy}`;
 }
 
+/** Converts a normalized location into template context fields for prompt metadata. */
 export function toLocationContext(location: NormalizedLocation): {
   LocationLat: number;
   LocationLon: number;

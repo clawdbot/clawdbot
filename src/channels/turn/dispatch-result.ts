@@ -5,6 +5,7 @@ export type ChannelTurnDispatchResultLike =
   | {
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyDispatchKind, number>>;
+      observedReplyDelivery?: boolean;
     }
   | null
   | undefined;
@@ -41,6 +42,7 @@ export function hasVisibleChannelTurnDispatch(
   const counts = resolveChannelTurnDispatchCounts(result);
   // Non-count signals cover delivery paths that bypass the buffered reply dispatcher.
   return (
+    result?.observedReplyDelivery === true ||
     signals.observedReplyDelivery === true ||
     signals.fallbackDelivered === true ||
     signals.deliverySummaryDelivered === true ||

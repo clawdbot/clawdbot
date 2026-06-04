@@ -1,6 +1,8 @@
+// Provides config cache helpers with filesystem freshness checks.
 import fs from "node:fs";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
+/** Resolves a cache TTL from an env override, falling back unless the override is exact. */
 export function resolveCacheTtlMs(params: {
   envValue: string | undefined;
   defaultTtlMs: number;
@@ -15,6 +17,7 @@ export function resolveCacheTtlMs(params: {
   return defaultTtlMs;
 }
 
+/** Returns whether a TTL keeps cache reads and writes active. */
 export function isCacheEnabled(ttlMs: number): boolean {
   return ttlMs > 0;
 }
@@ -58,6 +61,7 @@ function isCacheEntryExpired(storedAt: number, now: number, ttlMs: number): bool
   return now - storedAt > ttlMs;
 }
 
+/** Creates a small synchronous map cache with dynamic TTLs and explicit pruning hooks. */
 export function createExpiringMapCache<TKey, TValue>(options: {
   ttlMs: CacheTtlResolver;
   pruneIntervalMs?: CachePruneIntervalResolver;
@@ -68,6 +72,8 @@ export function createExpiringMapCache<TKey, TValue>(options: {
   let lastPruneAt = 0;
 
   function getTtlMs(): number {
+    // Re-read TTL on every operation so callers can disable or shrink caches without rebuilding
+    // the cache object.
     return Math.max(0, Math.floor(resolveCacheNumeric(options.ttlMs)));
   }
 
@@ -75,6 +81,8 @@ export function createExpiringMapCache<TKey, TValue>(options: {
     if (!isCacheEnabled(ttlMs)) {
       return;
     }
+    // Pruning is opportunistic; individual reads still check expiry so skipped sweeps cannot
+    // return stale values.
     if (nowMs - lastPruneAt < resolvePruneIntervalMs(ttlMs, options.pruneIntervalMs)) {
       return;
     }
@@ -146,6 +154,7 @@ type FileStatSnapshot = {
   sizeBytes: number;
 };
 
+/** Captures the file attributes used by cache invalidation without exposing fs.Stats. */
 export function getFileStatSnapshot(filePath: string): FileStatSnapshot | undefined {
   try {
     const stats = fs.statSync(filePath);

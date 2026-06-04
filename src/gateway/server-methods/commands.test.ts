@@ -1,3 +1,6 @@
+/**
+ * Tests for command gateway methods and command registry responses.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 

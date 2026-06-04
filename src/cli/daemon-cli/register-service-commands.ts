@@ -1,3 +1,4 @@
+// Gateway service command registration shared by `gateway` and legacy `daemon` CLIs.
 import type { Command } from "commander";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
@@ -53,6 +54,7 @@ function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Comman
   };
 }
 
+/** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")

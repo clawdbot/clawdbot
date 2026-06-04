@@ -15,6 +15,9 @@ type AccountInspectionFields = {
   configured?: boolean;
 } | null;
 
+/**
+ * Inspects one channel account using the plugin hook or read-only fallback.
+ */
 export async function inspectChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -30,6 +33,9 @@ export async function inspectChannelAccount(params: {
   );
 }
 
+/**
+ * Resolves an inspected channel account plus enabled/configured state for status surfaces.
+ */
 export async function resolveInspectedChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -54,6 +60,8 @@ export async function resolveInspectedChannelAccount(params: {
   const sourceInspection = sourceInspectedAccount as AccountInspectionFields;
   const resolvedAccount =
     resolvedInspectedAccount ?? params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  // When a source config says a credential exists but this process cannot resolve it, keep the
+  // unavailable source snapshot so status can distinguish "configured" from "missing".
   const useSourceUnavailableAccount = Boolean(
     sourceInspectedAccount &&
     hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&

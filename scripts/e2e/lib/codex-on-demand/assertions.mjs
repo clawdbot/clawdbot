@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertPathInside,
   configPath,
@@ -81,8 +82,27 @@ if (providerRuntime && providerRuntime !== "codex") {
   throw new Error(`unexpected OpenAI provider runtime: ${providerRuntime}`);
 }
 
-const authPath = path.join(stateDir(), "agents", "main", "agent", "auth-profiles.json");
-const authRaw = fs.readFileSync(authPath, "utf8");
+function readAuthProfileStoreText(agentDir) {
+  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error("auth profile SQLite store was not persisted");
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?").get(
+      "primary",
+    );
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } finally {
+    db?.close();
+  }
+}
+
+const authRaw = readAuthProfileStoreText(path.join(stateDir(), "agents", "main", "agent"));
+if (!authRaw) {
+  throw new Error("auth profile SQLite store row was not persisted");
+}
 if (!authRaw.includes("OPENAI_API_KEY")) {
   throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
 }

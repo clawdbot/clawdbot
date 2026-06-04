@@ -1,3 +1,4 @@
+// Covers automatic NODE_EXTRA_CA_CERTS discovery and validation.
 import { describe, expect, it } from "vitest";
 import {
   isNodeVersionManagerRuntime,
@@ -82,7 +83,10 @@ describe("isNodeVersionManagerRuntime", () => {
 
   it("detects mise via execPath", () => {
     expect(
-      isNodeVersionManagerRuntime({}, "/home/test/.local/share/mise/installs/node/22.14.0/bin/node"),
+      isNodeVersionManagerRuntime(
+        {},
+        "/home/test/.local/share/mise/installs/node/22.14.0/bin/node",
+      ),
     ).toBe(true);
   });
 

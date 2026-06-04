@@ -1,3 +1,4 @@
+// Covers config recovery policy decisions for invalid or clobbered files.
 import { describe, expect, it } from "vitest";
 import {
   isPluginPackagingRuntimeOutputInvalidConfigSnapshot,

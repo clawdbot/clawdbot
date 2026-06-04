@@ -1,12 +1,15 @@
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
+/** Marker pair used to wrap a styled Markdown span in the target renderer. */
 export type RenderStyleMarker = {
   open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
 };
 
+/** Optional marker map; omitted styles are emitted as plain escaped text. */
 export type RenderStyleMap = Partial<Record<MarkdownStyle, RenderStyleMarker>>;
 
+/** Link wrapper boundaries after a renderer has accepted or rewritten a link span. */
 export type RenderLink = {
   start: number;
   end: number;
@@ -14,6 +17,7 @@ export type RenderLink = {
   close: string;
 };
 
+/** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
   escapeText: (text: string) => string;
@@ -46,6 +50,7 @@ function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   });
 }
 
+/** Renders Markdown IR by nesting configured style markers and optional link markers. */
 export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
   const text = ir.text ?? "";
   if (!text) {
@@ -104,7 +109,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   }
 
   const points = [...boundaries].toSorted((a, b) => a - b);
-  // Unified stack for both styles and links, tracking close string and end position
+  // Links and styles share one stack so equal-end spans close in exact reverse open order.
   const stack: { close: string; end: number }[] = [];
   type OpeningItem =
     | { end: number; open: string; close: string; kind: "link"; index: number }
@@ -121,7 +126,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   for (let i = 0; i < points.length; i += 1) {
     const pos = points[i];
 
-    // Close ALL elements (styles and links) in LIFO order at this position
+    // Close all elements at this boundary before opening replacements at the same offset.
     while (stack.length && stack[stack.length - 1]?.end === pos) {
       const item = stack.pop();
       if (item) {

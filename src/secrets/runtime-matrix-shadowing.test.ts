@@ -1,3 +1,4 @@
+/** Tests shadowing precedence in secrets runtime matrix scenarios. */
 import { describe, expect, it } from "vitest";
 import "./runtime-matrix.test-support.ts";
 import {

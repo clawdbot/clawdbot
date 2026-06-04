@@ -1,3 +1,4 @@
+// Tests set/unset command parsing and config mutation replies.
 import { describe, expect, it } from "vitest";
 import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 import {

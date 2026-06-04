@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 const NODE_VERSIONED_PATTERN = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
+// Accept common Node binary aliases from package managers and Windows installs.
 function normalizeRuntimeBasename(execPath: string): string {
   const trimmed = execPath.trim().replace(/^["']|["']$/g, "");
   const lastSlash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));

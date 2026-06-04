@@ -1,3 +1,4 @@
+// Covers default device identity path under state dir.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

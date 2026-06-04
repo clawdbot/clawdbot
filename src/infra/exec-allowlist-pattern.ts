@@ -1,3 +1,4 @@
+// Parses execution allowlist patterns for approval policy checks.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

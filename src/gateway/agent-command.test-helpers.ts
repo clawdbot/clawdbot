@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import { agentCommand } from "./test-helpers.runtime-state.js";
 
+/**
+ * Async wait helpers for gateway tests that assert agent-command invocations.
+ */
 type AgentCommandCall = Record<string, unknown>;
 
 function agentCommandCalls(): Array<[AgentCommandCall]> {
@@ -12,6 +15,7 @@ const sleep = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
+/** Waits until the mocked `agentCommand` receives a call for a specific run id. */
 export async function waitForAgentCommandCall(runId: string): Promise<AgentCommandCall> {
   for (let elapsed = 0; elapsed <= 2_000; elapsed += 5) {
     const call = agentCommandCalls()
@@ -25,6 +29,7 @@ export async function waitForAgentCommandCall(runId: string): Promise<AgentComma
   throw new Error(`expected agentCommand to be called for ${runId}`);
 }
 
+/** Reads the latest mocked `agentCommand` call, or waits for a specific run id. */
 export async function readAgentCommandCall(
   params: { runId?: string; fromEnd?: number } = {},
 ): Promise<AgentCommandCall> {

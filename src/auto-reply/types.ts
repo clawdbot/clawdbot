@@ -1,3 +1,4 @@
+// Public auto-reply types and reply-payload metadata helpers.
 export type {
   BlockReplyContext,
   GetReplyOptions,

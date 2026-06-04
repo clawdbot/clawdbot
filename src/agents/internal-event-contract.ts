@@ -1,3 +1,5 @@
+// Internal event discriminants shared by runtime event producers and prompt
+// formatters. Keep values stable because they cross agent runtime boundaries.
 export const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion" as const;
 
 export const AGENT_INTERNAL_EVENT_SOURCES = [

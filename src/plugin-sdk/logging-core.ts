@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for logging, diagnostics, and redaction helpers.
+ */
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export {
   getChildLogger,

@@ -1,3 +1,4 @@
+// Test helper for asserting bundled plugin public surface files.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

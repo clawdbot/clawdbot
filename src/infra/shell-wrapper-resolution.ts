@@ -1,3 +1,4 @@
+// Unwraps shell wrappers so approval policy can inspect inline commands.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
@@ -15,6 +16,8 @@ import {
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
+// Shell wrapper resolution unwraps dispatch wrappers and shell multiplexers so
+// approval policy can reason about the actual inline command being run.
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
@@ -136,6 +139,7 @@ function isWithinDispatchClassificationDepth(depth: number): boolean {
   return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
 }
 
+/** Return true when an executable token names a supported shell wrapper. */
 export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
 }
@@ -145,6 +149,7 @@ function isShellWrapperInvocationInternal(argv: string[], depth: number): boolea
   return candidate ? isShellWrapperExecutable(candidate.token0) : false;
 }
 
+/** Return true when argv resolves to a shell wrapper invocation. */
 export function isShellWrapperInvocation(argv: string[]): boolean {
   return isShellWrapperInvocationInternal(argv, 0);
 }
@@ -168,6 +173,7 @@ type ShellMultiplexerUnwrapResult =
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
+/** Unwrap busybox/toybox shell applets or fail closed for ambiguous applets. */
 export function unwrapKnownShellMultiplexerInvocation(
   argv: string[],
 ): ShellMultiplexerUnwrapResult {
@@ -309,6 +315,7 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   return candidate.state;
 }
 
+/** Return true when dispatch wrappers set env before the shell wrapper. */
 export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
   return hasEnvManipulationBeforeShellWrapperInternal(argv, 0, false);
 }
@@ -366,14 +373,17 @@ function extractShellWrapperCommandInternal(
   };
 }
 
+/** Resolve the argv segment that should be transported for shell execution. */
 export function resolveShellWrapperTransportArgv(argv: string[]): string[] | null {
   return resolveShellWrapperSpecAndArgvInternal(argv, 0)?.argv ?? null;
 }
 
+/** Extract the raw inline command payload from a shell wrapper argv. */
 export function extractShellWrapperInlineCommand(argv: string[]): string | null {
   return resolveShellWrapperSpecAndArgvInternal(argv, 0)?.payload ?? null;
 }
 
+/** Extract a command payload only when it is safe to bind to raw command text. */
 export function extractBindableShellWrapperInlineCommand(
   argv: string[],
   rawCommand?: string | null,
@@ -381,6 +391,7 @@ export function extractBindableShellWrapperInlineCommand(
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0).command;
 }
 
+/** Classify shell wrapper argv and return the approval-display command when safe. */
 export function extractShellWrapperCommand(
   argv: string[],
   rawCommand?: string | null,
@@ -388,6 +399,7 @@ export function extractShellWrapperCommand(
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
 }
 
+/** Return true when shell wrapper startup behavior blocks command rebinding. */
 export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string | null): boolean {
   const extracted = extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
   return extracted.isWrapper && extracted.command === null;

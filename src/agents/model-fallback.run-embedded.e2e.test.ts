@@ -7,6 +7,7 @@ import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
@@ -155,33 +156,26 @@ async function writeAuthStore(
     }
   >,
 ) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  saveAuthProfileStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
-  );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
       usageStats:
         usageStats ??
         ({
           "openai:p1": { lastUsed: 1 },
           "groq:p1": { lastUsed: 2 },
         } as const),
-    }),
+    },
+    agentDir,
   );
 }
 
 async function readUsageStats(agentDir: string) {
-  const raw = await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8");
-  return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
+  return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
 function expectFailureCount(
@@ -195,9 +189,8 @@ function expectFailureCount(
 }
 
 async function writeMultiProfileAuthStore(agentDir: string) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  saveAuthProfileStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
@@ -205,19 +198,14 @@ async function writeMultiProfileAuthStore(agentDir: string) {
         "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
-  );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
         "openai:p3": { lastUsed: 3 },
         "groq:p1": { lastUsed: 4 },
       },
-    }),
+    },
+    agentDir,
   );
 }
 

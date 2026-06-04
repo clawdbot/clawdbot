@@ -1,3 +1,6 @@
+/**
+ * Gateway startup session migration tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 

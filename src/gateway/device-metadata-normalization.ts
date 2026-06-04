@@ -1,3 +1,4 @@
+// Device metadata normalization for auth payloads and policy matching.
 function normalizeTrimmedMetadata(value?: string | null): string {
   if (typeof value !== "string") {
     return "";
@@ -10,6 +11,7 @@ function toLowerAscii(input: string): string {
   return input.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
 }
 
+/** Normalize device metadata for cross-runtime auth comparisons. */
 export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   const trimmed = normalizeTrimmedMetadata(value);
   if (!trimmed) {
@@ -20,6 +22,7 @@ export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   return toLowerAscii(trimmed);
 }
 
+/** Normalize device metadata for policy classification. */
 export function normalizeDeviceMetadataForPolicy(value?: string | null): string {
   const trimmed = normalizeTrimmedMetadata(value);
   if (!trimmed) {

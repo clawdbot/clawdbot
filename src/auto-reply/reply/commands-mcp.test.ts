@@ -1,3 +1,4 @@
+// Tests MCP command configuration, listing, and enablement behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";

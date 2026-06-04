@@ -1,3 +1,4 @@
+// Parses npm registry specs into package, version, and tag references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const EXACT_SEMVER_VERSION_RE =
@@ -11,6 +12,7 @@ const OPENCLAW_BETA_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** Parsed date-based OpenClaw release version used for channel-aware ordering. */
 type OpenClawReleaseVersion = {
   channel: "alpha" | "beta" | "stable";
   dateTime: number;
@@ -19,6 +21,11 @@ type OpenClawReleaseVersion = {
   correctionNumber?: number;
 };
 
+/**
+ * Parsed registry-only npm spec accepted by plugin install flows.
+ * Selectors are limited to exact versions and dist-tags; URL/git/file specs
+ * are rejected before they can execute on the gateway host.
+ */
 export type ParsedRegistryNpmSpec = {
   name: string;
   raw: string;
@@ -54,6 +61,8 @@ function parseRegistryNpmSpecInternal(
   const name = hasSelector ? spec.slice(0, at) : spec;
   const selector = hasSelector ? spec.slice(at + 1) : "";
 
+  // Accept only registry package names; file paths, aliases, and URL/git specs are intentionally
+  // rejected before this point because plugin installs run on the gateway host.
   const unscopedName = /^[a-z0-9][a-z0-9-._~]*$/;
   const scopedName = /^@[a-z0-9][a-z0-9-._~]*\/[a-z0-9][a-z0-9-._~]*$/;
   const isValidName = name.startsWith("@") ? scopedName.test(name) : unscopedName.test(name);
@@ -112,25 +121,30 @@ function parseRegistryNpmSpecInternal(
   };
 }
 
+/** Parses a registry-only npm package spec into package name and optional selector metadata. */
 export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
   return parsed.ok ? parsed.parsed : null;
 }
 
+/** Returns whether a user-provided npm spec resolves to the official OpenClaw npm scope. */
 export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
   const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
   return parsed?.name.startsWith("@openclaw/") === true;
 }
 
+/** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
   return parsed.ok ? null : parsed.error;
 }
 
+/** Returns whether a value is an exact semver selector, with optional leading `v`. */
 export function isExactSemverVersion(value: string): boolean {
   return EXACT_SEMVER_VERSION_RE.test(value.trim());
 }
 
+/** Parses OpenClaw's date-based stable/alpha/beta/correction version format. */
 function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | null {
   const trimmed = value.trim();
   const candidates = [
@@ -163,6 +177,8 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
     candidate.channel === "stable" && candidate.match.groups.correction
       ? Number.parseInt(candidate.match.groups.correction, 10)
       : undefined;
+  // Stable correction releases share the stable channel rank; the optional
+  // correction number is compared later so base stable sorts before fixes.
   const alphaNumber =
     candidate.channel === "alpha"
       ? Number.parseInt(candidate.match.groups.alpha ?? "", 10)
@@ -181,11 +197,13 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
   };
 }
 
+/** Returns whether a version is an OpenClaw date-based stable correction release. */
 export function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
 }
 
+/** Compares OpenClaw date-based release versions across alpha, beta, stable, and corrections. */
 export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
   const parsedLeft = parseOpenClawReleaseVersion(left);
   const parsedRight = parseOpenClawReleaseVersion(right);
@@ -208,12 +226,18 @@ export function compareOpenClawReleaseVersions(left: string, right: string): num
   return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
 }
 
+/** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */
 export function isPrereleaseSemverVersion(value: string): boolean {
   const trimmed = value.trim();
   const match = EXACT_SEMVER_VERSION_RE.exec(trimmed);
   return Boolean(match?.[4]) && !isOpenClawStableCorrectionVersion(trimmed);
 }
 
+/**
+ * Enforces explicit opt-in before an npm spec may resolve to a prerelease.
+ * Bare specs and `latest` stay on stable releases unless the resolved version
+ * is an OpenClaw stable correction.
+ */
 export function isPrereleaseResolutionAllowed(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedVersion?: string;
@@ -221,6 +245,8 @@ export function isPrereleaseResolutionAllowed(params: {
   if (!params.resolvedVersion || !isPrereleaseSemverVersion(params.resolvedVersion)) {
     return true;
   }
+  // Bare specs and `latest` should not drift into beta/rc builds; prereleases require a tag or
+  // exact prerelease selector so automation remains stable.
   if (params.spec.selectorKind === "none") {
     return false;
   }
@@ -230,6 +256,7 @@ export function isPrereleaseResolutionAllowed(params: {
   return normalizeLowercaseStringOrEmpty(params.spec.selector) !== "latest";
 }
 
+/** Formats the install error shown when a registry spec resolves to a disallowed prerelease. */
 export function formatPrereleaseResolutionError(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedVersion: string;

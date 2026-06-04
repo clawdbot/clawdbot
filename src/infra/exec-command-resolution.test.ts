@@ -1,3 +1,4 @@
+// Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

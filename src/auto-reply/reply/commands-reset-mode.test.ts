@@ -1,3 +1,4 @@
+// Tests reset mode parsing for session reset commands.
 import { describe, expect, it } from "vitest";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 

@@ -1,3 +1,4 @@
+// Verifies WhatsApp runtime imports respect plugin boundary rules.
 import fs from "node:fs";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";

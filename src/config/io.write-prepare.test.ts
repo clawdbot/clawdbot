@@ -1,3 +1,4 @@
+// Covers config write preparation diffs and metadata preservation.
 import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,

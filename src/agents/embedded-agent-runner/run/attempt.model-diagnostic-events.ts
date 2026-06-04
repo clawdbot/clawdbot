@@ -508,6 +508,8 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Early consumer return should not hang diagnostic completion forever; give
+    // provider cleanup a short chance, then emit completion for the observed call.
     await Promise.race([
       Promise.resolve(returnResult).catch(() => undefined),
       new Promise<void>((resolve) => {
@@ -553,6 +555,8 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
+      // A consumer can stop reading before the provider emits done/error. Close
+      // the iterator best-effort and record the call as completed with observed bytes.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
@@ -611,6 +615,11 @@ function observeModelCallResult(
   return result;
 }
 
+/**
+ * Wraps a model stream function with diagnostic model-call lifecycle events,
+ * traceparent propagation, request/response byte accounting, optional captured
+ * model content, progress heartbeats, and plugin hook dispatch.
+ */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,

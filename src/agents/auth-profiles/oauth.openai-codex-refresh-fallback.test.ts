@@ -3,8 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { OAUTH_AGENT_ENV_KEYS, createExpiredOauthStore } from "./oauth-test-utils.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  readAuthProfileStoreForTest,
+} from "./oauth-test-utils.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -76,9 +81,7 @@ afterAll(() => {
 });
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
-  return JSON.parse(
-    await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-  ) as AuthProfileStore;
+  return readAuthProfileStoreForTest(agentDir);
 }
 
 function mockRotatedOpenAICodexRefresh() {
@@ -168,25 +171,34 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
   afterEach(async () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    closeOpenClawAgentDatabasesForTest();
     envSnapshot.restore();
   });
 
   afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("falls back to cached access token when openai refresh fails on accountId extraction", async () => {
+  it("falls back to matching cached Codex CLI credentials when openai refresh fails", async () => {
     const profileId = "openai:default";
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
-      async (params?: { context?: unknown }) => params?.context as never,
-    );
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
         provider: "openai",
+        accountId: "acct-cached",
       }),
       agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "cached-access-token",
+      refresh: "cached-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-cached",
+    });
 
     const result = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(agentDir),

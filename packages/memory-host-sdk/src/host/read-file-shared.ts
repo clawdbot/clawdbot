@@ -1,10 +1,15 @@
 import type { MemoryReadResult } from "./types.js";
 
+// Shared memory-file read result shaping and truncation notices.
+
+/** Default number of lines returned by memory read helpers. */
 export const DEFAULT_MEMORY_READ_LINES = 120;
+/** Default max character budget for memory read helper output. */
 export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
 export type { MemoryReadResult } from "./types.js";
 
+/** Build the continuation notice appended to truncated memory excerpts. */
 function buildContinuationNotice(params: {
   nextFrom: number | undefined;
   suggestReadFallback?: boolean;
@@ -19,6 +24,7 @@ function buildContinuationNotice(params: {
   return `\n\n${base.slice(0, -1)}${fallback}]`;
 }
 
+/** Fit line slices to the response character budget while preserving line boundaries. */
 function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   text: string;
   includedLines: number;
@@ -47,12 +53,14 @@ function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   };
 }
 
+/** Normalize optional numeric config to a positive integer fallback. */
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(1, Math.floor(value))
     : fallback;
 }
 
+/** Build a memory read result from an already-selected line slice. */
 export function buildMemoryReadResultFromSlice(params: {
   selectedLines: string[];
   relPath: string;
@@ -92,6 +100,7 @@ export function buildMemoryReadResultFromSlice(params: {
   };
 }
 
+/** Build a memory read result from raw file content and caller range options. */
 export function buildMemoryReadResult(params: {
   content: string;
   relPath: string;

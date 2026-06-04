@@ -1,5 +1,7 @@
+/** Detects inbound media and audio markers in channel message context. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Minimal inbound media fields used by media/audio detection. */
 export type InboundMediaContext = {
   Body?: unknown;
   BodyForCommands?: unknown;
@@ -19,6 +21,7 @@ function hasNormalizedStringEntry(values: readonly unknown[] | undefined): boole
   return Array.isArray(values) && values.some((value) => normalizeOptionalString(value));
 }
 
+/** Returns true when the context carries current-turn media or sticker data. */
 export function hasInboundMedia(ctx: InboundMediaContext): boolean {
   return Boolean(
     ctx.StickerMediaIncluded ||
@@ -39,6 +42,7 @@ function normalizeMediaType(value: unknown): string | undefined {
   return normalized?.split(";", 1)[0]?.toLowerCase();
 }
 
+/** Returns true when media fields or body placeholders indicate inbound audio. */
 export function hasInboundAudio(ctx: InboundMediaContext): boolean {
   const mediaTypes = [
     normalizeMediaType(ctx.MediaType),

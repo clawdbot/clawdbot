@@ -1,3 +1,4 @@
+/** Tests target-registry data built from the current runtime snapshot. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const metadataMocks = vi.hoisted(() => ({

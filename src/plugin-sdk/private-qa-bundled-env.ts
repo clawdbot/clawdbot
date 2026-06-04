@@ -1,7 +1,11 @@
+/**
+ * Runtime helper for private QA CLI source-checkout bundled plugin resolution.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
+/** Returns an env override that points bundled plugin loading at source extensions. */
 export function resolvePrivateQaBundledPluginsEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv | undefined {

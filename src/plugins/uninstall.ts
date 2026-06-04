@@ -1,3 +1,4 @@
+// Removes installed plugins and updates plugin index records.
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

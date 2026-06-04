@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+// Temp-dir helpers share one mkdtemp root per suite prefix and hand out numbered
+// case dirs. That reduces filesystem churn while preserving per-test cleanup.
 type PrefixRootState = {
   path: string;
   activeCount: number;
@@ -30,6 +32,8 @@ async function acquireAsyncPrefixRoot(options: {
   }
   const pending = pendingAsyncPrefixRoots.get(key);
   if (pending) {
+    // Concurrent tests with the same prefix wait for the same root creation
+    // instead of racing multiple mkdtemp roots.
     const state = await pending;
     state.activeCount += 1;
     return state;
@@ -131,6 +135,8 @@ export async function withTempDir<T>(
   }
 }
 
+// Suite-level tracker for tests that need a stable root across multiple cases
+// while still creating isolated child directories.
 export function createSuiteTempRootTracker(options: { prefix: string; parentDir?: string }) {
   let root = "";
   let nextIndex = 0;

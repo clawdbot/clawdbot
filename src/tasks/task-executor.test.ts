@@ -1,3 +1,4 @@
+// Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";

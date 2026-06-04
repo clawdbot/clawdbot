@@ -1,3 +1,4 @@
+// Normalizes plugin tool contracts from manifest metadata.
 import type { PluginManifestContracts } from "./manifest.js";
 
 export function normalizePluginToolContractNames(

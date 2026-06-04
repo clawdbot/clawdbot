@@ -1,3 +1,4 @@
+/** Tests provider request error classification for retry/fallback decisions. */
 import { describe, expect, it } from "vitest";
 import {
   classifyProviderRequestError,

@@ -11,6 +11,7 @@ import {
 } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { CONTROL_UI_CLIENT, TEST_OPERATOR_CLIENT } from "./server.auth.shared.js";
 import {
   connectReq,
   connectOk,
@@ -24,18 +25,6 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-const TEST_OPERATOR_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.TEST,
-  version: "1.0.0",
-  platform: "test",
-  mode: GATEWAY_CLIENT_MODES.TEST,
-};
-const CONTROL_UI_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-  version: "1.0.0",
-  platform: "web",
-  mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-};
 const ALLOWED_BROWSER_ORIGIN = "https://control.example.com";
 const TRUSTED_PROXY_BROWSER_HEADERS = {
   "x-forwarded-for": "203.0.113.50",

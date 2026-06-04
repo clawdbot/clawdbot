@@ -1,3 +1,4 @@
+// Covers plugin marketplace catalog loading and validation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -318,6 +319,16 @@ describe("marketplace plugins", () => {
         pluginDir,
         marketplaceSource: path.join(rootDir, ".claude-plugin", "marketplace.json"),
       });
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-dir",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "local-path",
+          authority: "user",
+          mutable: true,
+          network: false,
+        },
+      });
     });
   });
 
@@ -355,6 +366,16 @@ describe("marketplace plugins", () => {
         result,
         pluginDir,
         marketplaceSource: manifestPath,
+      });
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-dir",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "local-path",
+          authority: "user",
+          mutable: true,
+          network: false,
+        },
       });
       if (canonicalPluginDir !== pluginDir) {
         expect(
@@ -458,6 +479,16 @@ describe("marketplace plugins", () => {
     });
 
     expectRemoteMarketplaceInstallResult(result);
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-git",
+      requestedSpecifier: "frontend-design@owner/repo",
+      source: {
+        kind: "git",
+        authority: "third-party",
+        mutable: true,
+        network: true,
+      },
+    });
   });
 
   it("preserves remote marketplace file path sources inside the cloned repo", async () => {
@@ -492,6 +523,78 @@ describe("marketplace plugins", () => {
     expectMarketplaceInstallSuccess(result, {
       marketplacePlugin: "frontend-design",
       marketplaceSource: "owner/repo",
+    });
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: "frontend-design@owner/repo",
+      source: {
+        kind: "archive",
+        authority: "third-party",
+        mutable: true,
+        network: true,
+      },
+    });
+  });
+
+  it("reports full commit remote marketplace archives as immutable to install policy", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    mockRemoteMarketplaceClone({
+      pluginFile: path.join("plugins", "frontend-design.tgz"),
+      manifest: {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "./plugins/frontend-design.tgz",
+          },
+        ],
+      },
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      killed: false,
+    });
+    installPluginFromPathMock.mockResolvedValue({
+      ok: true,
+      pluginId: "frontend-design",
+      targetDir: "/tmp/frontend-design",
+      version: "0.1.0",
+      extensions: ["index.ts"],
+    });
+
+    const result = await installPluginFromMarketplace({
+      marketplace: `owner/repo#${commit}`,
+      plugin: "frontend-design",
+    });
+
+    expectMarketplaceInstallSuccess(result, {
+      marketplacePlugin: "frontend-design",
+      marketplaceSource: `owner/repo#${commit}`,
+    });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(runCommandWithTimeoutMock.mock.calls[0]?.[0]).toEqual([
+      "git",
+      "clone",
+      "https://github.com/owner/repo.git",
+      expect.any(String),
+    ]);
+    expect(runCommandWithTimeoutMock.mock.calls[1]?.[0]).toEqual([
+      "git",
+      "switch",
+      "--detach",
+      "--",
+      commit,
+    ]);
+    expect(installPluginInput().installPolicyRequest).toMatchObject({
+      kind: "plugin-archive",
+      requestedSpecifier: `frontend-design@owner/repo#${commit}`,
+      source: {
+        kind: "archive",
+        authority: "third-party",
+        mutable: false,
+        network: true,
+      },
     });
   });
 
@@ -727,6 +830,16 @@ describe("marketplace plugins", () => {
       });
       expectFetchDownloadCall();
       expect(String(installPluginInput().path)).toMatch(/[\\/]frontend-design\.tgz$/);
+      expect(installPluginInput().installPolicyRequest).toMatchObject({
+        kind: "plugin-archive",
+        requestedSpecifier: `frontend-design@${manifestPath}`,
+        source: {
+          kind: "archive",
+          authority: "third-party",
+          mutable: true,
+          network: true,
+        },
+      });
       expect(release).toHaveBeenCalledTimes(1);
     });
   });

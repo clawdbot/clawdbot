@@ -1,3 +1,6 @@
+/**
+ * Gateway post-attach startup task tests.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -186,8 +189,15 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 }));
 
 vi.mock("../agents/model-provider-auth.js", () => ({
-  clearCurrentProviderAuthState: hoisted.clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread: hoisted.warmCurrentProviderAuthStateOffMainThread,
+}));
+
+vi.mock("../agents/model-provider-auth-state.js", () => ({
+  clearCurrentProviderAuthState: hoisted.clearCurrentProviderAuthState,
+}));
+
+vi.mock("../agents/auth-profiles/failure-hook.js", () => ({
+  setAuthProfileFailureHook: hoisted.setAuthProfileFailureHook,
 }));
 
 vi.mock("../agents/auth-profiles.js", async () => {
@@ -1040,7 +1050,9 @@ describe("startGatewayPostAttachRuntime", () => {
 
       const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
       hook?.();
-      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+      });
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -1121,11 +1133,16 @@ describe("startGatewayPostAttachRuntime", () => {
 
       const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
       hook?.();
+      await vi.dynamicImportSettled();
       expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the default provider auth prewarm out of the early post-ready window", async () => {
+    expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
   it("uses the current provider auth config when the delayed prewarm fires", async () => {

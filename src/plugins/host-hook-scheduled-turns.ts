@@ -1,3 +1,4 @@
+// Schedules host hook turns requested by plugin hook contracts.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,

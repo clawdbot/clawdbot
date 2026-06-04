@@ -1,3 +1,4 @@
+/** Tests text chunking helpers used by auto-reply delivery. */
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";

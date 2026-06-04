@@ -1080,6 +1080,32 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("preserves internal target writeback when gateway scopes are absent", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { sendMessage, getChat } as unknown as {
+      sendMessage: typeof sendMessage;
+      getChat: typeof getChat;
+    };
+
+    await sendMessageTelegram("https://t.me/mychannel", "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expectPersistedTarget({
+      rawTarget: "https://t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: undefined,
+      trustedInternalWriteback: true,
+    });
+  });
+
   it("fails clearly when a legacy target cannot be resolved", async () => {
     const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
     const api = { getChat } as unknown as {

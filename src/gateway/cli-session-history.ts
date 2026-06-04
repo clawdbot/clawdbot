@@ -12,6 +12,9 @@ import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js
 
 const ANTHROPIC_PROVIDER = "anthropic";
 
+// CLI session history import keeps Claude/Anthropic-bound sessions in sync with
+// external CLI transcripts while leaving other provider histories untouched
+// once local messages already exist.
 export {
   mergeImportedChatHistoryMessages,
   readClaudeCliFallbackSeed,
@@ -21,6 +24,7 @@ export {
 };
 export type { ClaudeCliFallbackSeed };
 
+/** Augments local chat history with bound Claude CLI session messages when applicable. */
 export function augmentChatHistoryWithCliSessionImports(params: {
   entry: SessionEntry | undefined;
   provider?: string;

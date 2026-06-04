@@ -1,3 +1,4 @@
+// Tests OpenClaw execution environment construction.
 import { describe, expect, it } from "vitest";
 import {
   ensureOpenClawExecMarkerOnProcess,

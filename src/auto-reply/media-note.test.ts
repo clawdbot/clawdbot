@@ -1,3 +1,4 @@
+/** Tests prompt media-note rendering for inbound attachments. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getMediaDir } from "../media/store.js";

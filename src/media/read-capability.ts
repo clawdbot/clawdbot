@@ -61,6 +61,7 @@ function isAgentScopedHostMediaReadAllowed(
   return true;
 }
 
+/** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
 export function createAgentScopedHostMediaReadFile(
   params: {
     cfg: OpenClawConfig;
@@ -98,6 +99,7 @@ function appendWorkspaceDirToLocalRoots(
   return [...roots, resolvedWorkspaceDir];
 }
 
+/** Resolves roots and optional host read capability for outbound media in an agent context. */
 export function resolveAgentScopedOutboundMediaAccess(
   params: {
     cfg: OpenClawConfig;
@@ -113,6 +115,7 @@ export function resolveAgentScopedOutboundMediaAccess(
     params.mediaAccess?.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
   const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
+  // Even when host reads are denied, keep base roots so generated media remains addressable.
   const baseLocalRoots =
     params.mediaAccess?.localRoots ??
     (hostMediaReadAllowed

@@ -1,3 +1,6 @@
+/**
+ * Tests helper logic for live agent probe configuration and result handling.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   assertCronJobMatches,

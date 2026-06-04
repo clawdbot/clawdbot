@@ -1,3 +1,4 @@
+// Defines text-to-speech configuration types.
 export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";

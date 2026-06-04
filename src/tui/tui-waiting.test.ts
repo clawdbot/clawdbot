@@ -1,3 +1,4 @@
+// Verifies TUI waiting indicators and elapsed-time rendering.
 import { describe, expect, it } from "vitest";
 import { buildWaitingStatusMessage, pickWaitingPhrase } from "./tui-waiting.js";
 

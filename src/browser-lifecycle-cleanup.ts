@@ -1,3 +1,4 @@
+// Coordinates browser process cleanup for CLI-managed runtime sessions.
 import type { OpenClawConfig } from "./config/types.openclaw.js";
 import { runBestEffortCleanup } from "./infra/non-fatal-cleanup.js";
 import { closeTrackedBrowserTabsForSessions } from "./plugin-sdk/browser-maintenance.js";

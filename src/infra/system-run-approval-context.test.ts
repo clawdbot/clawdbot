@@ -1,3 +1,4 @@
+// Tests system-run approval context construction.
 import { describe, expect, test } from "vitest";
 import {
   parsePreparedSystemRunPayload,

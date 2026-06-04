@@ -1,3 +1,6 @@
+/**
+ * Tests text and Markdown chunking helpers exported by the plugin SDK.
+ */
 import { describe, expect, it } from "vitest";
 import { chunkTextForOutbound } from "./text-chunking.js";
 

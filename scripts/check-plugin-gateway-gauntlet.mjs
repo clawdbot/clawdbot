@@ -559,24 +559,33 @@ export function runMeasuredCommandLive(params) {
       ]
         .filter(Boolean)
         .join("\n");
-      const diagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
-      const logPath = writeCommandLog({
-        logDir: params.logDir,
-        label: params.label,
-        command: [params.command, ...params.args],
-        stdout,
-        stderr: finalStderr,
-      });
+      let logPath = null;
+      let logWriteError = null;
+      try {
+        logPath = writeCommandLog({
+          logDir: params.logDir,
+          label: params.label,
+          command: [params.command, ...params.args],
+          stdout,
+          stderr: finalStderr,
+        });
+      } catch (error) {
+        logWriteError = error instanceof Error ? error.message : String(error);
+      }
+      const outputDiagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+      const diagnosticFailure =
+        outputDiagnosticFailure ?? (logWriteError ? "command-log-write-failure" : null);
       resolve({
         label: params.label,
         phase: params.phase,
         pluginId: params.pluginId ?? null,
-        status: finalStatus,
+        status: logWriteError ? 1 : finalStatus,
         diagnosticFailure,
         signal: signal ?? null,
         timedOut,
         spawnError,
         logPath,
+        ...(logWriteError ? { logWriteError } : {}),
         ...parseTimedMetrics(finalStderr, wallMs, mode),
       });
     };

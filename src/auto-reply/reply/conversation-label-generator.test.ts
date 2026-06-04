@@ -1,3 +1,4 @@
+/** Tests generated conversation labels for reply sessions. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const completeSimple = vi.hoisted(() => vi.fn());

@@ -1,3 +1,6 @@
+/**
+ * Tests channel config helper authorization and write-scope behavior.
+ */
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";

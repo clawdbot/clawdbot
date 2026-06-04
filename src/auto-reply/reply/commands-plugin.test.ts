@@ -1,3 +1,4 @@
+// Tests plugin command dispatch and plugin-scoped command aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginCommand } from "./commands-plugin.js";

@@ -1,3 +1,9 @@
+/**
+ * Agent harness prompt and compaction hook helpers.
+ *
+ * Harness runtimes use this to run plugin hooks around prompt construction and
+ * compaction while keeping hook failures non-fatal.
+ */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -11,11 +17,13 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 
 const log = createSubsystemLogger("agents/harness");
 
+/** Prompt/developer-instruction pair after harness prompt-build hooks run. */
 export type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
 };
 
+/** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   developerInstructions: string;
@@ -35,6 +43,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     messages: params.messages,
   };
 
+  // Support the newer before_prompt_build hook plus the deprecated
+  // before_agent_start hook during the prompt-build migration window.
   const promptBuildResult = hookRunner.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
         log.warn(`before_prompt_build hook failed: ${String(error)}`);
@@ -85,6 +95,7 @@ function resolvePromptBuildSystemPrompt(params: {
   return params.developerInstructions;
 }
 
+/** Runs best-effort before-compaction hooks for a harness session. */
 export async function runAgentHarnessBeforeCompactionHook(params: {
   sessionFile: string;
   messages: AgentMessage[];
@@ -108,6 +119,7 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
   }
 }
 
+/** Runs best-effort after-compaction hooks for a harness session. */
 export async function runAgentHarnessAfterCompactionHook(params: {
   sessionFile: string;
   messages: AgentMessage[];

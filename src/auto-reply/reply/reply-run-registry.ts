@@ -1,3 +1,4 @@
+// Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   markDiagnosticEmbeddedRunEnded,

@@ -1,3 +1,4 @@
+// Verifies TUI command definitions and parser metadata.
 import { describe, expect, it } from "vitest";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 

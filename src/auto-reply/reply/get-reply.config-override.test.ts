@@ -1,3 +1,4 @@
+// Tests get-reply config override handling for a single inbound turn.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

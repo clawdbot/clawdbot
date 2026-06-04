@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
 
+/** ACP config option ids exposed to compatible ACP clients. */
 export const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 export const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 export const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
@@ -28,6 +29,7 @@ export type ClientCapabilityState = {
   terminal: boolean;
 };
 
+/** Gateway session fields needed to build ACP session presentation state. */
 export type GatewaySessionPresentationRow = Pick<
   GatewaySessionRow,
   | "key"

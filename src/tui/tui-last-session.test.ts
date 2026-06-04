@@ -1,3 +1,4 @@
+// Verifies last-session persistence and lookup for TUI launch.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

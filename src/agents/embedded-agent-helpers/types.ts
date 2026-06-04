@@ -1,5 +1,7 @@
+/** Context file passed into embedded agents as preloaded workspace content. */
 export type EmbeddedContextFile = { path: string; content: string };
 
+/** Closed reason codes used by model failover and retry classification. */
 export type FailoverReason =
   | "auth"
   | "auth_permanent"

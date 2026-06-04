@@ -1,3 +1,4 @@
+// Builds reply payloads for exec approval prompts and outcomes.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

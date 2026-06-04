@@ -1,3 +1,4 @@
+// Tests reply payload construction and metadata propagation from agent runs.
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";

@@ -5,6 +5,7 @@ import { getImageMetadata, resizeToJpeg } from "../../media/media-services.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import type { PluginRuntime } from "./types.js";
 
+/** Creates the plugin runtime media facade. */
 export function createRuntimeMedia(): PluginRuntime["media"] {
   return {
     loadWebMedia,

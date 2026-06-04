@@ -1,3 +1,4 @@
+/** Inputs used to format native dependency install/rebuild guidance. */
 export type NativeDependencyHintParams = {
   packageName: string;
   manager?: "pnpm" | "npm" | "yarn";
@@ -6,6 +7,7 @@ export type NativeDependencyHintParams = {
   downloadCommand?: string;
 };
 
+/** Formats concise guidance for installing and rebuilding a native dependency. */
 export function formatNativeDependencyHint(params: NativeDependencyHintParams): string {
   const manager = params.manager ?? "pnpm";
   const rebuildCommand =

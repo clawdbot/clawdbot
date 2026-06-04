@@ -1,3 +1,4 @@
+// Dispatch adapters that bridge provider reply resolution into inbound dispatchers.
 import {
   dispatchInboundMessageWithBufferedDispatcher,
   dispatchInboundMessageWithDispatcher,
@@ -12,6 +13,7 @@ export type {
   DispatchReplyWithDispatcher,
 } from "./provider-dispatcher.types.js";
 
+/** Dispatch a reply using the buffered block dispatcher path. */
 export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
     return await dispatchInboundMessageWithBufferedDispatcher({
@@ -23,6 +25,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBuffered
     });
   };
 
+/** Dispatch a reply using the standard dispatcher path. */
 export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (params) => {
   return await dispatchInboundMessageWithDispatcher({
     ctx: params.ctx,

@@ -1,5 +1,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
+// Parser for JSON LogTape lines emitted by the OpenClaw logger.
 type ParsedLogLine = {
   time?: string;
   level?: string;
@@ -40,6 +41,7 @@ function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
   }
 }
 
+/** Parses a raw log line into compact metadata and message text, or null for non-JSON lines. */
 export function parseLogLine(raw: string): ParsedLogLine | null {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;

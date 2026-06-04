@@ -1,3 +1,4 @@
+// Gateway RPC handlers for safe gateway restart requests and preflight state.
 import {
   createSafeGatewayRestartPreflight,
   requestSafeGatewayRestart,
@@ -16,6 +17,7 @@ function normalizeSkipDeferral(value: unknown): boolean {
   return value === true;
 }
 
+/** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
     const result = requestSafeGatewayRestart({

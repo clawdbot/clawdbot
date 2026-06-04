@@ -1,3 +1,4 @@
+// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -74,6 +75,7 @@ function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
+/** Handle OpenAI-compatible model list/detail requests, returning false for unrelated paths. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

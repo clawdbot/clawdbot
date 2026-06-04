@@ -5,8 +5,12 @@ import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
+/**
+ * Builds Docker volume arguments for workspace and read-only skill mounts.
+ */
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
 
+/** Read-only skill directory mounted from the agent workspace into the sandbox workspace. */
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
@@ -29,6 +33,7 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
+/** Returns true when a skill mount source exists inside the canonical agent workspace. */
 export function isExistingWorkspaceSkillMountSource(params: {
   agentWorkspaceDir: string;
   hostPath: string;
@@ -48,6 +53,7 @@ export function isExistingWorkspaceSkillMountSource(params: {
   return isPathInside(agentRoot, canonicalSource);
 }
 
+/** Finds agent-workspace skill directories that should be mounted read-only in rw workspaces. */
 export function resolveReadOnlyWorkspaceSkillMounts(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -58,6 +64,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     return [];
   }
 
+  // RW workspaces mount the project as writable, but skill sources remain read-only so agent
+  // instructions are visible without letting sandbox commands mutate them.
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
@@ -77,12 +85,14 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   );
 }
 
+/** Returns stable mount state for sandbox config hashes. */
 export function formatReadOnlyWorkspaceSkillMountHashState(
   mounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): string[] {
   return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
 }
 
+/** Appends Docker `-v` args for read-only skill mounts. */
 export function appendReadOnlyWorkspaceSkillMountArgs(params: {
   args: string[];
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
@@ -99,6 +109,7 @@ export function appendReadOnlyWorkspaceSkillMountArgs(params: {
   }
 }
 
+/** Appends Docker workspace mount args for the project, agent workspace, and skill overlays. */
 export function appendWorkspaceMountArgs(params: {
   args: string[];
   workspaceDir: string;

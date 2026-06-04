@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK runtime exports, logging wrappers, and runtime env helpers.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeEnv } from "./runtime.js";

@@ -1,3 +1,4 @@
+/** Parameter contracts shared by directive-only and fast-lane directive handlers. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -6,6 +7,7 @@ import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
+/** Core directive handler inputs that do not depend on the inbound message shape. */
 export type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
   directives: InlineDirectives;
@@ -32,6 +34,7 @@ export type HandleDirectiveOnlyCoreParams = {
   formatModelSwitchEvent: (label: string, alias?: string) => string;
 };
 
+/** Full directive-only command handler inputs. */
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   ctx?: MsgContext;
   messageProvider?: string;
@@ -47,6 +50,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   senderIsOwner?: boolean;
 };
 
+/** Inputs for applying inline directives before the full reply run is prepared. */
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
   commandAuthorized: boolean;
   senderIsOwner: boolean;

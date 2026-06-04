@@ -1,3 +1,4 @@
+/** Tests node-host runner credential routing and env handling. */
 import { describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/config.js";

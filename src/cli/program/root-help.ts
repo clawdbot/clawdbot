@@ -1,3 +1,4 @@
+// Root help renderer that combines core, sub-CLI, and optional plugin command descriptors.
 import { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
@@ -11,6 +12,7 @@ import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
 
+/** Options for rendering root help without fully registering the live CLI. */
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -54,6 +56,7 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
   return program;
 }
 
+/** Render root help text for tests, docs, and command output. */
 export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions): Promise<string> {
   const program = await buildRootHelpProgram(renderOptions);
   let output = "";
@@ -71,6 +74,7 @@ export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions):
   return output;
 }
 
+/** Write rendered root help directly to stdout. */
 export async function outputRootHelp(renderOptions?: RootHelpRenderOptions): Promise<void> {
   process.stdout.write(await renderRootHelpText(renderOptions));
 }

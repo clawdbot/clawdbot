@@ -1,3 +1,4 @@
+// Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -11,6 +12,8 @@ import {
 } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
+// Control-plane update sentinel helpers preserve update metadata while a
+// managed service handoff waits for restart health to complete.
 export const CONTROL_PLANE_UPDATE_SENTINEL_META_ENV = "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META";
 export const CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 export const CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
@@ -25,6 +28,7 @@ export type ControlPlaneUpdateSentinelMetaFile = {
   meta: UpdateRestartSentinelMeta;
 };
 
+/** Convert an update result into the restart-health-pending sentinel result. */
 export function buildControlPlaneUpdateRestartHealthPendingResult(
   result: UpdateRunResult,
 ): UpdateRunResult {
@@ -40,6 +44,7 @@ export function buildControlPlaneUpdateRestartHealthPendingResult(
   };
 }
 
+/** Return true when an update sentinel represents an in-progress control-plane restart. */
 export function isPendingControlPlaneUpdateRestartSentinel(
   payload: RestartSentinelPayload,
 ): boolean {
@@ -89,6 +94,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   };
 }
 
+/** Read update sentinel routing metadata from the configured handoff file. */
 export async function readControlPlaneUpdateSentinelMeta(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateRestartSentinelMeta | null> {
@@ -108,6 +114,7 @@ export async function readControlPlaneUpdateSentinelMeta(
   }
 }
 
+/** Write an update restart sentinel with control-plane routing metadata. */
 export async function writeControlPlaneUpdateRestartSentinel(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
@@ -120,6 +127,7 @@ export async function writeControlPlaneUpdateRestartSentinel(params: {
   );
 }
 
+/** Mark the pending update restart sentinel as failed. */
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
 ): Promise<RestartSentinelPayload | null> {

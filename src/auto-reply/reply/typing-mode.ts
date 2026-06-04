@@ -1,3 +1,4 @@
+// Normalizes typing indicator modes from config and directives.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -5,6 +6,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
+/** Inputs that decide when a channel typing indicator should be shown. */
 export type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
@@ -15,8 +17,10 @@ export type TypingModeContext = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
+/** Group chats default to message-triggered typing to avoid noisy indicators. */
 export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
+/** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
   configured,
   isGroupChat,
@@ -47,6 +51,7 @@ export function resolveTypingMode({
   return DEFAULT_GROUP_TYPING_MODE;
 }
 
+/** Event-driven typing signaler used by streaming reply dispatch. */
 export type TypingSignaler = {
   mode: TypingMode;
   shouldStartImmediately: boolean;
@@ -60,6 +65,7 @@ export type TypingSignaler = {
   signalToolStart: () => Promise<void>;
 };
 
+/** Creates a typing signaler that starts or refreshes typing from stream events. */
 export function createTypingSignaler(params: {
   typing: TypingController;
   mode: TypingMode;
@@ -126,6 +132,7 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
+    // Reasoning-only streams should not expose typing until visible text exists.
     if (!hasRenderableText) {
       return;
     }

@@ -1,3 +1,9 @@
+/**
+ * Shared media generation task status and duplicate-guard helpers.
+ *
+ * Image/video task modules use this to track recent starts, find active
+ * background tasks, and build consistent user/prompt status messages.
+ */
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -16,6 +22,7 @@ type RecentMediaGenerationTaskStart = {
 const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart[]>();
 const RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS = 2 * 60_000;
 
+/** Builds a stable request key for media generation duplicate detection. */
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
   return stableStringify(value);
 }
@@ -134,6 +141,7 @@ function findPersistedTaskForRecentMediaGenerationStart(params: {
   });
 }
 
+/** Returns whether a task is an active session-scoped media generation task. */
 export function isActiveMediaGenerationTask(params: {
   task: TaskRecord;
   taskKind: string;
@@ -146,6 +154,7 @@ export function isActiveMediaGenerationTask(params: {
   );
 }
 
+/** Records a just-started media task so duplicate guards work before persistence. */
 export function recordRecentMediaGenerationTaskStartForSession(params: {
   sessionKey?: string;
   taskKind: string;
@@ -207,6 +216,7 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
   ]);
 }
 
+/** Finds a recent started media task from memory or persisted task state. */
 export function findRecentStartedMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
@@ -224,6 +234,8 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
   const nowMs = params.nowMs ?? Date.now();
   const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   const taskLabel = normalizeOptionalString(params.taskLabel);
+  // Prefer persisted tasks when available; the in-memory start cache bridges
+  // the short gap before async task persistence catches up.
   pruneRecentMediaGenerationTaskStarts({ maxAgeMs, nowMs, preserveKey: key });
   const entries = recentMediaGenerationTaskStarts.get(key);
   if (!entries?.length) {
@@ -276,10 +288,12 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
   return undefined;
 }
 
+/** Clears in-memory duplicate guards between tests. */
 export function resetRecentMediaGenerationDuplicateGuardsForTests() {
   recentMediaGenerationTaskStarts.clear();
 }
 
+/** Extracts a provider id from a media task source id with the given prefix. */
 export function getMediaGenerationTaskProviderId(
   task: TaskRecord,
   sourcePrefix: string,
@@ -292,6 +306,7 @@ export function getMediaGenerationTaskProviderId(
   return providerId || undefined;
 }
 
+/** Finds the highest-priority active media generation task for a session. */
 export function findActiveMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
@@ -301,6 +316,7 @@ export function findActiveMediaGenerationTaskForSession(params: {
   return listActiveMediaGenerationTasksForSession(params)[0];
 }
 
+/** Lists active media generation tasks for a session, preferring running tasks. */
 export function listActiveMediaGenerationTasksForSession(params: {
   sessionKey?: string;
   taskKind: string;
@@ -336,6 +352,7 @@ export function listActiveMediaGenerationTasksForSession(params: {
   ];
 }
 
+/** Finds a task that should block duplicate media generation for a session. */
 export function findDuplicateGuardMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
@@ -356,6 +373,7 @@ export function findDuplicateGuardMediaGenerationTaskForSession(params: {
   );
 }
 
+/** Builds structured status details for one media generation task. */
 export function buildMediaGenerationTaskStatusDetails(params: {
   task: TaskRecord;
   sourcePrefix: string;
@@ -368,6 +386,7 @@ export function buildMediaGenerationTaskStatusDetails(params: {
   };
 }
 
+/** Builds structured status details for a list of media generation tasks. */
 export function buildMediaGenerationTaskStatusListDetails(params: {
   tasks: TaskRecord[];
   sourcePrefix: string;
@@ -386,6 +405,7 @@ export function buildMediaGenerationTaskStatusListDetails(params: {
   };
 }
 
+/** Builds user-facing status text for one media generation task. */
 export function buildMediaGenerationTaskStatusText(params: {
   task: TaskRecord;
   sourcePrefix: string;
@@ -413,6 +433,7 @@ export function buildMediaGenerationTaskStatusText(params: {
   return lines.join("\n");
 }
 
+/** Builds user-facing status text for multiple active media generation tasks. */
 export function buildMediaGenerationTaskStatusListText(params: {
   tasks: TaskRecord[];
   sourcePrefix: string;
@@ -435,6 +456,7 @@ export function buildMediaGenerationTaskStatusListText(params: {
   return lines.join("\n");
 }
 
+/** Builds prompt context warning an agent about an active media generation task. */
 export function buildActiveMediaGenerationTaskPromptContextForSession(params: {
   sessionKey?: string;
   taskKind: string;

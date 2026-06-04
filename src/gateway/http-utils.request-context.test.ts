@@ -1,3 +1,6 @@
+/**
+ * Tests HTTP request context extraction for gateway auth and routing.
+ */
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {

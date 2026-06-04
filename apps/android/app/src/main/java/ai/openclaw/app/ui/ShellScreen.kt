@@ -9,11 +9,14 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.ui.chat.ChatScreen
+import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawNavItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -24,20 +27,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -54,6 +63,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,22 +79,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class Tab(
+internal enum class Tab(
   val key: String,
   val label: String,
+  val icon: ImageVector,
 ) {
-  Overview(key = "overview", label = "Home"),
-  Chat(key = "chat", label = "Chat"),
-  Voice(key = "voice", label = "Voice"),
-  Sessions(key = "sessions", label = "Sessions"),
-  Settings(key = "settings", label = "Settings"),
-  ProvidersModels(key = "providers-models", label = "Providers"),
+  Overview(key = "overview", label = "Home", icon = Icons.Default.Home),
+  Chat(key = "chat", label = "Chat", icon = Icons.Outlined.ChatBubbleOutline),
+  Voice(key = "voice", label = "Voice", icon = Icons.Outlined.MicNone),
+  Sessions(key = "sessions", label = "Sessions", icon = Icons.Outlined.AccessTime),
+  Settings(key = "settings", label = "Settings", icon = Icons.Outlined.Settings),
+  ProvidersModels(key = "providers-models", label = "Providers", icon = Icons.Outlined.Inventory2),
 }
+
+private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
+
+private val shellContentInsets: WindowInsets
+  @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+
+internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
@@ -131,117 +150,144 @@ fun ShellScreen(
       commandOpen = false
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
-      when (activeTab) {
-        Tab.Overview ->
-          OverviewScreen(
-            viewModel = viewModel,
-            onSelectTab = { activeTab = it },
-            onOpenSettingsRoute = {
-              settingsRoute = it
-              returnToOverviewFromSettings = true
-              activeTab = Tab.Settings
-            },
-            onOpenCommand = { commandOpen = true },
-          )
-        Tab.Chat ->
-          ChatShellScreen(
-            viewModel = viewModel,
-            onBack = { activeTab = Tab.Overview },
-            onVoice = { activeTab = Tab.Voice },
-          )
-        Tab.Voice ->
-          VoiceShellScreen(
-            viewModel = viewModel,
-            onOpenCommand = { commandOpen = true },
-            onOpenGatewaySettings = {
-              settingsRoute = SettingsRoute.Gateway
-              returnToOverviewFromSettings = false
-              activeTab = Tab.Settings
-            },
-            onOpenVoiceSettings = {
-              settingsRoute = SettingsRoute.Voice
-              returnToOverviewFromSettings = false
-              activeTab = Tab.Settings
-            },
-          )
-        Tab.ProvidersModels ->
-          ProvidersModelsScreen(
-            viewModel = viewModel,
-            onBack = { activeTab = Tab.Overview },
-            onAddProvider = {
-              settingsRoute = SettingsRoute.Gateway
-              returnToOverviewFromSettings = false
-              activeTab = Tab.Settings
-            },
-          )
-        Tab.Sessions ->
-          SessionsScreen(
-            viewModel = viewModel,
-            onOpenCommand = { commandOpen = true },
-            onOpenChat = { activeTab = Tab.Chat },
-          )
-        Tab.Settings ->
-          SettingsShellScreen(
-            viewModel = viewModel,
-            route = settingsRoute,
-            onRouteChange = {
-              settingsRoute = it
-              returnToOverviewFromSettings = false
-            },
-            onRouteBack = {
-              settingsRoute = SettingsRoute.Home
-              if (returnToOverviewFromSettings) {
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val showBottomNav = shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen)
+
+    Scaffold(
+      modifier = modifier.fillMaxSize(),
+      containerColor = ClawTheme.colors.canvas,
+      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      bottomBar = {
+        if (showBottomNav) {
+          ClawBottomNav(
+            items = shellNavTabs.map { ClawNavItem(key = it.key, label = it.label, icon = it.icon) },
+            selectedKey = if (activeTab in shellNavTabs) activeTab.key else Tab.Overview.key,
+            onSelect = { key ->
+              val next = shellNavTabs.firstOrNull { it.key == key } ?: Tab.Overview
+              if (next == Tab.Settings) {
+                settingsRoute = SettingsRoute.Home
                 returnToOverviewFromSettings = false
-                activeTab = Tab.Overview
               }
+              activeTab = next
             },
-            onOpenCommand = { commandOpen = true },
           )
-      }
+        }
+      },
+    ) { shellPadding ->
+      Box(modifier = Modifier.fillMaxSize().padding(shellPadding)) {
+        when (activeTab) {
+          Tab.Overview ->
+            OverviewScreen(
+              viewModel = viewModel,
+              onSelectTab = { activeTab = it },
+              onOpenSettingsRoute = {
+                settingsRoute = it
+                returnToOverviewFromSettings = true
+                activeTab = Tab.Settings
+              },
+              onOpenCommand = { commandOpen = true },
+            )
+          Tab.Chat ->
+            ChatShellScreen(
+              viewModel = viewModel,
+              onVoice = { activeTab = Tab.Voice },
+              onOpenSessions = { activeTab = Tab.Sessions },
+            )
+          Tab.Voice ->
+            VoiceShellScreen(
+              viewModel = viewModel,
+              onOpenCommand = { commandOpen = true },
+              onOpenGatewaySettings = {
+                settingsRoute = SettingsRoute.Gateway
+                returnToOverviewFromSettings = false
+                activeTab = Tab.Settings
+              },
+              onOpenVoiceSettings = {
+                settingsRoute = SettingsRoute.Voice
+                returnToOverviewFromSettings = false
+                activeTab = Tab.Settings
+              },
+            )
+          Tab.ProvidersModels ->
+            ProvidersModelsScreen(
+              viewModel = viewModel,
+              onBack = { activeTab = Tab.Overview },
+              onAddProvider = {
+                settingsRoute = SettingsRoute.Gateway
+                returnToOverviewFromSettings = false
+                activeTab = Tab.Settings
+              },
+            )
+          Tab.Sessions ->
+            SessionsScreen(
+              viewModel = viewModel,
+              onOpenCommand = { commandOpen = true },
+              onOpenChat = { activeTab = Tab.Chat },
+            )
+          Tab.Settings ->
+            SettingsShellScreen(
+              viewModel = viewModel,
+              route = settingsRoute,
+              onRouteChange = {
+                settingsRoute = it
+                returnToOverviewFromSettings = false
+              },
+              onRouteBack = {
+                settingsRoute = SettingsRoute.Home
+                if (returnToOverviewFromSettings) {
+                  returnToOverviewFromSettings = false
+                  activeTab = Tab.Overview
+                }
+              },
+              onBackHome = { activeTab = Tab.Overview },
+              onOpenCommand = { commandOpen = true },
+            )
+        }
 
-      if (commandOpen) {
-        CommandPalette(
-          viewModel = viewModel,
-          onDismiss = { commandOpen = false },
-          onOpenChat = {
-            activeTab = Tab.Chat
-            commandOpen = false
-          },
-          onOpenVoice = {
-            activeTab = Tab.Voice
-            commandOpen = false
-          },
-          onOpenSessions = {
-            activeTab = Tab.Sessions
-            commandOpen = false
-          },
-          onOpenProviders = {
-            activeTab = Tab.ProvidersModels
-            commandOpen = false
-          },
-          onOpenSettings = {
-            settingsRoute = SettingsRoute.Home
-            returnToOverviewFromSettings = false
-            activeTab = Tab.Settings
-            commandOpen = false
-          },
-          onOpenSession = { sessionKey ->
-            viewModel.switchChatSession(sessionKey)
-            activeTab = Tab.Chat
-            commandOpen = false
-          },
-        )
-      }
+        if (commandOpen) {
+          CommandPalette(
+            viewModel = viewModel,
+            onDismiss = { commandOpen = false },
+            onOpenChat = {
+              activeTab = Tab.Chat
+              commandOpen = false
+            },
+            onOpenVoice = {
+              activeTab = Tab.Voice
+              commandOpen = false
+            },
+            onOpenSessions = {
+              activeTab = Tab.Sessions
+              commandOpen = false
+            },
+            onOpenProviders = {
+              activeTab = Tab.ProvidersModels
+              commandOpen = false
+            },
+            onOpenSettings = {
+              settingsRoute = SettingsRoute.Home
+              returnToOverviewFromSettings = false
+              activeTab = Tab.Settings
+              commandOpen = false
+            },
+            onOpenSession = { sessionKey ->
+              viewModel.switchChatSession(sessionKey)
+              activeTab = Tab.Chat
+              commandOpen = false
+            },
+          )
+        }
 
-      pendingTrust?.let { prompt ->
-        // Gateway certificate trust is modal across the shell so navigation
-        // cannot hide a changed TLS identity prompt.
-        GatewayTrustDialog(
-          prompt = prompt,
-          onAccept = viewModel::acceptGatewayTrustPrompt,
-          onDecline = viewModel::declineGatewayTrustPrompt,
-        )
+        pendingTrust?.let { prompt ->
+          // Gateway certificate trust is modal across the shell so navigation
+          // cannot hide a changed TLS identity prompt.
+          GatewayTrustDialog(
+            prompt = prompt,
+            onAccept = viewModel::acceptGatewayTrustPrompt,
+            onDecline = viewModel::declineGatewayTrustPrompt,
+          )
+        }
       }
     }
   }
@@ -289,33 +335,39 @@ private fun OverviewScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val statusText by viewModel.statusText.collectAsState()
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
-  val agents by viewModel.gatewayAgents.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  val attentionRows =
+    homeAttentionRows(
+      isConnected = isConnected,
+      pendingApprovals = pendingToolCalls.size,
+      channelsSummary = channelsSummary,
+      nodesDevicesSummary = nodesDevicesSummary,
+      readyProviderCount = readyProviderCount,
+    )
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 20)
       viewModel.refreshModelCatalog()
-      viewModel.refreshAgents()
       viewModel.refreshCronJobs()
-      viewModel.refreshUsage()
-      viewModel.refreshSkills()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 6.dp),
+    contentWindowInsets = shellContentInsets,
+  ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 104.dp)) {
+      LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
         item {
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -334,41 +386,20 @@ private fun OverviewScreen(
         }
 
         item {
-          SectionLabel(title = "MODULES")
+          CompanionHeroPanel(
+            statusText = gatewaySummary(statusText, isConnected),
+            isConnected = isConnected,
+            pendingRunCount = pendingRunCount,
+            onOpenChat = { onSelectTab(Tab.Chat) },
+            onOpenVoice = { onSelectTab(Tab.Voice) },
+            onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
+          )
         }
 
-        item {
-          ModuleList(
-            rows =
-              listOf(
-                ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, Tab.Chat),
-                ModuleRow("Sessions", null, if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, Tab.Sessions),
-                ModuleRow("Voice", null, if (isConnected) "Ready" else "Offline", Icons.Outlined.MicNone, Tab.Voice),
-                ModuleRow(
-                  title = "Providers & Models",
-                  subtitle = null,
-                  metadata =
-                    when {
-                      !isConnected -> "Offline"
-                      readyProviderCount > 0 -> "$readyProviderCount ready"
-                      models.isNotEmpty() -> "${models.size} models"
-                      else -> "Setup"
-                    },
-                  icon = Icons.Outlined.Inventory2,
-                  tab = Tab.ProvidersModels,
-                ),
-                ModuleRow("Channels", null, channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels),
-                ModuleRow("Agents", null, if (agents.isEmpty()) "Load" else "${agents.size} ready", Icons.Default.Person, Tab.Settings, SettingsRoute.Agents),
-                ModuleRow("Approvals", null, approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals),
-                ModuleRow("Cron Jobs", null, cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, Tab.Settings, SettingsRoute.CronJobs),
-                ModuleRow("Skills", null, skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, Tab.Settings, SettingsRoute.Skills),
-                ModuleRow("Nodes & Devices", null, nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices),
-                ModuleRow("Usage", null, usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, Tab.Settings, SettingsRoute.Usage),
-                ModuleRow("Settings", null, null, Icons.Outlined.Settings, Tab.Settings, SettingsRoute.Home),
-              ),
-            onSelectTab = onSelectTab,
-            onOpenSettingsRoute = onOpenSettingsRoute,
-          )
+        if (attentionRows.isNotEmpty()) {
+          item {
+            HomeAttentionPanel(rows = attentionRows, onSelectTab = onSelectTab, onOpenSettingsRoute = onOpenSettingsRoute)
+          }
         }
 
         item {
@@ -397,7 +428,7 @@ private fun OverviewScreen(
           item {
             RecentSessionList(
               rows =
-                sessions.take(7).map { session ->
+                sessions.take(5).map { session ->
                   RecentSessionListItem(
                     key = session.key,
                     title = displaySessionTitle(session.displayName),
@@ -412,8 +443,39 @@ private fun OverviewScreen(
             )
           }
         }
+
+        item {
+          SectionLabel(title = "Control center")
+        }
+
+        item {
+          ModuleList(
+            rows =
+              listOf(
+                ModuleRow("Sessions", "Conversation history", if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, Tab.Sessions),
+                ModuleRow(
+                  title = "Providers & Models",
+                  subtitle = "Model setup",
+                  metadata =
+                    when {
+                      !isConnected -> "Offline"
+                      readyProviderCount > 0 -> "$readyProviderCount ready"
+                      models.isNotEmpty() -> "${models.size} models"
+                      else -> "Setup"
+                    },
+                  icon = Icons.Outlined.Inventory2,
+                  tab = Tab.ProvidersModels,
+                ),
+                ModuleRow("Channels", "Connected messengers", channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels),
+                ModuleRow("Nodes & Devices", "Phone and node health", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices),
+                ModuleRow("Approvals", "Tool decisions", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals),
+                ModuleRow("Settings", "More runtime controls", null, Icons.Outlined.Settings, Tab.Settings, SettingsRoute.Home),
+              ),
+            onSelectTab = onSelectTab,
+            onOpenSettingsRoute = onOpenSettingsRoute,
+          )
+        }
       }
-      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 20.dp))
     }
   }
 }
@@ -427,26 +489,109 @@ private data class ModuleRow(
   val settingsRoute: SettingsRoute? = null,
 )
 
-/** Floating overview shortcut that keeps chat one tap away from module lists. */
 @Composable
-private fun OverviewChatButton(
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
+private fun CompanionHeroPanel(
+  statusText: String,
+  isConnected: Boolean,
+  pendingRunCount: Int,
+  onOpenChat: () -> Unit,
+  onOpenVoice: () -> Unit,
+  onOpenGateway: () -> Unit,
 ) {
-  Surface(
-    onClick = onClick,
-    modifier = modifier.height(ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.button),
-    color = ClawTheme.colors.primary,
-    contentColor = ClawTheme.colors.primaryText,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 16.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = "Chat", style = ClawTheme.type.label.copy(fontSize = 16.sp, lineHeight = 20.sp))
+  ClawPanel(contentPadding = PaddingValues(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(
+          modifier = Modifier.size(38.dp),
+          shape = CircleShape,
+          color = if (isConnected) ClawTheme.colors.successSoft else ClawTheme.colors.surfacePressed,
+          border = BorderStroke(1.dp, if (isConnected) ClawTheme.colors.success else ClawTheme.colors.border),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(19.dp), tint = if (isConnected) ClawTheme.colors.success else ClawTheme.colors.text)
+          }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = if (pendingRunCount > 0) "OpenClaw is working" else "Ready when you are", style = ClawTheme.type.title.copy(fontSize = 20.sp, lineHeight = 24.sp), color = ClawTheme.colors.text)
+          Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        ClawPrimaryButton(text = "Start chat", icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = "Voice", icon = Icons.Outlined.MicNone, onClick = onOpenVoice, modifier = Modifier.weight(1f))
+      }
+      if (!isConnected) {
+        ClawSecondaryButton(text = "Reconnect gateway", icon = Icons.Default.Cloud, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
+      }
+    }
+  }
+}
+
+internal data class HomeAttentionRow(
+  val title: String,
+  val subtitle: String,
+  val icon: ImageVector,
+  val tab: Tab,
+  val settingsRoute: SettingsRoute? = null,
+)
+
+internal fun homeAttentionRows(
+  isConnected: Boolean,
+  pendingApprovals: Int,
+  channelsSummary: GatewayChannelsSummary,
+  nodesDevicesSummary: GatewayNodesDevicesSummary,
+  readyProviderCount: Int,
+): List<HomeAttentionRow> =
+  listOfNotNull(
+    if (!isConnected) {
+      HomeAttentionRow("Gateway", "Connect before chat, voice, and live status.", Icons.Default.Cloud, Tab.Settings, SettingsRoute.Gateway)
+    } else {
+      null
+    },
+    if (pendingApprovals > 0) {
+      HomeAttentionRow("Approvals", approvalsSummary(pendingApprovals), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals)
+    } else {
+      null
+    },
+    if (channelsSummary.channels.any { it.error != null }) {
+      HomeAttentionRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
+    } else {
+      null
+    },
+    if (nodesDevicesSummary.pendingDevices.isNotEmpty()) {
+      HomeAttentionRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
+    } else {
+      null
+    },
+    if (isConnected && readyProviderCount == 0) {
+      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
+    } else {
+      null
+    },
+  )
+
+@Composable
+private fun HomeAttentionPanel(
+  rows: List<HomeAttentionRow>,
+  onSelectTab: (Tab) -> Unit,
+  onOpenSettingsRoute: (SettingsRoute) -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Text(text = "Needs attention", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
+      rows.forEach { row ->
+        ModuleListRow(
+          row = ModuleRow(row.title, row.subtitle, null, row.icon, row.tab, row.settingsRoute),
+          onClick = {
+            val route = row.settingsRoute
+            if (route == null) {
+              onSelectTab(row.tab)
+            } else {
+              onOpenSettingsRoute(route)
+            }
+          },
+        )
+      }
     }
   }
 }
@@ -527,14 +672,18 @@ private fun ModuleListRow(
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
       Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-      Text(
-        text = row.title,
-        style = ClawTheme.type.body,
-        color = ClawTheme.colors.text,
-        modifier = Modifier.weight(1f),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+          text = row.title,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        row.subtitle?.let {
+          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+      }
       row.metadata?.let {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
@@ -638,11 +787,18 @@ private fun RecentSessionRowContent(
 @Composable
 private fun ChatShellScreen(
   viewModel: MainViewModel,
-  onBack: () -> Unit,
   onVoice: () -> Unit,
+  onOpenSessions: () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    ChatScreen(viewModel = viewModel, onBack = onBack, onVoice = onVoice)
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
+    contentWindowInsets = shellContentInsets,
+  ) {
+    ChatScreen(
+      viewModel = viewModel,
+      onVoice = onVoice,
+      onOpenSessions = onOpenSessions,
+    )
   }
 }
 
@@ -653,7 +809,10 @@ private fun VoiceShellScreen(
   onOpenGatewaySettings: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
+    contentWindowInsets = shellContentInsets,
+  ) {
     VoiceScreen(
       viewModel = viewModel,
       onOpenCommand = onOpenCommand,
@@ -669,6 +828,7 @@ private fun SettingsShellScreen(
   route: SettingsRoute,
   onRouteChange: (SettingsRoute) -> Unit,
   onRouteBack: () -> Unit,
+  onBackHome: () -> Unit,
   onOpenCommand: () -> Unit,
 ) {
   val displayName by viewModel.displayName.collectAsState()
@@ -707,14 +867,18 @@ private fun SettingsShellScreen(
     return
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(13.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 6.dp),
+    contentWindowInsets = shellContentInsets,
+  ) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(13.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
+          PlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to home", onClick = onBackHome)
           Text(text = "Settings", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           SettingsSearchButton(onClick = onOpenCommand)
         }

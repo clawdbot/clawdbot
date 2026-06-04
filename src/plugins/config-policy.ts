@@ -1,3 +1,4 @@
+// Evaluates plugin config policy without activating plugin runtime code.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemorySlotDecisionShared,

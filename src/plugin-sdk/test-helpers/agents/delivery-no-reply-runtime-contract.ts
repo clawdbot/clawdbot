@@ -1,3 +1,6 @@
+/**
+ * Shared contract fixture for delivery no-reply runtime handling.
+ */
 export const DELIVERY_NO_REPLY_RUNTIME_CONTRACT = {
   sessionId: "session-delivery-contract",
   sessionKey: "agent:main:delivery-contract",

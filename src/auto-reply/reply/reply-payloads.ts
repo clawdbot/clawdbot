@@ -1,3 +1,4 @@
+// Re-exports reply payload metadata helpers used by agent delivery code.
 export {
   applyReplyTagsToPayload,
   applyReplyThreading,

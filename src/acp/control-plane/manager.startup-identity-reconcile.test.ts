@@ -1,3 +1,4 @@
+/** Tests startup reconciliation of pending ACP session identities. */
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionManager,

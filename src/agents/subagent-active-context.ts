@@ -4,10 +4,13 @@ import { listControlledSubagentRuns } from "./subagent-control.js";
 import { buildSubagentList } from "./subagent-list.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
+// Prompt data is sanitized then JSON-quoted so active subagent state cannot add
+// executable prompt instructions through labels or task text.
 function quotePromptData(value: string): string {
   return JSON.stringify(sanitizeForPromptLiteral(value));
 }
 
+/** Builds the runtime-owned active subagent section appended to the system prompt. */
 export function buildActiveSubagentSystemPromptAddition(params: {
   cfg: OpenClawConfig;
   controllerSessionKey?: string;

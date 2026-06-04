@@ -1,3 +1,4 @@
+/** Tests node-host exec policy evaluation and approval decisions. */
 import { describe, expect, it } from "vitest";
 import {
   evaluateSystemRunPolicy,

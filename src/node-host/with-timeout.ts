@@ -1,5 +1,13 @@
+/** Timeout wrapper for node-host operations using AbortSignal cancellation. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
+/**
+ * AbortSignal-based timeout wrapper for node-host operations.
+ *
+ * The wrapper races work against an abort promise, clears timers/listeners on
+ * completion, and preserves object-shaped abort reasons as Error properties.
+ */
+/** Run work with an optional timeout and AbortSignal. */
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
@@ -31,6 +39,7 @@ export async function withTimeout<T>(
   } finally {
     clearTimeout(timer);
     if (abortListener) {
+      // Remove the listener even when work wins the race to avoid retaining closures.
       abortCtrl.signal.removeEventListener("abort", abortListener);
     }
   }

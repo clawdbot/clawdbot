@@ -1,3 +1,4 @@
+// Tests post-compaction context loading and prompt attachment behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

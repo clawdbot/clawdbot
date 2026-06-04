@@ -1,3 +1,4 @@
+// Loads and saves JSON files with symlink backup handling.
 import "./fs-safe-defaults.js";
 import fs from "node:fs";
 import path from "node:path";

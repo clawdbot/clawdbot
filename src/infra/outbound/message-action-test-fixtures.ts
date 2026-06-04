@@ -1,3 +1,4 @@
+/** Returns a bootstrap registry mock for message-action alias tests. */
 export function createPinboardMessageActionBootstrapRegistryMock() {
   return (channel: string) => {
     if (channel === "pinboard") {

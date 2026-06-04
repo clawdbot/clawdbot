@@ -1,3 +1,4 @@
+// Verifies streamed TUI message assembly and display state updates.
 import { describe, expect, it } from "vitest";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 

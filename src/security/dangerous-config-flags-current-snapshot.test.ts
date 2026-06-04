@@ -1,3 +1,4 @@
+// Verifies current dangerous-config snapshot output.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";

@@ -1,3 +1,4 @@
+/** Tests web-tool secret metadata resolution from config and plugins. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type {

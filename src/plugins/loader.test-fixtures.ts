@@ -1,3 +1,4 @@
+/** Shared plugin-loader fixture builders for temp manifests, bundle roots, and isolated env state. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

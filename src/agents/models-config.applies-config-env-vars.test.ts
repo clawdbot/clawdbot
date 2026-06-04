@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -427,22 +428,19 @@ describe("models-config", () => {
   it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
     try {
-      await fs.writeFile(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "google-vertex:default": {
-                type: "api_key",
-                provider: "google-vertex",
-                keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
-              },
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "google-vertex:default": {
+              type: "api_key",
+              provider: "google-vertex",
+              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
             },
           },
-          null,
-          2,
-        )}\n`,
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
       const plan = await planOpenClawModelsJsonWithDeps(

@@ -1,3 +1,4 @@
+// Handles fast version output before the full CLI graph loads.
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 

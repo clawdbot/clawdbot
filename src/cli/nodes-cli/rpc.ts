@@ -1,3 +1,4 @@
+// Gateway RPC helpers for node CLI commands, including lazy runtime loading and option parsing.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -22,6 +23,7 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
+/** Attach shared Gateway connection/json options to a node command. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -29,6 +31,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
+/** Call a Gateway method through the lazily loaded node CLI RPC runtime. */
 export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
@@ -39,6 +42,7 @@ export const callGatewayCli = async (
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Call pairing approval methods with explicit operator scopes. */
 export const callNodePairApprovalGatewayCli = async (
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,
@@ -49,6 +53,7 @@ export const callNodePairApprovalGatewayCli = async (
   return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Build a node.invoke payload with an idempotency key and optional timeout. */
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
@@ -72,6 +77,7 @@ function hasOptionalValue(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
+/** Parse an optional positive integer node CLI flag. */
 export function parseOptionalNodePositiveInteger(value: unknown, flag: string): number | undefined {
   if (!hasOptionalValue(value)) {
     return undefined;
@@ -83,6 +89,7 @@ export function parseOptionalNodePositiveInteger(value: unknown, flag: string): 
   return parsed;
 }
 
+/** Parse an optional non-negative integer node CLI flag. */
 export function parseOptionalNodeNonNegativeInteger(
   value: unknown,
   flag: string,
@@ -97,6 +104,7 @@ export function parseOptionalNodeNonNegativeInteger(
   return parsed;
 }
 
+/** Parse an optional finite number node CLI flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -125,6 +133,7 @@ export function parseOptionalNodeFiniteNumber(
   return parsed;
 }
 
+/** Return the local-development hint for known unsigned Peekaboo bridge authorization failures. */
 export function unauthorizedHintForMessage(message: string): string | null {
   const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
@@ -141,10 +150,12 @@ export function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Resolve a node query to a node id via live node list or paired-node fallback. */
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   return (await resolveNode(opts, query)).nodeId;
 }
 
+/** Resolve a node query to the best available node record. */
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

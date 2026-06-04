@@ -1,6 +1,8 @@
+// Resolves exec command highlighting config for agent sessions.
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Resolves whether exec command highlighting is enabled for the current agent scope. */
 export function resolveExecCommandHighlighting(params: {
   config?: OpenClawConfig | null;
   agentId?: string | null;
@@ -12,5 +14,6 @@ export function resolveExecCommandHighlighting(params: {
     ? config.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId)?.tools?.exec
         ?.commandHighlighting
     : undefined;
+  // Agent-scoped config overrides the global exec setting; absent config stays disabled.
   return agentValue ?? globalValue ?? false;
 }

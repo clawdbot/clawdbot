@@ -1,3 +1,4 @@
+// Covers native approval runtime delivery and resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
 import { clearApprovalNativeRouteStateForTest } from "./approval-native-route-coordinator.js";

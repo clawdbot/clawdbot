@@ -15,6 +15,7 @@ function mergeProviderCapabilities(
   });
 }
 
+/** Builds provider capability metadata used to filter shared media model entries. */
 export function buildMediaUnderstandingCapabilityRegistry(
   cfg?: OpenClawConfig,
 ): MediaUnderstandingCapabilityRegistry {
@@ -28,6 +29,7 @@ export function buildMediaUnderstandingCapabilityRegistry(
   }
 
   for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+    // Plugin declarations own provider capability truth; config auto-registration only fills gaps.
     if (!registry.has(normalizedKey)) {
       mergeProviderCapabilities(registry, {
         id: normalizedKey,

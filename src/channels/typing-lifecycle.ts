@@ -7,6 +7,7 @@ type TypingKeepaliveLoop = {
   isRunning: () => boolean;
 };
 
+/** Creates a cancellable keepalive loop for channel typing indicators. */
 export function createTypingKeepaliveLoop(params: {
   intervalMs: number;
   onTick: AsyncTick;
@@ -18,6 +19,7 @@ export function createTypingKeepaliveLoop(params: {
     if (tickInFlight) {
       return;
     }
+    // Avoid overlapping typing updates when a channel API call stalls past the interval.
     tickInFlight = true;
     try {
       await params.onTick();

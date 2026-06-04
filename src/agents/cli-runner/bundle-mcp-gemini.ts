@@ -11,6 +11,8 @@ import {
   normalizeStringRecord,
 } from "./bundle-mcp-adapter-shared.js";
 
+// Gemini CLI MCP adapter. It writes a temporary system settings file that merges
+// any existing settings with enabled bundle MCP servers.
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
   const raw = await tryReadJson<unknown>(filePath);
   return raw && typeof raw === "object" && !Array.isArray(raw)
@@ -22,6 +24,8 @@ function resolveEnvPlaceholder(
   value: string,
   inheritedEnv: Record<string, string> | undefined,
 ): string {
+  // Gemini settings need concrete header values; resolve placeholders from the
+  // inherited run env first, then the process env.
   const decoded = decodeHeaderEnvPlaceholder(value);
   if (!decoded) {
     return value;
@@ -90,6 +94,7 @@ export async function writeGeminiSystemSettings(
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath,
     },
     cleanup: async () => {
+      // Temp settings are per-run and must disappear with the prepared CLI run.
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   };

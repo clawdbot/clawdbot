@@ -14,6 +14,8 @@ import {
   type SessionHeader,
 } from "../sessions/index.js";
 
+// Mutable view over a session JSONL transcript. The runner uses this layer to
+// tolerate old or partially malformed rows before appending new canonical rows.
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 type CustomEntry = Extract<SessionEntry, { type: "custom" }>;
@@ -271,6 +273,8 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
   return false;
 }
 
+// Keep every readable entry while repairing links through rejected rows. This
+// preserves usable branches from partially written or migrated transcripts.
 function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
   const entries: SessionEntry[] = [];
   const acceptedIds = new Set<string>();
@@ -346,6 +350,9 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
         : (entry.parentId ?? null);
     let repaired = parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
     if (repaired.type === "compaction" && rejectedIds.has(repaired.firstKeptEntryId)) {
+      // A rejected first-kept row would make compaction summaries unusable.
+      // Prefer the closest readable parent, then a readable descendant on the
+      // same branch, before falling back to the repaired parent.
       const resolvedFirstKeptParent = resolveRejectedParent(repaired.firstKeptEntryId);
       const firstKeptEntryId =
         (resolvedFirstKeptParent !== null && acceptedIds.has(resolvedFirstKeptParent)
@@ -430,6 +437,7 @@ function fileEntryOrMigrationSlot(value: unknown, index: number): FileEntry {
   } as unknown as FileEntry;
 }
 
+/** In-memory transcript state with branch, label, and append helpers. */
 export class TranscriptFileState {
   readonly header: SessionHeader | null;
   readonly entries: SessionEntry[];
@@ -509,6 +517,7 @@ export class TranscriptFileState {
     return buildSessionContext(this.entries, this.leafId, this.byId);
   }
 
+  /** Move the active leaf to an existing entry without appending a row. */
   branch(branchFromId: string): void {
     if (!this.byId.has(branchFromId)) {
       throw new Error(`Entry ${branchFromId} not found`);
@@ -516,6 +525,7 @@ export class TranscriptFileState {
     this.leafId = branchFromId;
   }
 
+  /** Clear the active leaf so the next append starts a root branch. */
   resetLeaf(): void {
     this.leafId = null;
   }
@@ -663,6 +673,7 @@ export class TranscriptFileState {
   }
 }
 
+/** Read a transcript file, migrate old rows, and drop only unrecoverable entries. */
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
   const raw = await fs.readFile(sessionFile, "utf-8");
   const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
@@ -677,6 +688,7 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   return new TranscriptFileState({ header, entries, migrated });
 }
 
+/** Rewrite the full transcript through the private-file store. */
 export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
@@ -687,6 +699,7 @@ export async function writeTranscriptFileAtomic(
   );
 }
 
+/** Persist a state mutation using append-only writes unless migration forced a rewrite. */
 export async function persistTranscriptStateMutation(params: {
   sessionFile: string;
   state: TranscriptFileState;

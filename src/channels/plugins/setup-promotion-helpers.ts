@@ -7,6 +7,10 @@ import {
   isCommonSingleAccountPromotionKey,
 } from "./setup-promotion-keys.js";
 
+/**
+ * Helpers for promoting legacy single-account channel config into `accounts`.
+ */
+
 type ChannelSectionBase = {
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
@@ -39,10 +43,15 @@ function getBundledChannelSetupPromotionSurface(
   return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
 }
 
+/**
+ * Returns whether one root-level channel key should move into account config.
+ */
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
   key: string;
 }): boolean {
+  // Common keys move for every channel; channel-owned setup surfaces can add
+  // plugin-specific keys without teaching core about that channel's schema.
   if (isCommonSingleAccountPromotionKey(params.key)) {
     return true;
   }
@@ -61,6 +70,9 @@ export function shouldMoveSingleAccountChannelKey(params: {
   return false;
 }
 
+/**
+ * Resolves all root-level keys eligible for single-account promotion.
+ */
 export function resolveSingleAccountKeysToMove(params: {
   channelKey: string;
   channel: Record<string, unknown>;
@@ -94,6 +106,8 @@ export function resolveSingleAccountKeysToMove(params: {
     return keysToMove;
   }
 
+  // Once named accounts exist, only keys explicitly allowed for named-account
+  // promotion should move. This avoids flattening root-only channel settings.
   const namedAccountPromotionKeys =
     resolveLoadedSetupSurface()?.namedAccountPromotionKeys ??
     resolveBundledSetupSurface()?.namedAccountPromotionKeys;
@@ -103,6 +117,9 @@ export function resolveSingleAccountKeysToMove(params: {
   return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
 }
 
+/**
+ * Resolves the account id that should receive promoted single-account config.
+ */
 export function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
@@ -116,6 +133,8 @@ export function resolveSingleAccountPromotionTarget(params: {
     return matchedAccountId ?? normalizedTargetAccountId;
   };
   const loadedSurface = getLoadedChannelSetupPromotionSurface(params.channelKey);
+  // Prefer loaded plugin setup hooks. Only consult bundled setup metadata when
+  // no loaded plugin supplied a target resolver for this channel.
   const bundledSurface = loadedSurface?.resolveSingleAccountPromotionTarget
     ? undefined
     : getBundledChannelSetupPromotionSurface(params.channelKey);

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
+/** Inputs for the first JSONL entry in a session transcript. */
 export type SessionTranscriptHeaderParams = {
   sessionId?: string;
   cwd?: string;
 };
 
+/** Creates a session transcript header entry with current version metadata. */
 export function createSessionTranscriptHeader(params: SessionTranscriptHeaderParams = {}) {
   return {
     type: "session",

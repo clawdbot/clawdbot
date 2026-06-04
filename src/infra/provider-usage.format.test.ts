@@ -1,3 +1,4 @@
+// Covers provider usage report formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatUsageReportLines,

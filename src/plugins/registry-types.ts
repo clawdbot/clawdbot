@@ -1,3 +1,4 @@
+/** Shared registration types that make up the in-memory plugin registry. */
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
@@ -70,6 +71,7 @@ import type {
   UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
 
+/** Agent tool factory registered by one plugin runtime. */
 export type PluginToolRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -92,6 +94,7 @@ export type PluginCliRegistration = {
   rootDir?: string;
 };
 
+/** Gateway HTTP route registered by a plugin runtime. */
 export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;

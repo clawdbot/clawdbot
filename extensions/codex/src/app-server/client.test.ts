@@ -408,9 +408,10 @@ describe("CodexAppServerClient", () => {
     // Start a pending request so we can verify it gets properly rejected.
     const pending = harness.client.request("test/method");
 
-    // Simulate the child process closing its pipe — a write to the now-dead
-    // stdin emits an asynchronous EPIPE error on the stream.
-    harness.process.stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    // Simulate the child process closing its pipe: stdin emits an asynchronous
+    // EPIPE error before the transport observes a process exit.
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    harness.process.stdin.emit("error", pipeError);
 
     // The pending request must be rejected with the pipe error rather than
     // an unhandled exception tearing down the gateway.

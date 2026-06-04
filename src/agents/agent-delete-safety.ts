@@ -28,6 +28,7 @@ function workspacePathsOverlap(left: string, right: string): boolean {
   );
 }
 
+/** Lists other agents whose workspaces overlap a candidate delete target. */
 export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
   agentId: string,

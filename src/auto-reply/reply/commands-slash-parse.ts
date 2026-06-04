@@ -1,11 +1,14 @@
+/** Shared parser for slash commands with action and argument tails. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Internal parse state for slash command action extraction. */
 export type SlashCommandParseResult =
   | { kind: "no-match" }
   | { kind: "empty" }
   | { kind: "invalid" }
   | { kind: "parsed"; action: string; args: string };
 
+/** Public slash-command parse result returned to command handlers. */
 export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
@@ -39,6 +42,7 @@ function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandPa
   return { kind: "parsed", action, args };
 }
 
+/** Parses a slash command or returns null when the prefix does not match. */
 export function parseSlashCommandOrNull(
   raw: string,
   slash: string,

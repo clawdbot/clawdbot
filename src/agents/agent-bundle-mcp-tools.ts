@@ -1,3 +1,5 @@
+// Public barrel for bundle MCP tool materialization and session-scoped runtime
+// management. Keep callers on this facade instead of importing runtime internals.
 export type {
   BundleMcpToolRuntime,
   McpCatalogTool,

@@ -1,3 +1,4 @@
+// Covers approval resolution over the gateway client.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 

@@ -1,3 +1,4 @@
+// Matches elevated-command allowlists against normalized sender identities.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -5,6 +6,7 @@ import {
 import { normalizeAtHashSlug } from "@openclaw/normalization-core/string-normalization";
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 
+/** Explicit allowFrom fields supported by elevated sender matching. */
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
 const INTERNAL_ALLOWLIST_CHANNEL = "webchat";
 
@@ -26,8 +28,10 @@ const SENDER_PREFIXES = [
 ];
 const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
 
+/** Channel-specific formatter for allowFrom identity values. */
 export type AllowFromFormatter = (values: string[]) => string[];
 
+/** Removes known channel/user prefixes before identity comparisons. */
 export function stripSenderPrefix(value?: string): string {
   if (!value) {
     return "";
@@ -36,6 +40,7 @@ export function stripSenderPrefix(value?: string): string {
   return trimmed.replace(SENDER_PREFIX_RE, "");
 }
 
+/** Parses explicit elevated allowlist entries such as `id:telegram:123`. */
 export function parseExplicitElevatedAllowEntry(
   entry: string,
 ): { field: ExplicitElevatedAllowField; value: string } | null {
@@ -72,6 +77,7 @@ function addTokenVariants(tokens: Set<string>, value: string): void {
   }
 }
 
+/** Adds formatted identity token variants into a matcher set. */
 export function addFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
   values: string[];
@@ -83,6 +89,7 @@ export function addFormattedTokens(params: {
   }
 }
 
+/** Checks a value against formatted identity tokens. */
 export function matchesFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
   value: string;
@@ -106,6 +113,7 @@ export function matchesFormattedTokens(params: {
   return false;
 }
 
+/** Builds normalized variants for mutable labels such as names and tags. */
 export function buildMutableTokens(value?: string): Set<string> {
   const tokens = new Set<string>();
   const trimmed = normalizeOptionalString(value);
@@ -120,6 +128,7 @@ export function buildMutableTokens(value?: string): Set<string> {
   return tokens;
 }
 
+/** Checks mutable label text against normalized token variants. */
 export function matchesMutableTokens(value: string, tokens: Set<string>): boolean {
   if (!value || tokens.size === 0) {
     return false;

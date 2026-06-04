@@ -1,3 +1,4 @@
+/** Tests node-host system.run policy, approval, allowlist, and execution behavior. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

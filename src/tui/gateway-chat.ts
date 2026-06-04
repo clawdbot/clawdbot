@@ -1,3 +1,4 @@
+// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,

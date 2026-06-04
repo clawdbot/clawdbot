@@ -1,3 +1,4 @@
+// Resolves primary model metadata for plugin-owned providers.
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -15,6 +16,7 @@ function resolvePrimaryModel(model?: AgentModelListConfig | string): string | un
   return undefined;
 }
 
+/** Applies an agent default primary model and reports whether config changed. */
 export function applyAgentDefaultPrimaryModel(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -49,6 +51,7 @@ export function applyAgentDefaultPrimaryModel(params: {
   };
 }
 
+/** Applies a primary model to agent defaults while preserving model fallback metadata. */
 export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
   const normalizedModel = normalizeAgentModelRefForConfig(model);
   const defaults = cfg.agents?.defaults;

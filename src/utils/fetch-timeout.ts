@@ -31,6 +31,8 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     return undefined;
   }
   try {
+    // Strip credentials, query, and fragment before logging; timeout URLs often
+    // include provider tokens or signed request parameters.
     const parsed = new URL(trimmed);
     parsed.username = "";
     parsed.password = "";
@@ -67,6 +69,8 @@ function abortDueToTimeout(
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
   const elapsedMs = Math.max(0, Date.now() - startedAtMs);
   const delayMs = Math.max(0, elapsedMs - timeoutMs);
+  // A large elapsed/timeout gap means the timer callback itself was starved,
+  // which is more useful for operators than another plain timeout message.
   const eventLoopDelayHint =
     delayMs >= Math.max(1000, timeoutMs * 0.5)
       ? `timer delayed ${delayMs}ms, likely event-loop starvation`
@@ -93,6 +97,10 @@ function abortDueToTimeout(
   controller.abort(error);
 }
 
+/**
+ * Builds an abort signal that combines an optional parent signal with a timeout.
+ * Callers must run `cleanup`; `refresh` restarts only the internal timeout timer.
+ */
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   signal?: AbortSignal;
   cleanup: () => void;

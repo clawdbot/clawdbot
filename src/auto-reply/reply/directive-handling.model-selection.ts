@@ -1,3 +1,4 @@
+/** Resolves /model directive selections and auth profile overrides. */
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
@@ -44,6 +45,7 @@ function resolveStoredNumericProfileModelDirective(params: { raw: string; agentD
   return { modelRaw, profileId, profileProvider: profile.provider };
 }
 
+/** Resolves the requested model/profile override from parsed inline directives. */
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;

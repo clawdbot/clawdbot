@@ -1,3 +1,4 @@
+// Normalizes provider auth choice metadata from plugin setup surfaces.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,

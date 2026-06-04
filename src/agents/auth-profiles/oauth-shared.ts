@@ -3,12 +3,14 @@ import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
+/** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
+/** Returns true when two OAuth credentials contain the same token/identity data. */
 export function areOAuthCredentialsEquivalent(
   a: OAuthCredential | undefined,
   b: OAuthCredential,
@@ -29,6 +31,8 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
+// Keep newer usable stored credentials over incoming runtime imports to avoid
+// replacing a fresh access token with stale external CLI state.
 function hasNewerStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -43,6 +47,7 @@ function hasNewerStoredOAuthCredential(
   );
 }
 
+/** Returns true when an incoming OAuth credential should replace stored state. */
 export function shouldReplaceStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -56,6 +61,7 @@ export function shouldReplaceStoredOAuthCredential(
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
 
+/** Returns true when an OAuth credential has a usable access token. */
 export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   now = Date.now(),
@@ -63,15 +69,18 @@ export function hasUsableOAuthCredential(
   return hasUsableStoredOAuthCredential(credential, { now });
 }
 
+/** Normalizes account identity tokens for equality checks. */
 export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
+/** Normalizes auth email identity tokens for equality checks. */
 export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
   return normalizeAuthIdentityToken(value)?.toLowerCase();
 }
 
+/** Returns true when an OAuth credential has account or email identity. */
 export function hasOAuthIdentity(
   credential: Pick<OAuthCredential, "accountId" | "email">,
 ): boolean {
@@ -81,6 +90,7 @@ export function hasOAuthIdentity(
   );
 }
 
+/** Returns true when OAuth identity fields match by account id or email. */
 export function hasMatchingOAuthIdentity(
   existing: Pick<OAuthCredential, "accountId" | "email">,
   incoming: Pick<OAuthCredential, "accountId" | "email">,
@@ -100,6 +110,8 @@ export function hasMatchingOAuthIdentity(
   return false;
 }
 
+// Different adoption paths have different safety thresholds. Bootstrap can
+// adopt missing identities, while stored overwrite requires an identity match.
 type OAuthIdentitySafetyPolicy = {
   whenExistingCredentialMissing: boolean;
   whenExistingIdentityMissing: boolean;
@@ -125,6 +137,7 @@ function isSafeOAuthIdentityTransition(
   return hasMatchingOAuthIdentity(existing, incoming);
 }
 
+/** Returns true when stored OAuth identity can be overwritten. */
 export function isSafeToOverwriteStoredOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -135,6 +148,7 @@ export function isSafeToOverwriteStoredOAuthIdentity(
   });
 }
 
+/** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -145,6 +159,7 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   });
 }
 
+/** Returns true when agent-local state may adopt a main-store OAuth identity. */
 export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -155,6 +170,7 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   });
 }
 
+/** Returns true when an external CLI credential should bootstrap stored OAuth. */
 export function shouldBootstrapFromExternalCliCredential(params: {
   existing: OAuthCredential | undefined;
   imported: OAuthCredential;
@@ -167,6 +183,7 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   return hasUsableOAuthCredential(params.imported, now);
 }
 
+/** Overlays runtime external OAuth profiles on a cloned store. */
 export function overlayRuntimeExternalOAuthProfiles(
   store: AuthProfileStore,
   profiles: Iterable<RuntimeExternalOAuthProfile>,
@@ -182,6 +199,8 @@ export function overlayRuntimeExternalOAuthProfiles(
       .filter((profile) => profile.persistence !== "persisted")
       .map((profile) => profile.profileId),
   );
+  // Preserve previous runtime-only profile ids that still exist so repeated
+  // overlays do not accidentally persist or drop external profile metadata.
   for (const profileId of store.runtimeExternalProfileIds ?? []) {
     if (next.profiles[profileId]) {
       runtimeOnlyProfileIds.add(profileId);
@@ -196,6 +215,7 @@ export function overlayRuntimeExternalOAuthProfiles(
   return next;
 }
 
+/** Returns true when a runtime external OAuth profile should be persisted. */
 export function shouldPersistRuntimeExternalOAuthProfile(params: {
   profileId: string;
   credential: OAuthCredential;

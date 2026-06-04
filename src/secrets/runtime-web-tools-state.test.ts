@@ -1,3 +1,4 @@
+/** Tests clone isolation for active web-tool metadata state. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearActiveRuntimeWebToolsMetadata,

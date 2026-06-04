@@ -1,3 +1,9 @@
+/**
+ * Effective tool inventory grouping.
+ *
+ * Tool inventory reports use this to present effective tools in stable source
+ * groups while preserving each source's original tool order.
+ */
 import type {
   EffectiveToolInventoryEntry,
   EffectiveToolInventoryGroup,
@@ -17,6 +23,7 @@ function groupLabel(source: EffectiveToolSource): string {
   }
 }
 
+/** Groups effective tool inventory entries by source in UI/report order. */
 export function buildEffectiveToolInventoryGroups(
   entries: readonly EffectiveToolInventoryEntry[],
 ): EffectiveToolInventoryGroup[] {

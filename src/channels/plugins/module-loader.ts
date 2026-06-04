@@ -14,6 +14,9 @@ const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const jitiLoaders: PluginModuleLoaderCache = new Map();
 let channelPluginModuleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
 
+/**
+ * Installs a test-only module loader factory for source channel plugin modules.
+ */
 export function setChannelPluginModuleLoaderFactoryForTest(
   factory?: PluginModuleLoaderFactory,
 ): void {
@@ -51,6 +54,8 @@ function loadModuleWithJiti(modulePath: string): unknown {
 function loadModule(modulePath: string): unknown {
   if (!isJavaScriptModulePath(modulePath) && !hasNativeSourceRequireHook(modulePath)) {
     if (isSourceModulePath(modulePath)) {
+      // Local source plugins need the TS loader unless the current runtime has
+      // installed a native source require hook for that extension.
       return loadModuleWithJiti(modulePath);
     }
     throw new Error(`channel plugin module must be built JavaScript: ${modulePath}`);
@@ -59,6 +64,8 @@ function loadModule(modulePath: string): unknown {
     return nodeRequire(modulePath);
   } catch (error) {
     if (isSourceModulePath(modulePath)) {
+      // Native source hooks can still fail on ESM/TS edge cases; fall back to
+      // the cached loader before surfacing the error.
       return loadModuleWithJiti(modulePath);
     }
     throw new Error(`failed to load channel plugin module with native require: ${modulePath}`, {
@@ -85,6 +92,9 @@ function resolvePluginModuleCandidates(rootDir: string, specifier: string): stri
   ];
 }
 
+/**
+ * Resolves a plugin-relative module specifier to an existing candidate path.
+ */
 export function resolveExistingPluginModulePath(rootDir: string, specifier: string): string {
   for (const candidate of resolvePluginModuleCandidates(rootDir, specifier)) {
     if (fs.existsSync(candidate)) {
@@ -94,6 +104,9 @@ export function resolveExistingPluginModulePath(rootDir: string, specifier: stri
   return path.resolve(rootDir, specifier);
 }
 
+/**
+ * Loads a channel plugin module after enforcing plugin-root file boundaries.
+ */
 export function loadChannelPluginModule(params: {
   modulePath: string;
   rootDir: string;
@@ -113,6 +126,8 @@ export function loadChannelPluginModule(params: {
     );
   }
   const safePath = opened.path;
+  // The boundary check opens the file to verify the path; close before loading
+  // through require/jiti so module evaluation owns its own descriptor lifecycle.
   fs.closeSync(opened.fd);
   return loadModule(safePath);
 }

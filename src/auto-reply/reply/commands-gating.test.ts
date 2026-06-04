@@ -1,3 +1,4 @@
+// Tests command gating rules for ownership, channel, and active session state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";

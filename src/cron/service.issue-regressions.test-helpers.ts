@@ -16,6 +16,7 @@ import { CronService } from "./service.js";
 
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
+/** Sets up temp store fixtures for cron service issue-regression tests. */
 export const setupCronIssueRegressionFixtures = () =>
   setupCronRegressionFixtures({ prefix: "cron-issues-" });
 

@@ -6,10 +6,15 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 
+// Pending node work is an in-memory per-node queue for gateway prompts such as
+// status/location requests. Nodes drain it opportunistically and acknowledge
+// item ids after handling them.
 const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
+/** Work item types that connected nodes understand today. */
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
 
 const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
+/** Priority labels used for pending work drain ordering. */
 export type NodePendingWorkPriority = (typeof NODE_PENDING_WORK_PRIORITIES)[number];
 
 type NodePendingWorkItem = {
@@ -91,6 +96,7 @@ function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
 }
 
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
+  // Higher priority wins, then older work, then id for deterministic paging.
   return [...state.itemsById.values()].toSorted((a, b) => {
     const priorityDelta = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
     if (priorityDelta !== 0) {
@@ -135,6 +141,8 @@ export function enqueueNodePendingWork(params: {
   const nowMs = resolveDateTimestampMs(rawNowMs);
   const state = getOrCreateState(nodeId);
   pruneExpired(state, nowMs);
+  // Keep one outstanding item per type so repeated status/location requests
+  // collapse until the node has a chance to drain and acknowledge them.
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
     return { revision: state.revision, item: existing, deduped: true };
@@ -152,6 +160,7 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
+/** Drains pending work for a node, including a baseline status request unless disabled. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -181,6 +190,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   };
 }
 
+/** Acknowledges completed pending-work ids and advances the node revision. */
 export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: string[] }): {
   revision: number;
   removedItemIds: string[];
@@ -210,10 +220,12 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   return { revision: state.revision, removedItemIds };
 }
 
+/** Clears all pending work state for tests. */
 export function resetNodePendingWorkForTests() {
   stateByNodeId.clear();
 }
 
+/** Returns the number of node queues retained in memory for tests. */
 export function getNodePendingWorkStateCountForTests(): number {
   return stateByNodeId.size;
 }

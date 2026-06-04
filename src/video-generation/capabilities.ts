@@ -5,6 +5,8 @@ import type {
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
+// Video generation mode helpers derive the active mode from reference inputs
+// and expose the provider capability block that applies to that mode/model.
 export function resolveVideoGenerationMode(params: {
   inputImageCount?: number;
   inputVideoCount?: number;
@@ -56,6 +58,8 @@ export function resolveVideoGenerationModeCapabilities(params: {
   >(
     caps: T,
   ): T => {
+    // Model-specific caps narrow the provider defaults without mutating the
+    // registered provider object shared across requests.
     const model = params.model?.trim();
     if (!caps || !model) {
       return caps;
@@ -99,6 +103,8 @@ export function resolveVideoGenerationModeCapabilities(params: {
     };
   }
   const videoToVideoCapabilities = withModelLimits(capabilities.videoToVideo);
+  // Mixed image+video references have no first-class mode label, but providers
+  // may support them through video-to-video capabilities that also accept images.
   if (
     inputImageCount > 0 &&
     inputVideoCount > 0 &&

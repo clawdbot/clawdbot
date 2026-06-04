@@ -526,7 +526,7 @@ Supported top-level Codex plugin fields:
 | -------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
 | `codexDynamicToolsLoading` | `"searchable"` | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context. |
 | `codexDynamicToolsExclude` | `[]`           | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.              |
-| `codexPlugins`             | disabled       | Native Codex plugin/app support for configured first-party Codex plugins.                |
+| `codexPlugins`             | disabled       | Native Codex plugin/app support for migrated source-installed curated plugins.           |
 
 Supported `appServer` fields:
 

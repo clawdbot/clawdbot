@@ -1,3 +1,4 @@
+// Reads and writes allow-from pairing entries from channel store files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for embedding provider registration and runtime access.
+ */
 export {
   getEmbeddingProvider,
   listEmbeddingProviders,

@@ -1,3 +1,4 @@
+// Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -497,6 +498,7 @@ async function createSanitizedStateSqliteBackupAsset(params: {
   } finally {
     source.close();
   }
+  await fs.chmod(sourcePath, 0o600);
 
   const snapshot = new sqlite.DatabaseSync(sourcePath);
   try {
@@ -517,6 +519,65 @@ async function createSanitizedStateSqliteBackupAsset(params: {
       path.resolve(`${archiveSourcePath}-shm`),
     ]),
   };
+}
+
+async function listAgentSqlitePaths(stateDir: string): Promise<string[]> {
+  const agentsDir = path.join(stateDir, "agents");
+  const found: string[] = [];
+  async function visit(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+      } else if (entry.isFile() && entry.name === "openclaw-agent.sqlite") {
+        found.push(entryPath);
+      }
+    }
+  }
+  await visit(agentsDir);
+  return found;
+}
+
+async function createAgentSqliteBackupAssets(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<SanitizedSqliteBackupAsset[]> {
+  const sqlitePaths = await listAgentSqlitePaths(params.stateDir);
+  if (sqlitePaths.length === 0) {
+    return [];
+  }
+  const sqlite = requireNodeSqlite();
+  const snapshots: SanitizedSqliteBackupAsset[] = [];
+  for (const archiveSourcePath of sqlitePaths) {
+    const source = new sqlite.DatabaseSync(archiveSourcePath, { readOnly: true });
+    const sourcePath = path.join(
+      params.tempDir,
+      `openclaw-agent-backup-${snapshots.length}.sqlite`,
+    );
+    try {
+      source.exec("PRAGMA busy_timeout = 30000;");
+      source.prepare("VACUUM INTO ?").run(sourcePath);
+    } finally {
+      source.close();
+    }
+    await fs.chmod(sourcePath, 0o600);
+    snapshots.push({
+      sourcePath,
+      archiveSourcePath,
+      skippedSourcePaths: new Set([
+        path.resolve(archiveSourcePath),
+        path.resolve(`${archiveSourcePath}-wal`),
+        path.resolve(`${archiveSourcePath}-shm`),
+      ]),
+    });
+  }
+  return snapshots;
 }
 
 export async function createBackupArchive(
@@ -588,12 +649,21 @@ export async function createBackupArchive(
           tempDir,
         })
       : undefined;
+    const agentSqliteSnapshots = stateAsset
+      ? await createAgentSqliteBackupAssets({
+          stateDir: stateAsset.sourcePath,
+          tempDir,
+        })
+      : [];
     const sourcePathRemaps = new Map<string, string>();
     if (sanitizedStateSqlite) {
       sourcePathRemaps.set(
         path.resolve(sanitizedStateSqlite.sourcePath),
         sanitizedStateSqlite.archiveSourcePath,
       );
+    }
+    for (const snapshot of agentSqliteSnapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
     }
     const manifest = buildManifest({
       createdAt,
@@ -621,7 +691,12 @@ export async function createBackupArchive(
       if (path.resolve(entryPath) === manifestPath) {
         return true;
       }
-      if (sanitizedStateSqlite?.skippedSourcePaths.has(path.resolve(entryPath))) {
+      if (
+        sanitizedStateSqlite?.skippedSourcePaths.has(path.resolve(entryPath)) ||
+        agentSqliteSnapshots.some((snapshot) =>
+          snapshot.skippedSourcePaths.has(path.resolve(entryPath)),
+        )
+      ) {
         return false;
       }
       if (extensionsFilter && !extensionsFilter(entryPath)) {
@@ -661,6 +736,7 @@ export async function createBackupArchive(
           [
             manifestPath,
             ...(sanitizedStateSqlite ? [sanitizedStateSqlite.sourcePath] : []),
+            ...agentSqliteSnapshots.map((snapshot) => snapshot.sourcePath),
             ...result.assets.map((asset) => asset.sourcePath),
           ],
         );

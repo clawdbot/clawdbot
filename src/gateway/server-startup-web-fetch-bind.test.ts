@@ -1,7 +1,11 @@
+/**
+ * Gateway startup web fetch bind tests.
+ */
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => {
@@ -51,16 +55,7 @@ async function requestHealthz(port: number): Promise<{ status: number; body: str
         port,
         path: "/healthz",
       },
-      (res) => {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.once("end", () => {
-          resolve({ status: res.statusCode ?? 0, body });
-        });
-      },
+      (res) => void readClientResponseBody(res).then(resolve, reject),
     );
     req.once("error", reject);
     req.setTimeout(5_000, () => {

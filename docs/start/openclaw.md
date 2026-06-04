@@ -235,7 +235,7 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - macOS menu bar companion: [OpenClaw macOS app](/platforms/macos)
 - iOS node app: [iOS app](/platforms/ios)
 - Android node app: [Android app](/platforms/android)
-- Windows status: [Windows (WSL2)](/platforms/windows)
+- Windows Hub: [Windows](/platforms/windows)
 - Linux status: [Linux app](/platforms/linux)
 - Security: [Security](/gateway/security)
 

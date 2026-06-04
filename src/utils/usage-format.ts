@@ -1,3 +1,7 @@
+/**
+ * Shared token/cost formatting and pricing lookup helpers for CLI, TUI, gateway, and status output.
+ * Keep this module synchronous; request paths call it while rendering usage summaries.
+ */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
@@ -34,6 +38,7 @@ type RawPricingTier = {
   range: [number, number] | [number];
 };
 
+/** Per-million-token model pricing used by usage summaries and cost estimates. */
 export type ModelCostConfig = {
   input: number;
   output: number;
@@ -94,6 +99,7 @@ let providerCostIndexByConfig = new WeakMap<
 let modelKeyCache = new Map<string, string | null>();
 let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 
+/** Formats a token count for compact human-facing status text. */
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
     return "0";
@@ -113,6 +119,7 @@ export function formatTokenCount(value?: number): string {
   return String(Math.round(safe));
 }
 
+/** Formats a USD amount for usage summaries, keeping tiny costs visible. */
 export function formatUsd(value?: number): string | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
@@ -586,6 +593,10 @@ function serializeCostIndex(
   return Array.from(entries.entries()).toSorted(([a], [b]) => a.localeCompare(b));
 }
 
+/**
+ * Fingerprints all model-pricing sources that can affect usage cost estimates.
+ * Consumers cache this value to know when resolved cost entries need recomputation.
+ */
 export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): string {
   return stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(
@@ -598,6 +609,10 @@ export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): stri
   });
 }
 
+/**
+ * Resolves pricing for a provider/model pair from local models.json, configured models, then gateway cache.
+ * Direct keys win before plugin normalization so configured pricing does not trigger provider discovery.
+ */
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
@@ -707,6 +722,10 @@ function computeTieredCost(
   );
 }
 
+/**
+ * Estimates USD usage cost from normalized token totals.
+ * Tiered pricing selects one whole-request tier by input size; it does not blend tiers.
+ */
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | UsageTotals | null;
   cost?: ModelCostConfig;

@@ -1,3 +1,4 @@
+/** Stable ClawHub install error codes used by plugin install policy and diagnostics. */
 export const CLAWHUB_INSTALL_ERROR_CODE = {
   INVALID_SPEC: "invalid_spec",
   PACKAGE_NOT_FOUND: "package_not_found",
@@ -14,5 +15,6 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
 } as const;
 
+/** Union of stable ClawHub install error code values. */
 export type ClawHubInstallErrorCode =
   (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];

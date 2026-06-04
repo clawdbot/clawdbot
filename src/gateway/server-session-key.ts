@@ -19,6 +19,9 @@ import { loadCombinedSessionStoreForGateway } from "./session-utils.js";
 const RUN_LOOKUP_CACHE_LIMIT = 256;
 const RUN_LOOKUP_MISS_TTL_MS = 1_000;
 
+// Run-id to session-key lookup bridges live agent events and persisted session
+// stores. Positive hits are stable; misses stay short-lived so late transcript
+// writes can become visible without polling on every caller.
 type RunLookupCacheEntry = {
   sessionKey: string | null;
   expiresAt: number | null;
@@ -62,6 +65,8 @@ function setResolvedSessionKeyCache(
   });
 }
 
+// Agent scoping accepts global sessions only when global scope is configured,
+// and rejects malformed agent-prefixed keys before store normalization.
 function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenClawConfig): boolean {
   if (cfg.session?.scope === "global" && sessionKey.trim().toLowerCase() === "global") {
     return true;
@@ -79,6 +84,7 @@ function resolveRunSessionKeyForCaller(storeKey: string) {
   return toAgentRequestSessionKey(storeKey) ?? storeKey;
 }
 
+/** Resolves the caller-facing session key for an active or recently persisted run id. */
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
   const explicitAgentId =
@@ -124,6 +130,7 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   return undefined;
 }
 
+/** Clears the run lookup cache for tests that mutate session stores. */
 export function resetResolvedSessionKeyForRunCacheForTest(): void {
   resolvedSessionKeyByRunId.clear();
 }

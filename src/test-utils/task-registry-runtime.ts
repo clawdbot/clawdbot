@@ -1,3 +1,4 @@
+// Test runtime helpers for task registry state and deterministic cleanup.
 import {
   configureTaskRegistryRuntime,
   type TaskRegistryStore,
@@ -5,6 +6,7 @@ import {
 } from "../tasks/task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord } from "../tasks/task-registry.types.js";
 
+// Clone snapshots across load/save so tests catch accidental shared mutation.
 function cloneTask(task: TaskRecord): TaskRecord {
   return { ...task };
 }
@@ -16,6 +18,7 @@ function cloneDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   };
 }
 
+/** Installs an in-memory task registry store for tests that avoid disk state. */
 export function installInMemoryTaskRegistryRuntime(): {
   taskStore: TaskRegistryStore;
 } {

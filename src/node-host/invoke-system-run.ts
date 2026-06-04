@@ -1,3 +1,4 @@
+/** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -219,6 +220,7 @@ function resolveAgentExecConfig(
   return entry?.tools?.exec;
 }
 
+/** Resolves the effective exec security/ask policy for one system.run request. */
 export function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -912,6 +914,7 @@ async function executeSystemRunPhase(
   );
 }
 
+/** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   const parsed = await parseSystemRunPhase(opts);
   if (!parsed) {
