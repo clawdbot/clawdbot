@@ -111,6 +111,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "runtime",
+    label: "runtime",
+    description: "Inspect configured runtime, scale/offload options, and cost hints",
+    sectionId: "runtime",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "code_execution",
     label: "code_execution",
     description: "Run sandboxed remote analysis",

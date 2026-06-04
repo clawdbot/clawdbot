@@ -75,6 +75,20 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional unicast DNS-SD domain for wide-area discovery, such as openclaw.internal. Use this when you intentionally publish gateway discovery beyond local mDNS scopes.",
   "discovery.mdns":
     "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
+  runtimeContext:
+    "Optional configured runtime self-context for the current agent execution environment. Exposure defaults closed; set runtimeContext.expose.mode to tool_hint or prompt_summary and allow the runtime tool when agents should inspect it.",
+  "runtimeContext.source":
+    'Declares where runtime context came from: "static", "provider", or "mixed". This is provenance for operators and tool results, not a provider refresh implementation.',
+  "runtimeContext.expose":
+    "Runtime self-context exposure controls. Defaults to no prompt hint and no runtime tool unless a non-none mode is selected.",
+  "runtimeContext.expose.mode":
+    'Exposure mode for runtime self-context. "none" is silent, "tool_hint" exposes only the runtime tool hint, and "prompt_summary" adds a compact prompt summary plus the runtime tool.',
+  "runtimeContext.ttlSeconds":
+    "Optional freshness TTL in seconds for the configured runtime context. This v1 slice reports the value but does not refresh provider state automatically.",
+  "runtimeContext.validUntil":
+    "Optional timestamp after which configured runtime context should be treated as stale by callers. This v1 slice reports the value but does not refresh provider state automatically.",
+  "runtimeContext.value":
+    "Configured runtime self-context payload including current runtime, resources, limits, action refs, offload targets, cost hints, freshness, and provenance.",
   tools:
     "Tool infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "tools.allow":

@@ -39,6 +39,7 @@ describe("tool-catalog", () => {
       "apply_patch",
       "exec",
       "process",
+      "runtime",
       "code_execution",
       "web_search",
       "web_fetch",
@@ -98,6 +99,17 @@ describe("tool-catalog", () => {
       "bundle-mcp",
     ]);
     expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
+  });
+
+  it("registers runtime in coding, runtime, and openclaw core policy surfaces", async () => {
+    const { CORE_TOOL_GROUPS, resolveCoreToolProfiles, isKnownCoreToolId } =
+      await import("./tool-catalog.js");
+
+    expect(isKnownCoreToolId("runtime")).toBe(true);
+    expect(resolveCoreToolProfiles("runtime")).toEqual(["coding"]);
+    expect(CORE_TOOL_GROUPS["group:runtime"]).toContain("runtime");
+    expect(CORE_TOOL_GROUPS["group:openclaw"]).toContain("runtime");
+    expect(requirePolicyAllow("coding")).toContain("runtime");
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {

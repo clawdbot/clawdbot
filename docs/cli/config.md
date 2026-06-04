@@ -148,6 +148,72 @@ openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Ll
 
 Use `--replace` only when the provided value should intentionally become the complete target value.
 
+## Runtime context
+
+`runtimeContext` is an optional top-level config contract for agent runtime
+self-awareness. It can describe the current execution environment, resources,
+limits, approval-gated action refs, offload targets, cost hints, freshness, and
+provenance.
+
+Exposure is closed by default. A configured value with no exposure mode, or with
+`expose.mode: "none"`, does not add prompt text and does not create the
+`runtime` tool. Use `expose.mode: "tool_hint"` to expose only the runtime-tool
+hint, or `expose.mode: "prompt_summary"` to add a compact prompt summary plus
+the tool hint. When using either exposed mode, make sure tool policy allows
+`runtime` directly or through `tools.profile: "coding"`, `group:runtime`, or
+`group:openclaw`.
+
+The v1 runtime context contract is config-backed. Provider refresh, action-ref
+execution, and precise cost estimation are not implemented by this slice; the
+`runtime` tool reports configured freshness/cost hints and returns
+`not_available` for provider-backed estimates.
+
+```json5
+{
+  runtimeContext: {
+    source: "static",
+    expose: { mode: "prompt_summary" },
+    validUntil: "2026-06-03T22:00:00-07:00",
+    value: {
+      id: "openclaw-dev",
+      current: {
+        id: "openclaw-dev",
+        label: "OpenClaw Dev",
+        locality: "local",
+      },
+      resources: {
+        cpu: { effectiveCores: 8, model: "Apple M3 Max" },
+        memory: { effectiveBytes: 34359738368 },
+      },
+      actions: [
+        {
+          kind: "scale_up",
+          label: "Resize this runtime",
+          ref: "runtime-action://provider/current/scale-up",
+          requiresApproval: true,
+        },
+      ],
+      offload: {
+        targets: [
+          {
+            id: "gateway-large",
+            locality: "cloud",
+            workloadKinds: ["codex", "long_task"],
+            cost: {
+              model: "metered",
+              currency: "USD",
+              estimateRef: "runtime-cost://provider/gateway-large",
+            },
+          },
+        ],
+      },
+      cost: { model: "included" },
+    },
+  },
+  tools: { profile: "coding" },
+}
+```
+
 ## `config set` modes
 
 <Tabs>
