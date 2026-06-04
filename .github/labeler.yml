@@ -328,6 +328,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "src/agents/**"
+          - "src/runtime-self-context/**"
+          - "docs/tools/runtime.md"
 
 "security":
   - changed-files:

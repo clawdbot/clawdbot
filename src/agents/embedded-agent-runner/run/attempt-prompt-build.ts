@@ -370,6 +370,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       attempt.inputProvenance,
     );
   }
+  // Internal-context delimiters are extracted only when a transcript prompt exists.
+  // Without that gate, raw delimiter text would leak into the model and transcript.
   if (transcriptPromptForRuntimeSplit !== undefined) {
     promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
       prompt: promptForRuntimeContextSplit,

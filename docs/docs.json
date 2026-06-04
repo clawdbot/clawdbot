@@ -1398,6 +1398,7 @@
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/runtime",
                   "tools/thinking",
                   "tools/tokenjuice",
                   "tools/tool-search",

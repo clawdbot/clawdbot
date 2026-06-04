@@ -59,6 +59,17 @@ describe("runtime self context prompt rendering", () => {
     ).toBe("visible request");
   });
 
+  it("renders no prompt when exposure mode is unset (defaults to none)", () => {
+    const config: RuntimeContextConfig = { value: { id: "openclaw-dev" } };
+    expect(buildRuntimeSelfContextPrompt(config)).toBe("");
+    expect(
+      appendRuntimeSelfContextToPrompt({
+        prompt: "visible request",
+        config: { runtimeContext: config },
+      }),
+    ).toBe("visible request");
+  });
+
   it("renders only a tool hint for exposure mode tool_hint", () => {
     const prompt = buildRuntimeSelfContextPrompt(createRuntimeContext("tool_hint"));
     expect(prompt).toContain("Runtime details are available through the runtime tool");

@@ -59,6 +59,18 @@ describe("runtime tool", () => {
     ).toBeNull();
   });
 
+  it("is omitted when exposure mode is unset (defaults to none)", () => {
+    expect(
+      createRuntimeTool({
+        config: {
+          runtimeContext: {
+            value: { id: "hidden" },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("returns filtered runtime details", async () => {
     const tool = createRuntimeTool({ config: createConfig() });
     expect(tool).not.toBeNull();

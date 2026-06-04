@@ -20,7 +20,9 @@ const RUNTIME_TOOL_HINT =
   "runtime scaling, or budget-aware placement, call the runtime tool for fresh details.";
 
 function resolveExposureMode(config: RuntimeContextConfig): RuntimeContextExposureMode {
-  return config.expose?.mode ?? "tool_hint";
+  // Default closed: configuring a runtime context value must not silently add the runtime tool or
+  // inject per-turn prompt text. Operators opt in explicitly via expose.mode.
+  return config.expose?.mode ?? "none";
 }
 
 export function shouldExposeRuntimeSelfContext(config: RuntimeContextConfig | undefined): boolean {

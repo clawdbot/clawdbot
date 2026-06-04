@@ -148,6 +148,18 @@ describe("model provider localService config", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects unknown runtimeContext keys via the strict schema", () => {
+    const result = OpenClawSchema.safeParse({
+      runtimeContext: {
+        expose: { mode: "tool_hint" },
+        value: { id: "openclaw-dev" },
+        unexpectedKey: true,
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {
