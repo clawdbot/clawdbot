@@ -370,10 +370,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       attempt.inputProvenance,
     );
   }
-  promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
-    prompt: promptForRuntimeContextSplit,
-    config: attempt.config ?? getRuntimeConfig(),
-  });
+  if (transcriptPromptForRuntimeSplit !== undefined) {
+    promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
+      prompt: promptForRuntimeContextSplit,
+      config: attempt.config ?? getRuntimeConfig(),
+    });
+  }
   const transcriptLeafId =
     (input.sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
   const heartbeatSummary =

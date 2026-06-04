@@ -7,7 +7,6 @@ import {
 import type {
   RuntimeContextConfig,
   RuntimeOffloadTarget,
-  RuntimeSelfContext,
 } from "../../runtime-self-context/types.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
@@ -31,42 +30,64 @@ const RuntimeDescribeIncludes = [
   "provenance",
 ] as const;
 
-const RuntimeToolSchema = Type.Object({
-  action: stringEnum(RuntimeToolActions, {
-    description:
-      "self returns the configured runtime context; describe can filter sections; actions lists scale/offload action refs; offload_targets lists target summaries; cost_estimate returns the configured cost hint for a target.",
-  }),
-  include: Type.Optional(
-    Type.Array(stringEnum(RuntimeDescribeIncludes), {
-      description: "Sections to include for action=describe. Omit for all configured sections.",
+const RuntimeWorkloadKinds = [
+  "codex",
+  "shell",
+  "build",
+  "test",
+  "long_task",
+  "gpu_compute",
+  "media",
+  "generic",
+] as const;
+
+const RuntimeToolSchema = Type.Object(
+  {
+    action: stringEnum(RuntimeToolActions, {
+      description:
+        "self returns the configured runtime context; describe can filter sections; actions lists scale/offload action refs; offload_targets lists target summaries; cost_estimate returns the configured cost hint for a target.",
     }),
-  ),
-  targetId: Type.Optional(
-    Type.String({
-      description: "Offload target id for action=cost_estimate.",
-    }),
-  ),
-  workload: Type.Optional(
-    Type.Object(
-      {},
-      {
-        additionalProperties: true,
-        description: "Optional workload summary for future provider-backed estimates.",
-      },
+    include: Type.Optional(
+      Type.Array(stringEnum(RuntimeDescribeIncludes), {
+        description: "Sections to include for action=describe. Omit for all configured sections.",
+      }),
     ),
-  ),
-});
+    targetId: Type.Optional(
+      Type.String({
+        description: "Offload target id for action=cost_estimate.",
+      }),
+    ),
+    workload: Type.Optional(
+      Type.Object(
+        {
+          kind: Type.Optional(stringEnum(RuntimeWorkloadKinds)),
+          estimatedSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+          notes: Type.Optional(Type.String()),
+        },
+        {
+          additionalProperties: false,
+          description: "Optional workload hint for future provider-backed estimates.",
+        },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 function resolveRuntimeContext(config: OpenClawConfig | undefined): RuntimeContextConfig | null {
   const runtimeContext = config?.runtimeContext;
   return shouldExposeRuntimeSelfContext(runtimeContext) ? (runtimeContext ?? null) : null;
 }
 
-function requireRuntimeValue(config: RuntimeContextConfig): RuntimeSelfContext {
-  if (!config.value) {
-    throw new ToolInputError("runtime context is configured without value");
-  }
-  return config.value;
+function unavailableRuntimeValueResult(config: RuntimeContextConfig) {
+  return jsonResult({
+    status: "unavailable",
+    source: config.source ?? "static",
+    expose: config.expose ?? { mode: "tool_hint" },
+    ttlSeconds: config.ttlSeconds,
+    validUntil: config.validUntil,
+    reason: "Runtime context is configured but no runtime value is available.",
+  });
 }
 
 function readInclude(
@@ -113,6 +134,9 @@ function findOffloadTarget(
 ): RuntimeOffloadTarget | undefined {
   const targets = context.offload?.targets ?? [];
   if (!targetId) {
+    if (targets.length > 1) {
+      throw new ToolInputError("targetId required when multiple offload targets are configured");
+    }
     return targets[0];
   }
   return targets.find((target) => target.id === targetId);
@@ -139,7 +163,10 @@ export function createRuntimeTool(options: { config?: OpenClawConfig }): AnyAgen
         throw new ToolInputError(`action must be one of ${RuntimeToolActions.join(", ")}`);
       }
 
-      const context = requireRuntimeValue(runtimeContext);
+      const context = runtimeContext.value;
+      if (!context) {
+        return unavailableRuntimeValueResult(runtimeContext);
+      }
       if (action === "self") {
         return jsonResult({
           source: runtimeContext.source ?? "static",
@@ -171,6 +198,15 @@ export function createRuntimeTool(options: { config?: OpenClawConfig }): AnyAgen
 
       const targetId = readStringParam(params, "targetId");
       const target = findOffloadTarget(context, targetId);
+      if (targetId && !target) {
+        return jsonResult({
+          targetId,
+          estimate: {
+            status: "target_not_found",
+            reason: "No configured offload target matched targetId.",
+          },
+        });
+      }
       return jsonResult({
         targetId: target?.id ?? targetId,
         cost: target?.cost ?? context.cost ?? { model: "unknown" },

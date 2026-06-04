@@ -51,6 +51,23 @@ function formatBytes(bytes: number | undefined): string | undefined {
   return `${Math.round(bytes)} bytes`;
 }
 
+function formatDataString(value: string | undefined): string | undefined {
+  const normalized = value
+    ?.split("")
+    .map((char) => {
+      const code = char.charCodeAt(0);
+      return code < 32 || code === 127 ? " " : char;
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const clipped = normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+  return JSON.stringify(clipped);
+}
+
 function formatResources(resources: RuntimeResources | undefined): string {
   const parts: string[] = [];
   if (resources?.cpu) {
@@ -58,8 +75,8 @@ function formatResources(resources: RuntimeResources | undefined): string {
       typeof resources.cpu.effectiveCores === "number"
         ? `${resources.cpu.effectiveCores} CPU`
         : undefined,
-      resources.cpu.model,
-      resources.cpu.architecture,
+      formatDataString(resources.cpu.model),
+      formatDataString(resources.cpu.architecture),
     ].filter((part): part is string => Boolean(part));
     if (cpuParts.length > 0) {
       parts.push(cpuParts.join(", "));
@@ -85,25 +102,27 @@ function formatActions(actions: RuntimeActionRef[] | undefined): string {
   return kinds.length > 0 ? kinds.join(", ") : "none";
 }
 
-function buildPromptSummary(context: RuntimeSelfContext): string {
+function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextConfig): string {
   const current = context.current;
-  const currentLabel = current?.label ?? context.label ?? current?.id ?? context.id;
+  const currentLabel = formatDataString(
+    current?.label ?? context.label ?? current?.id ?? context.id,
+  );
   const locality = current?.locality ?? "unknown";
   const offloadTargets = context.offload?.targets ?? [];
   const costModel =
     context.cost?.model ??
     offloadTargets.find((target) => target.cost?.model)?.cost?.model ??
     "unknown";
-  const validUntil = context.freshness?.validUntil;
+  const validUntil = context.freshness?.validUntil ?? config.validUntil;
   return [
     "Runtime summary:",
-    `- current: ${currentLabel}, ${locality}`,
+    `- current: ${currentLabel ?? "unknown"}, ${locality}`,
     `- resources: ${formatResources(context.resources)}`,
     `- actions: ${formatActions(context.actions)}`,
     `- offload: ${offloadTargets.length} target${offloadTargets.length === 1 ? "" : "s"} available`,
     `- cost: ${costModel}`,
     '- details: call runtime tool action "describe" for fresh details',
-    ...(validUntil ? [`- valid until: ${validUntil}`] : []),
+    ...(validUntil ? [`- valid until: ${formatDataString(validUntil) ?? "unknown"}`] : []),
   ].join("\n");
 }
 
@@ -118,7 +137,7 @@ export function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig | und
   if (mode === "tool_hint") {
     return RUNTIME_TOOL_HINT;
   }
-  const summary = config.value ? buildPromptSummary(config.value) : "";
+  const summary = config.value ? buildPromptSummary(config.value, config) : "";
   return [RUNTIME_TOOL_HINT, summary].filter((part) => part.trim()).join("\n\n");
 }
 

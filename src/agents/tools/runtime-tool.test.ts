@@ -85,6 +85,27 @@ describe("runtime tool", () => {
     });
   });
 
+  it("returns unavailable status when configured without a runtime value", async () => {
+    const tool = createRuntimeTool({
+      config: {
+        runtimeContext: {
+          source: "provider",
+          expose: { mode: "tool_hint" },
+          validUntil: "2026-06-03T20:00:00-07:00",
+        },
+      },
+    });
+    expect(tool).not.toBeNull();
+    const result = await tool!.execute("runtime-empty", { action: "describe" });
+    expect(result.details).toEqual({
+      status: "unavailable",
+      source: "provider",
+      expose: { mode: "tool_hint" },
+      validUntil: "2026-06-03T20:00:00-07:00",
+      reason: "Runtime context is configured but no runtime value is available.",
+    });
+  });
+
   it("returns static offload cost hints before provider estimators exist", async () => {
     const tool = createRuntimeTool({ config: createConfig() });
     const result = await tool!.execute("runtime-2", {
@@ -105,5 +126,34 @@ describe("runtime tool", () => {
         reason: "No provider-backed runtime cost estimator is registered in this v1 slice.",
       },
     });
+  });
+
+  it("returns target_not_found for unknown cost target ids", async () => {
+    const tool = createRuntimeTool({ config: createConfig() });
+    const result = await tool!.execute("runtime-3", {
+      action: "cost_estimate",
+      targetId: "missing",
+    });
+    expect(result.details).toEqual({
+      targetId: "missing",
+      estimate: {
+        status: "target_not_found",
+        reason: "No configured offload target matched targetId.",
+      },
+    });
+  });
+
+  it("requires targetId for cost estimates when multiple offload targets exist", async () => {
+    const config = createConfig();
+    config.runtimeContext?.value?.offload?.targets?.push({
+      id: "gateway-medium",
+      locality: "cloud",
+      workloadKinds: ["codex"],
+      cost: { model: "quota" },
+    });
+    const tool = createRuntimeTool({ config });
+    await expect(tool!.execute("runtime-4", { action: "cost_estimate" })).rejects.toThrow(
+      "targetId required when multiple offload targets are configured",
+    );
   });
 });
