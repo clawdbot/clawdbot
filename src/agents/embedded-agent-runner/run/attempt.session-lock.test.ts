@@ -995,6 +995,26 @@ describe("installEmbeddedPromptRetryDefault", () => {
     });
   });
 
+  it("injects the configured provider retry as the embedded prompt default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session, { maxRetries: 3 });
+    await session.agent.streamFn("model", "context");
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 3 });
+  });
+
+  it("lets an explicit caller maxRetries override the configured provider default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session, { maxRetries: 3 });
+    await session.agent.streamFn("model", "context", { maxRetries: 1 });
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 1 });
+  });
+
   it("does not stack retry-default and lock-release wrappers across repeated installs", async () => {
     const events: string[] = [];
     const streamFn = vi.fn(async (..._args: unknown[]) => {
