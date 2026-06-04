@@ -89,6 +89,16 @@ describe("runtime self context prompt rendering", () => {
     expect(extracted.runtimeContext).toContain('"2026-06-03T19:00:00-07:00"');
   });
 
+  it("suppresses runtime hints when the runtime tool is filtered out", () => {
+    expect(
+      appendRuntimeSelfContextToPrompt({
+        prompt: "visible request",
+        config: { runtimeContext: createRuntimeContext("prompt_summary") },
+        runtimeToolAvailable: false,
+      }),
+    ).toBe("visible request");
+  });
+
   it("uses config-level validUntil when value freshness omits it", () => {
     const runtimeContext = createRuntimeContext("prompt_summary");
     runtimeContext.validUntil = "2026-06-03T20:00:00-07:00";

@@ -145,7 +145,11 @@ export function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig | und
 
 export function buildRuntimeSelfContextInternalBlock(
   config: RuntimeContextConfig | undefined,
+  options?: { runtimeToolAvailable?: boolean },
 ): string | undefined {
+  if (options?.runtimeToolAvailable === false) {
+    return undefined;
+  }
   const prompt = buildRuntimeSelfContextPrompt(config).trim();
   if (!prompt) {
     return undefined;
@@ -160,8 +164,11 @@ export function buildRuntimeSelfContextInternalBlock(
 export function appendRuntimeSelfContextToPrompt(params: {
   prompt: string;
   config?: OpenClawConfig;
+  runtimeToolAvailable?: boolean;
 }): string {
-  const block = buildRuntimeSelfContextInternalBlock(resolveRuntimeContextConfig(params.config));
+  const block = buildRuntimeSelfContextInternalBlock(resolveRuntimeContextConfig(params.config), {
+    runtimeToolAvailable: params.runtimeToolAvailable,
+  });
   if (!block) {
     return params.prompt;
   }
