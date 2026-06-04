@@ -513,7 +513,7 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   },
 };
 
-function buildCoreToolGroupMap() {
+function buildCoreToolGroupMap(): Record<string, string[]> {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
     const groupId = `group:${tool.sectionId}`;
