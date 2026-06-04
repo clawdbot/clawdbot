@@ -140,6 +140,26 @@ describe("runtime tool", () => {
     });
   });
 
+  it("does not inherit current runtime cost hints for target estimates", async () => {
+    const config = createConfig();
+    config.runtimeContext!.value!.cost = {
+      model: "metered",
+      currency: "USD",
+      roughUnitCost: "current runtime only",
+    };
+    delete config.runtimeContext!.value!.offload!.targets![0]!.cost;
+    const tool = createRuntimeTool({ config });
+    const result = await tool!.execute("runtime-current-cost", {
+      action: "cost_estimate",
+      targetId: "gateway-large",
+    });
+    expect(result.details).toMatchObject({
+      targetId: "gateway-large",
+      cost: { model: "unknown" },
+      estimate: { status: "not_available" },
+    });
+  });
+
   it("returns target_not_found for unknown cost target ids", async () => {
     const tool = createRuntimeTool({ config: createConfig() });
     const result = await tool!.execute("runtime-3", {

@@ -89,6 +89,18 @@ describe("runtime self context prompt rendering", () => {
     expect(extracted.runtimeContext).toContain('"2026-06-03T19:00:00-07:00"');
   });
 
+  it("does not count unavailable offload targets as available in prompt_summary", () => {
+    const runtimeContext = createRuntimeContext("prompt_summary");
+    runtimeContext.value?.offload?.targets?.push({
+      id: "gateway-down",
+      locality: "cloud",
+      availability: { state: "unavailable", reason: "maintenance" },
+    });
+    const prompt = buildRuntimeSelfContextPrompt(runtimeContext);
+    expect(prompt).toContain("- offload: 1 target available, 1 unavailable");
+    expect(prompt).not.toContain("2 targets available");
+  });
+
   it("suppresses runtime hints when the runtime tool is filtered out", () => {
     expect(
       appendRuntimeSelfContextToPrompt({

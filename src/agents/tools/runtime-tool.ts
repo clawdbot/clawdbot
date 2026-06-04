@@ -210,7 +210,7 @@ export function createRuntimeTool(options: { config?: OpenClawConfig }): AnyAgen
       }
       return jsonResult({
         targetId: target?.id ?? targetId,
-        cost: target?.cost ?? context.cost ?? { model: "unknown" },
+        cost: target?.cost ?? { model: "unknown" },
         workload: params.workload,
         estimate: {
           status: "not_available",

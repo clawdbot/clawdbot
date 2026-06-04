@@ -8,6 +8,7 @@ import type {
   RuntimeActionRef,
   RuntimeContextConfig,
   RuntimeContextExposureMode,
+  RuntimeOffloadTarget,
   RuntimeResources,
   RuntimeSelfContext,
 } from "./types.js";
@@ -104,6 +105,20 @@ function formatActions(actions: RuntimeActionRef[] | undefined): string {
   return kinds.length > 0 ? kinds.join(", ") : "none";
 }
 
+function formatOffloadAvailability(targets: RuntimeOffloadTarget[] | undefined): string {
+  const offloadTargets = targets ?? [];
+  const unavailableTargets = offloadTargets.filter(
+    (target) =>
+      target.availability?.state === "unavailable" || target.availability?.state === "error",
+  ).length;
+  const availableTargets = offloadTargets.length - unavailableTargets;
+  const availableText = `${availableTargets} target${availableTargets === 1 ? "" : "s"} available`;
+  if (unavailableTargets === 0) {
+    return availableText;
+  }
+  return `${availableText}, ${unavailableTargets} unavailable`;
+}
+
 function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextConfig): string {
   const current = context.current;
   const currentLabel = formatDataString(
@@ -121,7 +136,7 @@ function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextC
     `- current: ${currentLabel ?? "unknown"}, ${locality}`,
     `- resources: ${formatResources(context.resources)}`,
     `- actions: ${formatActions(context.actions)}`,
-    `- offload: ${offloadTargets.length} target${offloadTargets.length === 1 ? "" : "s"} available`,
+    `- offload: ${formatOffloadAvailability(offloadTargets)}`,
     `- cost: ${costModel}`,
     '- details: call runtime tool action "describe" for fresh details',
     ...(validUntil ? [`- valid until: ${formatDataString(validUntil) ?? "unknown"}`] : []),
