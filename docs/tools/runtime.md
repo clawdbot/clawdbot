@@ -49,13 +49,17 @@ until you opt in:
 
 ## Exposure modes
 
-`runtimeContext.expose.mode` controls how the agent sees the context:
+`runtimeContext.expose.mode` opts the conversation in to runtime context; it does
+not override tool policy. The `runtime` tool and its per-turn hint/summary only
+reach the model when your effective tool policy also allows the `runtime` tool.
+If tool policy filters out `runtime`, the tool is hidden and no hint or summary
+is injected, even under `tool_hint` or `prompt_summary`.
 
-| Mode             | `runtime` tool | Per-turn prompt text                        |
-| ---------------- | -------------- | ------------------------------------------- |
-| `none` (default) | hidden         | none                                        |
-| `tool_hint`      | available      | a short hint that the `runtime` tool exists |
-| `prompt_summary` | available      | the hint plus a compact runtime summary     |
+| Mode             | `runtime` tool (when tool policy allows it) | Per-turn prompt text (when tool policy allows it) |
+| ---------------- | ------------------------------------------- | ------------------------------------------------- |
+| `none` (default) | hidden                                      | none                                              |
+| `tool_hint`      | available                                   | a short hint that the `runtime` tool exists       |
+| `prompt_summary` | available                                   | the hint plus a compact runtime summary           |
 
 Injected prompt text is wrapped as internal runtime context: it is hidden from
 the visible conversation and not persisted as user-authored content.

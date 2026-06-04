@@ -7,6 +7,7 @@ import {
 import type {
   RuntimeContextConfig,
   RuntimeOffloadTarget,
+  RuntimeSelfContext,
 } from "../../runtime-self-context/types.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
