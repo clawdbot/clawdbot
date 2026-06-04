@@ -20,6 +20,7 @@ import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.me
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
+import type { RuntimeContextConfig } from "./types.runtime-context.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
@@ -193,6 +194,8 @@ export type OpenClawConfig = {
   agents?: AgentsConfig;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
+  /** Conversation/session runtime self-awareness and prompt/tool exposure settings. */
+  runtimeContext?: RuntimeContextConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */

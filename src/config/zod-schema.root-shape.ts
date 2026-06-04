@@ -19,6 +19,7 @@ import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
+import { RuntimeContextConfigSchema } from "./zod-schema.runtime-context.js";
 import {
   AccessGroupsSchema,
   LoggingLevelSchema,
@@ -292,6 +293,7 @@ export const OpenClawSchemaShape = {
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
   tools: ToolsSchema,
+  runtimeContext: RuntimeContextConfigSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
   broadcast: BroadcastSchema,

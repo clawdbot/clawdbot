@@ -108,6 +108,46 @@ describe("agent timeoutSeconds config", () => {
 });
 
 describe("model provider localService config", () => {
+  it("accepts runtimeContext storage and prompt exposure config", () => {
+    const result = OpenClawSchema.safeParse({
+      runtimeContext: {
+        source: "static",
+        expose: {
+          mode: "prompt_summary",
+        },
+        ttlSeconds: 3600,
+        value: {
+          id: "openclaw-dev",
+          current: {
+            id: "openclaw-dev",
+            locality: "local",
+          },
+          resources: {
+            cpu: {
+              effectiveCores: 8,
+              model: "Apple M3 Max",
+            },
+          },
+          offload: {
+            targets: [
+              {
+                id: "gateway-large",
+                locality: "cloud",
+                workloadKinds: ["codex", "long_task"],
+                cost: {
+                  model: "metered",
+                  currency: "USD",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {

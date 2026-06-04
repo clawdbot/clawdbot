@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { appendRuntimeSelfContextToPrompt } from "../../../runtime-self-context/render.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -369,6 +370,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       attempt.inputProvenance,
     );
   }
+  promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
+    prompt: promptForRuntimeContextSplit,
+    config: attempt.config ?? getRuntimeConfig(),
+  });
   const transcriptLeafId =
     (input.sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
   const heartbeatSummary =
