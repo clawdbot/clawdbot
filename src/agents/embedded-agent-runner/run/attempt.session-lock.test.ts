@@ -994,4 +994,55 @@ describe("installEmbeddedPromptRetryDefault", () => {
       temperature: 0.2,
     });
   });
+
+  it("does not stack retry-default and lock-release wrappers across repeated installs", async () => {
+    const events: string[] = [];
+    const streamFn = vi.fn(async (..._args: unknown[]) => {
+      events.push("stream");
+    });
+    const releaseForPrompt = vi.fn(async () => {
+      events.push("release");
+    });
+    const reacquireAfterPrompt = vi.fn(async () => {
+      events.push("reacquire");
+    });
+    const session = { agent: { streamFn } };
+
+    const installBoth = () => {
+      installEmbeddedPromptRetryDefault(session);
+      installPromptSubmissionLockRelease({
+        session,
+        releaseForPrompt,
+        reacquireAfterPrompt,
+      });
+    };
+
+    // Each embedded turn re-runs both installers; repeated installs must be no-ops
+    // so a single model call is not surrounded by stacked retry/release wrappers.
+    installBoth();
+    installBoth();
+
+    await session.agent.streamFn("model", "context");
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    // Inner provider streamFn runs once per turn, not once per stacked wrapper.
+    expect(streamFn).toHaveBeenCalledTimes(2);
+    expect(streamFn).toHaveBeenNthCalledWith(1, "model", "context", { maxRetries: 0 });
+    expect(streamFn).toHaveBeenNthCalledWith(2, "model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
+
+    // One release/reacquire per turn — repeated installs do not double them.
+    expect(releaseForPrompt).toHaveBeenCalledTimes(2);
+    expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "release",
+      "stream",
+      "reacquire",
+      "release",
+      "stream",
+      "reacquire",
+    ]);
+  });
 });
