@@ -192,6 +192,28 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
+  it("returns matches in lexicographically sorted normalized-relative-path order", async () => {
+    // Regression: the walker visits directories in filesystem order, which varies
+    // across machines. Matches must come back sorted by normalized relative path
+    // so bootstrap byte order stays deterministic and the prompt cache is stable.
+    const workspaceDir = await createWorkspaceDir("glob-stable-order");
+    // Create siblings whose sorted order differs from creation order.
+    for (const name of ["zeta", "alpha", "mid", "beta"]) {
+      const packageDir = path.join(workspaceDir, "packages", name);
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(path.join(packageDir, "AGENTS.md"), name, "utf-8");
+    }
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/AGENTS.md"]);
+
+    expect(files.map((file) => file.path)).toStrictEqual([
+      path.join(workspaceDir, "packages", "alpha", "AGENTS.md"),
+      path.join(workspaceDir, "packages", "beta", "AGENTS.md"),
+      path.join(workspaceDir, "packages", "mid", "AGENTS.md"),
+      path.join(workspaceDir, "packages", "zeta", "AGENTS.md"),
+    ]);
+  });
+
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");
