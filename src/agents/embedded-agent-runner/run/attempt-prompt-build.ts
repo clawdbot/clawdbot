@@ -21,7 +21,7 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { appendRuntimeSelfContextToPrompt } from "../../../runtime-self-context/render.js";
+import { appendRuntimeSelfContextForPromptSplit } from "./runtime-context-prompt.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -371,15 +371,14 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       attempt.inputProvenance,
     );
   }
-  // Internal-context delimiters are extracted only when a transcript prompt exists.
-  // Without that gate, raw delimiter text would leak into the model and transcript.
-  if (transcriptPromptForRuntimeSplit !== undefined) {
-    promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
-      prompt: promptForRuntimeContextSplit,
-      config: attempt.config ?? getRuntimeConfig(),
-      runtimeToolAvailable: input.runtimeSelfContextToolAvailable,
-    });
-  }
+  const runtimePromptSplit = appendRuntimeSelfContextForPromptSplit({
+    prompt: promptForRuntimeContextSplit,
+    transcriptPrompt: transcriptPromptForRuntimeSplit,
+    config: attempt.config ?? getRuntimeConfig(),
+    runtimeToolAvailable: input.runtimeSelfContextToolAvailable,
+  });
+  promptForRuntimeContextSplit = runtimePromptSplit.prompt;
+  transcriptPromptForRuntimeSplit = runtimePromptSplit.transcriptPrompt;
   const transcriptLeafId =
     (input.sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
   const heartbeatSummary =

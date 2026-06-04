@@ -85,20 +85,32 @@ describe("runtime self context prompt rendering", () => {
     expect(extracted.text).toBe("visible request");
     expect(extracted.runtimeContext).toContain("Runtime summary:");
     expect(extracted.runtimeContext).toContain('"OpenClaw Dev", local');
-    expect(extracted.runtimeContext).toContain("1 target available");
+    expect(extracted.runtimeContext).toContain("1 target configured");
     expect(extracted.runtimeContext).toContain('"2026-06-03T19:00:00-07:00"');
   });
 
-  it("does not count unavailable offload targets as available in prompt_summary", () => {
+  it("does not label unverified offload targets as available in prompt_summary", () => {
     const runtimeContext = createRuntimeContext("prompt_summary");
+    runtimeContext.value?.offload?.targets?.push({
+      id: "gateway-up",
+      locality: "cloud",
+      availability: { state: "available" },
+    });
     runtimeContext.value?.offload?.targets?.push({
       id: "gateway-down",
       locality: "cloud",
       availability: { state: "unavailable", reason: "maintenance" },
     });
+    runtimeContext.value?.offload?.targets?.push({
+      id: "gateway-draining",
+      locality: "cloud",
+      availability: { state: "stopping" },
+    });
     const prompt = buildRuntimeSelfContextPrompt(runtimeContext);
-    expect(prompt).toContain("- offload: 1 target available, 1 unavailable");
-    expect(prompt).not.toContain("2 targets available");
+    expect(prompt).toContain(
+      "- offload: 4 targets configured, 1 available, 1 unavailable, 2 pending/unknown",
+    );
+    expect(prompt).not.toContain("3 targets available");
   });
 
   it("suppresses runtime hints when the runtime tool is filtered out", () => {

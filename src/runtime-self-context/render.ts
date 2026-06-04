@@ -107,16 +107,21 @@ function formatActions(actions: RuntimeActionRef[] | undefined): string {
 
 function formatOffloadAvailability(targets: RuntimeOffloadTarget[] | undefined): string {
   const offloadTargets = targets ?? [];
+  const availableTargets = offloadTargets.filter(
+    (target) => target.availability?.state === "available",
+  ).length;
   const unavailableTargets = offloadTargets.filter(
     (target) =>
       target.availability?.state === "unavailable" || target.availability?.state === "error",
   ).length;
-  const availableTargets = offloadTargets.length - unavailableTargets;
-  const availableText = `${availableTargets} target${availableTargets === 1 ? "" : "s"} available`;
-  if (unavailableTargets === 0) {
-    return availableText;
-  }
-  return `${availableText}, ${unavailableTargets} unavailable`;
+  const pendingTargets = offloadTargets.length - availableTargets - unavailableTargets;
+  const parts = [
+    `${offloadTargets.length} target${offloadTargets.length === 1 ? "" : "s"} configured`,
+    availableTargets > 0 ? `${availableTargets} available` : undefined,
+    unavailableTargets > 0 ? `${unavailableTargets} unavailable` : undefined,
+    pendingTargets > 0 ? `${pendingTargets} pending/unknown` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(", ");
 }
 
 function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextConfig): string {

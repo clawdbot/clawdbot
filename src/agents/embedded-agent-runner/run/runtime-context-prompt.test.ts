@@ -2,6 +2,7 @@
 // user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
 import {
+  appendRuntimeSelfContextForPromptSplit,
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
@@ -382,6 +383,54 @@ describe("runtime context prompt submission", () => {
     ].join("\n");
 
     expect(resolveRuntimeContextPromptParts({ effectivePrompt })).toEqual({
+      prompt: effectivePrompt,
+    });
+  });
+
+  it("adds an extraction-safe transcript prompt for generated prompt-only runtime context", () => {
+    const split = appendRuntimeSelfContextForPromptSplit({
+      prompt: "visible ask",
+      config: {
+        runtimeContext: {
+          expose: { mode: "prompt_summary" },
+          value: {
+            id: "openclaw-dev",
+            current: { id: "openclaw-dev", label: "OpenClaw Dev" },
+          },
+        },
+      },
+      runtimeToolAvailable: true,
+    });
+
+    expect(split.transcriptPrompt).toBe("visible ask");
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: split.prompt,
+      transcriptPrompt: split.transcriptPrompt,
+    });
+    expect(parts.prompt).toBe("visible ask");
+    expect(parts.runtimeContext).toContain(
+      "Runtime details are available through the runtime tool",
+    );
+    expect(parts.runtimeContext).toContain("Runtime summary:");
+    expect(parts.runtimeContext).not.toContain("visible ask");
+  });
+
+  it("does not synthesize a transcript prompt when runtime context is not appended", () => {
+    const effectivePrompt = [
+      "visible ask",
+      "",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "user-authored marker text",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+
+    const split = appendRuntimeSelfContextForPromptSplit({
+      prompt: effectivePrompt,
+      runtimeToolAvailable: false,
+    });
+
+    expect(split).toEqual({ prompt: effectivePrompt });
+    expect(resolveRuntimeContextPromptParts({ effectivePrompt: split.prompt })).toEqual({
       prompt: effectivePrompt,
     });
   });

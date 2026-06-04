@@ -1,3 +1,8 @@
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  appendRuntimeSelfContextToPrompt,
+  RUNTIME_SELF_CONTEXT_TOOL_NAME,
+} from "../../../runtime-self-context/render.js";
 /**
  * Builds runtime context prompt fragments and custom session messages.
  */
@@ -11,6 +16,7 @@ import {
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
+export { RUNTIME_SELF_CONTEXT_TOOL_NAME, appendRuntimeSelfContextToPrompt };
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -43,17 +49,48 @@ type ModelPromptBuildContext = {
   appendContext: string;
 };
 
+export function appendRuntimeSelfContextForPromptSplit(params: {
+  prompt: string;
+  transcriptPrompt?: string;
+  config?: OpenClawConfig;
+  runtimeToolAvailable?: boolean;
+}): { prompt: string; transcriptPrompt?: string } {
+  const promptBeforeRuntimeSelfContext = params.prompt;
+  const prompt = appendRuntimeSelfContextToPrompt({
+    prompt: params.prompt,
+    config: params.config,
+    runtimeToolAvailable: params.runtimeToolAvailable,
+  });
+  if (params.transcriptPrompt !== undefined) {
+    return { prompt, transcriptPrompt: params.transcriptPrompt };
+  }
+  if (prompt === promptBeforeRuntimeSelfContext) {
+    return { prompt };
+  }
+  return { prompt, transcriptPrompt: promptBeforeRuntimeSelfContext };
+}
+
+/** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
+export function buildCurrentInboundPromptContextPrefix(
+  context: CurrentInboundPromptContext | undefined,
+  options?: { preferResumableText?: boolean },
+): string {
+  const text =
+    options?.preferResumableText === true
+      ? (context?.resumableText ?? context?.text)
+      : context?.text;
+  return text?.trim() ?? "";
+}
+
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
   preferResumableText?: boolean;
 }): string {
-  const contextText =
-    params.preferResumableText === true
-      ? (params.context?.resumableText ?? params.context?.text)
-      : params.context?.text;
-  const prefix = contextText?.trim() ?? "";
+  const prefix = buildCurrentInboundPromptContextPrefix(params.context, {
+    preferResumableText: params.preferResumableText,
+  });
   if (!prefix) {
     return params.prompt;
   }
