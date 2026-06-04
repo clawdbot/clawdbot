@@ -13,6 +13,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { RUNTIME_SELF_CONTEXT_TOOL_NAME } from "../runtime-self-context/render.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
@@ -329,6 +330,28 @@ describe("Agent-specific tool filtering", () => {
     });
 
     expectReadOnlyToolSet(tools.map((t) => t.name));
+  });
+
+  it("applies deny policy to the configured runtime self-context tool", () => {
+    const cfg: OpenClawConfig = {
+      runtimeContext: {
+        source: "static",
+        expose: { mode: "tool_hint" },
+        value: { id: "openclaw-dev" },
+      },
+      tools: {
+        deny: [RUNTIME_SELF_CONTEXT_TOOL_NAME],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-runtime-deny",
+      agentDir: "/tmp/agent-runtime-deny",
+    });
+
+    expect(tools.map((tool) => tool.name)).not.toContain(RUNTIME_SELF_CONTEXT_TOOL_NAME);
   });
 
   it("should apply provider-specific tool profile overrides", () => {
