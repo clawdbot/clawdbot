@@ -131,10 +131,7 @@ function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextC
   );
   const locality = current?.locality ?? "unknown";
   const offloadTargets = context.offload?.targets ?? [];
-  const costModel =
-    context.cost?.model ??
-    offloadTargets.find((target) => target.cost?.model)?.cost?.model ??
-    "unknown";
+  const costModel = context.cost?.model ?? "unknown";
   const validUntil = context.freshness?.validUntil ?? config.validUntil;
   return [
     "Runtime summary:",

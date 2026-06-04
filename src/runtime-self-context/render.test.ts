@@ -113,6 +113,13 @@ describe("runtime self context prompt rendering", () => {
     expect(prompt).not.toContain("3 targets available");
   });
 
+  it("keeps the runtime cost line tied to the current runtime", () => {
+    const runtimeContext = createRuntimeContext("prompt_summary");
+    const prompt = buildRuntimeSelfContextPrompt(runtimeContext);
+    expect(prompt).toContain("- cost: unknown");
+    expect(prompt).not.toContain("- cost: metered");
+  });
+
   it("suppresses runtime hints when the runtime tool is filtered out", () => {
     expect(
       appendRuntimeSelfContextToPrompt({
