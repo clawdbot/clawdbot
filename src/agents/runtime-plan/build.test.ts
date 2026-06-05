@@ -28,6 +28,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(() => undefined),
   resolveProviderRuntimePluginHandle: vi.fn(() => ({ provider: "openai" })),
+  resolveProviderToolSchemaNormalizeCacheKey: vi.fn(() => null),
   wrapProviderStreamFn: vi.fn(() => undefined),
 }));
 
