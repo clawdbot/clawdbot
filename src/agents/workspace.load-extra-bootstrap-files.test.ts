@@ -71,27 +71,23 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
-  it("skips bootstrap glob matches in ignored directories", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
-    const packageDir = path.join(workspaceDir, "packages", "core");
-    await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, ".git", "hooks"), { recursive: true });
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "node_modules", "pkg", "AGENTS.md"),
-      "deps",
-      "utf-8",
-    );
-    await fs.writeFile(path.join(workspaceDir, ".git", "hooks", "AGENTS.md"), "git", "utf-8");
-    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "project", "utf-8");
+  it("matches broad globs under directories named like build outputs", async () => {
+    // Regression: the walker must match the same file set as fs.glob. A broad
+    // pattern like `**/AGENTS.md` includes files under directories such as
+    // `dist` — there is no ignored-directory pruning that would silently change
+    // which files an existing configured pattern matches on upgrade.
+    const workspaceDir = await createWorkspaceDir("glob-no-pruning");
+    const distDir = path.join(workspaceDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(path.join(distDir, "AGENTS.md"), "dist agents", "utf-8");
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["**/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
         name: "AGENTS.md",
-        path: path.join(packageDir, "AGENTS.md"),
-        content: "project",
+        path: path.join(distDir, "AGENTS.md"),
+        content: "dist agents",
         missing: false,
       },
     ]);
@@ -113,20 +109,6 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         missing: false,
       },
     ]);
-  });
-
-  it("still prunes ignored directories for non-explicit globs", async () => {
-    const workspaceDir = await createWorkspaceDir("glob-prune-non-explicit");
-    await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "node_modules", "pkg", "AGENTS.md"),
-      "deps",
-      "utf-8",
-    );
-
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/AGENTS.md"]);
-
-    expect(files).toHaveLength(0);
   });
 
   it("returns every matching file without an artificial match cap", async () => {

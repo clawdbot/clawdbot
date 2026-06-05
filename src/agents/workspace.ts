@@ -87,17 +87,6 @@ const workspaceLogger = createSubsystemLogger("workspace");
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 const gitInitializationInFlight = new Map<string, Promise<void>>();
-const EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES = new Set([
-  ".git",
-  "node_modules",
-  ".openclaw",
-  ".next",
-  "dist",
-  "build",
-  "coverage",
-  "__pycache__",
-  ".cache",
-]);
 const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
 
 type WorkspaceFileSourceIdentity = readonly [
@@ -1446,40 +1435,16 @@ function resolveGlobWalkRoot(pattern: string): string {
   return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
 }
 
-function hasIgnoredExtraBootstrapDir(relativePath: string, allowed?: ReadonlySet<string>): boolean {
-  return normalizeWorkspacePatternPath(relativePath)
-    .split("/")
-    .some((segment) => EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(segment) && !allowed?.has(segment));
-}
-
-// Ignored-dir names the pattern explicitly opts into via a literal path segment.
-// An explicit glob like `dist/**/AGENTS.md` must traverse `dist` even though it
-// is a default-pruned name; only wildcard segments (`**`) are excluded so the
-// stall protection still applies to patterns that do not name an ignored dir.
-function resolveAllowedIgnoredDirNames(normalizedPattern: string): ReadonlySet<string> {
-  const allowed = new Set<string>();
-  for (const segment of normalizedPattern.split("/")) {
-    if (EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(segment)) {
-      allowed.add(segment);
-    }
-  }
-  return allowed;
-}
-
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
   strictRead: boolean,
   matcher: Minimatch,
-  allowedIgnoredDirNames: ReadonlySet<string>,
 ): AsyncGenerator<string> {
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
   let visitedEntries = 0;
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
-    if (hasIgnoredExtraBootstrapDir(currentRelativeDir, allowedIgnoredDirNames)) {
-      continue;
-    }
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
     if (!isPathInside(workspaceDir, currentDir)) {
       continue;
@@ -1505,17 +1470,12 @@ async function* walkWorkspaceFiles(
         : entry.name;
       const normalizedChildPath = normalizeWorkspacePatternPath(childRelativePath);
       if (entry.isDirectory()) {
-        // Prune default-ignored dir names unless the pattern explicitly opts
-        // into them (an explicit glob like `dist/**/AGENTS.md` must still be
-        // honored even though `dist` is normally pruned).
-        if (
-          EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES.has(entry.name) &&
-          !allowedIgnoredDirNames.has(entry.name)
-        ) {
-          continue;
-        }
         // Descend only when the directory could still contain a match, so the
-        // traversal stays bounded to the pattern's own subtree.
+        // traversal stays bounded to the pattern's own subtree without changing
+        // which files match. Broad patterns like `**/AGENTS.md` still recurse
+        // into build-output directory names (e.g. `dist`), so the walker returns
+        // the same match set as fs.glob — no ignored-directory pruning silently
+        // drops a configured match on upgrade.
         if (matcher.match(normalizedChildPath, true)) {
           stack.push(childRelativePath);
         }
@@ -1551,13 +1511,11 @@ async function resolveExtraBootstrapPatternPaths(
     windowsPathsNoEscape: true,
   });
   const matches: string[] = [];
-  const allowedIgnoredDirNames = resolveAllowedIgnoredDirNames(normalizedPattern);
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
     strictRead,
     matcher,
-    allowedIgnoredDirNames,
   )) {
     // The walker already applies the Minimatch matcher before yielding, so every
     // candidate is a confirmed match. No cap of any kind: the walk always
