@@ -105,20 +105,21 @@ function resolveProviderHookFunctionIdentity(hook: unknown): string {
 
 export function resolveProviderToolSchemaNormalizeHookIdentity(
   params: ProviderRuntimePluginLookupParams,
-): string {
+): string | null {
   const plugin = resolveProviderRuntimePlugin(params);
+  if (!plugin?.normalizeToolSchemas) {
+    return null;
+  }
   return createPluginCacheKey([
     "provider-tool-schema-normalize-hook",
     resolveProviderRuntimePluginCacheKey(params),
-    plugin
-      ? {
-          pluginId: plugin.pluginId ?? "",
-          providerId: plugin.id,
-          aliases: [...(plugin.aliases ?? [])].toSorted(),
-          hookAliases: [...(plugin.hookAliases ?? [])].toSorted(),
-          normalizeToolSchemas: resolveProviderHookFunctionIdentity(plugin.normalizeToolSchemas),
-        }
-      : null,
+    {
+      pluginId: plugin.pluginId ?? "",
+      providerId: plugin.id,
+      aliases: [...(plugin.aliases ?? [])].toSorted(),
+      hookAliases: [...(plugin.hookAliases ?? [])].toSorted(),
+      normalizeToolSchemas: resolveProviderHookFunctionIdentity(plugin.normalizeToolSchemas),
+    },
   ]);
 }
 

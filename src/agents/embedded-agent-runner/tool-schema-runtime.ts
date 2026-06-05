@@ -3,8 +3,8 @@
  */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { PluginLruCache, createPluginCacheKey } from "../../plugins/plugin-cache-primitives.js";
+import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   inspectProviderToolSchemasWithPlugin,
@@ -76,26 +76,6 @@ function normalizeCacheString(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function resolveProviderToolSchemaCacheFamily(params: ProviderToolSchemaParams): string | null {
-  const provider = normalizeCacheString(params.provider).toLowerCase();
-  const modelProvider = normalizeCacheString(params.model?.provider).toLowerCase();
-  const modelApi = normalizeCacheString(params.model?.api ?? params.modelApi).toLowerCase();
-
-  if (provider === "openai" || provider === "openai-codex") {
-    return "openai";
-  }
-  if (modelProvider === "openai" || modelProvider === "openai-codex") {
-    return "openai";
-  }
-  if (provider === "google-gemini-cli" || modelProvider === "google-gemini-cli") {
-    return "gemini";
-  }
-  if (modelApi === "google-gemini-cli") {
-    return "gemini";
-  }
-  return null;
-}
-
 function stableJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => stableJsonValue(entry));
@@ -160,7 +140,6 @@ function applyCachedToolParameters<TSchemaType extends TSchema = TSchema, TResul
 function buildProviderToolSchemaCacheKey(
   params: ProviderToolSchemaParams,
   provider: string,
-  family: string,
   hookIdentity: string,
 ): string | null {
   try {
@@ -168,7 +147,6 @@ function buildProviderToolSchemaCacheKey(
       "provider-tool-schema",
       PROVIDER_TOOL_SCHEMA_CACHE_VERSION,
       hookIdentity,
-      family,
       provider,
       normalizeCacheString(params.modelId),
       normalizeCacheString(params.modelApi),
@@ -216,8 +194,7 @@ export function normalizeProviderToolSchemas<
   TResult = unknown,
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const provider = params.provider.trim();
-  const cacheFamily = resolveProviderToolSchemaCacheFamily(params);
-  const cacheEnabled = !!cacheFamily && isProviderToolSchemaCacheEnabled(params.env);
+  const cacheEnabled = isProviderToolSchemaCacheEnabled(params.env);
   const hookIdentity = cacheEnabled
     ? resolveProviderToolSchemaNormalizeHookIdentity({
         provider,
@@ -226,10 +203,9 @@ export function normalizeProviderToolSchemas<
         env: params.env,
       })
     : null;
-  const cacheKey =
-    cacheFamily && hookIdentity
-      ? buildProviderToolSchemaCacheKey(params, provider, cacheFamily, hookIdentity)
-      : null;
+  const cacheKey = hookIdentity
+    ? buildProviderToolSchemaCacheKey(params, provider, hookIdentity)
+    : null;
   if (cacheKey) {
     const cached = providerToolSchemaCache.get(cacheKey);
     if (cached) {

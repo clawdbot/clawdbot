@@ -257,7 +257,7 @@ describe("tool schema runtime cache", () => {
     });
   });
 
-  it("bypasses the cache for unsupported provider families and when disabled", () => {
+  it("caches third-party provider hooks without core provider family allowlists", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
 
     normalizeProviderToolSchemas({
@@ -268,6 +268,28 @@ describe("tool schema runtime cache", () => {
       provider: "example",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
+
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(1);
+    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
+      hit: 1,
+      miss: 1,
+      store: 1,
+    });
+  });
+
+  it("bypasses the cache when no provider hook identity is available and when disabled", () => {
+    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
+    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue(null);
+
+    normalizeProviderToolSchemas({
+      provider: "example",
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    normalizeProviderToolSchemas({
+      provider: "example",
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue("hook:disabled");
     normalizeProviderToolSchemas({
       provider: "openai",
       env: { OPENCLAW_TOOL_SCHEMA_CACHE: "0" },
