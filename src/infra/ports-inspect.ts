@@ -482,15 +482,70 @@ function recordsForPort(
   return { listeners, detail: detailLines.join("\n") || undefined };
 }
 
+async function readUnixListenersFromLsof(port: number): Promise<
+  ListenerReadResult & {
+    lsofUnavailable: boolean;
+  }
+> {
+  const lsof = await resolveLsofCommand();
+  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
+  if (res.code === 0) {
+    const recordsByPort = new Map<number, LsofListenerRecord[]>();
+    for (const record of parseLsofListenerFieldRecords(res.stdout)) {
+      const recordPort = parseLsofListenerPort(record.listener.address);
+      if (recordPort !== port) {
+        continue;
+      }
+      const records = recordsByPort.get(port) ?? [];
+      records.push(record);
+      recordsByPort.set(port, records);
+    }
+    const result = recordsForPort({ recordsByPort, errors: [], lsofUnavailable: false }, port);
+    await enrichUnixListenerProcessInfo(result.listeners);
+    return { ...result, errors: [], lsofUnavailable: false };
+  }
+
+  const errors: string[] = [];
+  const stderr = res.stderr.trim();
+  if (res.code === 1 && !res.error && !stderr) {
+    return { listeners: [], detail: undefined, errors, lsofUnavailable: false };
+  }
+  if (res.error) {
+    errors.push(res.error);
+  }
+  const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
+  if (detail) {
+    errors.push(detail);
+  }
+  return { listeners: [], detail: undefined, errors, lsofUnavailable: true };
+}
+
 async function readUnixListeners(
   port: number,
   snapshot?: UnixListenerSnapshot,
 ): Promise<ListenerReadResult> {
-  const resolvedSnapshot = snapshot ?? (await readUnixListenerSnapshot());
-  if (!resolvedSnapshot.lsofUnavailable) {
-    const result = recordsForPort(resolvedSnapshot, port);
-    await enrichUnixListenerProcessInfo(result.listeners);
-    return { ...result, errors: resolvedSnapshot.errors };
+  if (snapshot) {
+    if (!snapshot.lsofUnavailable) {
+      const result = recordsForPort(snapshot, port);
+      await enrichUnixListenerProcessInfo(result.listeners);
+      return { ...result, errors: snapshot.errors };
+    }
+
+    const ssFallback = await readUnixListenersFromSs(port);
+    if (ssFallback.listeners.length > 0) {
+      return ssFallback;
+    }
+
+    return {
+      listeners: [],
+      detail: undefined,
+      errors: [...snapshot.errors, ...ssFallback.errors],
+    };
+  }
+
+  const lsofResult = await readUnixListenersFromLsof(port);
+  if (!lsofResult.lsofUnavailable) {
+    return lsofResult;
   }
   const ssFallback = await readUnixListenersFromSs(port);
   if (ssFallback.listeners.length > 0) {
@@ -499,7 +554,7 @@ async function readUnixListeners(
   return {
     listeners: [],
     detail: undefined,
-    errors: [...resolvedSnapshot.errors, ...ssFallback.errors],
+    errors: [...lsofResult.errors, ...ssFallback.errors],
   };
 }
 

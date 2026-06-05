@@ -419,6 +419,49 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
+  it("keeps single-port lsof listener inspection scoped to the requested port", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    await inspectPortUsage(18789);
+
+    const lsofCalls = runCommandWithTimeoutMock.mock.calls.filter(([argv]) => {
+      const command = Array.isArray(argv) ? argv[0] : undefined;
+      return typeof command === "string" && command.includes("lsof");
+    });
+    expect(lsofCalls).toHaveLength(1);
+    const lsofArgv = lsofCalls[0]?.[0] as string[] | undefined;
+    expect(lsofArgv?.[0]).toMatch(/lsof$/);
+    expect(lsofArgv?.slice(1)).toEqual(["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFcn"]);
+  });
+
   it("batches Unix listener lsof inspection across same-cycle port checks", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
