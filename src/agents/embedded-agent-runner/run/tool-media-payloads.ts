@@ -1,3 +1,6 @@
+/**
+ * Merges media payloads discovered from attempt tool results.
+ */
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,

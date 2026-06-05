@@ -1,3 +1,4 @@
+/** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -112,6 +113,8 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
       return undefined;
     }
     return {
+      // Local-provider probes intentionally allow private hosts, but only the
+      // exact hostname from the configured provider base URL.
       hostnameAllowlist: [parsed.hostname],
       allowPrivateNetwork: true,
     };
@@ -189,6 +192,8 @@ export async function preflightCronModelProvider(params: {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
   const api = normalizeProbeApi(providerConfig);
   if (!baseUrl || !api || !isLocalProviderBaseUrl(baseUrl)) {
+    // Remote/cloud providers should fail in the model runner, not in this cron
+    // reachability preflight.
     return { status: "available" };
   }
 

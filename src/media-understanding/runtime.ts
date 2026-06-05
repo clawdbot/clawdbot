@@ -1,3 +1,5 @@
+// Public file-oriented media-understanding runtime for image, audio, video, and
+// structured extraction calls outside normal channel message handling.
 import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { OpenClawConfig } from "../config/types.js";
@@ -49,6 +51,8 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
 function resolveDecisionFailureReason(
   decision: Awaited<ReturnType<typeof runCapability>>["decision"],
 ): string | undefined {
+  // runCapability stores detailed failed-attempt reasons; file APIs expose the
+  // first normalized reason as the thrown error message.
   return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 

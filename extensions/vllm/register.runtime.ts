@@ -1,3 +1,4 @@
+// Vllm plugin module implements register behavior.
 export {
   buildVllmProvider,
   VLLM_DEFAULT_API_KEY_ENV_VAR,

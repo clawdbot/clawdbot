@@ -1,3 +1,4 @@
+/** Adapts the generic gateway service manager for OpenClaw node-host services. */
 import {
   NODE_SERVICE_KIND,
   NODE_SERVICE_MARKER,
@@ -13,6 +14,8 @@ import { resolveGatewayService } from "./service.js";
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
+  // Node services reuse gateway platform installers; env overrides select the
+  // node-specific labels, logs, task script, and service marker.
   return {
     ...env,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
@@ -44,6 +47,7 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
   };
 }
 
+/** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
   const base = resolveGatewayService();
   return {

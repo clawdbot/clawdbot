@@ -1,3 +1,4 @@
+/** Selects stable Node runtime paths for daemon installs across platforms. */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -44,6 +45,8 @@ function buildSystemNodeCandidates(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ): string[] {
+  // Prefer system package-manager Node paths over shell-managed shims; daemons
+  // launch without interactive shell init files.
   if (platform === "darwin") {
     return [
       "/opt/homebrew/bin/node",
@@ -104,6 +107,7 @@ async function isVersionManagedRealNodePath(
 ): Promise<boolean> {
   try {
     const realPath = await fs.realpath(nodePath);
+    // Symlinks in /usr/local/bin can resolve into version-manager trees.
     return isVersionManagedNodePath(realPath, platform);
   } catch {
     return false;
@@ -218,7 +222,8 @@ export async function resolvePreferredNodePath(params: {
       if (!isVersionManagedNodePath(currentExecPath, platform)) {
         return stableCurrentPath;
       }
-      // Prefer system Node over a version-manager shim so daemon launch survives shell setup.
+      // Prefer system Node over a version-manager shim so daemon launch survives
+      // shell setup differences and package manager upgrades.
       const systemNode = await resolveSystemNodeInfo({
         env: params.env,
         platform,

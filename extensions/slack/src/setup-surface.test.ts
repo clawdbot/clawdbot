@@ -1,3 +1,4 @@
+// Slack tests cover setup surface plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createTestWizardPrompter,

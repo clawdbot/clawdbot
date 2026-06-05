@@ -1,3 +1,4 @@
+// Sms tests cover phone plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   looksLikeSmsPhoneNumber,

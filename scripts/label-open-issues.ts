@@ -1,3 +1,4 @@
+// Label Open Issues script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

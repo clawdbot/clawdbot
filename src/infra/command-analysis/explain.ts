@@ -1,3 +1,5 @@
+// Command-analysis display helpers turn parsed command policy data into small
+// warning summaries for approval surfaces without loading the rich parser path.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";

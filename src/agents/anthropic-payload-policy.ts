@@ -1,3 +1,8 @@
+/**
+ * Anthropic-family request payload policy helpers.
+ * Applies service-tier and cache-control markers only when provider endpoint
+ * capabilities allow them.
+ */
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -21,6 +26,8 @@ type AnthropicPayloadPolicyInput = {
   provider?: string;
   serviceTier?: AnthropicServiceTier;
 };
+
+const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicPayloadPolicy = {
@@ -52,6 +59,7 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   );
 }
 
+/** Resolve Anthropic cache-control marker retention for a request endpoint. */
 export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
@@ -136,47 +144,89 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
 function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
+  markerLimit: number,
 ): void {
-  if (!Array.isArray(messages) || messages.length === 0) {
+  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
   }
 
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || typeof lastMessage !== "object") {
-    return;
-  }
+  let fallbackToolResult: Record<string, unknown> | undefined;
 
-  const record = lastMessage as Record<string, unknown>;
-  if (record.role !== "user") {
-    return;
-  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
 
-  const content = record.content;
-  if (Array.isArray(content)) {
-    const lastBlock = content[content.length - 1];
-    if (!lastBlock || typeof lastBlock !== "object") {
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user") {
+      continue;
+    }
+
+    const content = record.content;
+    if (typeof content === "string") {
+      if (fallbackToolResult && markerLimit === 1) {
+        fallbackToolResult.cache_control = cacheControl;
+        return;
+      }
+      record.content = [
+        {
+          type: "text",
+          text: content,
+          cache_control: cacheControl,
+        },
+      ];
+      if (fallbackToolResult && markerLimit > 1) {
+        fallbackToolResult.cache_control = cacheControl;
+      }
       return;
     }
-    const lastBlockRecord = lastBlock as Record<string, unknown>;
-    if (
-      lastBlockRecord.type === "text" ||
-      lastBlockRecord.type === "image" ||
-      lastBlockRecord.type === "tool_result"
-    ) {
-      lastBlockRecord.cache_control = cacheControl;
+
+    if (!Array.isArray(content)) {
+      continue;
     }
-    return;
+
+    for (let j = content.length - 1; j >= 0; j--) {
+      const block = content[j];
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+
+      const blockRecord = block as Record<string, unknown>;
+      if (blockRecord.type === "text" || blockRecord.type === "image") {
+        if (fallbackToolResult && markerLimit === 1) {
+          fallbackToolResult.cache_control = cacheControl;
+          return;
+        }
+        blockRecord.cache_control = cacheControl;
+        if (fallbackToolResult && markerLimit > 1) {
+          fallbackToolResult.cache_control = cacheControl;
+        }
+        return;
+      }
+      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
+        fallbackToolResult = blockRecord;
+      }
+    }
   }
 
-  if (typeof content === "string") {
-    record.content = [
-      {
-        type: "text",
-        text: content,
-        cache_control: cacheControl,
-      },
-    ];
+  if (fallbackToolResult) {
+    fallbackToolResult.cache_control = cacheControl;
   }
+}
+
+function countAnthropicCacheControlMarkers(blocks: unknown): number {
+  if (!Array.isArray(blocks)) {
+    return 0;
+  }
+
+  let count = 0;
+  for (const block of blocks) {
+    if (block && typeof block === "object" && "cache_control" in block) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
@@ -224,8 +274,14 @@ export function applyAnthropicPayloadPolicyToParams(
     return;
   }
 
-  // Preserve Anthropic cache-write scope by only tagging the trailing user turn.
-  applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
+  const usedMarkers =
+    countAnthropicCacheControlMarkers(payloadObj.system) +
+    countAnthropicCacheControlMarkers(payloadObj.tools);
+  applyAnthropicCacheControlToMessages(
+    payloadObj.messages,
+    policy.cacheControl,
+    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+  );
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */

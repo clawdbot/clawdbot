@@ -1,3 +1,8 @@
+/**
+ * JSONL-backed session tree manager.
+ *
+ * Reads, writes, forks, labels, and exports persisted session entries while preserving branch structure.
+ */
 import { randomUUID } from "node:crypto";
 import {
   closeSync,

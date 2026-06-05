@@ -1,3 +1,4 @@
+// Tlon API module exposes the plugin public contract.
 export {
   createDedupeCache,
   createLoggerBackedRuntime,

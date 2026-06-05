@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements models behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,

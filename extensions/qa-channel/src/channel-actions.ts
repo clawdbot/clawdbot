@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements channel actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";

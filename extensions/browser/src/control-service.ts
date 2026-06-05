@@ -1,3 +1,6 @@
+/**
+ * Browser control service lifecycle for plugin-managed, in-process operation.
+ */
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -15,6 +18,7 @@ import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
 
+/** Starts Browser control without binding the HTTP server when config enables it. */
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
   const current = getBrowserControlState();
   if (current) {
@@ -53,6 +57,7 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   return state;
 }
 
+/** Stops the in-process Browser control service runtime. */
 export async function stopBrowserControlService(): Promise<void> {
   await stopBrowserControlRuntime({
     requestedBy: "service",
@@ -60,4 +65,5 @@ export async function stopBrowserControlService(): Promise<void> {
   });
 }
 
+/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };

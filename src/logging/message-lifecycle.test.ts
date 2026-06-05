@@ -1,3 +1,4 @@
+// Message lifecycle tests cover diagnostic logging for queued and processed messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const diagnosticMocks = vi.hoisted(() => ({

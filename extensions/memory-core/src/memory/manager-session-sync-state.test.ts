@@ -1,3 +1,4 @@
+// Memory Core tests cover manager session sync state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveMemorySessionStartupDirtyFiles,

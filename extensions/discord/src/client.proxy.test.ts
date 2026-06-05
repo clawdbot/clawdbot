@@ -1,3 +1,4 @@
+// Discord tests cover client.proxy plugin behavior.
 import http from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fetch as undiciFetch } from "undici";

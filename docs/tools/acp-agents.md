@@ -548,6 +548,11 @@ Two ways to start an ACP session:
   requester session as system events. Accepted responses include
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+  Parent progress streams show assistant commentary and ACP status progress by
+  default unless `streaming.progress.commentary=false`. Discord also defaults
+  parent previews to progress mode when no stream mode is configured. Status
+  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
+  remain hidden unless explicitly enabled.
 </ParamField>
 
 ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds` for

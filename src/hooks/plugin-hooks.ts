@@ -1,3 +1,4 @@
+// Plugin hook helpers discover hooks contributed by installed plugins.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

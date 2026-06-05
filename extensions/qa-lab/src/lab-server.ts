@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements lab server behavior.
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";

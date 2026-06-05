@@ -1,3 +1,4 @@
+// Discord plugin module implements send.voice behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";

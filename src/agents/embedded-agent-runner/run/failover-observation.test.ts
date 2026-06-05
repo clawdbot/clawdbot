@@ -1,3 +1,5 @@
+// Failover observation tests pin the warning payloads emitted when embedded
+// runs decide whether to retry, rotate profiles, fall back, or surface errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
 import {
@@ -8,6 +10,8 @@ import {
 function normalizeObservation(
   overrides: Partial<Parameters<typeof normalizeFailoverDecisionObservationBase>[0]>,
 ) {
+  // Keep the base case boring so each test only states the failure dimension
+  // whose log metadata should change.
   return normalizeFailoverDecisionObservationBase({
     stage: "assistant",
     runId: "run:base",
@@ -41,6 +45,8 @@ function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
   sourceModel?: string;
   sourceProvider?: string;
 } {
+  // The logger intentionally records structured details separate from the
+  // console message, so assertions can cover both machine and human evidence.
   return firstWarnCall(warnSpy)[1] as {
     consoleMessage?: string;
     model?: string;
@@ -159,6 +165,8 @@ describe("createFailoverDecisionLogger", () => {
     logDecision("rotate_profile");
 
     const observation = firstWarnDetails(warnSpy);
+    // Raw provider bodies stay in structured preview fields; console output
+    // must not dump HTML auth pages into user-visible retry diagnostics.
     expect(observation.providerRuntimeFailureKind).toBe("auth_html");
     expect(observation.rawErrorPreview).toBe(
       "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",

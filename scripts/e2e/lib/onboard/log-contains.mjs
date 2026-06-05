@@ -1,3 +1,4 @@
+// Log substring assertion helper for onboard E2E scenarios.
 import fs from "node:fs";
 
 const [file, needle] = process.argv.slice(2);

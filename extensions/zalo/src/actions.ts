@@ -1,3 +1,4 @@
+// Zalo plugin module implements actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,

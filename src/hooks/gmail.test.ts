@@ -1,3 +1,4 @@
+// Gmail hook tests cover Gmail hook configuration and setup helpers.
 import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {

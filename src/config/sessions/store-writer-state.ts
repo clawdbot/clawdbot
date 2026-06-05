@@ -1,3 +1,4 @@
+// Shared session-store writer queue state and test-only drains.
 import {
   clearStoreWriterQueuesForTest,
   drainStoreWriterQueuesForTest,

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements reply failure behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FAILURE_REPLY_PREFIXES = [

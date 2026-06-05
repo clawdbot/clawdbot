@@ -1,3 +1,5 @@
+// Audio preflight tests cover auto mode, explicit disable, and transcript echo
+// delivery settings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { transcribeFirstAudio } from "./audio-preflight.js";
 

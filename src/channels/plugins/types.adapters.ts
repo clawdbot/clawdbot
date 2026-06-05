@@ -1,3 +1,8 @@
+/**
+ * Channel plugin adapter type contracts.
+ *
+ * Defines approval, setup, config, outbound, directory, and messaging adapter surfaces.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { AgentBinding } from "../../config/types.agents.js";

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements import runs behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -1,3 +1,4 @@
+// OpenAI stream wrapper tests cover streamed text, tools, and reasoning fields.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";

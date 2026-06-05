@@ -1,3 +1,4 @@
+// Session goal state tracks objective progress and token budgets in the session store.
 import crypto from "node:crypto";
 import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
@@ -101,6 +102,8 @@ function accountGoalUsage(
   }
   const totalTokens = resolveEntryFreshTotalTokens(entry);
   const hasFreshStart = goal.tokenStartFresh !== false;
+  // Old entries may have a stale token baseline; display-only reads can hold it, while persisted
+  // reads adopt the fresh total so future budget checks use current accounting.
   const shouldHoldStaleStart = !hasFreshStart && options?.adoptFreshBaseline === false;
   const shouldAdoptFreshStart =
     !shouldHoldStaleStart && totalTokens !== undefined && !hasFreshStart;
@@ -175,6 +178,7 @@ export async function getSessionGoal(
 ): Promise<SessionGoalSnapshot> {
   const now = nowMs(options.now);
   if (options.persist === false) {
+    // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
       getSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
@@ -265,6 +269,7 @@ export async function updateSessionGoalStatus(
         (accounted.status === "budget_limited" ||
           accounted.status === "usage_limited" ||
           (accounted.tokenBudget !== undefined && accounted.tokensUsed >= accounted.tokenBudget));
+      // Resuming from a limited state starts a new budget window at the current fresh token count.
       const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
       const next: SessionGoal = {
         ...accounted,

@@ -1,3 +1,4 @@
+// Browser tests cover browser request.profile from body plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMock } = vi.hoisted(

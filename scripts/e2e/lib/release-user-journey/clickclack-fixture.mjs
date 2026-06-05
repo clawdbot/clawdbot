@@ -1,3 +1,4 @@
+// ClickClack fixture server for release user-journey E2E scenarios.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -125,9 +126,12 @@ function readBody(req) {
 }
 
 function requestBodyTooLargeError() {
-  return Object.assign(new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`), {
-    code: "ETOOBIG",
-  });
+  return Object.assign(
+    new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
+    {
+      code: "ETOOBIG",
+    },
+  );
 }
 
 function isRequestBodyTooLargeError(error) {

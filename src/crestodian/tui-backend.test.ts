@@ -1,3 +1,4 @@
+// Crestodian TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianOverview } from "./overview.js";

@@ -1,3 +1,4 @@
+// Covers context-engine message filtering, assemble validation, and turn finalization.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -16,6 +17,8 @@ function textMessage(role: "user" | "assistant", text: string, timestamp: number
 }
 
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
+  // Runtime context is hidden harness metadata. Context engines should see
+  // user/assistant transcript messages, not this internal custom channel.
   return {
     role: "custom",
     customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -183,6 +186,8 @@ describe("harness context engine lifecycle", () => {
     const turnAssistant = textMessage("assistant", "new answer", 6);
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
 
+    // The ingestBatch fallback receives only the current visible turn, with
+    // hidden runtime context filtered and the pre-prompt history excluded.
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ ingestBatch }),
       promptError: false,

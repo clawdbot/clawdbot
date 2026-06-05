@@ -1,3 +1,4 @@
+// Canvas tests cover copy a2ui plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

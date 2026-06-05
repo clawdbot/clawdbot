@@ -1,3 +1,5 @@
+// Agent timestamp injection adds compact local-time context to direct gateway
+// agent messages without double-stamping channel envelopes or cron prompts.
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";

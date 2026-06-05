@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements send result behavior.
 import type { WAMessage, WAMessageKey } from "baileys";
 import {
   createMessageReceiptFromOutboundResults,

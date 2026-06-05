@@ -1,3 +1,4 @@
+// Video generation runtime tests cover provider execution and fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {

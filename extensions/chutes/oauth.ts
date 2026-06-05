@@ -1,3 +1,6 @@
+/**
+ * Chutes OAuth PKCE login flow.
+ */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
@@ -181,6 +184,7 @@ async function exchangeChutesCodeForTokens(params: {
   } as ChutesStoredOAuth;
 }
 
+/** Runs Chutes OAuth and returns refreshable stored credentials. */
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;

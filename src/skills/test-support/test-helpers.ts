@@ -1,3 +1,4 @@
+// Skill test helpers build canonical skill fixtures for unit tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";

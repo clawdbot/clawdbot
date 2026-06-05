@@ -1,3 +1,4 @@
+// Durable receive tests cover persisted inbound channel receive state and replay behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

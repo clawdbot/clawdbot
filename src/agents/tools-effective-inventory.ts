@@ -1,3 +1,8 @@
+/**
+ * Effective tool inventory resolver.
+ *
+ * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -28,10 +33,6 @@ import type {
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
 
-/**
- * Builds the effective tool inventory for a session/model after profile, provider,
- * plugin, policy, and model-compat filtering.
- */
 export {
   buildEffectiveToolInventoryEntries,
   buildEffectiveToolInventoryGroups,

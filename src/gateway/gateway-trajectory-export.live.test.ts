@@ -1,3 +1,4 @@
+// Gateway trajectory export live tests verify Codex harness runs emit trajectory artifacts under live settings.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

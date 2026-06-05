@@ -1,3 +1,4 @@
+// Agent Core tests cover messages behavior.
 import { describe, expect, it } from "vitest";
 import { convertToLlm, createCustomMessage } from "./messages.js";
 

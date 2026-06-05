@@ -702,6 +702,9 @@ final class GatewayConnectionController {
         appModel.gatewayStatusText = "Connecting…"
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
+            if forceReconnect {
+                await appModel.resetGatewaySessionsForForcedReconnect()
+            }
             let nodeOptions = await self.makeConnectOptions(stableID: gatewayStableID)
             let cfg = GatewayConnectConfig(
                 url: url,

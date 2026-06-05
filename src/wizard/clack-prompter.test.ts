@@ -1,3 +1,4 @@
+// Clack prompter tests cover prompt rendering, validation, and cancellation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
 

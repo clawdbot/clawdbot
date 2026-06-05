@@ -1,3 +1,6 @@
+/**
+ * Resolves memory-search source, sync, and ranking configuration.
+ */
 import os from "node:os";
 import path from "node:path";
 import {

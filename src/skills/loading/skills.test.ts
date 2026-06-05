@@ -1,3 +1,4 @@
+// Skill loading tests cover bundled, plugin, and workspace skill resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

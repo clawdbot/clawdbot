@@ -1,3 +1,4 @@
+// Check Channel Agnostic Boundaries tests cover check channel agnostic boundaries script behavior.
 import { describe, expect, it } from "vitest";
 import {
   findChannelAgnosticBoundaryViolations,

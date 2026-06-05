@@ -1,3 +1,4 @@
+// Discord tests cover gateway supervisor plugin behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {

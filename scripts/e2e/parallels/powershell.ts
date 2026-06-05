@@ -1,3 +1,4 @@
+// Powershell script supports OpenClaw repository automation.
 import {
   configPathMapKey,
   modelProviderConfigBatchJson,

@@ -1,3 +1,5 @@
+// web_search late-binding tests cover runtime config and provider metadata
+// selection at execution time.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSearchTool } from "./web-search.js";
 
@@ -136,6 +138,8 @@ describe("web_search late-bound runtime fallback", () => {
   });
 
   it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
+    // Active runtime metadata reflects the newest credential snapshot; fallback
+    // options only cover tools created before that state exists.
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         selectedProvider: "perplexity",
@@ -161,6 +165,8 @@ describe("web_search late-bound runtime fallback", () => {
   });
 
   it("honors late-bound disabled search config at execute time", async () => {
+    // A long-lived tool must still observe an operator disabling web_search
+    // before the next call is dispatched.
     mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
       config: { tools: { web: { search: { enabled: false } } } },
     });

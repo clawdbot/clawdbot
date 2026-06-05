@@ -1,3 +1,4 @@
+// Codex plugin module implements conversation control behavior.
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   isCodexFastServiceTier,

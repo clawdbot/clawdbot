@@ -1,11 +1,17 @@
+/**
+ * Shared Brave Search provider metadata and credential lookup. Contract tests
+ * and runtime provider creation both use this lightweight descriptor.
+ */
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+/** Canonical config path for the Brave Search API key. */
 export const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
+/** Resolve legacy top-level Brave credentials from old web-search config. */
 export function resolveLegacyTopLevelBraveCredential(
   config: unknown,
 ): { path: string; value: unknown } | undefined {
@@ -32,6 +38,7 @@ function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unkn
   return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
 }
 
+/** Resolve Brave credentials from current plugin config or legacy fallback. */
 export function resolveConfiguredBraveCredential(config: unknown): unknown {
   return (
     resolveBraveWebSearchPluginConfig(config)?.apiKey ??
@@ -39,6 +46,7 @@ export function resolveConfiguredBraveCredential(config: unknown): unknown {
   );
 }
 
+/** Build the common Brave provider metadata without the runtime tool executor. */
 export function buildBraveWebSearchProviderBase(): Omit<WebSearchProviderPlugin, "createTool"> {
   return {
     id: "brave",

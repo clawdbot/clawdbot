@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for user-facing text sanitization.
+ * Includes reasoning/tool-call cleanup and internal event prompt formatting.
+ */
 import { describe, expect, it } from "vitest";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,

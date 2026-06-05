@@ -1,3 +1,4 @@
+// Legacy hook config helpers convert older hook records into current config shape.
 type LegacyInternalHookHandler = {
   event: string;
   module: string;

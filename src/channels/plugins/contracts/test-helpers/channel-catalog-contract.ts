@@ -1,11 +1,14 @@
+/**
+ * Channel catalog contract suites.
+ *
+ * Exercises manifest/catalog loading paths used by setup and install-on-demand surfaces.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "../../catalog.js";
 
-// Reusable catalog contract suites for channel plugins. Fixtures exercise the
-// same manifest/catalog loading paths that setup uses for install-on-demand.
 type CatalogEntryMeta = {
   id: string;
   label: string;

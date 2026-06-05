@@ -1,3 +1,4 @@
+// Openshell plugin module implements mirror behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { movePathWithCopyFallback } from "openclaw/plugin-sdk/security-runtime";

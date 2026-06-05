@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming repair behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

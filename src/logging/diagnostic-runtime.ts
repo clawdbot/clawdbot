@@ -1,3 +1,4 @@
+// Diagnostic runtime helpers expose process runtime facts for diagnostics.
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,

@@ -1,3 +1,6 @@
+/**
+ * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
+ */
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import type { OpenClawCodingToolConstructionPlan } from "../../agent-tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";

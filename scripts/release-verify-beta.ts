@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Release Verify Beta script supports OpenClaw repository automation.
 
 import { parseReleaseVerifyBetaArgs, verifyBetaRelease } from "./lib/release-beta-verifier.ts";
 

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

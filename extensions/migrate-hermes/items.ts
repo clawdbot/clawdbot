@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements items behavior.
 import type { MigrationItem } from "openclaw/plugin-sdk/migration";
 import {
   createMigrationItem,

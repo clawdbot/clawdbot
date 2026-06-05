@@ -1,3 +1,4 @@
+// Coverage for retrying transient model-runtime misses during startup.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const discoverAuthStorageMock = vi.fn<(agentDir?: string) => { mocked: true }>(() => ({
@@ -10,6 +11,8 @@ const discoverModelsMock = vi.fn<
 const prepareProviderDynamicModelMock = vi.fn<(params: unknown) => Promise<void>>(async () => {});
 let dynamicAttempts = 0;
 const runProviderDynamicModelMock = vi.fn<(params: unknown) => unknown>(() =>
+  // First dynamic lookup simulates startup catalog warmup; the retry path must
+  // resolve on the second attempt only when explicitly enabled.
   dynamicAttempts > 1
     ? {
         id: "gpt-5.4",
@@ -90,6 +93,8 @@ describe("resolveModelAsync startup retry", () => {
   });
 
   it("does not retry during steady-state misses", async () => {
+    // Normal runtime lookups should not double-hit providers after startup; that
+    // would add latency and duplicate plugin side effects.
     const result = await resolveModelAsync("openai", "gpt-5.4", "/tmp/agent", {}, { runtimeHooks });
 
     expect(result.model).toBeUndefined();

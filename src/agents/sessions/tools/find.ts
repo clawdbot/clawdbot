@@ -1,3 +1,8 @@
+/**
+ * Built-in find session tool.
+ *
+ * Searches files by glob through fd/local operations and returns bounded, renderable results.
+ */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";

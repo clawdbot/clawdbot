@@ -1,3 +1,4 @@
+// Diagnostic stability tests cover stable diagnostic output under repeated events.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,

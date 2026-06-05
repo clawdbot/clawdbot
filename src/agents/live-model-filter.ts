@@ -1,3 +1,8 @@
+/**
+ * Live model sweep filtering and prioritization.
+ * Curates modern high-signal and small-model refs while preserving provider
+ * spread and explicit operator selections for live test lanes.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -5,8 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 
-// Curates live-test model sweeps to modern, high-signal refs while preserving a
-// smaller local-model lane for cheap smoke coverage.
 type ModelRef = {
   provider?: string | null;
   id?: string | null;
@@ -44,7 +47,9 @@ const SMALL_LIVE_MODEL_PRIORITY = [
   "zai/glm-5.1",
 ] as const;
 
+/** Default cap for high-signal live model sweeps. */
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
+/** Default cap for the small-model live smoke lane. */
 export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli"]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([

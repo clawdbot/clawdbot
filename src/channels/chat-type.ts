@@ -1,3 +1,8 @@
+/**
+ * Channel conversation kind normalization.
+ *
+ * Maps channel-specific direct/group/channel labels into OpenClaw chat types.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 /**

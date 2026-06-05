@@ -1,3 +1,4 @@
+// Control UI chat module implements status indicators behavior.
 import { html, nothing } from "lit";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import { icons } from "../icons.ts";

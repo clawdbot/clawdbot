@@ -1,3 +1,5 @@
+// Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
+// container defaults, and invalid config rejection before server startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetContainerCacheForTest } from "./net.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";

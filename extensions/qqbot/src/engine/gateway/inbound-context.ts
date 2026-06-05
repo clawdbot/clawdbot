@@ -1,3 +1,4 @@
+// Qqbot plugin module implements inbound context behavior.
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { EngineAdapters } from "../adapter/index.js";
 import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";

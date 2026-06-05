@@ -1,3 +1,5 @@
+// Restart sentinel tests protect queued post-restart delivery recovery and the
+// session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
@@ -1173,7 +1175,7 @@ describe("scheduleRestartSentinelWake", () => {
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.recordInboundSessionAndDispatchReply.mockImplementation(async (params) => {
       attempt += 1;
-      if (attempt <= 6) {
+      if (attempt <= 2) {
         await params.deliver({ text: busyReply });
         return;
       }
@@ -1185,7 +1187,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(7);
+    expectMockCallFields(mocks.enqueueSessionDelivery, {
+      maxRetries: 20,
+    });
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(3);
     expectContinuationDispatchFields(
       {},
       { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123" },
@@ -1193,8 +1198,8 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expectContinuationDispatchFields(
       {},
-      { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:6" },
-      6,
+      { MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:2" },
+      2,
     );
     const deliveredBusyReply = (
       mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
@@ -1212,7 +1217,7 @@ describe("scheduleRestartSentinelWake", () => {
       payloads: [{ text: "restart message" }],
     });
     expect(mocks.logWarn.mock.calls).toEqual(
-      Array.from({ length: 6 }, () => [
+      Array.from({ length: 2 }, () => [
         "restart continuation: retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
       ]),
     );

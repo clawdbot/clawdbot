@@ -1,3 +1,5 @@
+// Gateway cron notification delivery.
+// Sends announce and webhook notifications for cron completion/failure events.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -19,12 +21,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
-/**
- * Gateway cron notification delivery for announce and webhook destinations.
- *
- * Webhooks are posted through the SSRF guard and logged with redacted URLs
- * because cron config is user-authored and can point at arbitrary endpoints.
- */
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
 type CronLogger = {

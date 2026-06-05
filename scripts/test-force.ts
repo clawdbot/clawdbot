@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Test Force script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";

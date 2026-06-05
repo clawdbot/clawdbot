@@ -1,3 +1,4 @@
+/** SQLite column codec for cron failure-alert configuration. */
 import type { CronFailureAlert } from "../types.js";
 import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";

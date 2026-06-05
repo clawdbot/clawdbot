@@ -1,3 +1,4 @@
+// Control UI tests cover session goal behavior.
 import { describe, expect, it } from "vitest";
 import { formatGoalDetail, formatGoalSummary, formatGoalTokenCount } from "./session-goal.ts";
 import type { SessionGoal } from "./types.ts";

@@ -1,3 +1,4 @@
+// Covers fallback thinking-level selection from provider error text.
 import { describe, expect, it } from "vitest";
 import { pickFallbackThinkingLevel } from "./thinking.js";
 
@@ -35,6 +36,7 @@ describe("pickFallbackThinkingLevel", () => {
   });
 
   it('falls back to "minimal" when the endpoint requires reasoning', () => {
+    // Mandatory-reasoning endpoints need the smallest enabled level, not "off".
     const result = pickFallbackThinkingLevel({
       message: "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
       attempted: new Set(["off"]),

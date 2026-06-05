@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Measures gateway watch idle CPU and dist/runtime artifact churn.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -44,10 +45,16 @@ const WATCH_GATEWAY_SKIP_ENV = {
   NODE_ENV: "test",
 };
 
+/**
+ * Maximum retained stdout/stderr text for gateway watch diagnostics.
+ */
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 
+/**
+ * Appends watch output while preserving only the diagnostic tail.
+ */
 export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTURE_MAX_CHARS) {
   const next = `${current}${String(chunk)}`;
   if (next.length <= maxChars) {
@@ -62,6 +69,9 @@ function formatCapturedWatchLog(text, truncated) {
     : text;
 }
 
+/**
+ * Updates bounded watch-build detection state from new output.
+ */
 export function updateWatchBuildDetection(state, chunk) {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
@@ -74,6 +84,9 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
+/**
+ * Parses a safe non-negative integer CLI value.
+ */
 export function readNonNegativeInteger(value, label) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
@@ -86,6 +99,9 @@ export function readNonNegativeInteger(value, label) {
   return parsed;
 }
 
+/**
+ * Parses gateway watch regression CLI arguments.
+ */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -396,6 +412,9 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+/**
+ * Reports whether gateway watch output contains a ready marker.
+ */
 export function hasGatewayReadyLog(text) {
   return /\[gateway\] (?:http server listening|ready \()/.test(text);
 }
@@ -504,6 +523,9 @@ function parseTimingFile(timeFilePath) {
   };
 }
 
+/**
+ * Runs a bounded gateway watch process and captures timing/log artifacts.
+ */
 export async function runTimedWatch(options, outputDir, deps = {}) {
   const allocatePort = deps.allocateLoopbackPort ?? allocateLoopbackPort;
   const parseTiming = deps.parseTimingFile ?? parseTimingFile;
@@ -642,6 +664,9 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
   }
 }
 
+/**
+ * Stops the timed watch child process with TERM/KILL fallback.
+ */
 export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {
   const killProcess = deps.killProcess ?? ((pid, signal) => process.kill(pid, signal));
   const currentExit = () =>
@@ -749,6 +774,9 @@ function buildRunNodeDeps(env) {
   };
 }
 
+/**
+ * Reports whether restored CI artifacts need fresh build stamps.
+ */
 export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   return (
     params.skipBuild === true &&
@@ -757,6 +785,9 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
+/**
+ * Writes build and runtime-postbuild stamps for the current artifact set.
+ */
 export function writeBuildAndRuntimePostBuildStamps(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   writeBuildStamp({ cwd });

@@ -1,3 +1,4 @@
+// Openai tests cover openai chatgpt auth identity plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 

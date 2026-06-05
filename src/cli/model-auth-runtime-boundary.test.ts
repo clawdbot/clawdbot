@@ -1,3 +1,4 @@
+// Model auth runtime boundary tests cover CLI/model auth import boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

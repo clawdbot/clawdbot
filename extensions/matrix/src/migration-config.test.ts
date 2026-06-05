@@ -1,3 +1,4 @@
+// Matrix tests cover migration config plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";

@@ -1,3 +1,4 @@
+// Vitest UI package config tests validate UI package test project settings.
 import { describe, expect, it } from "vitest";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";

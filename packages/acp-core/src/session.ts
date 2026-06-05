@@ -1,3 +1,4 @@
+// ACP Core module implements session behavior.
 import { randomUUID } from "node:crypto";
 import { resolveIntegerOption } from "./numeric-options.js";
 import type { AcpSession } from "./types.js";

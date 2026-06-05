@@ -1,3 +1,4 @@
+// Voice Call type declarations define plugin contracts.
 import type { WebhookSecurityConfig } from "../config.js";
 
 /**

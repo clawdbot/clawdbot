@@ -1,3 +1,5 @@
+// Role allowlist update tests cover operator-driven gateway updates, node lists,
+// device/node pairing state, restart sentinels, and runtime plugin visibility.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

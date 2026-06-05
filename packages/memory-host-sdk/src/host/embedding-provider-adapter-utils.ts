@@ -1,3 +1,4 @@
+// Memory Host SDK helper module supports embedding provider adapter utils behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 // Adapter helpers shared by remote embedding provider implementations.

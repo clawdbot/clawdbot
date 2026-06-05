@@ -1,3 +1,5 @@
+// Gateway auxiliary handler tests cover hot config reload behavior, prepared
+// secret snapshot updates, and restart-plan side effects.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

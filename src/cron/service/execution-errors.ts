@@ -1,3 +1,4 @@
+/** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { CronAgentExecutionStarted } from "../types.js";
 

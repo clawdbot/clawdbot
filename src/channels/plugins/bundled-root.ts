@@ -1,3 +1,8 @@
+/**
+ * Bundled channel package-root resolver.
+ *
+ * Computes cache scopes for generated channel metadata across source and packaged layouts.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";

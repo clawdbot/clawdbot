@@ -1,3 +1,4 @@
+// Provider discovery contract helpers define reusable discovery tests for provider plugins.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 import {

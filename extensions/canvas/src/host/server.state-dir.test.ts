@@ -1,3 +1,4 @@
+// Canvas tests cover server.state dir plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";

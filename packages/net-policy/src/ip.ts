@@ -1,3 +1,4 @@
+// Network Policy module implements ip behavior.
 import ipaddr from "ipaddr.js";
 
 function normalizeOptionalString(value: unknown): string | undefined {

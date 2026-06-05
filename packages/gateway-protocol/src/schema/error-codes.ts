@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import type { ErrorShape } from "./types.js";
 
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */

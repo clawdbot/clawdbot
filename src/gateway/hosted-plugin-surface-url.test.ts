@@ -1,3 +1,5 @@
+// Hosted plugin surface URL tests document forwarded-host/proto precedence for
+// URLs exposed to plugin-hosted UI surfaces.
 import { describe, expect, it } from "vitest";
 import { resolveHostedPluginSurfaceUrl } from "./hosted-plugin-surface-url.js";
 

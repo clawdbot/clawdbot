@@ -1,3 +1,4 @@
+// Qa Lab tests cover model switch eval plugin behavior.
 import { describe, expect, it } from "vitest";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 

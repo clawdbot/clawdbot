@@ -1,3 +1,4 @@
+// Whatsapp tests cover deliver reply plugin behavior.
 import fsSync from "node:fs";
 import {
   createMessageReceiptFromOutboundResults,

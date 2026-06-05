@@ -1,3 +1,4 @@
+// Whatsapp tests cover on message.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const events: string[] = [];

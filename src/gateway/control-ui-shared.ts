@@ -1,3 +1,5 @@
+// Control UI shared URL helpers.
+// Normalizes base paths and avatar URLs for browser/gateway surfaces.
 import {
   isAvatarHttpUrl,
   isAvatarImageDataUrl,
@@ -6,8 +8,6 @@ import {
 
 const CONTROL_UI_AVATAR_PREFIX = "/avatar";
 
-// Control UI URL helpers keep browser bootstrap paths stable across root and
-// subpath deployments, including avatar paths proxied through the gateway.
 /** Normalizes a Control UI base path to either "" or a leading-slash path without trailing slash. */
 export function normalizeControlUiBasePath(basePath?: string): string {
   if (!basePath) {

@@ -1,3 +1,4 @@
+// Matrix tests cover sdk plugin behavior.
 import "fake-indexeddb/auto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";

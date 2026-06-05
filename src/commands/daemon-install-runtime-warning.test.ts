@@ -1,3 +1,4 @@
+// Daemon install runtime warning tests cover Node runtime compatibility notices during service install.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

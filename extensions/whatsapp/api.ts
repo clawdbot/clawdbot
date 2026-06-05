@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { whatsappPlugin } from "./src/channel.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {

@@ -1,3 +1,5 @@
+// Gateway network address helpers.
+// Normalizes host/IP inputs and classifies local/private gateway requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import {
@@ -21,10 +23,7 @@ import {
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 
-/**
- * Pick the primary non-internal IPv4 address (LAN IP).
- * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
- */
+/** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
   return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
     family: "IPv4",
@@ -32,10 +31,12 @@ export function pickPrimaryLanIPv4(): string | undefined {
   });
 }
 
+/** Normalize a raw Host header for gateway origin and local-request checks. */
 export function normalizeHostHeader(hostHeader?: string): string {
   return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
+/** Extract hostname from a Host header while preserving unbracketed IPv6 hosts. */
 export function resolveHostName(hostHeader?: string): string {
   const host = normalizeHostHeader(hostHeader);
   if (!host) {

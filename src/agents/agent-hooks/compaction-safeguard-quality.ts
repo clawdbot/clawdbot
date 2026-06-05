@@ -1,3 +1,4 @@
+/** Quality contract, fallback, and audit helpers for compaction safeguard summaries. */
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
@@ -22,6 +23,7 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+/** Wraps operator-provided compaction instruction text as untrusted prompt data. */
 export function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
     label,
@@ -128,6 +130,7 @@ export function buildStructuredFallbackSummary(
 }
 
 /** Append an already-formatted summary section without disturbing empty summaries. */
+/** Appends a bounded post-compaction section to an existing summary. */
 export function appendSummarySection(summary: string, section: string): string {
   if (!section) {
     return summary;
@@ -160,6 +163,7 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
   return summary.includes(identifier);
 }
 
+/** Extracts likely exact identifiers that summaries should preserve literally. */
 export function extractOpaqueIdentifiers(text: string): string[] {
   const matches =
     text.match(
@@ -226,6 +230,7 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 }
 
 /** Audit summary structure, exact identifier preservation, and latest-ask coverage. */
+/** Audits a candidate summary for required sections, pending asks, and identifier preservation. */
 export function auditSummaryQuality(params: {
   summary: string;
   identifiers: string[];

@@ -1,3 +1,6 @@
+// Text-mode status runtime barrel.
+// Kept separate from command orchestration so JSON/fast status does not import table/theme helpers.
+
 export { formatCliCommand } from "../cli/command-format.js";
 export { info } from "../globals.js";
 export { formatTimeAgo } from "../infra/format-time/format-relative.ts";

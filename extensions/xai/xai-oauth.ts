@@ -1,3 +1,4 @@
+// Xai plugin module implements xai oauth behavior.
 import { randomBytes } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

@@ -1,3 +1,4 @@
+// Non-interactive API key tests cover flag, environment, auth-profile, and secret-ref mode precedence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNonInteractiveApiKey } from "./api-keys.js";
 

@@ -1,3 +1,5 @@
+// OpenAI-compatible embeddings HTTP endpoint.
+// Bridges /v1/embeddings requests to configured OpenClaw memory providers.
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -80,6 +82,7 @@ function resolveInputTexts(input: unknown): string[] | null {
 }
 
 function encodeEmbeddingBase64(embedding: number[]): string {
+  // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
   const float32 = Float32Array.from(embedding);
   return Buffer.from(float32.buffer).toString("base64");
 }

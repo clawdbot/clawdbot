@@ -8,6 +8,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  downloadClawHubSkillArchiveUrl,
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
@@ -849,6 +850,35 @@ describe("clawhub helpers", () => {
     try {
       expect(path.basename(archive.archivePath)).toBe("agentreceipt.zip");
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+    } finally {
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expectPathMissing(archiveDir);
+    }
+  });
+
+  it("does not send ambient ClawHub auth tokens to off-registry resolver archive URLs", async () => {
+    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "https://clawhub.ai",
+      url: "https://codeload.github.com/NVIDIA/skills/zip/abcdef",
+      fetchImpl: async (input, init) => {
+        requestedUrl = input instanceof Request ? input.url : String(input);
+        requestedInit = init;
+        return new Response(new Uint8Array([7, 8, 9]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        });
+      },
+    });
+
+    try {
+      expect(requestedUrl).toBe("https://codeload.github.com/NVIDIA/skills/zip/abcdef");
+      expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([7, 8, 9]));
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();

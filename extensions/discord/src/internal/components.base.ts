@@ -1,3 +1,4 @@
+// Discord plugin module implements components.base behavior.
 import type { BaseComponentInteraction } from "./interactions.js";
 
 export type ComponentParserResult = {

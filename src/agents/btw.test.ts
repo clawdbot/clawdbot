@@ -1,3 +1,4 @@
+/** Tests BTW side-question execution, session context, auth, and harness routing. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -158,6 +159,8 @@ const DEFAULT_USAGE = {
 };
 
 function makeAsyncEvents(events: unknown[]) {
+  // Minimal async iterable that matches provider stream shape without loading
+  // real model/runtime infrastructure.
   return {
     async *[Symbol.asyncIterator]() {
       for (const event of events) {
@@ -177,6 +180,8 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
 }
 
 function createAssistantDoneEvent(content: unknown[]) {
+  // Done events include usage/provider metadata because BTW persists the reply
+  // as a normal assistant turn.
   return {
     type: "done",
     reason: "stop",

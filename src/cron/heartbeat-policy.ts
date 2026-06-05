@@ -1,3 +1,4 @@
+/** Decides when cron heartbeat acknowledgements should stay out of visible delivery. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 
@@ -24,6 +25,8 @@ export function shouldSkipHeartbeatOnlyDelivery(
   if (hasAnyNonTextContent) {
     return false;
   }
+  // Heartbeat acks may include tiny punctuation/noise; strip the token before
+  // deciding whether there is user-visible text worth delivering.
   return payloads.some((payload) => {
     const result = stripHeartbeatToken(payload.text, {
       mode: "heartbeat",

@@ -1,3 +1,4 @@
+// Ts Topology tests cover ts topology script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { analyzeTopology, filterRecordsForReport } from "../../scripts/lib/ts-topology/analyze.js";
@@ -50,9 +51,9 @@ describe("ts-topology", () => {
 
     expect(sharedThing).toEqual({
       aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:1:sharedThing",
+      canonicalKey: "src/lib/shared.ts:2:sharedThing",
       declarationPath: "src/lib/shared.ts",
-      declarationLine: 1,
+      declarationLine: 2,
       entrypoints: ["extra", "index"],
       exportNames: ["aliasedSharedThing", "sharedThing"],
       internalConsumers: [],
@@ -87,8 +88,8 @@ describe("ts-topology", () => {
     expect(aliasedThing.productionRefCount).toBe(1);
     expect(sharedType).toEqual({
       aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:21:SharedType",
-      declarationLine: 21,
+      canonicalKey: "src/lib/shared.ts:22:SharedType",
+      declarationLine: 22,
       declarationPath: "src/lib/shared.ts",
       entrypoints: ["index"],
       exportNames: ["SharedType"],
@@ -112,8 +113,8 @@ describe("ts-topology", () => {
     });
     expect(testOnlyThing).toEqual({
       aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:13:testOnlyThing",
-      declarationLine: 13,
+      canonicalKey: "src/lib/shared.ts:14:testOnlyThing",
+      declarationLine: 14,
       declarationPath: "src/lib/shared.ts",
       entrypoints: ["index"],
       exportNames: ["testOnlyThing"],
@@ -159,11 +160,11 @@ describe("ts-topology", () => {
       Unused public exports: 2
       
       Top 2 candidate-to-move exports:
-      - fixture-sdk:aliasedThing -> src/lib/shared.ts:9 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
-      - fixture-sdk:singleOwnerHelper -> src/lib/shared.ts:5 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
+      - fixture-sdk:aliasedThing -> src/lib/shared.ts:10 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
+      - fixture-sdk:singleOwnerHelper -> src/lib/shared.ts:6 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
       
       Top 1 duplicated public exports:
-      - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:1)"
+      - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:2)"
     `);
   });
 

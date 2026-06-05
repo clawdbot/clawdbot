@@ -1,3 +1,4 @@
+// Matrix plugin module implements media text behavior.
 import path from "node:path";
 import type {
   MatrixMessageAttachmentKind,

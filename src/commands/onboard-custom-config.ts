@@ -1,3 +1,9 @@
+/**
+ * Normalizes and applies custom provider settings captured by onboarding.
+ *
+ * Interactive and non-interactive setup share this module so validation,
+ * endpoint probing, and config mutation stay in one command boundary.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -21,10 +27,12 @@ import { normalizeAlias } from "./models/alias-name.js";
 export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
-// Azure OpenAI uses the Responses API which supports larger defaults
+// Azure OpenAI uses the Responses API, which supports larger generated defaults.
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
+
+/** Result of best-effort image-input inference for custom model ids. */
 export type CustomModelImageInputInference = {
   supportsImageInput: boolean;
   confidence: "known" | "unknown";
@@ -32,6 +40,7 @@ export type CustomModelImageInputInference = {
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
+  // The hard minimum is a guardrail sentinel, not a useful custom model window.
   if (parsed <= 0 || parsed === CONTEXT_WINDOW_HARD_MIN_TOKENS) {
     return CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
   }
@@ -44,6 +53,7 @@ function customModelInputs(supportsImageInput: boolean): CustomModelInput[] {
   return supportsImageInput ? ["text", "image"] : ["text"];
 }
 
+/** Infers image-input support from common custom model naming conventions. */
 export function resolveCustomModelImageInputInference(
   modelId: string,
 ): CustomModelImageInputInference {
@@ -73,6 +83,7 @@ export function resolveCustomModelImageInputInference(
   return { supportsImageInput: false, confidence: "unknown" };
 }
 
+/** Returns whether a custom model id is known to support image input. */
 export function inferCustomModelSupportsImageInput(modelId: string): boolean {
   return resolveCustomModelImageInputInference(modelId).supportsImageInput;
 }
@@ -168,6 +179,8 @@ function hasSameHost(a: string, b: string): boolean {
 }
 
 export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic";
+
+/** Config mutation result for a custom API setup pass. */
 export type CustomApiResult = {
   config: OpenClawConfig;
   providerId?: string;
@@ -175,6 +188,7 @@ export type CustomApiResult = {
   providerIdRenamedFrom?: string;
 };
 
+/** Inputs used to persist a custom provider in the OpenClaw config. */
 export type ApplyCustomApiConfigParams = {
   config: OpenClawConfig;
   baseUrl: string;
@@ -186,6 +200,7 @@ export type ApplyCustomApiConfigParams = {
   supportsImageInput?: boolean;
 };
 
+/** Raw CLI flag values for non-interactive custom API setup. */
 export type ParseNonInteractiveCustomApiFlagsParams = {
   baseUrl?: string;
   modelId?: string;
@@ -195,6 +210,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   supportsImageInput?: boolean;
 };
 
+/** Validated non-interactive custom API setup flags. */
 export type ParsedNonInteractiveCustomApiFlags = {
   baseUrl: string;
   modelId: string;
@@ -212,6 +228,7 @@ export type CustomApiErrorCode =
   | "invalid_provider_id"
   | "invalid_alias";
 
+/** Error class used by callers to turn custom API validation failures into CLI UX. */
 export class CustomApiError extends Error {
   readonly code: CustomApiErrorCode;
 
@@ -228,11 +245,13 @@ export type ResolveCustomProviderIdParams = {
   providerId?: string;
 };
 
+/** Provider id selected for a custom endpoint, with collision rename metadata. */
 export type ResolvedCustomProviderId = {
   providerId: string;
   providerIdRenamedFrom?: string;
 };
 
+/** Converts arbitrary endpoint labels into provider-id-safe tokens. */
 export function normalizeEndpointId(raw: string): string {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
@@ -241,6 +260,7 @@ export function normalizeEndpointId(raw: string): string {
   return trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+/** Builds a stable custom provider id from an endpoint URL host and port. */
 export function buildEndpointIdFromUrl(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
@@ -260,6 +280,8 @@ function resolveUniqueEndpointId(params: {
 }) {
   const normalized = normalizeEndpointId(params.requestedId) || "custom";
   const existing = params.providers[normalized];
+  // Azure config URLs are normalized before storage, so host equality preserves
+  // the existing provider id across deployment-path and /openai/v1 variants.
   if (
     !existing?.baseUrl ||
     existing.baseUrl === params.baseUrl ||
@@ -276,6 +298,7 @@ function resolveUniqueEndpointId(params: {
   return { providerId: candidate, renamed: true };
 }
 
+/** Returns a human-readable alias collision error for a custom model ref. */
 export function resolveCustomModelAliasError(params: {
   raw: string;
   cfg: OpenClawConfig;
@@ -339,6 +362,7 @@ type VerificationRequest = {
   body: Record<string, unknown>;
 };
 
+/** Normalizes optional provider API key input while preserving secret refs. */
 export function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
   if (isSecretRef(value)) {
     return value;
@@ -359,11 +383,14 @@ function resolveVerificationEndpoint(params: {
     resolvedUrl.endsWith("/") ? resolvedUrl : `${resolvedUrl}/`,
   );
   if (isAzureUrl(params.baseUrl)) {
+    // Azure deployment probes need a concrete api-version; stored config keeps
+    // only the reusable base URL and lets the runtime client own request paths.
     endpointUrl.searchParams.set("api-version", "2024-10-21");
   }
   return endpointUrl.href;
 }
 
+/** Builds a minimal OpenAI-family request used only to verify custom endpoints. */
 export function buildOpenAiVerificationProbeRequest(params: {
   baseUrl: string;
   apiKey: string;
@@ -411,6 +438,7 @@ export function buildOpenAiVerificationProbeRequest(params: {
   };
 }
 
+/** Builds a minimal Anthropic-compatible request used only to verify endpoints. */
 export function buildAnthropicVerificationProbeRequest(params: {
   baseUrl: string;
   apiKey: string;
@@ -466,6 +494,7 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   return compatibilityRaw;
 }
 
+/** Resolves the provider id that should own a custom endpoint in config. */
 export function resolveCustomProviderId(
   params: ResolveCustomProviderIdParams,
 ): ResolvedCustomProviderId {
@@ -495,6 +524,7 @@ export function resolveCustomProviderId(
   };
 }
 
+/** Validates non-interactive custom API flags before config mutation. */
 export function parseNonInteractiveCustomApiFlags(
   params: ParseNonInteractiveCustomApiFlagsParams,
 ): ParsedNonInteractiveCustomApiFlags {
@@ -530,6 +560,7 @@ export function parseNonInteractiveCustomApiFlags(
   };
 }
 
+/** Applies custom provider config and makes the custom model the primary model. */
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   if (!URL.canParse(baseUrl)) {
@@ -578,6 +609,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const existingProvider = providers[providerId];
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hasModel = existingModels.some((model) => model.id === modelId);
+  // Azure reasoning deployments usually need explicit reasoning metadata for
+  // the provider loop, while non-Azure endpoints rely on model-name inference.
   const isLikelyReasoningModel = isAzure && /\b(o[134]|gpt-([5-9]|\d{2,}))\b/i.test(modelId);
   const explicitInput =
     params.supportsImageInput === undefined
@@ -617,6 +650,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
           ? {
               ...model,
               ...(isAzure ? nextModel : {}),
+              // Preserve caller-authored catalog fields unless setup explicitly
+              // received a new input-mode choice for this existing model.
               ...(explicitInput ? { input: explicitInput } : {}),
               name: model.name ?? nextModel.name,
               cost: model.cost ?? nextModel.cost,
@@ -634,6 +669,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const providerApi = isAzureOpenAi
     ? ("azure-openai-responses" as const)
     : resolveProviderApi(params.compatibility);
+  // Azure clients use api-key headers and no bearer Authorization header.
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
 
   let config: OpenClawConfig = {
@@ -660,6 +696,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   if (isAzure && isLikelyReasoningModel) {
     const existingPerModelThinking = config.agents?.defaults?.models?.[modelRef]?.params?.thinking;
     if (!existingPerModelThinking) {
+      // Seed a conservative reasoning effort only when the user has not already
+      // configured per-model thinking for this exact custom deployment.
       config = {
         ...config,
         agents: {

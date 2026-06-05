@@ -1,3 +1,4 @@
+// Text chunking helpers split long outbound text while preserving readable line boundaries.
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 
 /**

@@ -1,3 +1,4 @@
+// Qqbot plugin module implements stub contexts behavior.
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { InboundContext, InboundGroupInfo } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";

@@ -1,3 +1,4 @@
+// Stepfun tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {

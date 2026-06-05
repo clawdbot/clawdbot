@@ -1,3 +1,4 @@
+// Program test mocks provide shared CLI command doubles and typed Vitest helpers.
 import { vi, type Mock } from "vitest";
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;

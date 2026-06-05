@@ -1,3 +1,4 @@
+// Copilot tests cover telemetry bridge plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelemetryConfig,

@@ -1,3 +1,4 @@
+// Nostr type declarations define plugin contracts.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

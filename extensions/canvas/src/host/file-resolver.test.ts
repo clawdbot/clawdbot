@@ -1,3 +1,4 @@
+// Canvas tests cover file resolver plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";

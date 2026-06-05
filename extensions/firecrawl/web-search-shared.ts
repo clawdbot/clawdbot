@@ -1,3 +1,4 @@
+// Firecrawl plugin module implements web search shared behavior.
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,

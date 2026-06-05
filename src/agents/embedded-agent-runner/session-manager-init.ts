@@ -1,3 +1,6 @@
+/**
+ * Prepares session managers and transcript state before embedded runs.
+ */
 import fs from "node:fs/promises";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 

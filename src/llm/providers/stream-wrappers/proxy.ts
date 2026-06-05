@@ -1,3 +1,4 @@
+// Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,

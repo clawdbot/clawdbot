@@ -1,3 +1,4 @@
+// Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   classifyConceptTagScript,

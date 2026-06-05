@@ -1,3 +1,4 @@
+// Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
@@ -133,6 +134,7 @@ function extractGatewayMiskeys(parsed: unknown): {
   hasGatewayToken: boolean;
   hasRemoteToken: boolean;
 } {
+  // Detect common token misplacements before startup falls back to unauthenticated mode.
   if (!parsed || typeof parsed !== "object") {
     return { hasGatewayToken: false, hasRemoteToken: false };
   }

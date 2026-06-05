@@ -1,3 +1,4 @@
+// Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 

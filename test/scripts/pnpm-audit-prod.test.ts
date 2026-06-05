@@ -1,3 +1,4 @@
+// Pnpm Audit Prod tests cover pnpm audit prod script behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Google Meet tests cover index plugin behavior.
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

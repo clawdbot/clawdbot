@@ -1,3 +1,4 @@
+/** Windows cmd `set` assignment renderer/parser for managed service scripts. */
 type CmdSetAssignment = { key: string; value: string };
 
 /** Rejects line breaks before rendering values into Windows cmd scripts. */
@@ -8,6 +9,7 @@ export function assertNoCmdLineBreak(value: string, field: string): void {
 }
 
 function escapeCmdSetAssignmentComponent(value: string): string {
+  // Escape expansion-sensitive characters before wrapping in set "KEY=VALUE".
   return value.replace(/\^/g, "^^").replace(/%/g, "%%").replace(/!/g, "^!").replace(/"/g, '^"');
 }
 
@@ -50,6 +52,8 @@ export function parseCmdSetAssignment(line: string): CmdSetAssignment | null {
   if (!quoted) {
     return { key, value };
   }
+  // Quoted cmd set lines were produced by renderCmdSetAssignment, so undo only
+  // the expansion escapes that renderer emits.
   return {
     key: unescapeCmdSetAssignmentComponent(key),
     value: unescapeCmdSetAssignmentComponent(value),

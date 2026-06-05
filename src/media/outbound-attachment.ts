@@ -1,3 +1,4 @@
+// Outbound attachment helpers prepare media attachments for channel delivery.
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMedia } from "./web-media.js";

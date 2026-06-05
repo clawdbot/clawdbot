@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native commands behavior.
 export {
   ensureConfiguredBindingRouteReady,
   recordInboundSessionMetaSafe,

@@ -1,3 +1,4 @@
+// Daemon runtime binary tests cover runtime executable resolution.
 import { describe, expect, it } from "vitest";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 

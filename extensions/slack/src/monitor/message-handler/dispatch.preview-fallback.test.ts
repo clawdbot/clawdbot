@@ -1,3 +1,4 @@
+// Slack tests cover dispatch.preview fallback plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FINAL_REPLY_TEXT = "final answer";

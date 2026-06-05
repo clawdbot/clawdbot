@@ -1,3 +1,4 @@
+// Zalo tests cover channelirectory plugin behavior.
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,

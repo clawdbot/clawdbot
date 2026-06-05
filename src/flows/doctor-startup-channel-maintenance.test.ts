@@ -1,3 +1,4 @@
+// Doctor startup maintenance tests cover channel startup maintenance checks.
 import { describe, expect, it } from "vitest";
 import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
 

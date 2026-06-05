@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements channel.adapters behavior.
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,

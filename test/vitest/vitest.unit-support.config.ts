@@ -1,3 +1,4 @@
+// Vitest unit support config wires the unit support test shard.
 import { createUnitVitestConfigWithOptions } from "./vitest.unit.config.ts";
 
 export default createUnitVitestConfigWithOptions(process.env, {

@@ -1,3 +1,7 @@
+/**
+ * Shared command types that are imported by both public and runtime modules.
+ */
+/** Best-effort provider stream parameter overrides for an agent command. */
 export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
@@ -13,7 +17,7 @@ export type AgentStreamParams = {
   seed?: number;
 };
 
-// Simplified tool definition for client-provided tools (OpenResponses hosted tools)
+/** Simplified tool definition for client-provided OpenResponses hosted tools. */
 export type ClientToolDefinition = {
   type: "function";
   function: {

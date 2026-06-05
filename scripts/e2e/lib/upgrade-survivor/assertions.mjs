@@ -1,3 +1,4 @@
+// Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";

@@ -1,3 +1,4 @@
+// Tlon tests cover core plugin behavior.
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,

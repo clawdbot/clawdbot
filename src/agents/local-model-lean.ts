@@ -1,15 +1,16 @@
+/**
+ * Local-model lean tool filtering.
+ * Removes high-latency or channel-dependent tools for local models while
+ * preserving explicitly required delivery tools.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-// Local-model lean mode removes high-latency or channel-dependent tools unless
-// the caller explicitly preserves them for the current delivery path.
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
 
-// Preserve lists accept tool groups; normalize them to concrete tool names so
-// filtering stays aligned with the normal tool-policy path.
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
   if (!names) {
     return new Set();

@@ -1,3 +1,4 @@
+// OC Path tests cover sentinel plugin behavior.
 import { describe, expect, it } from "vitest";
 import { OcEmitSentinelError, REDACTED_SENTINEL, guardSentinel } from "../sentinel.js";
 

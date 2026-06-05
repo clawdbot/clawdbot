@@ -1,3 +1,5 @@
+// sessions_history tool tests cover recall redaction and input validation for
+// session transcript history returned to models.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,6 +60,8 @@ describe("sessions_history redaction", () => {
   });
 
   it("redacts recalled session text even when log redaction is disabled", async () => {
+    // Recalled transcript content is model-visible, so it is always redacted
+    // even when normal logging redaction is configured off.
     useLoggingConfig("redaction-off.json", { redactSensitive: "off" });
     const tool = createHistoryToolWithMessage("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789");
 

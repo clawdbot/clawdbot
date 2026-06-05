@@ -1,3 +1,4 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -63,6 +64,7 @@ function extractCliFlags(cliOption: string): string[] {
 }
 
 function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
   const flags: OnboardAuthFlag[] = [];
   for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {

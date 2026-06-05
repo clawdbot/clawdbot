@@ -1,3 +1,4 @@
+// Module loader tests cover channel plugin module resolution and import failure handling.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";

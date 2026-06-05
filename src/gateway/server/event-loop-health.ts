@@ -1,3 +1,4 @@
+// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;

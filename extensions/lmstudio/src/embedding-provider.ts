@@ -1,3 +1,4 @@
+// Lmstudio provider module implements model/runtime integration.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,

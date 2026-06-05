@@ -1,3 +1,4 @@
+// Coverage for deferred context-engine maintenance and transcript rewrite hooks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -36,6 +37,8 @@ let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-ma
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
 
 function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
+  // Task creation can legally return null for invalid inputs; tests here always
+  // need a concrete queued task record.
   const task = createQueuedTaskRunOrNull(params);
   if (!task) {
     throw new Error("expected queued task creation to succeed");
@@ -58,6 +61,8 @@ async function waitForAssertion(
   timeoutMs = 2_000,
   stepMs = 5,
 ): Promise<void> {
+  // Timed polling lets fake-timer tasks advance through queue and delivery
+  // microtasks without binding assertions to a specific internal await count.
   const startedAt = Date.now();
   for (;;) {
     try {
@@ -106,6 +111,8 @@ vi.mock("./transcript-rewrite.js", () => ({
 }));
 
 async function loadFreshContextEngineMaintenanceModuleForTest() {
+  // The module owns singleton deferred-maintenance state, so reload between
+  // cases before asserting abort or queue behavior.
   ({
     buildContextEngineMaintenanceRuntimeContext,
     createDeferredTurnMaintenanceAbortSignal,

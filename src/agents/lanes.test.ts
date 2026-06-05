@@ -1,3 +1,4 @@
+// Documents nested-agent command lane resolution and session scoping.
 import { describe, expect, it } from "vitest";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -46,6 +47,8 @@ describe("resolveNestedAgentLaneForSession (#67502)", () => {
   });
 
   it("scopes the nested lane per target session key", () => {
+    // Per-session lane suffixes prevent two nested agents from serializing
+    // unrelated work just because both are nested runs.
     expect(resolveNestedAgentLaneForSession("agent:ebao-next:discord:channel:1")).toBe(
       `${AGENT_LANE_NESTED}:agent:ebao-next:discord:channel:1`,
     );
@@ -87,6 +90,7 @@ describe("isNestedAgentLane", () => {
   });
 
   it("returns false for lanes that merely contain 'nested' as a substring", () => {
+    // Lane checks are prefix-contract based, not substring heuristics.
     expect(isNestedAgentLane("deeply-nested-lane")).toBe(false);
     expect(isNestedAgentLane("session:nested")).toBe(false);
     expect(isNestedAgentLane("nestedfoo")).toBe(false);

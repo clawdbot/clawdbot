@@ -1,3 +1,5 @@
+// Verifies outbound channel resolution fast paths, active-registry reads,
+// bootstrap fallback, and runtime facade projection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());

@@ -1,3 +1,4 @@
+// Onboard helper tests cover workspace setup, control UI links, and gateway reachability probes.
 import * as fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

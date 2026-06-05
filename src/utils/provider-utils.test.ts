@@ -1,3 +1,4 @@
+// Provider utility tests cover provider normalization and utility behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveProviderReasoningOutputModeWithPluginMock } = vi.hoisted(() => ({

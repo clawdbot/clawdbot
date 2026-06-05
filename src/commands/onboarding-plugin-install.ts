@@ -1,3 +1,9 @@
+/**
+ * Onboarding plugin installation flow.
+ *
+ * It selects local, ClawHub, npm, or override install sources; records durable
+ * install metadata; and enables plugins requested by setup workflows.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -50,6 +56,7 @@ type InstallPluginFromClawHubResult = Awaited<
 const ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS = ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS + 5_000;
 
+/** Catalog entry used by onboarding to offer or require a plugin install. */
 export type OnboardingPluginInstallEntry = {
   pluginId: string;
   label: string;
@@ -58,8 +65,10 @@ export type OnboardingPluginInstallEntry = {
   preferRemoteInstall?: boolean;
 };
 
+/** Outcome status for a single onboarding plugin install attempt. */
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
 
+/** Config and status returned after attempting an onboarding plugin install. */
 export type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
@@ -74,6 +83,8 @@ function shouldFallbackClawHubToNpm(params: {
   if (!isOpenClawOrgNpmSpec(params.npmSpec)) {
     return false;
   }
+  // Only official OpenClaw npm packages are safe fallback targets for ClawHub
+  // availability failures; arbitrary npm fallbacks would change trust source.
   return (
     params.result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
     params.result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
@@ -238,6 +249,8 @@ function resolveLocalPath(params: {
   for (const candidate of candidates) {
     try {
       const resolved = fs.realpathSync(candidate);
+      // Local plugin paths must stay inside the current repo/workspace roots so
+      // catalog metadata cannot point setup at arbitrary filesystem locations.
       if (
         !bases.some((base) => {
           const realBase = resolveRealDirectory(base);
@@ -334,6 +347,8 @@ function resolveInstallDefaultChoice(params: {
     return "local";
   }
   const updateChannel = cfg.update?.channel;
+  // Dev builds prefer checked-out local plugins; stable/beta prefer published
+  // artifacts so installed records match the user's release channel.
   if (updateChannel === "dev") {
     return "local";
   }
@@ -411,6 +426,8 @@ async function promptInstallChoice(params: {
       realSources.push("local");
     }
     if (realSources.length === 1) {
+      // Callers that already selected a plugin/channel can skip an extra prompt
+      // when there is only one viable source.
       return realSources[0];
     }
   }
@@ -785,6 +802,8 @@ async function installPluginFromOverride(params: {
   runtime.log?.(
     `Using plugin install override for ${sanitizeTerminalText(entry.pluginId)} from ${PLUGIN_INSTALL_OVERRIDES_ENV} (${ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV}=1).`,
   );
+  // Overrides are explicit operator/developer input and intentionally bypass
+  // catalog trust defaults while still recording the resulting install source.
   const installOutcome =
     params.override.kind === "npm"
       ? await installPluginFromNpmSpecWithProgress({
@@ -965,6 +984,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
   }
 }
 
+/** Ensures an onboarding plugin is installed, enabled, and recorded in config. */
 export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -978,6 +998,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   let next = params.cfg;
   const installOverride = resolvePluginInstallOverride({ pluginId: entry.pluginId });
   if (installOverride) {
+    // Any install override mutates config/install records, so guard it with the
+    // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
     return await installPluginFromOverride({
       cfg: next,
@@ -1053,6 +1075,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   assertConfigWriteAllowedInCurrentMode();
 
   if (choice === "local" && localPath) {
+    // Bundled plugin sources are already part of the host checkout; enabling is
+    // enough and no install record/load path should be added for that case.
     const enableResult = await applyPluginEnablement({
       cfg: next,
       pluginId: entry.pluginId,
@@ -1164,6 +1188,8 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
 
+    // ClawHub package/version misses for official packages can recover through
+    // npm, but keep the operator in control before changing install source.
     shouldTryNpm = await prompter.confirm({
       message: t("wizard.plugins.useNpmPackageInstead", {
         spec: sanitizeTerminalText(npmInstallSpec),
@@ -1274,6 +1300,8 @@ export async function ensureOnboardingPluginInstalled(params: {
   );
 
   if (localPath) {
+    // If npm fails and a trusted local checkout exists, offer it as a recovery
+    // path instead of leaving setup stuck on the remote artifact.
     const fallback = await prompter.confirm({
       message: t("wizard.plugins.useLocalPluginPathInstead", {
         path: sanitizeTerminalText(localPath),

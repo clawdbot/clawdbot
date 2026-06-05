@@ -1,3 +1,6 @@
+/**
+ * Codex provider plugin and live app-server model catalog discovery.
+ */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
@@ -52,6 +55,10 @@ type BuildCatalogOptions = {
   onDiscoveryFailure?: (error: unknown) => void;
 };
 
+/**
+ * Builds the Codex provider plugin, including setup metadata, catalog discovery,
+ * dynamic model resolution, and prompt/thinking hooks.
+ */
 export function buildCodexProvider(options: BuildCodexProviderOptions = {}): ProviderPlugin {
   return {
     id: CODEX_PROVIDER_ID,
@@ -116,6 +123,10 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
   };
 }
 
+/**
+ * Builds the Codex model catalog from live app-server discovery, falling back
+ * to built-in model records when discovery is disabled or unavailable.
+ */
 export async function buildCodexProviderCatalog(
   options: BuildCatalogOptions = {},
 ): Promise<{ provider: ModelProviderConfig }> {
@@ -166,6 +177,8 @@ async function listModelsBestEffort(params: {
     const models: CodexAppServerModel[] = [];
     let cursor: string | undefined;
     do {
+      // App-server model listing is paginated; collect every visible model so
+      // aliases and picker rows match the current Codex account.
       const result = await params.listModels({
         timeoutMs: params.timeoutMs,
         limit: MODEL_DISCOVERY_PAGE_LIMIT,
@@ -231,10 +244,10 @@ function isKnownXHighCodexModel(modelId: string): boolean {
   );
 }
 
-// Exported so adapter request paths (thread-lifecycle.resolveReasoningEffort)
-// can branch on model-family enum support: modern Codex models use the
-// none/low/medium/high/xhigh effort enum and reject "minimal", which is the
-// CLI default. (#71946)
+/**
+ * Returns true for Codex models that use the modern reasoning effort enum and
+ * reject the legacy CLI `minimal` default.
+ */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (

@@ -1,3 +1,4 @@
+// Discord tests cover typing plugin behavior.
 import { Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { RequestClient } from "../internal/discord.js";

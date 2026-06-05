@@ -1,3 +1,4 @@
+// Extension Package Boundary script supports OpenClaw repository automation.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { privateLocalOnlyPluginSdkEntrypoints } from "./plugin-sdk-entries.mjs";

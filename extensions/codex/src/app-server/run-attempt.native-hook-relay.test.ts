@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.native hook relay plugin behavior.
 import path from "node:path";
 import {
   abortAgentHarnessRun,

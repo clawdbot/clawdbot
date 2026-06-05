@@ -1,3 +1,4 @@
+// Fake Codex app server used by media-path E2E scenarios.
 import fs from "node:fs";
 import readline from "node:readline";
 

@@ -1,3 +1,4 @@
+// Talk session controller tests cover controller state transitions.
 import { describe, expect, it } from "vitest";
 import type { TalkEvent } from "./talk-events.js";
 import { createTalkSessionController, normalizeTalkTransport } from "./talk-session-controller.js";

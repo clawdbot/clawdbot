@@ -1,3 +1,4 @@
+/** Doctor repair for broken session transcript branches and legacy OpenAI Codex metadata. */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -208,6 +209,7 @@ async function writeTranscriptEntries(params: {
   return backupPath;
 }
 
+/** Repairs one transcript file by keeping the active branch and backing up the original file. */
 export async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
@@ -309,6 +311,7 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
   sessionDirs?: string[];

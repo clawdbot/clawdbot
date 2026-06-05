@@ -1,3 +1,4 @@
+// Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,

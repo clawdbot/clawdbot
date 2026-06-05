@@ -1,3 +1,4 @@
+// Line plugin module implements reply payload transform behavior.
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {

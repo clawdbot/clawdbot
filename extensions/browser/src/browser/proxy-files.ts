@@ -1,3 +1,9 @@
+/**
+ * Browser proxy file helpers.
+ *
+ * Persists files returned by node-hosted browser proxy calls and rewrites
+ * proxied result paths to local saved media paths.
+ */
 import { saveMediaBuffer } from "../media/store.js";
 
 type BrowserProxyFile = {
@@ -6,6 +12,7 @@ type BrowserProxyFile = {
   mimeType?: string;
 };
 
+/** Persist proxy-returned files and return a remote-path to local-path map. */
 export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undefined) {
   if (!files || files.length === 0) {
     return new Map<string, string>();
@@ -19,6 +26,7 @@ export async function persistBrowserProxyFiles(files: BrowserProxyFile[] | undef
   return mapping;
 }
 
+/** Rewrite result.path when it points at a persisted proxy file. */
 export function applyBrowserProxyPaths(result: unknown, mapping: Map<string, string>) {
   if (!result || typeof result !== "object") {
     return;

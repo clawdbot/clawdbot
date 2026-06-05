@@ -1,3 +1,7 @@
+/**
+ * Bridges OpenClaw runtime tools into Codex app-server dynamic tool specs and
+ * tool-call responses.
+ */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
@@ -59,6 +63,7 @@ type CodexDynamicToolSchemaQuarantine = {
   violations: readonly string[];
 };
 
+/** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
@@ -80,6 +85,7 @@ export type CodexDynamicToolBridge = {
   };
 };
 
+/** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
 // Keep OpenClaw session spawning searchable in Codex mode so Codex's native
@@ -87,6 +93,10 @@ export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
+/**
+ * Creates dynamic tool specs and a call handler that executes OpenClaw tools,
+ * applies hooks/middleware, and records delivery/media telemetry.
+ */
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: AnyAgentTool[];
@@ -183,6 +193,8 @@ export function createCodexDynamicToolBridge(params: {
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
       try {
+        // Prepare before marking side-effect evidence; argument preparation can
+        // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);

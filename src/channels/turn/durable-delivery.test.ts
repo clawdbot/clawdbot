@@ -1,3 +1,4 @@
+// Durable delivery tests cover persisted channel turn delivery attempts and recovery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

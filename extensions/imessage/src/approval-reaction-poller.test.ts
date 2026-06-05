@@ -1,3 +1,4 @@
+// Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
 import {

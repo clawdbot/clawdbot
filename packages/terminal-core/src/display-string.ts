@@ -1,3 +1,4 @@
+// Terminal Core module implements display string behavior.
 import os from "node:os";
 import path from "node:path";
 

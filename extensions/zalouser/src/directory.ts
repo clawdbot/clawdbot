@@ -1,3 +1,4 @@
+// Zalouser plugin module implements directory behavior.
 import { resolveZalouserAccountSync } from "./accounts.js";
 import type { ChannelDirectoryEntry, OpenClawConfig } from "./channel-api.js";
 import { parseZalouserDirectoryGroupId } from "./session-route.js";

@@ -1,3 +1,4 @@
+// Builds a prerelease live-ish probe matrix from available credential env vars.
 const LIVEISH_INPUTS = Object.freeze([
   {
     probe: "provider-openai",

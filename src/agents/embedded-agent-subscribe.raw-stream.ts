@@ -1,3 +1,6 @@
+/**
+ * Appends raw embedded-agent stream payloads for diagnostics when enabled.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";

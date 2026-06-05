@@ -1,3 +1,4 @@
+// Web provider boundary tests enforce provider import boundaries.
 import { describe, expect, it } from "vitest";
 import {
   collectWebFetchProviderBoundaryViolations,

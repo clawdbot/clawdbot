@@ -1,3 +1,4 @@
+// Migration skill selection prompt tests drive keyboard shortcuts through the custom Clack multi-select.
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {

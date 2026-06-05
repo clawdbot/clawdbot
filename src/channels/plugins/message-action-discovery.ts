@@ -1,3 +1,8 @@
+/**
+ * Channel message action discovery.
+ *
+ * Builds agent tool schema contributions from loaded or bundled channel action hooks.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";

@@ -1,3 +1,7 @@
+/**
+ * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
+ * checks, shared-client leasing, and isolated-client shutdown handling.
+ */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -14,6 +18,7 @@ import {
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
+/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(params: {
   method: M;
   requestParams: CodexAppServerRequestParams<M>;

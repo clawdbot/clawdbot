@@ -1,3 +1,8 @@
+/**
+ * Channel message adapter contract verification helpers.
+ *
+ * Runs proof callbacks for declared durable, live-preview, live-message, and receive capabilities.
+ */
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageLiveCapability,

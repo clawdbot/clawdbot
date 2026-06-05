@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover provider model id normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,

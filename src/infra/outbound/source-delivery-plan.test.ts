@@ -1,3 +1,5 @@
+// Covers source-delivery target matching, message-tool ownership plans, and
+// fallback satisfaction outcomes.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./target-normalization.js", () => ({

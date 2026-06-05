@@ -1,3 +1,5 @@
+// Thinking sanitization tests cover reasoning-block retention, stripping, and
+// recovery behavior for provider transcripts and active assistant turns.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -10,12 +12,15 @@ import {
   isAssistantMessageWithContent,
   sanitizeThinkingForRecovery,
   stripInvalidThinkingSignatures,
+  stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
+  // Single-assistant fixture exercises the "latest assistant turn" path where
+  // reasoning blocks should remain available for continuation.
   const messages: AgentMessage[] = [
     castAgentMessage({
       role: "assistant",
@@ -37,6 +42,8 @@ const noThinkingReferenceCases = [
 ];
 
 function createNoThinkingMessages(): AgentMessage[] {
+  // No-thinking fixtures should keep reference identity to avoid unnecessary
+  // transcript rewrites in the common path.
   return [
     castAgentMessage({ role: "user", content: "hello" }),
     castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
@@ -210,6 +217,8 @@ describe("dropReasoningFromHistory", () => {
   });
 
   it("preserves reasoning for the active tool-call continuation after the latest user turn", () => {
+    // Active tool-call turns may need reasoning signatures for provider
+    // continuation, so only completed prior turns are stripped.
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "look up the answer" }),
       castAgentMessage({
@@ -853,5 +862,218 @@ describe("wrapAnthropicStreamWithRecovery", () => {
 
     await expect(response.result()).resolves.toEqual(finalMessage);
     expect(events).toHaveLength(2);
+  });
+});
+
+describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
+  it("returns the original reference when no compaction summary is present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "think", thinkingSignature: "sig" }],
+        timestamp: 1000,
+      }),
+    ];
+    expect(stripStaleThinkingSignaturesForCompactionReplay(messages)).toBe(messages);
+  });
+
+  it("strips thinking signatures from assistant messages at or before the compaction timestamp", () => {
+    const compactionSummary = castAgentMessage({
+      role: "compactionSummary",
+      summary: "summary",
+      tokensBefore: 100,
+      timestamp: 2000,
+    });
+    const preCompaction = castAgentMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "old think", thinkingSignature: "stale_sig" },
+        { type: "text", text: "old answer" },
+      ],
+      timestamp: 1000,
+    });
+    const postCompaction = castAgentMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "new think", thinkingSignature: "fresh_sig" },
+        { type: "text", text: "new answer" },
+      ],
+      timestamp: 3000,
+    });
+    const messages: AgentMessage[] = [
+      compactionSummary,
+      preCompaction,
+      castAgentMessage({ role: "user", content: "q" }),
+      postCompaction,
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    expect(result).not.toBe(messages);
+
+    const pre = result[1] as AssistantMessage;
+    expect(pre.content).toEqual([
+      { type: "thinking", thinking: "old think" },
+      { type: "text", text: "old answer" },
+    ]);
+
+    const post = result[3] as AssistantMessage;
+    expect(post.content).toEqual([
+      { type: "thinking", thinking: "new think", thinkingSignature: "fresh_sig" },
+      { type: "text", text: "new answer" },
+    ]);
+  });
+
+  it("strips thinkingSignature from a thinking-only pre-compaction message, leaving text for downstream handling", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "hidden", thinkingSignature: "sig" }],
+        timestamp: 1000,
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    const assistant = result[1] as AssistantMessage;
+    // Signature is stripped; thinking text is preserved. Downstream stripInvalidThinkingSignatures
+    // converts this unsigned thinking-only message to [assistant reasoning omitted].
+    expect(assistant.content).toEqual([{ type: "thinking", thinking: "hidden" }]);
+  });
+
+  it("strips redacted_thinking data from pre-compaction messages", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "opaque_sig" },
+          { type: "text", text: "visible" },
+        ],
+        timestamp: 1500,
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    const assistant = result[1] as AssistantMessage;
+    expect(assistant.content).toEqual([
+      { type: "redacted_thinking" },
+      { type: "text", text: "visible" },
+    ]);
+  });
+
+  it("skips assistant messages with no parseable timestamp", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "think", thinkingSignature: "sig" }],
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("uses the latest compaction summary timestamp when multiple summaries are present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "first",
+        tokensBefore: 0,
+        timestamp: 1000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "mid", thinkingSignature: "sig_mid" }],
+        timestamp: 1500,
+      }),
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "second",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "after", thinkingSignature: "sig_after" }],
+        timestamp: 3000,
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    // mid (timestamp 1500 < 2000): signature stripped
+    const mid = result[1] as AssistantMessage;
+    expect(mid.content).toEqual([{ type: "thinking", thinking: "mid" }]);
+    // after (timestamp 3000 > 2000): signature kept
+    const after = result[3] as AssistantMessage;
+    expect((after.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBe(
+      "sig_after",
+    );
+  });
+
+  it("uses max compaction timestamp when summaries appear out of chronological order", () => {
+    // Two compaction summaries: ts=1500 appears first, ts=2000 appears later.
+    // latestCompactionTimestamp must be max(1500, 2000) = 2000, not 1500.
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "earlier-in-array lower-timestamp",
+        tokensBefore: 0,
+        timestamp: 1500,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "t1", thinkingSignature: "sig1" }],
+        timestamp: 1200,
+      }),
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "later-in-array higher-timestamp",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "t2", thinkingSignature: "sig2" }],
+        timestamp: 1800,
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    // Both messages have ts < 2000 so both should be stripped
+    const a1 = result[1] as AssistantMessage;
+    const a2 = result[3] as AssistantMessage;
+    expect((a1.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBeUndefined();
+    expect((a2.content[0] as unknown as Record<string, unknown>).thinkingSignature).toBeUndefined();
+  });
+
+  it("preserves signatures on assistant messages at exactly the compaction timestamp", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: 2000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "exact", thinkingSignature: "exact_sig" }],
+        timestamp: 2000,
+      }),
+    ];
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+    // Same millisecond as compaction: treated as post-compaction; signature preserved
+    expect(result).toBe(messages);
   });
 });

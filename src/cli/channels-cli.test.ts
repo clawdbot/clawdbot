@@ -1,3 +1,4 @@
+// Channels CLI tests cover channel command registration and option parsing.
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginPackageChannel } from "../plugins/manifest.js";

@@ -1,3 +1,4 @@
+// Reasoning tag partitioner helpers split text around reasoning tag regions.
 import {
   buildCodeSpanIndex,
   createInlineCodeState,

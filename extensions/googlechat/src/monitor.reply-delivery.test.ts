@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor.reply delivery plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";

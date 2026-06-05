@@ -1,3 +1,8 @@
+/**
+ * Session write-lock implementation.
+ *
+ * Uses lock files with owner metadata, stale detection, signal cleanup, and watchdog checks to serialize writes.
+ */
 import "../infra/fs-safe-defaults.js";
 import type fsSync from "node:fs";
 import fs from "node:fs/promises";

@@ -1,3 +1,4 @@
+// Googlechat plugin module implements secret contract behavior.
 import {
   getChannelSurface,
   hasOwnProperty,

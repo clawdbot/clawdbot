@@ -1,3 +1,4 @@
+// Googlechat tests cover doctor contract plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 

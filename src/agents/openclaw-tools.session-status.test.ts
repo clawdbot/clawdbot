@@ -1,3 +1,4 @@
+// Verifies session status output across scoped stores, tasks, and runtime hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -54,6 +55,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
+  // Two stores simulate per-agent session files merged by gateway status paths.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -71,6 +73,7 @@ function createScopedSessionStores() {
 }
 
 function installScopedSessionStores(syncUpdates = false) {
+  // Tests choose whether session-store writes should mutate the backing map.
   const stores = createScopedSessionStores();
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
@@ -196,6 +199,7 @@ function formatStatusLines(primary: string, taskLineOverride: string | undefined
 }
 
 function createCommandsStatusRuntimeModuleMock() {
+  // Status text mock keeps model/task/session routing observable in one place.
   return {
     buildStatusText: async (params: {
       sessionKey: string;

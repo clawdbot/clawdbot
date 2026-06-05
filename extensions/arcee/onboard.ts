@@ -1,3 +1,7 @@
+/**
+ * Arcee setup preset appliers. They seed model catalog defaults for direct
+ * Arcee API usage and the OpenRouter-backed path.
+ */
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -9,7 +13,9 @@ import {
   OPENROUTER_BASE_URL,
 } from "./provider-catalog.js";
 
+/** Default Arcee model ref for direct API setup. */
 export const ARCEE_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
+/** Default Arcee model ref for OpenRouter setup. */
 export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 
 const arceePresetAppliers = createModelCatalogPresetAppliers({
@@ -34,10 +40,12 @@ const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
+/** Apply direct Arcee provider defaults to config. */
 export function applyArceeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return arceePresetAppliers.applyConfig(cfg);
 }
 
+/** Apply OpenRouter-backed Arcee provider defaults to config. */
 export function applyArceeOpenRouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   return arceeOpenRouterPresetAppliers.applyConfig(cfg);
 }

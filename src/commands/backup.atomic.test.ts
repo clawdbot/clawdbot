@@ -1,3 +1,4 @@
+// Backup atomicity tests cover temp-file writes, rollback behavior, and backup archive consistency.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

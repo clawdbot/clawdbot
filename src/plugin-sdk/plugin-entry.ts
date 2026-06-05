@@ -1,3 +1,4 @@
+// Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {

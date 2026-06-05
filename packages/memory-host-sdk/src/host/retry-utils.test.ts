@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover retry utils behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
 import { resolveRetryConfig, retryAsync } from "./retry-utils.js";

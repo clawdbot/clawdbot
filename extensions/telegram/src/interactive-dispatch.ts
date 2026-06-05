@@ -1,3 +1,4 @@
+// Telegram plugin module implements interactive dispatch behavior.
 import {
   createInteractiveConversationBindingHelpers,
   dispatchPluginInteractiveHandler,

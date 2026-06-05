@@ -1,3 +1,4 @@
+// Imessage plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
   ChannelSetupWizard,

@@ -1,3 +1,5 @@
+// Runner attachment facade keeps media attachment normalization/cache creation
+// available from the public runner module without exposing implementation files.
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   MediaAttachmentCache,

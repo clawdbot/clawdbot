@@ -1,8 +1,10 @@
+// Completion write-state tests cover shell completion state file writes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const stderrWrites = vi.hoisted(() => vi.fn());
 const getCoreCliCommandNamesMock = vi.hoisted(() => vi.fn(() => []));
@@ -44,8 +46,6 @@ vi.mock("../plugins/cli.js", () => ({
 }));
 
 describe("completion-cli write-state", () => {
-  const originalHome = process.env.HOME;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let restoreStderrWriteSpy: (() => void) | null = null;
 
   beforeEach(() => {
@@ -67,16 +67,6 @@ describe("completion-cli write-state", () => {
 
   afterEach(async () => {
     restoreStderrWriteSpy?.();
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
   });
 
   it("keeps completion cache generation alive when a subcli fails to register", async () => {
@@ -84,34 +74,35 @@ describe("completion-cli write-state", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.HOME = homeDir;
+    try {
+      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const program = new Command();
+        program.name("openclaw");
+        registerCompletionCli(program);
 
-    const program = new Command();
-    program.name("openclaw");
-    registerCompletionCli(program);
+        await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
-    await program.parseAsync(["completion", "--write-state"], { from: "user" });
-
-    const cacheDir = path.join(stateDir, "completions");
-    expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
-      "openclaw.bash",
-      "openclaw.fish",
-      "openclaw.ps1",
-      "openclaw.zsh",
-    ]);
-    expect(registerSubCliByNameMock.mock.calls).toEqual([
-      [program, "qa", process.argv, { purpose: "completion" }],
-    ]);
-    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
-    expect(stderrWrites.mock.calls).toEqual([
-      [
-        "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.md\n",
-      ],
-    ]);
-
-    await fs.rm(stateDir, { recursive: true, force: true });
-    await fs.rm(homeDir, { recursive: true, force: true });
+        const cacheDir = path.join(stateDir, "completions");
+        expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
+          "openclaw.bash",
+          "openclaw.fish",
+          "openclaw.ps1",
+          "openclaw.zsh",
+        ]);
+        expect(registerSubCliByNameMock.mock.calls).toEqual([
+          [program, "qa", process.argv, { purpose: "completion" }],
+        ]);
+        expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
+        expect(stderrWrites.mock.calls).toEqual([
+          [
+            "[completion] skipping subcommand `qa` while building completion cache: qa scenario pack not found: qa/scenarios/index.md\n",
+          ],
+        ]);
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("can skip plugin command registration for update-triggered cache writes", async () => {
@@ -122,29 +113,33 @@ describe("completion-cli write-state", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.HOME = homeDir;
-    process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] = "1";
-
     try {
-      const program = new Command();
-      program.name("openclaw");
-      registerCompletionCli(program);
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
+        },
+        async () => {
+          const program = new Command();
+          program.name("openclaw");
+          registerCompletionCli(program);
 
-      await program.parseAsync(["completion", "--write-state"], { from: "user" });
+          await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
-      expect(registerSubCliByNameMock.mock.calls).toEqual([
-        [program, "qa", process.argv, { purpose: "completion" }],
-      ]);
-      expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-      expect((await fs.readdir(path.join(stateDir, "completions"))).toSorted()).toEqual([
-        "openclaw.bash",
-        "openclaw.fish",
-        "openclaw.ps1",
-        "openclaw.zsh",
-      ]);
+          expect(registerSubCliByNameMock.mock.calls).toEqual([
+            [program, "qa", process.argv, { purpose: "completion" }],
+          ]);
+          expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+          expect((await fs.readdir(path.join(stateDir, "completions"))).toSorted()).toEqual([
+            "openclaw.bash",
+            "openclaw.fish",
+            "openclaw.ps1",
+            "openclaw.zsh",
+          ]);
+        },
+      );
     } finally {
-      delete process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV];
       await fs.rm(stateDir, { recursive: true, force: true });
       await fs.rm(homeDir, { recursive: true, force: true });
     }

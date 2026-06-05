@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor auth plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());

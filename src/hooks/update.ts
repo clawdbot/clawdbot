@@ -1,3 +1,4 @@
+// Hook update helpers refresh installed hook records and config references.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {

@@ -1,3 +1,5 @@
+// Resource loader tests cover compatibility wiring for SDK prompt transform
+// aliases.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +8,8 @@ import { DefaultResourceLoader } from "./resource-loader.js";
 
 describe("DefaultResourceLoader", () => {
   it("keeps deprecated SDK prompt override aliases wired to prompt transforms", async () => {
+    // These aliases are deprecated but shipped SDK surface, so they still map
+    // through the same transform path as the current options.
     const root = mkdtempSync(join(tmpdir(), "openclaw-resource-loader-"));
     try {
       const loader = new DefaultResourceLoader({

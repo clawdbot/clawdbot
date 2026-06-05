@@ -1,3 +1,4 @@
+// Models list e2e tests cover model listing command output with local auth/config fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

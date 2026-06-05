@@ -1,3 +1,4 @@
+// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {

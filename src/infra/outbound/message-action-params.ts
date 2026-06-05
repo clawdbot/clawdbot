@@ -1,3 +1,5 @@
+// Message-action param normalization hydrates media sources, sandbox paths,
+// base64 buffers, JSON params, and plugin-owned media aliases.
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -155,6 +157,7 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   senderIsOwner?: boolean;
 }): string[] {
   if (!hasPotentialPluginActionParam(params.args)) {
+    // Standard send params never need bundled action metadata discovery.
     return [];
   }
   return resolveChannelMessageToolMediaSourceParamKeys({

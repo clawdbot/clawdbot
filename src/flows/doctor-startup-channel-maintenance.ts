@@ -1,3 +1,4 @@
+// Doctor startup channel maintenance runs channel plugin startup repairs.
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

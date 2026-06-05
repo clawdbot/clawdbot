@@ -1,3 +1,4 @@
+// Session key utilities normalize and classify persisted session keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

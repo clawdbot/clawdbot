@@ -1,3 +1,4 @@
+// Matrix helper module supports account config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {

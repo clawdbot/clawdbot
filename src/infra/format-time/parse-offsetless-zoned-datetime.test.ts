@@ -1,3 +1,5 @@
+// Covers offsetless ISO datetime detection, timezone conversion, DST gaps, and
+// sub-second round trips.
 import { describe, expect, it } from "vitest";
 import {
   isOffsetlessIsoDateTime,

@@ -1,9 +1,11 @@
+// Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing, createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
+  // Stub every non-TTS tool so this suite isolates TTS option plumbing.
   const stubTool = (name: string) =>
     ({
       name,
@@ -135,6 +137,7 @@ vi.mock("../tts/tts.js", () => ({
 }));
 
 function getTextToSpeechParams() {
+  // The mocked TTS runtime exposes the exact invocation payload for assertions.
   const calls = (mocks.textToSpeech as unknown as { mock: { calls: unknown[][] } }).mock.calls;
   return calls[0]?.[0] as
     | {

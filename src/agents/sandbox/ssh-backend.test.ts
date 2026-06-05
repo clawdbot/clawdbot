@@ -1,3 +1,5 @@
+// SSH sandbox backend tests cover runtime description/removal, remote seeding,
+// command execution, bind validation, and backend config plumbing.
 import os from "node:os";
 import path from "node:path";
 import {
@@ -73,6 +75,8 @@ function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number,
 }
 
 function requireSshRunCommandParams(callIndex = 0) {
+  // Backend assertions inspect the normalized remote command params before the
+  // ssh helper turns them into argv.
   return requireMockRecordArg(sshMocks.runSshSandboxCommand, callIndex, "ssh run command params");
 }
 

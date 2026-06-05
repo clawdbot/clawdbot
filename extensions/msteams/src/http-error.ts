@@ -1,3 +1,4 @@
+// Msteams plugin module implements http error behavior.
 import {
   createProviderHttpError,
   extractProviderErrorDetail,

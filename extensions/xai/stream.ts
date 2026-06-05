@@ -1,3 +1,4 @@
+// Xai plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,

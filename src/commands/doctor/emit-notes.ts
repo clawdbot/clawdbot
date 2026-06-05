@@ -1,5 +1,7 @@
+// Doctor note emission helpers that sanitize user-visible repair output.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 
+/** Strip terminal control sequences from a potentially multi-line doctor note. */
 export function sanitizeDoctorNote(note: string): string {
   return note
     .split("\n")
@@ -7,6 +9,7 @@ export function sanitizeDoctorNote(note: string): string {
     .join("\n");
 }
 
+/** Emit grouped doctor change, info, and warning notes with sanitized content. */
 export function emitDoctorNotes(params: {
   note: (message: string, title?: string) => void;
   changeNotes?: string[];

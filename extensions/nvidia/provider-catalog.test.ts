@@ -1,3 +1,4 @@
+// Nvidia tests cover provider catalog plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildLiveNvidiaProvider,
@@ -40,6 +41,7 @@ describe("nvidia provider catalog", () => {
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe("NVIDIA_API_KEY");
     expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
@@ -50,6 +52,16 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
     );
+    expect(provider.models[0]).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 16_384,
+      params: {
+        chat_template_kwargs: {
+          enable_thinking: false,
+          force_nonempty_content: true,
+        },
+      },
+    });
   });
 
   it("promotes ranked models from NVIDIA's featured catalog", async () => {
@@ -99,6 +111,7 @@ describe("nvidia provider catalog", () => {
     const provider = await buildLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
@@ -226,5 +239,42 @@ describe("nvidia provider catalog", () => {
     expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies bundled Ultra defaults when featured catalog returns Ultra", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "nemotron-3-ultra-550b-a55b",
+          "model-name": "Nemotron 3 Ultra 550B",
+          context: 1000000,
+          "max-output": 16384,
+        },
+        {
+          model: "minimaxai/minimax-m2.7",
+          "model-name": "Minimax M2.7",
+          context: 196608,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const provider = await buildLiveNvidiaProvider();
+
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "minimaxai/minimax-m2.7",
+    ]);
+    expect(provider.models[0]).toMatchObject({
+      name: "Nemotron 3 Ultra 550B",
+      contextWindow: 1_000_000,
+      maxTokens: 16_384,
+      params: {
+        chat_template_kwargs: {
+          enable_thinking: false,
+          force_nonempty_content: true,
+        },
+      },
+    });
   });
 });

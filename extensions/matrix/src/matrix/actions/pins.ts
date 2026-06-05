@@ -1,3 +1,4 @@
+// Matrix plugin module implements pins behavior.
 import { withResolvedRoomAction } from "./client.js";
 import { fetchEventSummary, readPinnedEvents } from "./summary.js";
 import {

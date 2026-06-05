@@ -1,3 +1,4 @@
+// Agent Core module implements prompt templates behavior.
 import {
   basenameEnvPath,
   parseFrontmatter,

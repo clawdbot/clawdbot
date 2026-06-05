@@ -1,3 +1,4 @@
+// Imessage plugin module implements actions contract behavior.
 export const IMESSAGE_ACTIONS = {
   react: { gate: "reactions" },
   edit: { gate: "edit" },

@@ -1,3 +1,5 @@
+// Gateway client watchdog tests ensure managed proxy mode does not block direct
+// loopback WebSocket connections needed by the OpenClaw wrapper.
 import { describe, expect, test, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";

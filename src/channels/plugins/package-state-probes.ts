@@ -1,3 +1,8 @@
+/**
+ * Bundled channel package-state probes.
+ *
+ * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,10 +21,6 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
-
-/**
- * Package-state probes for bundled channel configured/auth state metadata.
- */
 
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;

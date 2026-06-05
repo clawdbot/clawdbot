@@ -1,3 +1,4 @@
+/** Runtime-loaded channel target helpers used by cron delivery resolution. */
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
@@ -20,6 +21,8 @@ export async function resolveChannelTargetForDelivery(params: {
   input: string;
   accountId?: string | null;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
+  // Delivery may be the first channel touch after startup; allow bootstrap so
+  // plugin config and account metadata are available before target resolution.
   resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
@@ -52,6 +55,8 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
   threadId?: string | number | null;
   currentSessionKey?: string;
 }): Promise<OutboundSessionRoute | null> {
+  // Route lookup also bootstraps the plugin so canonical thread/session mapping
+  // matches the send-time channel runtime.
   resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,

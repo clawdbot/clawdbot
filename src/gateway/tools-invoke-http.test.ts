@@ -1,3 +1,5 @@
+// Tool invoke HTTP tests cover request auth, tool context construction, hook
+// filtering, plugin metadata, payload validation, and response shaping.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

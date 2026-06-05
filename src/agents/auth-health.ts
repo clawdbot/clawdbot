@@ -1,3 +1,8 @@
+/**
+ * Auth profile health summarization.
+ * Classifies stored and runtime credentials into profile/provider rollups for
+ * status commands and doctor output without prompting keychain access.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -61,6 +66,7 @@ function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 
+/** Format a remaining-duration value for compact auth status displays. */
 export function formatRemainingShort(
   remainingMs?: number,
   opts?: {
@@ -253,6 +259,7 @@ function buildProfileHealth(params: {
   };
 }
 
+/** Build profile and provider auth health rollups from an auth profile store. */
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;

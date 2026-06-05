@@ -1,3 +1,4 @@
+// Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {

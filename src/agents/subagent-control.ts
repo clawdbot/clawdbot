@@ -1,3 +1,8 @@
+/**
+ * Implements subagent control operations: list, kill, steer, and send-message.
+ * The module enforces controller ownership before mutating child sessions or
+ * routing internal follow-up messages.
+ */
 import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
@@ -34,7 +39,9 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
+/** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
+/** Maximum recent-run window accepted by subagent control UI/tools. */
 export const MAX_RECENT_MINUTES = 24 * 60;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
@@ -85,12 +92,14 @@ async function resolveSubagentControlRuntime(): Promise<{
   };
 }
 
+/** Controller identity and capability scope resolved from the caller session. */
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
   callerSessionKey: string;
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
 };
+/** Resolves which subagent runs the caller is allowed to control. */
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -121,6 +130,7 @@ export function resolveSubagentController(params: {
   };
 }
 
+/** Lists latest child runs controlled by a session key. */
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
   const key = controllerSessionKey.trim();
   if (!key) {
@@ -265,6 +275,7 @@ async function cascadeKillChildren(params: {
   return { killed, labels };
 }
 
+/** Kills every currently controlled child run and its descendants. */
 export async function killAllControlledSubagentRuns(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -313,6 +324,7 @@ export async function killAllControlledSubagentRuns(params: {
   return { status: "ok" as const, killed, labels: killedLabels };
 }
 
+/** Kills one controlled subagent run and any active descendants. */
 export async function killControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -389,6 +401,7 @@ export async function killControlledSubagentRun(params: {
   };
 }
 
+/** Admin kill path for a subagent session key, bypassing caller ownership checks. */
 export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
   const targetSessionKey = params.sessionKey.trim();
   if (!targetSessionKey) {
@@ -423,6 +436,7 @@ export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessio
   };
 }
 
+/** Restarts a controlled subagent run with a new steering message. */
 export async function steerControlledSubagentRun(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;
@@ -614,6 +628,7 @@ export async function steerControlledSubagentRun(params: {
   };
 }
 
+/** Sends a follow-up message to a controlled subagent and waits for a reply. */
 export async function sendControlledSubagentMessage(params: {
   cfg: OpenClawConfig;
   controller: ResolvedSubagentController;

@@ -1,3 +1,4 @@
+// Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

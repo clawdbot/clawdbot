@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements text runtime behavior.
 export {
   convertMarkdownTables,
   sanitizeAssistantVisibleText,

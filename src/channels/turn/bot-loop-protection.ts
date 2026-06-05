@@ -1,3 +1,4 @@
+// Channel bot-pair loop guard shared by turn adapters.
 import {
   createPairLoopGuard,
   resolvePairLoopGuardSettings,

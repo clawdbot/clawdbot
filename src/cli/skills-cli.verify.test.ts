@@ -1,3 +1,4 @@
+// Skills CLI verify tests cover skill verification command behavior and diagnostics.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

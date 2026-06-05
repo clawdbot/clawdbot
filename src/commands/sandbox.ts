@@ -1,3 +1,9 @@
+/**
+ * Sandbox runtime management commands.
+ *
+ * Supports listing active sandbox containers/browsers and recreating them by
+ * session, agent, or all scopes.
+ */
 import { confirm as clackConfirm } from "@clack/prompts";
 import {
   listSandboxBrowsers,
@@ -40,8 +46,7 @@ type FilteredContainers = {
   browsers: SandboxBrowserInfo[];
 };
 
-// --- List Command ---
-
+/** Lists active sandbox containers or browser containers. */
 export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
@@ -63,8 +68,7 @@ export async function sandboxListCommand(
   displaySummary(containers, browsers, runtime);
 }
 
-// --- Recreate Command ---
-
+/** Stops and removes sandbox runtimes matching the requested scope. */
 export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
@@ -97,8 +101,6 @@ export async function sandboxRecreateCommand(
   }
 }
 
-// --- Validation ---
-
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error(
@@ -118,8 +120,6 @@ function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeE
   return true;
 }
 
-// --- Filtering ---
-
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
   const allContainers = await listSandboxContainers().catch(() => []);
   const allBrowsers = await listSandboxBrowsers().catch(() => []);
@@ -131,6 +131,8 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
     containers = containers.filter((c) => c.sessionKey === opts.session);
     browsers = browsers.filter((b) => b.sessionKey === opts.session);
   } else if (opts.agent) {
+    // Agent-scoped cleanup removes both the agent root session and its child
+    // session keys while leaving unrelated agent containers untouched.
     const matchesAgent = createAgentMatcher(opts.agent);
     containers = containers.filter(matchesAgent);
     browsers = browsers.filter(matchesAgent);
@@ -144,8 +146,6 @@ function createAgentMatcher(agentId: string) {
   return (item: ContainerItem) =>
     item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
 }
-
-// --- Container Operations ---
 
 async function confirmRecreate(): Promise<boolean> {
   const result = await clackConfirm({
@@ -165,6 +165,8 @@ async function removeContainers(
   let successCount = 0;
   let failCount = 0;
 
+  // Remove normal sandboxes first, then browser containers; reporting keeps one
+  // aggregate fail count so callers can exit non-zero on partial cleanup.
   for (const container of filtered.containers) {
     const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
     if (result.success) {

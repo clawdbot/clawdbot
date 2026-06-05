@@ -1,3 +1,7 @@
+/**
+ * Reads Codex plugin marketplace state and app inventory to decide which
+ * plugin-owned apps can be exposed to a native Codex thread.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexAppInventoryCache,
@@ -12,14 +16,17 @@ import {
 } from "./config.js";
 import type { v2 } from "./protocol.js";
 
+/** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
+/** Stable reference to the OpenAI curated Codex plugin marketplace. */
 export type CodexPluginMarketplaceRef = {
   name: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   path?: string;
   remoteMarketplaceName?: string;
 };
 
+/** Machine-readable inventory diagnostic code used by thread config builders. */
 export type CodexPluginInventoryDiagnosticCode =
   | "disabled"
   | "marketplace_missing"
@@ -30,12 +37,14 @@ export type CodexPluginInventoryDiagnosticCode =
   | "app_inventory_stale"
   | "app_ownership_ambiguous";
 
+/** Diagnostic explaining why a configured plugin or app cannot be exposed. */
 export type CodexPluginInventoryDiagnostic = {
   code: CodexPluginInventoryDiagnosticCode;
   plugin?: ResolvedCodexPluginPolicy;
   message: string;
 };
 
+/** App owned by a Codex plugin with current accessibility/auth state. */
 export type CodexPluginOwnedApp = {
   id: string;
   name: string;
@@ -44,6 +53,7 @@ export type CodexPluginOwnedApp = {
   needsAuth: boolean;
 };
 
+/** Inventory record for one configured Codex plugin policy. */
 export type CodexPluginInventoryRecord = {
   policy: ResolvedCodexPluginPolicy;
   summary: v2.PluginSummary;
@@ -55,6 +65,7 @@ export type CodexPluginInventoryRecord = {
   apps: CodexPluginOwnedApp[];
 };
 
+/** Complete inventory result for configured Codex plugins and owned apps. */
 export type CodexPluginInventory = {
   policy: ResolvedCodexPluginsPolicy;
   marketplace?: CodexPluginMarketplaceRef;
@@ -63,6 +74,7 @@ export type CodexPluginInventory = {
   appInventory?: CodexAppInventoryCacheRead;
 };
 
+/** Inputs for reading plugin marketplace/detail state and cached app inventory. */
 export type ReadCodexPluginInventoryParams = {
   pluginConfig?: unknown;
   policy?: ResolvedCodexPluginsPolicy;
@@ -74,6 +86,7 @@ export type ReadCodexPluginInventoryParams = {
   suppressAppInventoryRefresh?: boolean;
 };
 
+/** Reads configured Codex plugin state and maps owned apps to readiness diagnostics. */
 export async function readCodexPluginInventory(
   params: ReadCodexPluginInventoryParams,
 ): Promise<CodexPluginInventory> {
@@ -195,6 +208,7 @@ export async function readCodexPluginInventory(
   return inventory;
 }
 
+/** Finds one plugin summary in the OpenAI curated marketplace response. */
 export function findOpenAiCuratedPluginSummary(
   listed: v2.PluginListResponse,
   pluginName: string,
@@ -209,6 +223,7 @@ export function findOpenAiCuratedPluginSummary(
   return summary ? { marketplace: marketplaceRef(marketplaceEntry), summary } : undefined;
 }
 
+/** Builds plugin/read or plugin/install params from a marketplace reference. */
 export function pluginReadParams(
   marketplace: CodexPluginMarketplaceRef,
   pluginName: string,

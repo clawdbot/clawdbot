@@ -1,3 +1,4 @@
+// Local media access tests cover workspace path authorization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

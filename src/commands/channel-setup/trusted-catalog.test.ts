@@ -1,3 +1,4 @@
+// Trusted channel catalog tests cover workspace shadow filtering and plugin auto-enable trust resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 

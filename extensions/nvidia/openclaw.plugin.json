@@ -26,6 +26,22 @@
         "api": "openai-completions",
         "models": [
           {
+            "id": "nvidia/nemotron-3-ultra-550b-a55b",
+            "name": "NVIDIA Nemotron 3 Ultra 550B",
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
             "id": "nvidia/nemotron-3-super-120b-a12b",
             "name": "NVIDIA Nemotron 3 Super 120B",
             "input": ["text"],

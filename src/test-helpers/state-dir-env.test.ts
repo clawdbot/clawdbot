@@ -1,3 +1,4 @@
+// State dir environment tests cover isolated state directory env helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Verifies models.json planning applies config env vars and discovery scope.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +37,8 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
 }
 
 function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  // Minimal implicit OpenAI provider used to verify write planning without live
+  // discovery or real credentials.
   return {
     baseUrl: "https://api.openai.com/v1",
     api: "openai-responses",
@@ -76,6 +79,8 @@ async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
+  // Config env vars are materialized into the discovery env before implicit
+  // provider resolution.
   const env = createConfigRuntimeEnv(params.cfg);
   return await resolveProvidersForModelsJsonWithDeps(
     {
@@ -121,6 +126,8 @@ let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawMode
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
 
 beforeAll(async () => {
+  // Reused no-auth write plan proves generated providers stay serializable
+  // even when discovery returns auth-only provider shells.
   unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
     {
       cfg: { models: { providers: {} } },

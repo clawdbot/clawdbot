@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent common behavior.
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type { QaProviderMode } from "./model-selection.js";
 

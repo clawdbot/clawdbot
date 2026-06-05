@@ -1,3 +1,4 @@
+// Ollama tests cover discovery shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl } from "./discovery-shared.js";
 

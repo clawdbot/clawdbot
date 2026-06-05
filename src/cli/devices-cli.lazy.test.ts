@@ -1,3 +1,4 @@
+// Devices CLI lazy tests cover lazy device command imports and registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,3 +1,4 @@
+// Control UI tests cover presenter behavior.
 import { describe, expect, it } from "vitest";
 import { formatNextRun } from "./presenter.ts";
 

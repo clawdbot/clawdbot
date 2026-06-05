@@ -1,3 +1,4 @@
+// Sender label tests cover display-label formatting for channel senders.
 import { describe, expect, it } from "vitest";
 import { listSenderLabelCandidates, resolveSenderLabel } from "./sender-label.js";
 

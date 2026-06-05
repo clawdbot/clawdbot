@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager search behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {

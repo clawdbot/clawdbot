@@ -1,3 +1,5 @@
+// Compaction retry subscription tests cover retry wait accounting, compaction
+// event emission, abort-on-unsubscribe, and verbose tool summary behavior.
 import { describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -8,6 +10,7 @@ function toolResultPayloadAt(
 ): {
   text?: string;
 } {
+  // Tool summary assertions only need text payloads from onToolResult calls.
   const [payload] = onToolResult.mock.calls[index] ?? [];
   if (!payload || typeof payload !== "object") {
     throw new Error(`expected tool result payload for call ${index + 1}`);
@@ -17,6 +20,8 @@ function toolResultPayloadAt(
 
 describe("subscribeEmbeddedAgentSession", () => {
   it("waits for multiple compaction retries before resolving", async () => {
+    // Each retrying compaction requires a matching agent_end before waiters are
+    // released, preventing early continuation during repeated overflow repairs.
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-3",
     });

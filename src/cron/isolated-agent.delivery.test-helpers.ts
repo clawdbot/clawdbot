@@ -1,3 +1,4 @@
+// Isolated agent delivery test helpers build delivery targets and mocks.
 import { expect, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";

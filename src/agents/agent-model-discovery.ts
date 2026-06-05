@@ -1,3 +1,4 @@
+/** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -147,6 +148,7 @@ function createOpenClawModelRegistry(
 }
 
 /** Creates auth storage for model discovery from stored and env-backed credentials. */
+/** Builds auth storage for model discovery without prompting for secrets. */
 export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
@@ -157,6 +159,7 @@ export function discoverAuthStorage(
 }
 
 /** Creates the model registry used by agent model discovery. */
+/** Creates a model registry for one agent directory, optionally filtered and plugin-normalized. */
 export function discoverModels(
   authStorage: AgentAuthStorage,
   agentDir: string,

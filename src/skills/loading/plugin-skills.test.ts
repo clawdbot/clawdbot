@@ -1,3 +1,4 @@
+// Plugin skill loading tests cover skill discovery from plugin-provided skill bundles.
 import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

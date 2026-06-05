@@ -1,3 +1,5 @@
+// Embedded gateway stub tests cover in-process gateway methods used by agent
+// tools when no external gateway transport is available.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
@@ -101,6 +103,8 @@ describe("embedded gateway stub", () => {
   });
 
   it("projects embedded chat history through the shared display projector", async () => {
+    // Embedded history must use the same projection path as gateway history so
+    // byte/message limits and display filtering stay aligned.
     const rawMessages = [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
@@ -148,6 +152,8 @@ describe("embedded gateway stub", () => {
   });
 
   it("infers embedded global chat history scope from agent-prefixed aliases", async () => {
+    // Agent-prefixed global aliases carry the target agent id even when the
+    // caller does not pass agentId separately.
     const callGateway = createEmbeddedCallGateway();
     await callGateway<{ messages: unknown[] }>({
       method: "chat.history",

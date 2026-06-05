@@ -1,3 +1,8 @@
+/**
+ * Channel config matching helpers.
+ *
+ * Resolves direct, parent, normalized, and wildcard config entries with match metadata.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 

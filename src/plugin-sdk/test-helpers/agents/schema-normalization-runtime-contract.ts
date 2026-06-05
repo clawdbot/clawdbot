@@ -1,3 +1,4 @@
+// Schema normalization runtime contract helpers create tools for provider schema tests.
 export function createParameterFreeTool(name = "ping") {
   return {
     name,

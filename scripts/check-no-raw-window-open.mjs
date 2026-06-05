@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Ensures UI code opens external URLs through the safe helper.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -37,6 +38,9 @@ function isRawWindowOpenCall(expression) {
   );
 }
 
+/**
+ * Finds raw `window.open(...)` or `globalThis.open(...)` call lines.
+ */
 export function findRawWindowOpenLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const lines = [];
@@ -52,6 +56,9 @@ export function findRawWindowOpenLines(content, fileName = "source.ts") {
   return lines;
 }
 
+/**
+ * Runs the raw window.open guard.
+ */
 export async function main() {
   const files = await collectTypeScriptFiles(uiSourceDir, {
     extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],

@@ -1,3 +1,4 @@
+// Crestodian assistant tests cover assistant-driven rescue message generation.
 import { describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";

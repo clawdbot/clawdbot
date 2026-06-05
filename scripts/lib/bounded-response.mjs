@@ -1,3 +1,4 @@
+// Reads response bodies with byte limits, abort handling, and timeout cancellation.
 function defaultTooLargeMessage(label, maxBytes) {
   return `${label} response body exceeded ${maxBytes} bytes`;
 }
@@ -67,6 +68,7 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   }
 }
 
+/** Read response text while enforcing max bytes before and during streaming. */
 export async function readBoundedResponseText(response, label, maxBytes, options = {}) {
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;

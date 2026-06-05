@@ -1,3 +1,4 @@
+// Agent consult runtime tests cover consult session creation and runtime handoff.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import {

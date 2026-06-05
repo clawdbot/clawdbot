@@ -1,3 +1,4 @@
+// Doctor repair flow builds and runs repair actions for doctor findings.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";

@@ -1,3 +1,4 @@
+// Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";

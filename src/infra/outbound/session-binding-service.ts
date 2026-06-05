@@ -1,3 +1,5 @@
+// Session binding service multiplexes channel adapters and the generic current
+// conversation store behind one bind/list/resolve/touch/unbind API.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -154,6 +156,8 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
   });
   const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
   const registrations = existing ? [...existing] : [];
+  // Registrations are stacked so duplicate module graphs can temporarily
+  // coexist and unregister without tearing down the active replacement.
   registrations.push({
     adapter,
     normalizedAdapter,

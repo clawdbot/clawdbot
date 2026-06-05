@@ -1,11 +1,10 @@
+/**
+ * Lightweight shell parsing helpers for exec display summaries.
+ *
+ * Handles common quoting, wrapper, and preamble shapes for UI labels without validating shell syntax.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/**
- * Lightweight shell parsing helpers for exec-tool display summaries.
- *
- * These parsers intentionally handle common quoting/wrapper/preamble shapes for UI labels; they do
- * not execute or validate shell syntax.
- */
 type PreambleResult = {
   command: string;
   chdirPath?: string;

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements query expansion behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 /**

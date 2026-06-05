@@ -1,3 +1,4 @@
+// Plugin install record commit tests cover install record persistence after CLI installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";

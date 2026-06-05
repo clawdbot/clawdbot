@@ -1,3 +1,8 @@
+/**
+ * Temporary plugin/extension fixtures.
+ *
+ * Creates disposable plugin directories and resets loader/registry state for tests.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

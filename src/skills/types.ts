@@ -1,3 +1,4 @@
+// Skill types expose the shared skill contracts used by discovery, loading, and runtime flows.
 import type { Skill } from "./loading/skill-contract.js";
 
 export type SkillInstallSpec = {

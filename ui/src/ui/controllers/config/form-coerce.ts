@@ -1,3 +1,4 @@
+// Control UI controller manages form coerce gateway state.
 import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 
 function coerceNumberString(value: string, integer: boolean): number | undefined | string {

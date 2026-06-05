@@ -1,3 +1,4 @@
+// Control UI controller manages form utils gateway state.
 import JSON5 from "json5";
 
 export function cloneConfigObject<T>(value: T): T {

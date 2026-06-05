@@ -1,3 +1,4 @@
+// Deprecation compatibility tests cover doctor warnings and repairs for deprecated config.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {

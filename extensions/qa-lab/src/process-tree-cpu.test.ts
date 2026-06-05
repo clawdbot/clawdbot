@@ -1,3 +1,4 @@
+// Qa Lab tests cover process tree cpu plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parsePsCpuTimeMs,

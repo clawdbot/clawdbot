@@ -1,3 +1,6 @@
+/**
+ * Resolves model provider API keys from explicit environment variables.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";

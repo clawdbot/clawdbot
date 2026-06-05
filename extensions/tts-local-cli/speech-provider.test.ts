@@ -1,3 +1,4 @@
+// Tts Local Cli tests cover speech provider plugin behavior.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

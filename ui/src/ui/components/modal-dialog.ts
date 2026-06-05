@@ -1,3 +1,4 @@
+// Control UI component implements the modal dialog element.
 import { LitElement, css, html, nothing } from "lit";
 import { property, query } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";

@@ -1,3 +1,7 @@
+/**
+ * Integration coverage for workspace bootstrap cache reads.
+ * Uses temp workspaces to verify real file loading through the cache layer.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

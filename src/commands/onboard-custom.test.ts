@@ -1,3 +1,4 @@
+// Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";

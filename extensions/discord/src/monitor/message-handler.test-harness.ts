@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler harness behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

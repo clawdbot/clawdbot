@@ -1,3 +1,4 @@
+// Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";

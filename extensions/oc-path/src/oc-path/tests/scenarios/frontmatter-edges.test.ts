@@ -1,3 +1,4 @@
+// OC Path tests cover frontmatter edges plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";
 

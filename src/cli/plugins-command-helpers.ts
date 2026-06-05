@@ -1,3 +1,4 @@
+// Shared plugin CLI helpers for install logging, file specs, hooks, and slot selection.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -99,6 +100,7 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
+  // Static metadata is preferred; runtime diagnostics fill in kind for older manifests.
   const report = buildSlotSelectionRegistry(config, pluginId);
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {

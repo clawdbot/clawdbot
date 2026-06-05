@@ -1,3 +1,4 @@
+// TTS capability tests cover channel plugin text-to-speech capability detection.
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

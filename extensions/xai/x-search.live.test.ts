@@ -1,3 +1,4 @@
+// Xai tests cover x search plugin behavior.
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createXSearchTool } from "./x-search.js";

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
+// report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -53,6 +55,9 @@ function parsePositiveInt(raw, flagName) {
   return parsed;
 }
 
+/**
+ * Parses extension memory profiler options after pnpm's optional separator.
+ */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
@@ -171,6 +176,9 @@ function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS)
   )}`;
 }
 
+/**
+ * Runs one import scenario in a child process and captures bounded output plus RSS.
+ */
 export async function runCase({
   repoRoot,
   env,

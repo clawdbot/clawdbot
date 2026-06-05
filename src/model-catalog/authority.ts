@@ -1,3 +1,4 @@
+// Model-catalog authority merging chooses the strongest source for duplicate provider/model rows.
 import type {
   ModelCatalogSource,
   NormalizedModelCatalogRow,

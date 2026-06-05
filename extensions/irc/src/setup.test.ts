@@ -1,3 +1,4 @@
+// Irc tests cover setup plugin behavior.
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,

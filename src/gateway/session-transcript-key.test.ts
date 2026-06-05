@@ -1,3 +1,5 @@
+// Transcript key tests cover cached lookup from transcript files back to gateway
+// session keys using combined session stores and transcript candidates.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 

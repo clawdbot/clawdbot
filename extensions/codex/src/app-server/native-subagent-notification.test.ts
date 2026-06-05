@@ -1,3 +1,4 @@
+// Codex tests cover native subagent notification plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractCodexNativeSubagentCompletions,

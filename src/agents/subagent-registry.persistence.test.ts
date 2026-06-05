@@ -1,3 +1,5 @@
+// Subagent registry persistence tests cover JSON registry restore, child
+// session timing writes, and restart cleanup behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -123,6 +125,8 @@ describe("subagent registry persistence", () => {
     persisted: Record<string, unknown>,
     opts?: { seedChildSessions?: boolean },
   ) => {
+    // Each persisted-registry fixture gets its own state dir so session stores
+    // and registry files are tested through the same paths production resolves.
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
@@ -187,6 +191,8 @@ describe("subagent registry persistence", () => {
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) => {
+    // Most tests assert restore semantics, not async writer behavior, so this
+    // synchronous writer keeps registry state immediately observable.
     const registryPath = tempStateDir
       ? path.join(tempStateDir, "subagents", "runs.json")
       : resolveSubagentRegistryPath();

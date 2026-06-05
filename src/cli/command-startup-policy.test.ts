@@ -1,3 +1,4 @@
+// Command startup policy tests cover which CLI commands require startup side effects.
 import { describe, expect, it } from "vitest";
 import {
   resolveCliStartupPolicy,

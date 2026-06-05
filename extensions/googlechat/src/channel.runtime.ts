@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channel behavior.
 import {
   probeGoogleChat as probeGoogleChatImpl,
   sendGoogleChatMessage as sendGoogleChatMessageImpl,

@@ -1,3 +1,5 @@
+// Tool-call argument decoding tests cover HTML entity repair for model-emitted
+// tool arguments without corrupting invalid numeric entities.
 import { describe, expect, it } from "vitest";
 import { decodeHtmlEntitiesInObject } from "./tool-call-argument-decoding.js";
 

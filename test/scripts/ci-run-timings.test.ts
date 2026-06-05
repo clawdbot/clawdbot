@@ -1,3 +1,4 @@
+// Ci Run Timings tests cover ci run timings script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,

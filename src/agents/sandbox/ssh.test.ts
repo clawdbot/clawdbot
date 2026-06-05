@@ -1,3 +1,5 @@
+// SSH sandbox helper tests cover temp auth materialization, remote command
+// validation, shell quoting, and upload symlink safety.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +31,8 @@ afterEach(async () => {
 
 describe("sandbox ssh helpers", () => {
   it("materializes inline ssh auth data into a temp config", async () => {
+    // Inline key/cert/known-host material is written to private temp files and
+    // referenced from the generated ssh config.
     const session = await createSshSandboxSessionFromSettings({
       command: "ssh",
       target: "peter@example.com:2222",

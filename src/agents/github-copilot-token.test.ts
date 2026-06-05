@@ -1,3 +1,4 @@
+// Covers Copilot token exchange, cache shape, and proxy-derived API host behavior.
 import { describe, expect, it, vi } from "vitest";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import {
@@ -7,6 +8,8 @@ import {
 
 describe("resolveCopilotApiToken", () => {
   it("derives native Copilot base URLs from Copilot proxy hints", () => {
+    // Native Copilot tokens advertise proxy hosts; the chat endpoint lives on
+    // the sibling api host and ignores proxy ports.
     expect(
       deriveCopilotApiBaseUrlFromToken(
         "copilot-token;proxy-ep=https://proxy.individual.githubcopilot.com;",
@@ -89,6 +92,8 @@ describe("resolveCopilotApiToken", () => {
     const saveJsonFileImpl = vi.fn();
 
     try {
+      // The integration id is part of Copilot's routing contract. Legacy cache
+      // entries without it must be refreshed even if the token is not expired.
       const result = await resolveCopilotApiToken({
         githubToken: "github-token",
         cachePath: "/tmp/github-copilot-token-test.json",

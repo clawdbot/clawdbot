@@ -1,3 +1,4 @@
+// Doctor command tests cover probe orchestration, fix mode, and runtime command output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

@@ -1,3 +1,4 @@
+// Nodes camera tests cover camera node command media handling and file inputs.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

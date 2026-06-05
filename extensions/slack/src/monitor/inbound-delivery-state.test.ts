@@ -1,3 +1,4 @@
+// Slack tests cover inbound delivery state plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearSlackRuntime, setSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";

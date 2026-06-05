@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.media policy plugin behavior.
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";

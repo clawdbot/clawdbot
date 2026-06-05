@@ -1,3 +1,4 @@
+// Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,

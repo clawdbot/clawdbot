@@ -1,3 +1,8 @@
+/**
+ * Tests layered tool policy resolution.
+ * Covers wildcard matching, sub-agent inheritance, provider overrides, and
+ * trusted group context checks.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

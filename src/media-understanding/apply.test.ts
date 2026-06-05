@@ -1,3 +1,5 @@
+// Media-understanding apply tests cover attachment transcription/description,
+// local binary probing, file text extraction, and context mutation.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -160,6 +162,8 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 }
 
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+  // Many tests reuse identical fixture buffers; cache by content hash to keep
+  // setup cheap while each case still gets a stable local path.
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
   const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");

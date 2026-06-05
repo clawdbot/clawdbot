@@ -1,3 +1,5 @@
+// Gateway startup runtime-config resolver.
+// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
 import type {
   GatewayAuthConfig,
   GatewayBindMode,

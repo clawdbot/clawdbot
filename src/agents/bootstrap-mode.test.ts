@@ -1,3 +1,4 @@
+/** Tests bootstrap mode selection for primary, cron, heartbeat, and sandboxed runs. */
 import { describe, expect, it } from "vitest";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
 

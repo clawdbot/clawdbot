@@ -1,3 +1,6 @@
+/**
+ * Creates the resource loader used by embedded-agent sessions.
+ */
 import { DefaultResourceLoader } from "../sessions/index.js";
 
 /**

@@ -1,3 +1,5 @@
+// Gateway node session runtime factory.
+// Creates node registry, subscription, and voice-wake fanout state.
 import { NodeRegistry, type SerializedEventPayload } from "./node-registry.js";
 import {
   createSessionEventSubscriberRegistry,

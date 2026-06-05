@@ -1,3 +1,5 @@
+// Stages bundled plugin runtime overlays into dist-runtime with SDK aliases and
+// Windows-safe symlink fallbacks.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -319,6 +321,9 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
   }
 }
 
+/**
+ * Stages runtime plugin entries and aliases used by packaged bundled plugins.
+ */
 export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");

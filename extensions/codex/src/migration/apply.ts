@@ -1,3 +1,4 @@
+// Codex plugin module implements apply behavior.
 import path from "node:path";
 import {
   applyMigrationManualItem,

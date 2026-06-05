@@ -1,3 +1,4 @@
+// Matrix tests cover verification plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const withResolvedActionClientMock = vi.fn();

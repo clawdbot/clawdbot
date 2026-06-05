@@ -1,3 +1,4 @@
+// Imessage tests cover channel inbound roots.contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

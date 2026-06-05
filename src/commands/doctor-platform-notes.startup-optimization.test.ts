@@ -1,3 +1,4 @@
+// Doctor platform note tests cover startup optimization hints and note output.
 import { describe, expect, it, vi } from "vitest";
 import { noteStartupOptimizationHints } from "./doctor-platform-notes.js";
 

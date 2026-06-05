@@ -1,3 +1,4 @@
+// Configured hook helpers combine config and install records into active hooks.
 import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";

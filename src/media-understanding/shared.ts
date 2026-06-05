@@ -1,3 +1,5 @@
+// Shared provider HTTP/audio helpers for media-understanding integrations,
+// including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
 import {
   assertOkOrThrowHttpError,
@@ -45,6 +47,8 @@ const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  // Some providers reject raw `.aac` names even when the bytes are AAC; `.m4a`
+  // preserves intent while matching their accepted upload extensions.
   const trimmed = fileName?.trim();
   const baseName = trimmed ? path.basename(trimmed) : "audio";
   const lowerMime = mime?.trim().toLowerCase();

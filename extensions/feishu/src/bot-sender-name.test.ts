@@ -1,3 +1,4 @@
+// Feishu tests cover bot sender name plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuSenderName } from "./bot-sender-name.js";
 import { FeishuConfigSchema } from "./config-schema.js";

@@ -1,3 +1,4 @@
+// Session store maintenance prunes stale entries, caps count, and handles quota TTL state.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -148,6 +149,7 @@ export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): num
     return 1;
   }
   if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    // Small caps run strictly so operator-configured tiny stores do not drift far past the limit.
     return maxEntries + 1;
   }
   const slack = Math.max(
@@ -293,6 +295,7 @@ export function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
 ): boolean {
+  // Human conversation surfaces are protected; synthetic automation sessions are disposable.
   if (isSyntheticSessionMaintenanceKey(sessionKey)) {
     return false;
   }
@@ -384,6 +387,7 @@ function wouldCapActiveSession(params: {
       key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
   ).length;
   const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  // If protected entries fill the cap, the active unprotected session would be the one removed.
   if (maxRemovableEntries <= 0) {
     return true;
   }
@@ -430,6 +434,7 @@ export function capEntryCount(
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  // Protected entries reduce the removable budget instead of being counted as deletion targets.
   const keys = Object.keys(store).filter(
     (key) =>
       !shouldPreserveMaintenanceEntry({

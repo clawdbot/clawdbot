@@ -1,3 +1,4 @@
+// Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -25,6 +26,7 @@ type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
+  // Tests mutate records freely; clone to keep helper state from leaking across assertions.
   return structuredClone(records);
 }
 

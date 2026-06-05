@@ -1,3 +1,4 @@
+// Cron CLI tests cover cron command registration and schedule output.
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";

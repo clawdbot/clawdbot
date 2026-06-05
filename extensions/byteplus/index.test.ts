@@ -1,3 +1,4 @@
+// Byteplus tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";

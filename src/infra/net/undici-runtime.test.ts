@@ -1,3 +1,5 @@
+// Undici runtime tests cover managed proxy TLS, IP-SNI stripping, and proxy
+// client factory installation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetActiveManagedProxyStateForTests,

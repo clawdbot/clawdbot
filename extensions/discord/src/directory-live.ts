@@ -1,3 +1,4 @@
+// Discord plugin module implements directory live behavior.
 import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,

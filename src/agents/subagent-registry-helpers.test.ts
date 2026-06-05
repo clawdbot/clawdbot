@@ -1,3 +1,5 @@
+// Subagent registry helper tests cover orphan reconciliation and compact logging
+// for announce delivery give-up paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { logAnnounceGiveUp, reconcileOrphanedRun } from "./subagent-registry-helpers.js";
@@ -81,6 +83,8 @@ describe("logAnnounceGiveUp", () => {
   });
 
   it("normalizes multiline delivery errors onto one gateway log line", () => {
+    // Gateway logs are line-oriented; multiline provider errors must be
+    // collapsed before they enter warning text.
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
       delivery: {

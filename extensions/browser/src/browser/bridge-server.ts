@@ -1,3 +1,9 @@
+/**
+ * Loopback browser bridge server.
+ *
+ * Hosts the browser control routes on an authenticated local port for sandbox,
+ * host, and node browser integrations that need HTTP access to browser control.
+ */
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
@@ -13,6 +19,7 @@ import {
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
+/** Running bridge server details returned to callers that manage its lifecycle. */
 export type BrowserBridge = {
   server: Server;
   port: number;
@@ -54,6 +61,7 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
 </html>`;
 }
 
+/** Start an authenticated loopback browser bridge and register browser routes. */
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
@@ -144,6 +152,7 @@ export async function startBrowserBridgeServer(params: {
   return { server, port: resolvedPort, baseUrl, state };
 }
 
+/** Stop a browser bridge server and clear its ephemeral port auth. */
 export async function stopBrowserBridgeServer(server: Server): Promise<void> {
   try {
     const address = server.address() as AddressInfo | null;

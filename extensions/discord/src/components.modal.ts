@@ -1,3 +1,4 @@
+// Discord plugin module implements components.modal behavior.
 import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForInteractionImpl,

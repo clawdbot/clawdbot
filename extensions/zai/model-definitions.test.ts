@@ -1,3 +1,4 @@
+// Zai tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildZaiModelDefinition, ZAI_DEFAULT_COST } from "./model-definitions.js";
 

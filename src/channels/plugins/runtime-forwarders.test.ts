@@ -1,3 +1,4 @@
+// Runtime forwarder tests cover channel plugin runtime method delegation and fallback handling.
 import { describe, expect, it, vi } from "vitest";
 import {
   createRuntimeDirectoryLiveAdapter,

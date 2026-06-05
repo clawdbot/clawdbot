@@ -1,3 +1,5 @@
+// Test helpers provide isolated delivery-queue state directories and logger
+// stubs for queue/recovery tests.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";

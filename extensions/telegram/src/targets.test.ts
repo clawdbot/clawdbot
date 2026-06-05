@@ -1,3 +1,4 @@
+// Telegram tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isNumericTelegramSenderUserId,

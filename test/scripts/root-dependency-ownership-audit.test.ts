@@ -1,3 +1,4 @@
+// Root Dependency Ownership Audit tests cover root dependency ownership audit script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

@@ -1,3 +1,7 @@
+/**
+ * Keeps the latest Codex app-server rate-limit payload in process-global state
+ * so failure handling can enrich later usage-limit errors.
+ */
 import type { JsonValue } from "./protocol.js";
 
 const DEFAULT_CODEX_RATE_LIMIT_CACHE_MAX_AGE_MS = 10 * 60_000;
@@ -16,6 +20,7 @@ function getCodexRateLimitCacheState(): CodexRateLimitCacheState {
   return globalState[CODEX_RATE_LIMIT_CACHE_STATE];
 }
 
+/** Stores a non-empty Codex rate-limit payload with its observation time. */
 export function rememberCodexRateLimits(value: JsonValue | undefined, nowMs = Date.now()): void {
   if (value === undefined) {
     return;
@@ -25,6 +30,7 @@ export function rememberCodexRateLimits(value: JsonValue | undefined, nowMs = Da
   state.updatedAtMs = nowMs;
 }
 
+/** Reads the cached Codex rate-limit payload when it is still within the max-age window. */
 export function readRecentCodexRateLimits(options?: {
   nowMs?: number;
   maxAgeMs?: number;
@@ -41,6 +47,7 @@ export function readRecentCodexRateLimits(options?: {
   return state.value;
 }
 
+/** Clears the process-global rate-limit cache for deterministic tests. */
 export function resetCodexRateLimitCacheForTests(): void {
   const state = getCodexRateLimitCacheState();
   state.value = undefined;

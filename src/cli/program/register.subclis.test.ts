@@ -1,3 +1,4 @@
+// Register subCLI tests cover nested CLI command registration boundaries.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";

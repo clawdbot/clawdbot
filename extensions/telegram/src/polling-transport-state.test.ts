@@ -1,3 +1,4 @@
+// Telegram tests cover polling transport state plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramTransport } from "./fetch.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";

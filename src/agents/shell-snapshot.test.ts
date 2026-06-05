@@ -1,3 +1,4 @@
+// Verifies exec shell snapshots capture safe startup state without leaking secrets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -38,6 +39,7 @@ function setSnapshotStateForTest(
   stateDir: string,
   options: { home?: string; zdotdir?: string } = {},
 ): void {
+  // Snapshot tests mutate trusted process env, not per-command untrusted env.
   process.env.OPENCLAW_STATE_DIR = stateDir;
   if (options.home) {
     process.env.HOME = options.home;
@@ -106,6 +108,7 @@ describe("exec shell snapshots", () => {
   });
 
   it("does not honor per-call env for selecting the snapshot state dir", async () => {
+    // Per-call env may be model/tool-controlled, so snapshot roots come from process env.
     const trustedStateDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-snapshot-trusted-state-"),
     );

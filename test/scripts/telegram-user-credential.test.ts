@@ -1,3 +1,4 @@
+// Telegram User Credential tests cover telegram user credential script behavior.
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";

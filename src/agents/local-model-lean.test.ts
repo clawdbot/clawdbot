@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for local-model lean tool filtering.
+ * Verifies agent scope, default flags, preserve lists, and message-tool overrides.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";

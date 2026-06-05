@@ -1,3 +1,4 @@
+// Msteams tests cover http error plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createMSTeamsHttpError, readMSTeamsHttpErrorDetail } from "./http-error.js";
 

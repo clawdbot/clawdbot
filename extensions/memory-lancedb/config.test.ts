@@ -1,3 +1,4 @@
+// Memory Lancedb tests cover config plugin behavior.
 import fs from "node:fs";
 import {
   type JsonSchemaObject,

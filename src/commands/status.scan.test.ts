@@ -1,3 +1,4 @@
+// Status scan tests cover fast scan defaults, memory setup, gateway probes, and status aggregation.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,

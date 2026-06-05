@@ -1,3 +1,4 @@
+// Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ChannelAgentTool } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,6 +25,14 @@ type WebChannelPluginRecord = {
   rootDir?: string;
   source: string;
 };
+
+type WebChannelConnectionWaitOptions =
+  | {
+      timeout: "none";
+    }
+  | {
+      timeoutMs: number;
+    };
 
 type WebChannelLightRuntimeModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
@@ -100,7 +109,7 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
-  waitForWaConnection: (sock: unknown) => Promise<void>;
+  waitForWaConnection: (sock: unknown, options: WebChannelConnectionWaitOptions) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
   extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;

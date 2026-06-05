@@ -1,3 +1,4 @@
+// Mattermost token summary tests cover status-all credential source counting and safe display output.
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {

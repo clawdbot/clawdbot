@@ -1,3 +1,4 @@
+// Control UI controller manages health gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { HealthSummary } from "../types.ts";
 

@@ -1,3 +1,4 @@
+// Line plugin module implements setup surface behavior.
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements sync behavior.
 import {
   findMatrixQaObservedEventMatch,
   normalizeMatrixQaObservedEvent,

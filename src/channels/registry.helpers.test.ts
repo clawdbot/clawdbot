@@ -1,3 +1,4 @@
+// Registry helper tests cover channel registry fixtures and lookup helpers.
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {

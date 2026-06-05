@@ -1,3 +1,4 @@
+/** Shared helpers for gateway status target selection, auth, summaries, and probe rendering. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
@@ -15,6 +16,7 @@ const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
+/** Concrete websocket endpoint that gateway status should probe. */
 export type GatewayStatusTarget = {
   id: string;
   kind: TargetKind;
@@ -29,6 +31,7 @@ export type GatewayStatusTarget = {
   };
 };
 
+/** Sanitized config subset rendered by the deep gateway status view. */
 export type GatewayConfigSummary = {
   path: string | null;
   exists: boolean;
@@ -67,6 +70,7 @@ function parseIntOrNull(value: unknown): number | null {
   return parseStrictInteger(s) ?? null;
 }
 
+/** Parses CLI timeout input with the gateway-status fallback rules. */
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
   return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
@@ -82,6 +86,7 @@ function normalizeWsUrl(value: string): string | null {
   return trimmed;
 }
 
+/** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
@@ -148,6 +153,7 @@ export function resolveProbeBudgetMs(
   return overallMs;
 }
 
+/** Normalizes user-entered SSH targets, accepting both raw targets and `ssh host` input. */
 export function sanitizeSshTarget(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -159,6 +165,7 @@ export function sanitizeSshTarget(value: unknown): string | null {
   return trimmed.replace(/^ssh\s+/, "");
 }
 
+/** Resolves auth for the probe surface represented by the selected status target. */
 export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
@@ -178,6 +185,7 @@ export async function resolveAuthForTarget(
 
 export { pickGatewaySelfPresence };
 
+/** Extracts the config fields displayed by `openclaw gateway status --deep`. */
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {
   const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
   const path = typeof snap?.path === "string" ? snap.path : null;
@@ -244,6 +252,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   };
 }
 
+/** Builds local and tailnet gateway URL hints for the configured gateway port. */
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
@@ -255,6 +264,7 @@ export function buildNetworkHints(cfg: OpenClawConfig) {
   };
 }
 
+/** Renders the status heading for a single gateway probe target. */
 export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   const kindLabel =
     target.kind === "localLoopback"
@@ -269,6 +279,7 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
+/** Returns true when auth succeeded enough to connect but lacks the read scope. */
 export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   if (probe.ok || probe.connectLatencyMs == null) {
     return false;
@@ -276,10 +287,12 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
+/** Returns true when the gateway connection was established but a later probe failed. */
 export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
   return !probe.ok && probe.connectLatencyMs != null;
 }
 
+/** Returns true when the probe established any gateway connection. */
 export function isProbeReachable(probe: GatewayProbeResult): boolean {
   return probe.ok || probe.connectLatencyMs != null;
 }
@@ -291,6 +304,7 @@ function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapab
 export function summarizeGatewayProbeCapability(
   probes: GatewayProbeResult[],
 ): GatewayProbeCapability {
+  // Show the strongest observed capability across all attempted targets.
   const priority: GatewayProbeCapability[] = [
     "admin_capable",
     "write_capable",

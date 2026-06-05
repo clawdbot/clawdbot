@@ -1,3 +1,4 @@
+// Windowed channel history facade over caller-owned pending-history maps.
 import {
   buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,

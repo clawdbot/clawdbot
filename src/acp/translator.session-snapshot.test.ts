@@ -1,3 +1,4 @@
+/** Tests ACP session metadata and usage snapshots after prompts. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";

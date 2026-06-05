@@ -1,3 +1,4 @@
+// Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/types.js";

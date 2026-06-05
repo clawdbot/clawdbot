@@ -1,3 +1,4 @@
+// Search setup cold-import tests guard onboarding search setup against loading heavy runtime modules.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

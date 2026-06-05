@@ -1,3 +1,4 @@
+// Msteams API module exposes the plugin public contract.
 export {
   buildChannelConfigSchema,
   MSTeamsConfigSchema,

@@ -1,3 +1,4 @@
+// Ollama plugin module implements visible content contract behavior.
 export type OllamaVisibleContentStreamResolution =
   | { kind: "visible"; text: string }
   | { kind: "pending" };

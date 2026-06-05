@@ -1,3 +1,8 @@
+/**
+ * Resolve-exec-env hook tests.
+ * Verifies plugin-provided env values are filtered and forwarded to the chosen
+ * exec host without leaking unsafe overrides.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import type { ExtensionContext } from "./sessions/index.js";

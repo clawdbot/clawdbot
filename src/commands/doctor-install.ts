@@ -1,7 +1,9 @@
+/** Doctor warnings for source checkout installs with missing pnpm runtime state. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 
+/** Emits install warnings when a source checkout looks npm-installed or lacks source-run deps. */
 export function noteSourceInstallIssues(root: string | null) {
   if (!root) {
     return;

@@ -1,3 +1,4 @@
+// Resource ceiling assertions for Docker E2E stats output.
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 

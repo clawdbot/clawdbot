@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds config recipes for upgrade-survivor E2E scenarios.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

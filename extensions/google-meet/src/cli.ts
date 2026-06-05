@@ -1,3 +1,4 @@
+// Google Meet plugin module implements cli behavior.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";

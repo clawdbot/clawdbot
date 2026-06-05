@@ -1,3 +1,4 @@
+// Session snapshot tests cover runtime skill state captured for agent sessions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SkillSnapshot } from "../types.js";

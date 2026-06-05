@@ -1,3 +1,4 @@
+// Browser tests cover pw sessionless plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
 

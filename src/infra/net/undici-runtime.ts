@@ -1,3 +1,5 @@
+// Undici runtime helpers lazily load dispatcher constructors and enforce
+// OpenClaw HTTP/1, timeout, proxy TLS, and IP-safe proxy policies.
 import { createRequire } from "node:module";
 import net from "node:net";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -85,6 +87,8 @@ function loadUndiciProxyPoolCtor(): typeof import("undici").Pool {
 }
 
 function stripIpServernameFromConnectOptions(options: unknown): unknown {
+  // OpenSSL rejects IP literals as SNI values; strip only IP servernames while
+  // preserving hostname SNI for HTTPS proxies.
   if (!isObjectRecord(options) || typeof options.servername !== "string") {
     return options;
   }

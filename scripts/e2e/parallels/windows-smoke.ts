@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";

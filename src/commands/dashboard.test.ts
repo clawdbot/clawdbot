@@ -1,3 +1,4 @@
+// Dashboard command tests cover dashboard URL selection, gateway bind modes, and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { dashboardCommand } from "./dashboard.js";

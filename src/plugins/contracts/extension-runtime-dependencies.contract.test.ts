@@ -1,3 +1,4 @@
+// Extension runtime dependency contract tests cover runtime dependency placement for extensions.
 import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";

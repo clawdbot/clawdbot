@@ -1,4 +1,6 @@
+// Channel setup status tests cover status text and docs link rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -259,8 +261,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("localizes channel status note labels", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
       makeMeta("telegram", "Telegram"),
@@ -273,7 +273,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       }),
     );
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       const summary = await collectChannelStatus({
         cfg: {} as never,
         accountOverrides: {},
@@ -286,23 +286,15 @@ describe("resolveChannelSetupSelectionContributions", () => {
         "Matrix: 已安装",
         "Zalo: 安装插件后启用",
       ]);
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("localizes channel status note title", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const note = vi.fn(async () => {});
     listChatChannels.mockReturnValue([makeMeta("discord", "Discord")]);
     isChannelConfigured.mockReturnValue(true);
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await noteChannelStatus({
         cfg: {} as never,
         prompter: { note } as never,
@@ -310,13 +302,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       });
 
       expect(note).toHaveBeenCalledWith(expect.any(String), "频道状态");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("sanitizes channel metadata before primer notes", async () => {
@@ -354,11 +340,9 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("localizes built-in channel primer copy", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const note = vi.fn(async () => undefined);
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await noteChannelPrimer(
         { note } as never,
         [
@@ -369,13 +353,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
           } satisfies NoteChannelPrimerChannels[number],
         ] as NoteChannelPrimerChannels,
       );
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
 
     expect(formatChannelPrimerLine).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -434,8 +412,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("localizes built-in channel blurbs before selection notes", () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     resolveChannelSetupEntries.mockReturnValue(
       makeChannelSetupEntries({
         entries: [
@@ -454,7 +430,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       }),
     );
 
-    try {
+    withEnv({ OPENCLAW_LOCALE: "zh-CN" }, () => {
       const lines = resolveChannelSelectionNoteLines({
         cfg: {} as never,
         installedPlugins: [],
@@ -470,12 +446,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
         expect.any(Function),
       );
       expect(lines).toEqual(["Feishu — 飞书/Lark 企业消息。"]);
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 });

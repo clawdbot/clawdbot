@@ -1,7 +1,10 @@
+/**
+ * Internal channel plugin type barrel.
+ *
+ * Re-exports curated core-facing channel plugin types without helper-only implementation details.
+ */
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
-// Curated internal channel-plugin type barrel. Keep this list explicit so core
-// imports do not accidentally expose helper-only implementation types.
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 export { CHANNEL_MESSAGE_CAPABILITIES } from "./message-capabilities.js";
 

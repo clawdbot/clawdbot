@@ -1,3 +1,4 @@
+// Mistral tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,

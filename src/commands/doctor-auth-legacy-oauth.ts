@@ -1,3 +1,4 @@
+/** Migrates legacy provider-declared OAuth profile ids to current auth profile ids. */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { repairOAuthProfileIdMismatch } from "../agents/auth-profiles/repair.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -21,6 +22,12 @@ function sanitizePromptLabel(label: string | undefined): string | undefined {
   return sanitized || undefined;
 }
 
+/**
+ * Applies provider-declared OAuth profile id repairs to config after prompting.
+ *
+ * Providers own the legacy id mapping; doctor only loads setup-time provider metadata and asks
+ * before writing config so stale provider-specific ids do not silently shadow current profiles.
+ */
 export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,

@@ -1,3 +1,5 @@
+// OpenAI-compatible HTTP tests cover chat completions, streaming, tool calls,
+// session context, auth scopes, and provider error mapping.
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Validates build-info commit metadata for Parallels package E2E scenarios.
 import fs from "node:fs";
 
 const path = "dist/build-info.json";

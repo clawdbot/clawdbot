@@ -1,3 +1,5 @@
+// Probe auth integration tests verify cached operator device tokens and pairing
+// state work with call/probe flows against a real local gateway harness.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

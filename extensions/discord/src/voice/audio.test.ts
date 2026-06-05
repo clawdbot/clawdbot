@@ -1,3 +1,4 @@
+// Discord tests cover audio plugin behavior.
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {

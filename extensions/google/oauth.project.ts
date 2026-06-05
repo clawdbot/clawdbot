@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.project behavior.
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,

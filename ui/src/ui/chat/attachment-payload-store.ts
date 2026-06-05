@@ -1,3 +1,4 @@
+// Control UI chat module implements attachment payload store behavior.
 import type { ChatAttachment } from "../ui-types.ts";
 
 type AttachmentPayload = {

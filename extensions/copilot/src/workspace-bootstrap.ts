@@ -1,3 +1,4 @@
+// Copilot plugin module implements workspace bootstrap behavior.
 import path from "node:path";
 import type {
   AgentHarnessAttemptParams,

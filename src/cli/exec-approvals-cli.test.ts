@@ -1,3 +1,4 @@
+// Exec approvals CLI tests cover approval command registration and output handling.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover session files yield behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fileState } = vi.hoisted(() => ({

@@ -1,3 +1,4 @@
+// Snapshot hydration tests cover restoring runtime skill state from saved snapshots.
 import { describe, expect, it } from "vitest";
 import type { SessionSkillSnapshot } from "../../config/sessions/types.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";

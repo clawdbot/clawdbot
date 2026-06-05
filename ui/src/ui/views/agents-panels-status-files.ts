@@ -1,3 +1,4 @@
+// Control UI view renders agents panels status files screen content.
 import { applyPreviewTheme } from "@create-markdown/preview";
 import DOMPurify from "dompurify";
 import { html, nothing } from "lit";

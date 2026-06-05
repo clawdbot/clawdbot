@@ -1,3 +1,4 @@
+// Browser tests cover cdp.helpers.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,

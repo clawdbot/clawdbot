@@ -1,3 +1,4 @@
+// Session model override tests cover model override parsing and validation.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {

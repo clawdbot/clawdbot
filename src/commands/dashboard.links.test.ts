@@ -1,3 +1,4 @@
+// Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
 

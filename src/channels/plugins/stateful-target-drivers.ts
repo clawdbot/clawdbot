@@ -1,11 +1,14 @@
+/**
+ * Stateful binding target driver registry.
+ *
+ * Stores lifecycle drivers for binding targets that carry mutable external session state.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
 } from "./binding-types.js";
 
-// Registry for binding targets that carry external mutable session state, such
-// as ACP-backed channels that need per-session reset and lookup behavior.
 export type StatefulBindingTargetReadyResult = { ok: true } | { ok: false; error: string };
 export type StatefulBindingTargetSessionResult =
   | { ok: true; sessionKey: string }

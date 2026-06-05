@@ -1,3 +1,5 @@
+// Web login methods delegate QR-login start/wait requests to the active channel
+// plugin that owns web login gateway methods.
 import {
   ErrorCodes,
   errorShape,

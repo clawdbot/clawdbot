@@ -1,3 +1,4 @@
+// Discord tests cover proxy request client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAbortableFetchMock,

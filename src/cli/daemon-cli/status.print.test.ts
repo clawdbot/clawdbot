@@ -1,3 +1,4 @@
+// Daemon status print tests cover user-facing service status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
 import { printDaemonStatus } from "./status.print.js";

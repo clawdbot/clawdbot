@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
+// GitHub dependency-change guard: detects dependency files, manages override
+// comments/labels, and can autoscrub lockfile-only PR changes.
 import { appendFile, readFile } from "node:fs/promises";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
+/** Marker used to identify dependency guard comments. */
 export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
 export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";

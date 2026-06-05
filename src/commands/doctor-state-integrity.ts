@@ -1,3 +1,4 @@
+/** Doctor checks and repairs for state dir durability, sessions, transcripts, and credentials. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -418,6 +419,7 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
+/** Detects Linux state directories mounted from SD/eMMC-style block devices. */
 export function detectLinuxSdBackedStateDir(
   stateDir: string,
   deps?: {
@@ -470,6 +472,7 @@ export function detectLinuxSdBackedStateDir(
   };
 }
 
+/** Formats the warning for state stored on SD/eMMC media. */
 export function formatLinuxSdBackedStateDirWarning(
   displayStateDir: string,
   linuxSdBackedStateDir: LinuxSdBackedStateDir,
@@ -488,6 +491,7 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
+/** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(
   stateDir: string,
   deps?: {
@@ -611,6 +615,7 @@ function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: str
   return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
 }
 
+/** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -1057,6 +1062,7 @@ export async function noteStateIntegrity(
   }
 }
 
+/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
 export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
     return null;
@@ -1072,6 +1078,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   ].join("\n");
 }
 
+/** Emits the workspace backup tip when applicable. */
 export function noteWorkspaceBackupTip(workspaceDir: string) {
   const tip = collectWorkspaceBackupTip(workspaceDir);
   if (tip) {

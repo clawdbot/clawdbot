@@ -1,3 +1,4 @@
+// Msteams plugin module implements sqlite state behavior.
 import path from "node:path";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { withFileLock } from "./store-fs.js";

@@ -1,3 +1,6 @@
+/**
+ * BytePlus provider plugin entrypoint for model and video generation providers.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";

@@ -1,3 +1,4 @@
+// Skill E2E test helpers build isolated skill environments for integration tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 

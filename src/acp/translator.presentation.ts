@@ -1,3 +1,4 @@
+/** Builds ACP session presentation, metadata, usage, and config-option snapshots. */
 import type {
   InitializeRequest,
   SessionConfigOption,
@@ -23,6 +24,7 @@ export const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 export const ACP_TIMEOUT_CONFIG_ID = "timeout";
 export const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 
+/** Normalized ACP client capability flags used to choose session controls. */
 export type ClientCapabilityState = {
   readTextFile: boolean;
   writeTextFile: boolean;
@@ -61,27 +63,32 @@ export type GatewaySessionPresentationRow = Pick<
   | "contextTokens"
 >;
 
+/** ACP session controls and modes shown to the client. */
 export type SessionPresentation = {
   configOptions: SessionConfigOption[];
   modes: SessionModeState;
 };
 
+/** ACP session metadata plus lineage information. */
 export type SessionMetadata = {
   title?: string | null;
   updatedAt?: string | null;
   _meta?: AcpSessionLineageMeta;
 };
 
+/** Context/token usage snapshot for ACP clients that expose progress meters. */
 export type SessionUsageSnapshot = {
   size: number;
   used: number;
 };
 
+/** Full session snapshot sent after load/list/prompt completion. */
 export type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
 };
 
+/** Normalizes optional ACP initialize capabilities into stable booleans. */
 export function normalizeClientCapabilities(
   capabilities: InitializeRequest["clientCapabilities"] | undefined,
 ): ClientCapabilityState {

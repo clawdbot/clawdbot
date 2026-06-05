@@ -1,3 +1,4 @@
+// Empty allowlist scan tests cover doctor detection of unconfigured sender allowlists.
 import { describe, expect, it, vi } from "vitest";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 

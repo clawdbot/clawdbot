@@ -1,3 +1,6 @@
+/**
+ * Cross-platform pnpm command resolver used by Canvas build scripts.
+ */
 import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -117,6 +120,7 @@ function resolveConfiguredPnpmExec(params) {
   return undefined;
 }
 
+/** Resolves a safe pnpm command spec for Unix, Windows, and npm_execpath launches. */
 export function resolvePnpmRunner(params = {}) {
   const configured = resolveConfiguredPnpmExec(params);
   if (configured) {

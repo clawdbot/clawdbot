@@ -1,3 +1,4 @@
+// Control UI controller manages agent files gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentFileEntry,

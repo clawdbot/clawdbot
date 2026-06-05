@@ -1,3 +1,4 @@
+// Archive fixture helpers create compressed plugin archives for install and loader tests.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

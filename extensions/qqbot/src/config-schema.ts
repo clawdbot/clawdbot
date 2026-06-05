@@ -1,3 +1,4 @@
+// Qqbot helper module supports config schema behavior.
 import {
   AllowFromListSchema,
   buildChannelConfigSchema,

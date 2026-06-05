@@ -1,3 +1,5 @@
+// Send gateway methods route operator/tool messages and poll actions through
+// channel plugins, outbound session state, durable delivery, and transcript mirrors.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

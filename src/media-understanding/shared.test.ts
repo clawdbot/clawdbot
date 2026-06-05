@@ -1,3 +1,5 @@
+// Shared provider helper tests cover deadlines, guarded fetch policy, HTTP
+// config, multipart transcription, and error response parsing.
 import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -54,6 +56,8 @@ afterEach(() => {
 });
 
 function getFirstGuardedFetchCall() {
+  // Guarded fetch options carry SSRF and proxy policy, so assertions inspect the
+  // structured request passed to the network guard.
   const [mockCall] = fetchWithSsrFGuardMock.mock.calls;
   if (!mockCall) {
     throw new Error("Expected fetchWithSsrFGuard to be called");

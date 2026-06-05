@@ -1,3 +1,5 @@
+// Covers global Undici dispatcher policy: proxy bootstrap, stream timeouts,
+// WSL2 address-family handling, and managed-dispatcher wrapping.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

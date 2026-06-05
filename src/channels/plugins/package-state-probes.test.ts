@@ -1,3 +1,4 @@
+// Package state probe tests cover channel plugin package install and runtime status probes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

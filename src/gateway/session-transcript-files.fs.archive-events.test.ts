@@ -1,3 +1,5 @@
+// Transcript archive event tests ensure file archive/delete operations emit
+// path-only transcript update notifications for UI and index listeners.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

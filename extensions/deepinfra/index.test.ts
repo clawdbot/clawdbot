@@ -1,3 +1,4 @@
+// Deepinfra tests cover index plugin behavior.
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,

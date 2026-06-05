@@ -1,3 +1,4 @@
+// Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fileState = vi.hoisted(() => ({

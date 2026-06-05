@@ -1,3 +1,5 @@
+// Outbound policy enforces message-tool allowlists and cross-context delivery
+// markers/decorations before channel dispatch.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {

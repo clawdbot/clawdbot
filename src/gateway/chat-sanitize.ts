@@ -1,3 +1,5 @@
+// Gateway chat display sanitizer.
+// Removes OpenClaw-only envelopes before messages are shown in UI/RPC results.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   stripInternalMetadataForDisplay,
@@ -12,6 +14,8 @@ import { stripEnvelope } from "../shared/chat-envelope.js";
 export { stripEnvelope };
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
+  // Sender labels can be explicit fields or embedded in text/envelope content.
+  // Preserve the first label found so user-origin rows keep human context.
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
     return entry.senderLabel.trim();
   }

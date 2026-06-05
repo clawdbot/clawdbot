@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock model discovery and implicit provider construction. It merges
+ * foundation models with inference profiles and caches catalog results.
+ */
 import type {
   BedrockClient,
   ListFoundationModelsCommandOutput,
@@ -478,11 +482,13 @@ function resolveInferenceProfiles(
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Reset Bedrock discovery cache for tests. */
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
   hasLoggedBedrockError = false;
 }
 
+/** Discover Bedrock models and inference profiles for one region/config. */
 export async function discoverBedrockModels(params: {
   region: string;
   config?: BedrockDiscoveryConfig;
@@ -627,6 +633,7 @@ export async function discoverBedrockModels(params: {
   }
 }
 
+/** Resolve the implicit Bedrock provider config from env, plugin config, and discovery. */
 export async function resolveImplicitBedrockProvider(params: {
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   env?: NodeJS.ProcessEnv;

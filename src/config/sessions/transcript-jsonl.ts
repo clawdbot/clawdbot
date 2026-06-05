@@ -1,3 +1,4 @@
+// JSONL helpers centralize newline-safe transcript serialization and writes.
 import { appendFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
@@ -21,6 +22,7 @@ export function serializeJsonlEntries(entries: readonly unknown[]): string {
 }
 
 export function serializeJsonlLines(lines: readonly string[]): string {
+  // Transcript readers expect every persisted entry batch to end with a newline.
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 

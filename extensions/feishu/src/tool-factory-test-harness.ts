@@ -1,3 +1,4 @@
+// Feishu plugin module implements tool factory test harness behavior.
 import type { OpenClawPluginApi } from "../runtime-api.js";
 
 type ToolContextLike = {

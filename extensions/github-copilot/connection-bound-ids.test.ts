@@ -1,3 +1,4 @@
+// Github Copilot tests cover connection bound ids plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   rewriteCopilotConnectionBoundResponseIds,

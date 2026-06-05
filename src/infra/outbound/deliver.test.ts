@@ -1,3 +1,5 @@
+// Covers outbound delivery core: hooks, queue cleanup, durable capability
+// checks, adapter sends, transcript mirroring, and payload outcomes.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";

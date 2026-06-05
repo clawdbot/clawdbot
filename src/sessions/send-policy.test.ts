@@ -1,3 +1,4 @@
+// Session send policy tests cover message send eligibility decisions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";

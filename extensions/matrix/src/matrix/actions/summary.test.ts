@@ -1,3 +1,4 @@
+// Matrix tests cover summary plugin behavior.
 import { describe, expect, it } from "vitest";
 import { summarizeMatrixRawEvent } from "./summary.js";
 

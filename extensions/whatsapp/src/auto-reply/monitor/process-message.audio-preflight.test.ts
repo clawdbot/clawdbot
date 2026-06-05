@@ -1,3 +1,4 @@
+// Whatsapp tests cover process message.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the lazy-loaded audio preflight runtime boundary

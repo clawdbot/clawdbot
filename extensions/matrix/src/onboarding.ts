@@ -1,3 +1,4 @@
+// Matrix setup module handles plugin onboarding behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import {

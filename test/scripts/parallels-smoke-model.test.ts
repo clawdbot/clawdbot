@@ -1,3 +1,4 @@
+// Parallels Smoke Model tests cover parallels smoke model script behavior.
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -36,6 +37,7 @@ import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/ma
 import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
+import { withEnv } from "../../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
@@ -109,27 +111,6 @@ class FakeHostServerChild extends EventEmitter {
   exit(): void {
     this.exitCode = 0;
     this.emit("exit", 0, null);
-  }
-}
-
-function withEnv<T>(env: Record<string, string>, callback: () => T): T {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, _value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-  }
-  for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value;
-  }
-  try {
-    return callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
   }
 }
 

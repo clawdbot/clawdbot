@@ -1,3 +1,4 @@
+// Gateway auth bypass tests cover channel plugin paths allowed to skip gateway auth.
 import { describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({

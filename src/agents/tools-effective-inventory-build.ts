@@ -1,3 +1,8 @@
+/**
+ * Builds the operator-facing effective inventory for the current tool surface:
+ * runtime-compatible tools plus warnings for tools quarantined by schema
+ * policy, with plugin/channel ownership preserved.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,8 +28,6 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-// Effective inventory is the operator-facing view of the current tool surface:
-// runtime-compatible tools plus warnings for tools quarantined by schema policy.
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (

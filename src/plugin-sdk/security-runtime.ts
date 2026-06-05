@@ -46,6 +46,7 @@ export {
   type FsSafeErrorCode as SafeOpenErrorCode,
 } from "../infra/fs-safe.js";
 
+/** Safely open a path beneath a trusted root while rejecting hardlinks and unsafe symlinks by default. */
 export async function openFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
@@ -61,6 +62,7 @@ export async function openFileWithinRoot(params: {
   });
 }
 
+/** Copy a source file into a path beneath a trusted root using fs-safe root policy. */
 export async function writeFileFromPathWithinRoot(params: {
   rootDir: string;
   relativePath: string;

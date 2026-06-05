@@ -1,3 +1,4 @@
+// Doctor config-flow include-warning tests cover config include warnings during repair.
 import { describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";

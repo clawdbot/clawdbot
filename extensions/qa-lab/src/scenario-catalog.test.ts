@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {

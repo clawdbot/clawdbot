@@ -1,3 +1,4 @@
+// Live cache-behavior checks for embedded-agent direct provider runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -91,6 +92,8 @@ function makeUserHistoryTurn(content: UserContent): Message {
 }
 
 function makeImageUserTurn(text: string): Message {
+  // Image cache tests use a small repo fixture so payload bytes are stable across
+  // runs and do not require external downloads.
   if (!liveTestPngBase64) {
     throw new Error("live test PNG not loaded");
   }
@@ -117,6 +120,8 @@ function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | und
 }
 
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
+  // Trace events are JSONL so live assertions can inspect cache state transitions
+  // after the provider call completes.
   if (!liveCacheTraceFile) {
     throw new Error("live cache trace file not initialized");
   }
@@ -156,6 +161,8 @@ function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): strin
 }
 
 function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
+  // Live model discovery can return partial metadata; embedded runner tests need
+  // a complete config model definition.
   const contextWindowCandidate = (model as { contextWindow?: unknown }).contextWindow;
   const maxTokensCandidate = (model as { maxTokens?: unknown }).maxTokens;
   const reasoningCandidate = (model as { reasoning?: unknown }).reasoning;

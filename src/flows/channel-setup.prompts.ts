@@ -1,3 +1,4 @@
+// Channel setup prompt helpers build interactive prompts for channel setup.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";

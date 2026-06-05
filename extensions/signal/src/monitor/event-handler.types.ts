@@ -1,3 +1,4 @@
+// Signal type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,

@@ -1,3 +1,4 @@
+// Browser tests cover chrome.version plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());

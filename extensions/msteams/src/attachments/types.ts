@@ -1,3 +1,4 @@
+// Msteams type declarations define plugin contracts.
 export type MSTeamsAttachmentLike = {
   contentType?: string | null;
   contentUrl?: string | null;

@@ -1,3 +1,5 @@
+// Workspace default tests cover environment-variable precedence for the
+// built-in agent workspace location.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";

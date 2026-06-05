@@ -1,3 +1,4 @@
+// Whatsapp tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "../config-api.js";
 

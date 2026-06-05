@@ -1,3 +1,4 @@
+// Slack tests cover messages plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackSystemEventTestHarness,

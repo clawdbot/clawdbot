@@ -1,3 +1,4 @@
+// Coverage for releasing session locks from abort paths.
 import { describe, expect, it, vi } from "vitest";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 
@@ -20,6 +21,8 @@ describe("releaseEmbeddedAttemptSessionLockForAbort", () => {
   });
 
   it("logs release failures without throwing from the abort path", async () => {
+    // Abort cleanup must not replace the original timeout/manual-abort reason
+    // with a secondary lock-release failure.
     const releaseError = new Error("locked");
     const releaseHeldLockForAbort = vi.fn(async () => {
       throw releaseError;

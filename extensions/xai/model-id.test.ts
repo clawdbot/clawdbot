@@ -1,3 +1,4 @@
+// Xai tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeXaiModelId } from "./api.js";
 

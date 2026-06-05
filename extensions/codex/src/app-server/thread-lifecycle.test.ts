@@ -1,9 +1,11 @@
+// Codex tests cover thread lifecycle plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -17,7 +19,6 @@ import {
   startOrResumeThread,
   type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
-import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
 

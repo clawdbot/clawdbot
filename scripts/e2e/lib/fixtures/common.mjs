@@ -1,3 +1,4 @@
+// Common file/assertion helpers for E2E fixture writers.
 import fs from "node:fs";
 import path from "node:path";
 

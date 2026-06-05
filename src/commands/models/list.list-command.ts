@@ -1,3 +1,4 @@
+/** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
@@ -42,6 +43,7 @@ function loadSourcePlanModule(): Promise<SourcePlanModule> {
   return sourcePlanModuleLoader.load();
 }
 
+/** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
   opts: {
     all?: boolean;
@@ -114,6 +116,8 @@ export async function modelsListCommand(
   const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  // Full/provider-filtered lists may need runtime, manifest, and registry rows.
+  // Defer that planning so default configured-only output stays cheap.
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
@@ -193,6 +197,8 @@ export async function modelsListCommand(
     });
     if (initialAppend.requiresRegistryFallback) {
       const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
+      // Runtime-scoped providers can fail catalog availability while still being
+      // useful for a provider-filtered list; retry through the registry fallback.
       try {
         await loadRegistryState(
           useScopedRegistryFallback

@@ -1,11 +1,14 @@
+/**
+ * Subagent run timeout math.
+ *
+ * Separates timer-safe delays from duration/deadline values because setTimeout has stricter bounds.
+ */
 import {
   asDateTimestampMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "../shared/number-coercion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-// Shared subagent timeout math. Timer delays and duration/deadline values are
-// resolved separately because setTimeout has stricter safe bounds.
 /** Convert subagent timeout seconds to a timer-safe delay. */
 export function resolveSubagentRunTimerDelayMs(timeoutSeconds: unknown): number | undefined {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });

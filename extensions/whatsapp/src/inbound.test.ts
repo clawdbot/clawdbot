@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractContactContext,

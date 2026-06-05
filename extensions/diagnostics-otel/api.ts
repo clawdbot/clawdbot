@@ -1,3 +1,4 @@
+// Diagnostics Otel API module exposes the plugin public contract.
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

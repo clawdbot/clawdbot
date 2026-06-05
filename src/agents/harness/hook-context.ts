@@ -1,3 +1,6 @@
+/**
+ * Builds plugin hook context metadata for native agent harness events.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type {

@@ -1,3 +1,6 @@
+/**
+ * Browser CLI debugging commands for highlights, errors, requests, and traces.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
@@ -71,6 +74,7 @@ function resolveDebugQuery(params: {
   };
 }
 
+/** Registers Browser debugging and trace commands. */
 export function registerBrowserDebugCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

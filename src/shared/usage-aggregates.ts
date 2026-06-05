@@ -1,3 +1,4 @@
+// Usage aggregate helpers accumulate token, cost, and latency usage totals.
 type LatencyTotalsLike = {
   count: number;
   sum: number;

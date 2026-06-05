@@ -1,3 +1,8 @@
+/**
+ * Public browser action client barrel.
+ *
+ * Re-exports the action helpers used by Browser tool registration and tests.
+ */
 export {
   browserAct,
   browserArmDialog,

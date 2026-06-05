@@ -1,3 +1,4 @@
+// Bundled channel catalog fail-soft tests cover catalog read failures and fallback behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

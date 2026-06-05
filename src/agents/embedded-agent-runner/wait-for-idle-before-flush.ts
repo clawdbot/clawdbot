@@ -1,3 +1,6 @@
+/**
+ * Waits for tool-result streams to become idle before flushing output.
+ */
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 type IdleAwareAgent = {

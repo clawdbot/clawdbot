@@ -1,3 +1,4 @@
+// Coverage for assistant failover decisions and auth-profile rotation.
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
@@ -7,6 +8,8 @@ type Params = Parameters<typeof handleAssistantFailover>[0];
 type Outcome = Awaited<ReturnType<typeof handleAssistantFailover>>;
 
 function makeParams(overrides: Partial<Params> = {}): Params {
+  // Defaults model a billing-classified provider failure; tests override only
+  // the branch-specific signals they need.
   const provider = "Anthropic";
   const model = "claude-haiku-4-5-20251001";
   const defaults: Params = {
@@ -48,6 +51,8 @@ function makeParams(overrides: Partial<Params> = {}): Params {
 }
 
 function expectThrownFailoverError(outcome: Outcome): FailoverError {
+  // Surface-error branches return a throw outcome instead of throwing directly
+  // so the runner can compose cleanup and logging around the decision.
   expect(outcome.action).toBe("throw");
   if (outcome.action !== "throw") {
     throw new Error("expected throw outcome");
@@ -59,6 +64,8 @@ function expectThrownFailoverError(outcome: Outcome): FailoverError {
 describe("handleAssistantFailover", () => {
   describe("rotate_profile branch", () => {
     it("rotates before waiting on auth profile failure marking", async () => {
+      // Rotation is latency-sensitive; profile failure marking can persist in
+      // the background after the next profile is selected.
       const events: string[] = [];
       let releaseMark: (() => void) | undefined;
       const markFinished = new Promise<void>((resolve) => {

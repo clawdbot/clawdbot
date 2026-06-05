@@ -1,3 +1,4 @@
+// Cron service ops tests cover high-level service operations and state transitions.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -5,6 +6,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -18,15 +20,11 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 function withStateDirForStorePath(storePath: string) {
   const stateRoot = path.dirname(path.dirname(storePath));
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   process.env.OPENCLAW_STATE_DIR = stateRoot;
   resetTaskRegistryForTests();
   return () => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    envSnapshot.restore();
     resetTaskRegistryForTests();
   };
 }
@@ -448,23 +446,25 @@ describe("cron service ops seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeDueIsolatedJobSnapshot(storePath, now);
+    try {
+      await writeDueIsolatedJobSnapshot(storePath, now);
 
-    const state = createTimedOutIsolatedCronState({
-      storePath,
-      now,
-    });
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
 
-    await run(state, "isolated-timeout");
+      await run(state, "isolated-timeout");
 
-    expectTaskRun({
-      runId: `cron:isolated-timeout:${now}`,
-      runtime: "cron",
-      status: "timed_out",
-      sourceId: "isolated-timeout",
-    });
-
-    restoreStateDir();
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "isolated-timeout",
+      });
+    } finally {
+      restoreStateDir();
+    }
   });
 
   it("keeps manual cron runs progressing when task ledger creation fails", async () => {
@@ -494,34 +494,31 @@ describe("cron service ops seam coverage", () => {
 
   it("keeps manual cron cleanup progressing when task ledger updates fail", async () => {
     const { storePath } = await makeStorePath();
-    const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
-    resetTaskRegistryForTests();
+    const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeDueIsolatedJobSnapshot(storePath, now);
+    try {
+      await writeDueIsolatedJobSnapshot(storePath, now);
 
-    const updateTaskRecordSpy = vi
-      .spyOn(detachedTaskRuntime, "completeTaskRunByRunId")
-      .mockImplementation(() => {
-        throw new Error("disk full");
-      });
+      const updateTaskRecordSpy = vi
+        .spyOn(detachedTaskRuntime, "completeTaskRunByRunId")
+        .mockImplementation(() => {
+          throw new Error("disk full");
+        });
 
-    await expectDueIsolatedManualRunProgresses(storePath, now);
-    expectWarnedJob({
-      field: "jobStatus",
-      value: "ok",
-      message: "cron: failed to update task ledger record",
-    });
-
-    updateTaskRecordSpy.mockRestore();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      try {
+        await expectDueIsolatedManualRunProgresses(storePath, now);
+        expectWarnedJob({
+          field: "jobStatus",
+          value: "ok",
+          message: "cron: failed to update task ledger record",
+        });
+      } finally {
+        updateTaskRecordSpy.mockRestore();
+      }
+    } finally {
+      restoreStateDir();
     }
-    resetTaskRegistryForTests();
   });
 
   it("non-schedule edit preserves nextRunAtMs (#63499)", async () => {

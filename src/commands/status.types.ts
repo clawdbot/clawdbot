@@ -1,3 +1,6 @@
+// Shared status output types.
+// These shapes are consumed by scan, summary, text report, and JSON status builders.
+
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
 import type {
@@ -38,6 +41,7 @@ export type SessionStatus = {
   flags: string[];
 };
 
+/** Heartbeat schedule state for one agent. */
 export type HeartbeatStatus = {
   agentId: string;
   enabled: boolean;
@@ -45,6 +49,7 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+/** Aggregate status summary before text or JSON formatting. */
 export type StatusSummary = {
   runtimeVersion?: string | null;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;

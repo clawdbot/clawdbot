@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: {

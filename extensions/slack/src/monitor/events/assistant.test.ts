@@ -1,3 +1,4 @@
+// Slack tests cover assistant plugin behavior.
 import type { App } from "@slack/bolt";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "../context.js";

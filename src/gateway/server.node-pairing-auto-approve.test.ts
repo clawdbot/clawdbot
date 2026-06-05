@@ -1,3 +1,5 @@
+// Node pairing auto-approve tests cover LAN self-connect detection, token auth,
+// node identity persistence, and auto-approved pairing state.
 import net from "node:net";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";

@@ -1,3 +1,8 @@
+/**
+ * image_generate action helpers.
+ *
+ * Handles provider listing, task status, and duplicate-guard output for the image generation tool.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listRuntimeImageGenerationProviders } from "../../image-generation/runtime.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
@@ -17,9 +22,6 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-/**
- * Image-generation list/status/duplicate-guard action helpers.
- */
 export type ImageGenerateActionResult = MediaGenerateActionResult;
 
 /** Formats provider auth setup hints for the image generation `list` action. */

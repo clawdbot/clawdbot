@@ -1,3 +1,4 @@
+// Novita provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { NOVITA_BASE_URL, NOVITA_MODEL_CATALOG, buildNovitaModelDefinition } from "./models.js";
 

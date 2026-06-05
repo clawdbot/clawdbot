@@ -1,3 +1,4 @@
+// Telegram helper module supports network config behavior.
 import * as dns from "node:dns";
 import process from "node:process";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";

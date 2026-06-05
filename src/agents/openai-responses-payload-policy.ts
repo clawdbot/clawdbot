@@ -1,3 +1,8 @@
+/**
+ * OpenAI Responses payload policy.
+ * Classifies endpoint capabilities and applies store, prompt-cache,
+ * server-compaction, service-tier, and reasoning payload rules.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { asBoolean } from "../utils/boolean.js";
@@ -320,6 +325,7 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
   }
 }
 
+/** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
   options: OpenAIResponsesPayloadPolicyOptions = {},
@@ -364,6 +370,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
   policy: OpenAIResponsesPayloadPolicy,

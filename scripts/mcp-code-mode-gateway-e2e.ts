@@ -1,3 +1,4 @@
+// Mcp Code Mode Gateway E2E script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import net from "node:net";

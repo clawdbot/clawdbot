@@ -1,3 +1,4 @@
+// OpenClaw state database manages shared persisted state and migrations.
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";

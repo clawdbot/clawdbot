@@ -1,3 +1,7 @@
+/**
+ * Maps ClickClack senders and conversations onto the shared channel ingress
+ * allowlist/command authorization contract.
+ */
 import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
@@ -26,11 +30,19 @@ const clickClackIngressIdentity = {
   entryIdPrefix: "clickclack-user",
 } satisfies StableChannelIngressIdentityParams;
 
+/**
+ * Dispatch and command authorization decision for one inbound ClickClack
+ * message.
+ */
 export type ClickClackInboundAccess = {
   shouldDispatch: boolean;
   commandAuthorized: boolean;
 };
 
+/**
+ * Resolves whether a ClickClack message should enter the agent pipeline and
+ * whether its command-style body may run tools.
+ */
 export async function resolveClickClackInboundAccess(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;

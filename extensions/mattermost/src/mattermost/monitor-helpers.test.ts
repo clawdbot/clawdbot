@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeMention } from "./monitor-helpers.js";
 

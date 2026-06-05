@@ -1,3 +1,4 @@
+// Native command session target tests cover session targeting for built-in channel commands.
 import { describe, expect, it } from "vitest";
 import { resolveNativeCommandSessionTargets } from "./native-command-session-targets.js";
 

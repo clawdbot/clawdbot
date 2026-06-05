@@ -1,3 +1,4 @@
+// Plugin dependency cleanup tests cover doctor cleanup of stale plugin dependencies.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

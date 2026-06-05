@@ -1,3 +1,6 @@
+/**
+ * Wraps stream functions with pre-call message transforms.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "../../runtime/index.js";
 

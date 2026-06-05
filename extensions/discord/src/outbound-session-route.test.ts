@@ -1,3 +1,4 @@
+// Discord tests cover outbound session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 

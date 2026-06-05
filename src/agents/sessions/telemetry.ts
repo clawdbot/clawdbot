@@ -1,11 +1,10 @@
+/**
+ * Install telemetry switch.
+ *
+ * Environment overrides win over persisted settings for CI and packaged launcher control.
+ */
 import type { SettingsManager } from "./settings-manager.js";
 
-/**
- * Install telemetry switch shared by session startup and settings.
- *
- * Environment overrides win over persisted settings so CI and packaged launchers
- * can force the telemetry posture without editing user config.
- */
 function isTruthyEnvFlag(value: string | undefined): boolean {
   if (!value) {
     return false;

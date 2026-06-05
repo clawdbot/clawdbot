@@ -1,3 +1,8 @@
+/**
+ * Read-only subagent registry accessors.
+ *
+ * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
+ */
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -11,12 +16,6 @@ import {
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/**
- * Read-only accessors over subagent run state.
- *
- * Helpers combine persisted snapshots with in-memory live runs so UI, announce,
- * and control paths see recovered plus currently executing sessions consistently.
- */
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,

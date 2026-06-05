@@ -1,3 +1,4 @@
+// Setup gateway config helpers build gateway config from onboarding answers.
 import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import {

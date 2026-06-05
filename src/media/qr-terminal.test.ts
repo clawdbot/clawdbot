@@ -1,3 +1,4 @@
+// QR terminal tests cover text normalization and terminal render calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { create, toString } = vi.hoisted(() => ({

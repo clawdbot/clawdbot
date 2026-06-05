@@ -1,3 +1,4 @@
+// Tavily plugin module implements tavily extract tool behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,

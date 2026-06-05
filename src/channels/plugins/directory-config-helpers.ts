@@ -1,3 +1,8 @@
+/**
+ * Directory config helper utilities.
+ *
+ * Builds user/group directory entries from plugin config with query and limit filtering.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -6,10 +11,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../../config/types.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.public.js";
-
-/**
- * Shared directory helpers for plugin config-derived user/group listings.
- */
 
 function resolveDirectoryQuery(query?: string | null): string {
   return normalizeLowercaseStringOrEmpty(query);

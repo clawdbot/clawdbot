@@ -1,3 +1,4 @@
+// Status message tests cover status message formatting and persistence.
 import { describe, expect, it } from "vitest";
 import { formatFastModeLabel } from "./status-labels.js";
 

@@ -1,3 +1,4 @@
+// Telegram plugin module implements sequential key behavior.
 import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {

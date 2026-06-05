@@ -1,3 +1,4 @@
+// Discord tests cover approval handler plugin behavior.
 import { describe, expect, it } from "vitest";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
 

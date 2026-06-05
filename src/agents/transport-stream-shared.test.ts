@@ -1,3 +1,5 @@
+// Transport stream shared tests cover payload sanitization, header merging, and
+// final/error stream termination helpers used by provider transports.
 import { describe, expect, it, vi } from "vitest";
 import {
   failTransportStream,
@@ -74,6 +76,8 @@ describe("transport stream shared helpers", () => {
   });
 
   it("marks transport stream failures and runs cleanup", () => {
+    // Failure finalization mutates the output message before emitting it so
+    // downstream transcript consumers see the same error state as the stream.
     const push = vi.fn();
     const end = vi.fn();
     const cleanup = vi.fn();

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime edit behavior.
 import { randomUUID } from "node:crypto";
 import {
   assertNoSutReplyWindow,

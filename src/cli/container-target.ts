@@ -1,3 +1,4 @@
+// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -134,6 +135,7 @@ function buildContainerExecArgs(params: {
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
 }): string[] {
+  // Preserve proxy env only after loopback validation; localhost would point inside the container.
   const envFlag = params.exec.runtime === "docker" ? "-e" : "--env";
   const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
   if (proxyUrl) {

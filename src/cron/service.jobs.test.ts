@@ -1,3 +1,4 @@
+// Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,

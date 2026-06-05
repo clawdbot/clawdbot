@@ -1,3 +1,4 @@
+// Discord plugin module implements send behavior.
 export {
   createChannelDiscord,
   deleteChannelDiscord,

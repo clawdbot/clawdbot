@@ -1,3 +1,4 @@
+// Ollama tests cover index plugin behavior.
 import {
   describeImageWithModel,
   describeImagesWithModel,

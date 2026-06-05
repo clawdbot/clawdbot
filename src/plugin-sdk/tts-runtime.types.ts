@@ -1,3 +1,4 @@
+// TTS runtime types define plugin-facing text-to-speech synthesis hooks and results.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedTtsPersona, TtsAutoMode, TtsProvider } from "../config/types.tts.js";
 import type {
@@ -14,6 +15,7 @@ export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
 export type { TtsConfigResolutionContext };
 export type { TtsDirectiveOverrides, TtsDirectiveParseResult };
 
+/** Stable reason codes for one provider attempt in a TTS fallback chain. */
 export type TtsAttemptReasonCode =
   | "success"
   | "no_provider_registered"
@@ -23,6 +25,7 @@ export type TtsAttemptReasonCode =
   | "timeout"
   | "provider_error";
 
+/** Per-provider attempt record used in TTS status, logs, and result metadata. */
 export type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
@@ -33,6 +36,7 @@ export type TtsProviderAttempt = {
   error?: string;
 };
 
+/** Last-attempt status snapshot exposed by the TTS runtime facade. */
 export type TtsStatusEntry = {
   timestamp: number;
   success: boolean;
@@ -47,8 +51,10 @@ export type TtsStatusEntry = {
   error?: string;
 };
 
+/** Delivery target requested for synthesized speech output. */
 export type TtsSpeechTarget = "audio-file" | "voice-note";
 
+/** Summary metadata returned when long text is condensed before synthesis. */
 export type SummarizeResult = {
   summary: string;
   latencyMs: number;
@@ -56,12 +62,14 @@ export type SummarizeResult = {
   outputLength: number;
 };
 
+/** Inputs for resolving effective auto-TTS mode from config and session override. */
 export type ResolveTtsAutoModeParams = {
   config: ResolvedTtsConfig;
   prefsPath: string;
   sessionAuto?: string;
 };
 
+/** Inputs for explicit provider/model/voice overrides parsed from user or tool directives. */
 export type ResolveExplicitTtsOverridesParams = {
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -73,6 +81,7 @@ export type ResolveExplicitTtsOverridesParams = {
   accountId?: string;
 };
 
+/** Standard text-to-speech request for file or stream synthesis. */
 export type TtsRequestParams = {
   text: string;
   cfg: OpenClawConfig;
@@ -85,6 +94,7 @@ export type TtsRequestParams = {
   accountId?: string;
 };
 
+/** Telephony-specific synthesis request where output format is constrained by the caller. */
 export type TtsTelephonyRequestParams = {
   text: string;
   cfg: OpenClawConfig;
@@ -92,6 +102,7 @@ export type TtsTelephonyRequestParams = {
   overrides?: TtsDirectiveOverrides;
 };
 
+/** Inputs for listing voices from a speech provider with optional resolved config. */
 export type ListSpeechVoicesParams = {
   provider: string;
   cfg?: OpenClawConfig;
@@ -100,6 +111,7 @@ export type ListSpeechVoicesParams = {
   baseUrl?: string;
 };
 
+/** Inputs for attaching synthesized speech to an outbound reply payload when enabled. */
 export type MaybeApplyTtsToPayloadParams = {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -111,6 +123,7 @@ export type MaybeApplyTtsToPayloadParams = {
   accountId?: string;
 };
 
+/** Test-only helpers exported so plugin and channel tests share TTS policy decisions. */
 export type TtsTestFacade = {
   parseTtsDirectives: (...args: unknown[]) => TtsDirectiveParseResult;
   resolveModelOverridePolicy: (...args: unknown[]) => ResolvedTtsModelOverrides;
@@ -133,6 +146,7 @@ export type TtsTestFacade = {
   sanitizeTtsErrorForLog: (err: unknown) => string;
 };
 
+/** File-backed text-to-speech result returned by high-level runtime helpers. */
 export type TtsResult = {
   success: boolean;
   audioPath?: string;
@@ -149,6 +163,7 @@ export type TtsResult = {
   target?: TtsSpeechTarget;
 };
 
+/** Buffer-backed synthesis result returned by lower-level provider orchestration. */
 export type TtsSynthesisResult = {
   success: boolean;
   audioBuffer?: Buffer;
@@ -167,6 +182,7 @@ export type TtsSynthesisResult = {
   target?: TtsSpeechTarget;
 };
 
+/** Stream-backed synthesis result with optional release hook for provider resources. */
 export type TtsStreamResult = {
   success: boolean;
   audioStream?: ReadableStream<Uint8Array>;
@@ -184,8 +200,10 @@ export type TtsStreamResult = {
   release?: () => Promise<void>;
 };
 
+/** @deprecated Use `TtsStreamResult`. */
 export type TtsSynthesisStreamResult = TtsStreamResult;
 
+/** Telephony synthesis result with provider voice/model and sample-rate metadata. */
 export type TtsTelephonyResult = {
   success: boolean;
   audioBuffer?: Buffer;
@@ -202,13 +220,18 @@ export type TtsTelephonyResult = {
   sampleRate?: number;
 };
 
+/** High-level function contract for file-backed text-to-speech synthesis. */
 export type TextToSpeech = (params: TtsRequestParams) => Promise<TtsResult>;
+/** High-level function contract for streaming text-to-speech synthesis. */
 export type TextToSpeechStream = (params: TtsRequestParams) => Promise<TtsStreamResult>;
+/** High-level function contract for telephony-safe text-to-speech synthesis. */
 export type TextToSpeechTelephony = (
   params: TtsTelephonyRequestParams,
 ) => Promise<TtsTelephonyResult>;
+/** Function contract for provider voice discovery. */
 export type ListSpeechVoices = (params: ListSpeechVoicesParams) => Promise<SpeechVoiceOption[]>;
 
+/** Complete TTS runtime facade exposed to SDK consumers and bundled provider tests. */
 export type TtsRuntimeFacade = {
   /** @deprecated Use `testApi`. */
   _test: TtsTestFacade;

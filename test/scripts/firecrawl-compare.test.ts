@@ -1,3 +1,4 @@
+// Firecrawl Compare tests cover firecrawl compare script behavior.
 import { describe, expect, it } from "vitest";
 import { testing as firecrawlCompareTesting } from "../../scripts/firecrawl-compare.ts";
 

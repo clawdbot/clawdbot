@@ -1,3 +1,4 @@
+// Finds duplicate PRs after merge and closes overlapping candidates.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -10,6 +11,9 @@ Closes explicit duplicate PRs after a landed PR, after verifying the landed PR i
 each duplicate has either a shared referenced issue or overlapping changed hunks. Defaults to dry-run.`;
 }
 
+/**
+ * Parses comma-separated PR numbers from CLI/env input.
+ */
 export function parsePrNumberList(value) {
   return [
     ...new Set(
@@ -27,6 +31,9 @@ export function parsePrNumberList(value) {
   ];
 }
 
+/**
+ * Parses duplicate PR close workflow arguments.
+ */
 export function parseArgs(argv, env = process.env) {
   const args = {
     apply: false,
@@ -109,6 +116,9 @@ function intersectSets(left, right) {
   return [...left].filter((value) => right.has(value));
 }
 
+/**
+ * Parses changed hunk ranges from unified diff text.
+ */
 export function parseUnifiedDiffRanges(diffText) {
   const ranges = new Map();
   let currentPath = null;
@@ -136,6 +146,9 @@ export function parseUnifiedDiffRanges(diffText) {
   return ranges;
 }
 
+/**
+ * Reports whether two PR diffs touch overlapping hunks.
+ */
 export function hasOverlappingHunks(leftRanges, rightRanges) {
   for (const [path, left] of leftRanges) {
     const right = rightRanges.get(path) ?? [];
@@ -182,6 +195,9 @@ Evidence: ${formatEvidence(evidence)}.
 Closing #${candidate.number} as a duplicate.`;
 }
 
+/**
+ * Builds the close/skip plan for duplicate PR candidates.
+ */
 export function buildDuplicateClosePlan({ candidates, diffs, landed, repo }) {
   if (landed.state !== "MERGED" || !landed.mergedAt) {
     throw new Error(`#${landed.number} is not merged`);
@@ -246,6 +262,9 @@ function loadDiff(repo, number, runGh) {
   return runGh(["pr", "diff", String(number), "--repo", repo, "--color=never"]);
 }
 
+/**
+ * Applies labels/comments/closes for planned duplicate PR actions.
+ */
 export function applyClosePlan({ labels = DEFAULT_LABELS, plan, repo, runGh }) {
   for (const item of plan) {
     if (item.action !== "close") {
@@ -261,6 +280,9 @@ export function applyClosePlan({ labels = DEFAULT_LABELS, plan, repo, runGh }) {
   }
 }
 
+/**
+ * Runs the duplicate PR close workflow.
+ */
 export function runDuplicateCloseWorkflow(args, runGh = defaultRunGh) {
   const landed = loadPr(args.repo, args.landedPr, runGh);
   const candidates = args.duplicates.map((number) => loadPr(args.repo, number, runGh));

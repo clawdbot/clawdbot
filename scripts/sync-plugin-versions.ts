@@ -1,3 +1,4 @@
+// Sync Plugin Versions script supports OpenClaw repository automation.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 

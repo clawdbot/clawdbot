@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Development runner that rebuilds OpenClaw, runs runtime postbuild steps, and
+// restarts the CLI when watched source or metadata changes.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -498,6 +500,7 @@ const listRequiredCoreRuntimePostBuildOutputs = (deps) =>
     path.join(deps.cwd, normalizePath(relativePath)),
   );
 
+/** Lists runtime postbuild outputs that must exist before the dev CLI starts. */
 export const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
@@ -514,6 +517,7 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps) =>
     (filePath) => statMtime(filePath, deps.fs) == null,
   );
 
+/** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
@@ -571,6 +575,7 @@ export const resolveBuildRequirement = (deps) => {
   return { shouldBuild: false, reason: "clean" };
 };
 
+/** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1") {
     return { shouldSync: true, reason: "force_runtime_postbuild" };
@@ -1142,6 +1147,7 @@ const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   }
 };
 
+/** Acquires the dev-build lock used to serialize local rebuilds. */
 export const acquireRunNodeBuildLock = async (deps) => {
   const lockRoot = path.join(deps.cwd, ".artifacts");
   const lockDir = path.join(lockRoot, "run-node-build.lock");
@@ -1385,6 +1391,9 @@ const runQaCoverageReportFromSource = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+/**
+ * Runs the dev build/watch loop and keeps the child CLI in sync with changes.
+ */
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,

@@ -1,3 +1,8 @@
+/**
+ * Configured binding registry public facade.
+ *
+ * Lazily registers built-in binding providers before resolving configured bindings.
+ */
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import {
   primeConfiguredBindingRegistry as primeConfiguredBindingRegistryRaw,
@@ -6,9 +11,6 @@ import {
   resolveConfiguredBindingRecordBySessionKey as resolveConfiguredBindingRecordBySessionKeyRaw,
   resolveConfiguredBindingRecordForConversation as resolveConfiguredBindingRecordForConversationRaw,
 } from "./configured-binding-registry.js";
-
-// Thin public wrapper around the configured-binding registry. Runtime plugin
-// conversation bindings use a separate approval-driven path in src/plugins/.
 
 export function primeConfiguredBindingRegistry(
   ...args: Parameters<typeof primeConfiguredBindingRegistryRaw>

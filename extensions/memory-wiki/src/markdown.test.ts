@@ -1,3 +1,4 @@
+// Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {

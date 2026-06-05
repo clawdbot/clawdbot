@@ -1,3 +1,4 @@
+// Coverage for bootstrap routing across canonical and effective workspaces.
 import { describe, expect, it, vi } from "vitest";
 import {
   hasBootstrapFileContent,
@@ -7,6 +8,8 @@ import {
 
 describe("runEmbeddedAttempt bootstrap routing", () => {
   it("resolves bootstrap pending from the canonical workspace instead of a copied sandbox", async () => {
+    // Sandbox copies are execution roots; bootstrap state belongs to the
+    // canonical workspace.
     const sandboxWorkspace = "/tmp/openclaw-sandbox-copy";
     const canonicalWorkspace = "/tmp/openclaw-canonical-workspace";
     const isWorkspaceBootstrapPending = vi.fn(async (workspaceDir: string) => {
@@ -48,6 +51,8 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
   });
 
   it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
+    // Hook-provided bootstrap files can replace filesystem reads and still drive
+    // a full bootstrap turn.
     const routing = await resolveAttemptWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
       bootstrapFiles: [

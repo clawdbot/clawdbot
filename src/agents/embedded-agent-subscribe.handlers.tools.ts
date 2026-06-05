@@ -1,3 +1,8 @@
+/**
+ * Handles embedded-agent tool execution events and turns them into channel UI,
+ * replay state, hook calls, approval prompts, media queues, and agent-event
+ * telemetry.
+ */
 import {
   asOptionalObjectRecord,
   asOptionalRecord as readRecordField,
@@ -200,6 +205,7 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
+/** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
   let count = 0;
@@ -846,6 +852,7 @@ async function emitToolResultOutput(params: {
   });
 }
 
+/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
@@ -1050,6 +1057,7 @@ export function handleToolExecutionStart(
   return continueAfterBlockReplyFlush();
 }
 
+/** Handles partial tool output and emits throttled live UI updates. */
 export function handleToolExecutionUpdate(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -1141,6 +1149,7 @@ export function handleToolExecutionUpdate(
   }
 }
 
+/** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {

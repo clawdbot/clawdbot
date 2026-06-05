@@ -1,3 +1,4 @@
+// Live-gated cache regression proof against stored provider baselines.
 import { describe, expect, it } from "vitest";
 import { runLiveCacheRegression } from "./live-cache-regression-runner.js";
 import { LIVE_CACHE_TEST_ENABLED } from "./live-cache-test-support.js";

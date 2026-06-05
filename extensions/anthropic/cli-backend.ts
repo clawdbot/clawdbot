@@ -1,3 +1,7 @@
+/**
+ * Claude CLI backend descriptor. It configures Claude Code process arguments,
+ * MCP bundling, session handling, environment scrubbing, and watchdog defaults.
+ */
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
@@ -13,6 +17,7 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,

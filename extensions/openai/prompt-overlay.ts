@@ -1,3 +1,4 @@
+// Openai plugin module implements prompt overlay behavior.
 import {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,

@@ -1,3 +1,4 @@
+// Live image probe tests cover generated probe image payloads.
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64, renderSolidColorPngBase64 } from "./live-image-probe.js";
 

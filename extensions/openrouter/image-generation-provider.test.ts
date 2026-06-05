@@ -1,3 +1,4 @@
+// Openrouter tests cover image generation provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenRouterImageGenerationProvider,

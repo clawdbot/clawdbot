@@ -1,3 +1,4 @@
+// Doctor plugin manifest tests cover manifest validation, missing installs, and repair guidance.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

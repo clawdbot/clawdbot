@@ -1,3 +1,6 @@
+/**
+ * Emits diagnostic model-call events around embedded-agent stream functions.
+ */
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,

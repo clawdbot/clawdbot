@@ -1,3 +1,6 @@
+/**
+ * Public Chutes provider plugin API exports.
+ */
 export {
   buildChutesModelDefinition,
   CHUTES_BASE_URL,

@@ -1,3 +1,4 @@
+// Channel output policy tests cover isolated agent delivery output filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCronChannelOutputPolicy,

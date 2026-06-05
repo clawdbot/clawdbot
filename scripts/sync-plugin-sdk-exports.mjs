@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Regenerates package.json plugin-sdk export entries from the canonical entry list.
 import fs from "node:fs";
 import path from "node:path";
 import { buildPluginSdkPackageExports } from "./lib/plugin-sdk-entries.mjs";

@@ -1,3 +1,4 @@
+/** Custom Clack multi-select prompt for Codex migration skill/plugin choices. */
 import { styleText } from "node:util";
 import { MultiSelectPrompt, settings, wrapTextWithPrefix } from "@clack/core";
 import {
@@ -24,6 +25,7 @@ type MigrationSkillSelectionOption = {
   disabled?: boolean;
 };
 
+/** Options for the migration selection prompt, including testable IO streams. */
 export type MigrationSkillSelectionPromptOptions = {
   message: string;
   options: MigrationSkillSelectionOption[];
@@ -72,6 +74,7 @@ function formatOption(
   return withHint;
 }
 
+/** Prompts for migration selection values and reconciles all/none/recommended shortcuts. */
 export function promptMigrationSkillSelectionValues(
   opts: MigrationSkillSelectionPromptOptions,
 ): Promise<string[] | symbol | undefined> {
@@ -231,6 +234,8 @@ export function promptMigrationSkillSelectionValues(
             !(prompt.value ?? []).includes(activatedValue),
         },
       );
+      // Enter can submit the active row without a Space event; keep the local
+      // selection cache aligned for subsequent shortcut reconciliation.
       lastSpaceDeselectedValue = undefined;
       lastSelectedValues = [...(prompt.value ?? [])];
       return;
@@ -251,4 +256,5 @@ export function promptMigrationSkillSelectionValues(
   return prompt.prompt();
 }
 
+/** Compatibility alias for plugin selection prompts that share the same picker. */
 export const promptMigrationSelectionValues = promptMigrationSkillSelectionValues;

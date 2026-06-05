@@ -1,3 +1,4 @@
+// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -79,6 +80,7 @@ const loadCrestodianModule = async () => await import("../crestodian/crestodian.
 const loadProgressModule = async () => await import("./progress.js");
 
 function createGatewayCliMainStartupTrace(argv: string[]) {
+  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
   const enabled =
     isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
     argv.slice(2).includes("gateway");

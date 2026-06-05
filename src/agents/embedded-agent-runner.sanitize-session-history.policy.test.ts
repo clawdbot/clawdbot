@@ -1,3 +1,4 @@
+// Smoke coverage for session-history sanitization policy wiring.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
@@ -17,6 +18,8 @@ vi.mock(
   async () => await createSanitizeSessionHistoryHelpersMock({ isGoogleModelApi: vi.fn() }),
 );
 
+// Provider runtime mocks keep this file focused on high-level policy routing
+// while deeper replay-history behavior is covered in the main test suite.
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
@@ -71,6 +74,8 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   });
 
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
+    // Snapshot changes are the public safety boundary: reasoning that was valid
+    // for one provider must be replayed as text-only when the model family moves.
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
     });

@@ -1,3 +1,4 @@
+// Logger env tests cover log level and transport behavior from environment config.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getResolvedConsoleSettings,
@@ -5,6 +6,7 @@ import {
   resetLogger,
   setLoggerOverride,
 } from "../logging.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { loggingState } from "./state.js";
 
@@ -12,7 +14,7 @@ const defaultMaxFileBytes = 100 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-test-env-log-level-");
 
 describe("OPENCLAW_LOG_LEVEL", () => {
-  let originalEnv: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let testLogPath = "";
 
   beforeAll(async () => {
@@ -20,7 +22,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
   });
 
   beforeEach(() => {
-    originalEnv = process.env.OPENCLAW_LOG_LEVEL;
+    envSnapshot = captureEnv(["OPENCLAW_LOG_LEVEL"]);
     testLogPath = logPathTracker.nextPath();
     delete process.env.OPENCLAW_LOG_LEVEL;
     loggingState.invalidEnvLogLevelValue = null;
@@ -29,11 +31,8 @@ describe("OPENCLAW_LOG_LEVEL", () => {
   });
 
   afterEach(() => {
-    if (originalEnv === undefined) {
-      delete process.env.OPENCLAW_LOG_LEVEL;
-    } else {
-      process.env.OPENCLAW_LOG_LEVEL = originalEnv;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
     loggingState.invalidEnvLogLevelValue = null;
     resetLogger();
     setLoggerOverride(null);

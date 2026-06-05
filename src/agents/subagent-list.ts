@@ -1,3 +1,8 @@
+/**
+ * Subagent list builder.
+ *
+ * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -29,8 +34,6 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
-// Builds the sessions_list subagent view from registry runs and persisted
-// session metadata. The text and structured items share one indexing path.
 type SubagentListItem = {
   index: number;
   line: string;

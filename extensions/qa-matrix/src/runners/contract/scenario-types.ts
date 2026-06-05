@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario types behavior.
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 
 export type MatrixQaReplyArtifact = {

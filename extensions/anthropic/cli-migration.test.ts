@@ -1,3 +1,4 @@
+// Anthropic tests cover cli migration plugin behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,

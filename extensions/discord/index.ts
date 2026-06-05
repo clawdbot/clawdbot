@@ -1,3 +1,4 @@
+// Discord plugin entrypoint registers its OpenClaw integration.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { registerDiscordSubagentHooks } from "./subagent-hooks-api.js";
 import { discordVoiceTranscriptsSourceProvider } from "./transcripts-source-api.js";

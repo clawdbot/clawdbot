@@ -1,3 +1,4 @@
+/** Doctor note for workspace bootstrap file size and truncation risk. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -30,6 +31,11 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
+/**
+ * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
+ *
+ * Returns the raw budget analysis for tests and callers that need structured evidence.
+ */
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const bootstrapMaxChars = resolveBootstrapMaxChars(cfg);

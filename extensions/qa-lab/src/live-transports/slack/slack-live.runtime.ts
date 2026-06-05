@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements slack live behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

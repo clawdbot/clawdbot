@@ -1,3 +1,4 @@
+// Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
 import * as childProcess from "node:child_process";
 import { createCipheriv, createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
@@ -23,8 +24,11 @@ const LEGACY_OAUTH_SECRET_KEYCHAIN_ACCOUNT = "oauth-profile-master-key";
 const LEGACY_OAUTH_SECRET_KEY_FILE_NAME = "auth-profile-secret-key";
 
 export type LegacyOAuthSecretMaterial = {
+  /** OAuth access token from the legacy sidecar. */
   access?: string;
+  /** OAuth refresh token from the legacy sidecar. */
   refresh?: string;
+  /** Optional OpenID Connect id token from the legacy sidecar. */
   idToken?: string;
 };
 
@@ -39,6 +43,7 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 export function resolveLegacyOAuthSidecarPath(
   ref: LegacyOAuthRef,
   env: NodeJS.ProcessEnv = process.env,
@@ -75,6 +80,7 @@ function coerceLegacyOAuthEncryptedPayload(raw: unknown): LegacyOAuthEncryptedPa
     : null;
 }
 
+/** Return true when raw JSON has the legacy OAuth sidecar envelope or plaintext token shape. */
 export function isLegacyOAuthSidecarPayload(raw: unknown): boolean {
   if (!isRecord(raw)) {
     return false;

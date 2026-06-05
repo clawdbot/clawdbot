@@ -1,3 +1,5 @@
+// Gateway exec approval manager.
+// Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +20,8 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 }
 
 function scheduleResolvedEntryCleanup(cleanup: () => void): void {
+  // Resolved approvals stay visible briefly so node.invoke sanitizers can
+  // consume a just-approved id after the UI decision races the command retry.
   const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
   unrefTimer(timer);
 }

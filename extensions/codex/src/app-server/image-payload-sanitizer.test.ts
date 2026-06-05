@@ -1,3 +1,4 @@
+// Codex tests cover image payload sanitizer plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   invalidInlineImageText,

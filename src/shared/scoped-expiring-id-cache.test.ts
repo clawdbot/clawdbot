@@ -1,3 +1,4 @@
+// Scoped expiring id cache tests cover TTL and scope isolation behavior.
 import { describe, expect, it } from "vitest";
 import { createScopedExpiringIdCache } from "./scoped-expiring-id-cache.js";
 

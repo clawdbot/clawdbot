@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor auth behavior.
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   type ChannelIngressDecision,

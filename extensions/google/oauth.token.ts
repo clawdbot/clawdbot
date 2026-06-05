@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.token behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,

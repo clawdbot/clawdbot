@@ -1,3 +1,4 @@
+/** Tests ACP translator permission relay for Gateway exec approvals. */
 import type { CancelNotification } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";

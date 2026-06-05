@@ -1,3 +1,5 @@
+// Audio transcription runner executes the configured media-understanding audio
+// pipeline and extracts the first transcript output.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ActiveMediaModel } from "./active-model.types.js";

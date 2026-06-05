@@ -1,3 +1,4 @@
+// Stale OAuth profile shadow tests cover doctor detection of shadowed auth profiles.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

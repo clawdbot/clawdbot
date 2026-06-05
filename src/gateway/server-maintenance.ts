@@ -1,3 +1,5 @@
+// Gateway maintenance timers.
+// Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
@@ -128,6 +130,8 @@ export function startGatewayMaintenanceTimers(params: {
       return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      // Keep idempotency records for active runs so retries cannot create
+      // duplicate chat/agent work while a command is still draining.
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
       }

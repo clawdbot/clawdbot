@@ -1,3 +1,4 @@
+// Feishu tests cover card interaction plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildFeishuCardActionTextFallback,

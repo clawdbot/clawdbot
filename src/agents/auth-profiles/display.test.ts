@@ -1,3 +1,7 @@
+/**
+ * Tests auth profile display labels.
+ * Verifies configured display names/emails are used without fabricating labels.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveAuthProfileDisplayLabel } from "./display.js";
 

@@ -1,4 +1,6 @@
+// Console settings tests cover console logger configuration behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { captureConsoleSnapshot, type ConsoleSnapshot } from "./test-helpers/console-snapshot.js";
 
 const shouldSkipMutatingLoggingConfigReadMock = vi.hoisted(() => vi.fn(() => false));
@@ -21,7 +23,7 @@ vi.mock("./logger.js", () => ({
 
 let loadConfigCalls = 0;
 let originalIsTty: boolean | undefined;
-let originalOpenClawTestConsole: string | undefined;
+let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let snapshot: ConsoleSnapshot;
 let logging: typeof import("../logging.js");
 let state: typeof import("./state.js");
@@ -37,7 +39,7 @@ beforeEach(() => {
   shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   snapshot = captureConsoleSnapshot();
   originalIsTty = process.stdout.isTTY;
-  originalOpenClawTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
+  envSnapshot = captureEnv(["OPENCLAW_TEST_CONSOLE"]);
   process.env.OPENCLAW_TEST_CONSOLE = "1";
   Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 });
@@ -49,11 +51,8 @@ afterEach(() => {
   console.error = snapshot.error;
   console.debug = snapshot.debug;
   console.trace = snapshot.trace;
-  if (originalOpenClawTestConsole === undefined) {
-    delete process.env.OPENCLAW_TEST_CONSOLE;
-  } else {
-    process.env.OPENCLAW_TEST_CONSOLE = originalOpenClawTestConsole;
-  }
+  envSnapshot?.restore();
+  envSnapshot = undefined;
   Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
   logging.setConsoleConfigLoaderForTests();
   vi.restoreAllMocks();

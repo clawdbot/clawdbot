@@ -1,3 +1,4 @@
+/** Classifies cron run failures for retry policy decisions. */
 import type { CronRetryOn } from "../config/types.cron.js";
 
 /** Cron retry classifier output consumed by scheduler retry policy. */

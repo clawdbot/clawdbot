@@ -1,3 +1,5 @@
+// Completion-reply capture tests cover the short polling window used to collect
+// final child output after an announce waits for the subagent.
 import { describe, expect, it, vi } from "vitest";
 import { captureSubagentCompletionReplyUsing } from "./subagent-announce-capture.js";
 
@@ -26,6 +28,8 @@ describe("captureSubagentCompletionReply", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce("Late tool result completion");
 
+    // Fake timers make the retry contract deterministic without waiting for the
+    // wall-clock window used by live child sessions.
     const pending = captureSubagentCompletionReplyUsing({
       sessionKey: "agent:main:subagent:child",
       maxWaitMs: 50,

@@ -1,3 +1,5 @@
+// Gateway HTTP test harness.
+// Builds fake requests/responses and dispatches them through Gateway HTTP servers.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -27,6 +29,7 @@ export const AUTH_TOKEN: ResolvedGatewayAuth = {
   allowTailscale: false,
 };
 
+/** Build an IncomingMessage-like request for gateway HTTP handler tests. */
 export function createRequest(params: {
   path: string;
   authorization?: string;
@@ -45,6 +48,7 @@ export function createRequest(params: {
   });
 }
 
+/** Build a pre-authenticated hook POST request for hook HTTP tests. */
 export function createHookRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
@@ -61,6 +65,7 @@ export function createHookRequest(params?: {
   });
 }
 
+/** Build a ServerResponse-like mock and body reader for handler tests. */
 export function createResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;
@@ -102,6 +107,7 @@ export function createResponse(): {
   };
 }
 
+/** Emit one request through a gateway HTTP server and wait for response completion. */
 export async function dispatchRequest(
   server: GatewayHttpServer,
   req: IncomingMessage,

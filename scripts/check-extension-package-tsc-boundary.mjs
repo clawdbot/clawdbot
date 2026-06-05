@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Verifies extension packages compile through their package-local TypeScript boundary.
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -49,6 +50,9 @@ function parseMode(argv) {
   return mode;
 }
 
+/**
+ * Resolves the compile worker count from CLI/env/default settings.
+ */
 export function resolveCompileConcurrency(
   env = process.env,
   availableParallelism = os.availableParallelism(),
@@ -98,6 +102,9 @@ function createStepOutputCapture() {
   return { text: "", truncatedChars: 0 };
 }
 
+/**
+ * Appends child-process output while preserving only the diagnostic tail.
+ */
 export function appendBoundedStepOutput(buffer, chunk, maxChars = STEP_OUTPUT_MAX_CHARS) {
   const nextText = buffer.text + String(chunk);
   if (nextText.length <= maxChars) {
@@ -114,6 +121,9 @@ function formatCapturedStepOutput(buffer) {
   return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
 }
 
+/**
+ * Formats the successful boundary compile summary.
+ */
 export function formatBoundaryCheckSuccessSummary(params = {}) {
   const lines = ["extension package boundary check passed"];
   if (params.mode) {
@@ -143,6 +153,9 @@ export function formatBoundaryCheckSuccessSummary(params = {}) {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Formats skipped compile progress for fresh extension canaries.
+ */
 export function formatSkippedCompileProgress(params = {}) {
   const skippedCount = params.skippedCount ?? 0;
   const totalCount = params.totalCount ?? 0;
@@ -157,6 +170,9 @@ export function formatSkippedCompileProgress(params = {}) {
   return `skipped ${skippedCount} fresh plugin compiles\n`;
 }
 
+/**
+ * Formats slow extension compile diagnostics.
+ */
 export function formatSlowCompileSummary(params = {}) {
   const compileTimings = Array.isArray(params.compileTimings) ? params.compileTimings : [];
   if (compileTimings.length === 0) {
@@ -174,6 +190,9 @@ export function formatSlowCompileSummary(params = {}) {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Formats a failed boundary-check child process step.
+ */
 export function formatStepFailure(label, params = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
@@ -285,6 +304,9 @@ function collectOldestMtime(paths) {
   return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
 }
 
+/**
+ * Checks whether an extension boundary compile canary is still fresh.
+ */
 export function isBoundaryCompileFresh(extensionId, params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const extensionRoot = resolve(rootDir, "extensions", extensionId);
@@ -363,6 +385,9 @@ function abortSiblingSteps(abortController) {
   }
 }
 
+/**
+ * Runs one node-based boundary check step with timeout and output capture.
+ */
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const killProcess = params.killProcess ?? process.kill.bind(process);
@@ -540,6 +565,9 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   });
 }
 
+/**
+ * Runs boundary check steps with bounded concurrency.
+ */
 export async function runNodeStepsWithConcurrency(steps, concurrency) {
   const abortController = new AbortController();
   let firstFailure = null;
@@ -571,6 +599,9 @@ export async function runNodeStepsWithConcurrency(steps, concurrency) {
   }
 }
 
+/**
+ * Resolves canary artifact paths for an extension boundary compile.
+ */
 export function resolveCanaryArtifactPaths(extensionId, rootDir = repoRoot) {
   const extensionRoot = resolve(rootDir, "extensions", extensionId);
   return {
@@ -580,18 +611,27 @@ export function resolveCanaryArtifactPaths(extensionId, rootDir = repoRoot) {
   };
 }
 
+/**
+ * Removes canary artifacts for one extension.
+ */
 export function cleanupCanaryArtifacts(extensionId, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });
 }
 
+/**
+ * Removes canary artifacts for multiple extensions.
+ */
 export function cleanupCanaryArtifactsForExtensions(extensionIds, rootDir = repoRoot) {
   for (const extensionId of extensionIds) {
     cleanupCanaryArtifacts(extensionId, rootDir);
   }
 }
 
+/**
+ * Installs signal/exit cleanup for extension canary artifacts.
+ */
 export function installCanaryArtifactCleanup(extensionIds, params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const processObject = params.processObject ?? process;
@@ -612,6 +652,9 @@ function resolveBoundaryTsStampPath(extensionId, rootDir = repoRoot) {
   return resolve(rootDir, "extensions", extensionId, "dist", ".boundary-tsc.stamp");
 }
 
+/**
+ * Resolves the local lock path for extension boundary checks.
+ */
 export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
   return resolve(rootDir, "dist", ".extension-package-boundary.lock");
 }
@@ -649,6 +692,9 @@ function removeStaleBoundaryCheckLock(lockPath) {
   return true;
 }
 
+/**
+ * Acquires the single-process lock for extension boundary checks.
+ */
 export function acquireBoundaryCheckLock(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const processObject = params.processObject ?? process;
@@ -848,6 +894,9 @@ async function runCanaryCheck(extensionIds) {
   };
 }
 
+/**
+ * Runs the extension package TypeScript boundary check.
+ */
 export async function main(argv = process.argv.slice(2)) {
   const startedAt = Date.now();
   const mode = parseMode(argv);

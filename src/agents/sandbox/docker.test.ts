@@ -1,3 +1,5 @@
+// Docker image tests cover sandbox image inspection and actionable setup errors
+// without invoking a real Docker daemon.
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +100,8 @@ describe("ensureDockerImage", () => {
   });
 
   it("does not satisfy the missing default sandbox image by tagging plain Debian", async () => {
+    // The default image carries Python/helper contracts; tagging a base distro
+    // would pass image inspection but fail sandbox file operations later.
     spawnState.imageExists = false;
 
     let err: unknown;

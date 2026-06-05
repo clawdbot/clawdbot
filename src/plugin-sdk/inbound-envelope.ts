@@ -1,3 +1,4 @@
+// Shared inbound envelope helpers wire plugin route resolution to session-aware reply formatting.
 type RouteLike = {
   agentId: string;
   sessionKey: string;

@@ -1,3 +1,4 @@
+// Input file helpers normalize inline, fetched, and local media inputs.
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime } from "@openclaw/media-core/mime";

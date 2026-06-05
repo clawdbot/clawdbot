@@ -1,3 +1,4 @@
+// Check Workflows tests cover check workflows script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";

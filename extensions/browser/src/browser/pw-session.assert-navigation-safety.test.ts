@@ -1,3 +1,4 @@
+// Browser tests cover pw session.assert navigation safety plugin behavior.
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";

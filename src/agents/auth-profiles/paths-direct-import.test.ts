@@ -1,3 +1,8 @@
+/**
+ * Direct-import tests for auth profile path helpers.
+ * Calls path-resolve exports directly so coverage attribution stays honest
+ * despite the public paths.ts re-export barrel.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,14 +15,6 @@ import {
   resolveAuthStorePathForDisplay,
   resolveLegacyAuthStorePath,
 } from "./path-resolve.js";
-
-// Direct-import sanity tests. These helpers are exercised transitively by the
-// wider auth-profile test suite via ESM re-exports through paths.ts, but v8
-// coverage does not always attribute those transitive hits back to the
-// original function bodies in path-resolve.ts. This file imports each helper
-// directly from ./path-resolve.js (bypassing the re-export indirection) and
-// calls it at least once so the coverage report is honest about what is and
-// isn't tested.
 
 describe("path-resolve helpers (direct-import coverage attribution)", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);

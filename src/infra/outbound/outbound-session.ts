@@ -1,3 +1,5 @@
+// Outbound session routing maps send targets back into route/session metadata
+// so outbound-only messages can be mirrored into conversation state.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";

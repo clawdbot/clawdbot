@@ -1,3 +1,4 @@
+// Mattermost plugin module implements channel behavior.
 export {
   listMattermostDirectoryGroups,
   listMattermostDirectoryPeers,

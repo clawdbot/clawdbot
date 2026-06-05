@@ -1,3 +1,6 @@
+/**
+ * Resolves default exec tool settings from session and config context.
+ */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

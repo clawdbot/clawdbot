@@ -1,3 +1,8 @@
+/**
+ * gateway built-in tool.
+ *
+ * Exposes selected Gateway control/config/update actions with fail-closed config mutation boundaries.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import {

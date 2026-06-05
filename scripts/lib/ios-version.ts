@@ -1,3 +1,4 @@
+// Ios Version script supports OpenClaw repository automation.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 

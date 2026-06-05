@@ -1,3 +1,4 @@
+/** Doctor notes for auth profile health, OAuth refresh failures, and legacy Codex config. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -113,6 +114,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
+/** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
@@ -170,6 +172,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
   return [...targets.values()];
 }
 
+/** Returns the short doctor hint for disabled or cooldown auth profiles. */
 export function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
@@ -202,6 +205,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
   }
 }
 
+/** Formats provider OAuth refresh failures as actionable doctor note lines. */
 export function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
@@ -380,6 +384,7 @@ async function noteAuthProfileHealthForTarget(params: {
   }
 }
 
+/** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
 export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

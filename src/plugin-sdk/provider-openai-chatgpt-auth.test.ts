@@ -1,3 +1,4 @@
+// OpenAI ChatGPT auth tests cover auth status normalization and token expiry handling.
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAICodexCredentialExtra,

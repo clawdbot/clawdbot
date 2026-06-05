@@ -1,3 +1,4 @@
+// Common helper supports OpenClaw script workflows.
 export * from "./filesystem.ts";
 export * from "./env-limits.ts";
 export * from "./host-command.ts";

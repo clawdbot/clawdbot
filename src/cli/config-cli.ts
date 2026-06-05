@@ -1,3 +1,4 @@
+// Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import fs from "node:fs";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -143,6 +144,7 @@ function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unkno
 }
 
 function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
+  // Config mutation normalizes model refs at write time so later readers see canonical ids.
   if (!Array.isArray(value)) {
     return value;
   }

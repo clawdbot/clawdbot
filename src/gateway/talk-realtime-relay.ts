@@ -1,3 +1,5 @@
+// Gateway Talk realtime relay.
+// Bridges browser Talk audio sessions with realtime voice provider plugins.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
@@ -48,13 +50,6 @@ import {
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
-/**
- * Gateway-owned relay between browser Talk audio and realtime voice providers.
- *
- * Each relay is scoped to the owning WebSocket connection; events are broadcast
- * back only to that connection so audio, transcript, and tool-call state cannot
- * leak across clients that know another relay id.
- */
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;

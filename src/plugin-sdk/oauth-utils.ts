@@ -1,3 +1,4 @@
+// OAuth utility helpers provide PKCE, state, and redirect primitives for plugin auth flows.
 import { createHash, randomBytes } from "node:crypto";
 
 /**

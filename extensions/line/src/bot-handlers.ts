@@ -1,3 +1,4 @@
+// Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";

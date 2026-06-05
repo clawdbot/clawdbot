@@ -1,3 +1,5 @@
+// Session delete lifecycle tests protect transcript deletion, ACP metadata,
+// active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";

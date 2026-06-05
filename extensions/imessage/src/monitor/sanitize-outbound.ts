@@ -1,3 +1,4 @@
+// Imessage plugin module implements sanitize outbound behavior.
 import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-chunking";
 
 /**

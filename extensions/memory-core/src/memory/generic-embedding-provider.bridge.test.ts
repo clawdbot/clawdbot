@@ -1,3 +1,4 @@
+// Memory Core tests cover generic embedding provider.bridge plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   EmbeddingInput,

@@ -1,3 +1,4 @@
+// Feishu plugin module implements lifecycle support behavior.
 import { vi, type Mock } from "vitest";
 
 type BoundConversation = {

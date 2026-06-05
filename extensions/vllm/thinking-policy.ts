@@ -1,3 +1,4 @@
+// Vllm plugin module implements thinking policy behavior.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,

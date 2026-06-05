@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager vector warning behavior.
 export function formatMemoryVectorDegradedWriteReason(loadError?: string): string {
   return loadError
     ? `sqlite-vec unavailable: ${loadError}`

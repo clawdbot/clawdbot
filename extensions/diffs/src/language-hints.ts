@@ -1,3 +1,4 @@
+// Diffs plugin module implements language hints behavior.
 import { resolveLanguage } from "@pierre/diffs";
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import {

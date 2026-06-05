@@ -1,3 +1,4 @@
+// Plans grouped targeted Docker lane matrix entries.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
@@ -23,6 +24,9 @@ function sanitizeLabel(value) {
   );
 }
 
+/**
+ * Groups selected Docker lanes and expands sharded upgrade-survivor baselines.
+ */
 export function planTargetedDockerLaneGroups({
   groupSize = 1,
   lanes,

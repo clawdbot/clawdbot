@@ -1,3 +1,4 @@
+// Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
 import {
   accessSync,
   chmodSync,

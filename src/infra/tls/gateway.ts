@@ -1,3 +1,5 @@
+// Gateway TLS runtime loads configured certificates or generates a local
+// self-signed pair, returning server-ready options plus client fingerprint.
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";

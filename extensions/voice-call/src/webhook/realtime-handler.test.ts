@@ -1,3 +1,4 @@
+// Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
 import type {
   RealtimeVoiceBridge,

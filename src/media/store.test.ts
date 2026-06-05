@@ -1,3 +1,4 @@
+// Media store tests cover persisted media records and local file storage.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";

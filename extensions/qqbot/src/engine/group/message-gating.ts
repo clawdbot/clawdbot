@@ -1,3 +1,4 @@
+// Qqbot plugin module implements message gating behavior.
 type GroupMessageGateAction =
   | "drop_other_mention"
   | "block_unauthorized_command"

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements backend config behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -77,6 +78,7 @@ export type ResolvedQmdConfig = {
   command: string;
   mcporter: ResolvedQmdMcporterConfig;
   searchMode: MemoryQmdSearchMode;
+  rerank?: boolean;
   searchTool?: string;
   collections: ResolvedQmdCollection[];
   sessions: ResolvedQmdSessionConfig;
@@ -443,6 +445,7 @@ export function resolveMemoryBackendConfig(params: {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
+    rerank: qmdCfg?.rerank,
     searchTool: resolveSearchTool(qmdCfg?.searchTool),
     collections,
     includeDefaultMemory,

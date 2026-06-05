@@ -1,3 +1,4 @@
+// Cache-TTL eligibility coverage for native and provider-routed model families.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../plugins/provider-runtime.js", async () => {
@@ -9,6 +10,8 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
     resolveProviderCacheTtlEligibility: (params: {
       context: { provider: string; modelId: string; modelApi?: string };
     }) => {
+      // Provider runtime owns model-family-specific eligibility; tests mirror
+      // plugin decisions without loading actual provider plugins.
       if (params.context.provider === "anthropic") {
         return true;
       }
@@ -89,6 +92,8 @@ describe("isCacheTtlEligibleProvider", () => {
 
 describe("readLastCacheTtlTimestamp", () => {
   it("returns the latest matching timestamp for the active provider/model", () => {
+    // Replay only reuses cache TTL entries scoped to the current model target;
+    // stale entries for other providers must not reset pruning clocks.
     const sessionManager = {
       getEntries: () => [
         {

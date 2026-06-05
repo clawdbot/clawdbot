@@ -1,3 +1,4 @@
+// Model load-config tests cover loading config used by model commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

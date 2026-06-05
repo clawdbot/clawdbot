@@ -1,3 +1,4 @@
+// Channel MCP server wires channel bridge tools into an MCP server instance.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

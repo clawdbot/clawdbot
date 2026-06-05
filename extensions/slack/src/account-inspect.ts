@@ -1,3 +1,4 @@
+// Slack plugin module implements account inspect behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

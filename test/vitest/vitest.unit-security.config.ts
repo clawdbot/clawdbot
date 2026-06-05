@@ -1,3 +1,4 @@
+// Vitest unit security config wires the unit security test shard.
 import { createUnitVitestConfigWithOptions } from "./vitest.unit.config.ts";
 
 export default createUnitVitestConfigWithOptions(process.env, {

@@ -1,3 +1,8 @@
+/**
+ * Tests OpenAI/Codex OAuth refresh fallback behavior.
+ * Covers CLI bootstrap and profile success state when refresh recovery has to
+ * fall back across auth sources.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Whatsapp tests cover monitor state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createWebChannelStatusController } from "./monitor-state.js";
 

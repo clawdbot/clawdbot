@@ -1,3 +1,8 @@
+/**
+ * ACP configured binding consumer.
+ *
+ * Converts channel configured-binding rules into persistent ACP binding records.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

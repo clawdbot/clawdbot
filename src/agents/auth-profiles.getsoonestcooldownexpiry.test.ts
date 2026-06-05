@@ -1,3 +1,8 @@
+/**
+ * Soonest cooldown expiry tests.
+ * Verifies timestamp selection across cooldown, blocked, disabled, invalid, and
+ * model-scoped usage-state combinations.
+ */
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { getSoonestCooldownExpiry } from "./auth-profiles/usage-state.js";

@@ -1,3 +1,4 @@
+// Telegram tests cover audit plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;

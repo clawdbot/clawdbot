@@ -1,3 +1,4 @@
+// Telegram plugin module implements inline buttons behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-contracts";
 import {

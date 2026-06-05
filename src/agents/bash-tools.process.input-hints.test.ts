@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process input-wait hints.
+ * Idle writable sessions should surface actionable metadata and user-facing hints.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addSession,

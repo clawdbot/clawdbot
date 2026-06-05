@@ -1,3 +1,5 @@
+// Image runtime tests cover model-backed image routing, auth/profile handling,
+// provider payload transforms, and MiniMax/Copilot special paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -55,6 +57,8 @@ function requireMockCallAt<const Calls extends readonly unknown[][]>(
   index: number,
   label: string,
 ): Calls[number] {
+  // Tests inspect exact dependency calls because image runtime behavior is
+  // mostly provider/auth orchestration.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected ${label} call ${index}`);

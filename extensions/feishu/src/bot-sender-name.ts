@@ -1,3 +1,4 @@
+// Feishu plugin module implements bot sender name behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

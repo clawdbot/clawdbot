@@ -1,3 +1,4 @@
+// Covers Moonshot-specific extra-params thinking payload behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createMoonshotThinkingWrapper,
@@ -8,6 +9,8 @@ import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.t
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.js";
 
 beforeEach(() => {
+  // Moonshot thinking support lives in its provider wrapper, wired through the
+  // generic extra-params provider-runtime seam here.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -55,6 +58,8 @@ describe("applyExtraParamsToAgent Moonshot", () => {
   });
 
   it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {
+    // A pinned tool choice is stricter than thinking. Disable thinking instead
+    // of changing the user's requested tool routing.
     const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.5",
@@ -90,6 +95,8 @@ describe("applyExtraParamsToAgent Moonshot", () => {
   });
 
   it("forwards thinking.keep=all to kimi-k2.6 requests", () => {
+    // thinking.keep is only supported by kimi-k2.6, so this verifies the
+    // positive allowlist before the negative cases below.
     const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.6",

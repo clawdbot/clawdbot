@@ -1,3 +1,4 @@
+// Slack plugin module implements subteam mentions behavior.
 import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

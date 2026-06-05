@@ -1,3 +1,5 @@
+// sessions_yield tool tests cover cooperative turn yielding and unsupported
+// context errors.
 import { describe, expect, it, vi } from "vitest";
 import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 
@@ -30,6 +32,8 @@ describe("sessions_yield tool", () => {
   });
 
   it("passes the custom message through the yield callback", async () => {
+    // The callback message becomes operator-visible scheduler context, so the
+    // tool must not replace a supplied reason with the default text.
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({ sessionId: "test-session", onYield });
     const result = await tool.execute("call-1", { message: "Waiting for fact-checker" });

@@ -1,3 +1,5 @@
+// Agent config mutation helpers wrap retrying config writes for create/update/
+// delete flows and surface typed precondition failures to gateway handlers.
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyAgentConfig,

@@ -1,3 +1,4 @@
+// Runtime media helpers load and classify media attachments for plugin runtimes.
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { detectMime } from "@openclaw/media-core/mime";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";

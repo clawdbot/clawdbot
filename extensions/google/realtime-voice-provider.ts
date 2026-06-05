@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import type {
   ActivityHandling,

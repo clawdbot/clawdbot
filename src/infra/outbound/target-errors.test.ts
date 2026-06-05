@@ -1,3 +1,4 @@
+// Covers user-facing target error messages and hint formatting.
 import { describe, expect, it } from "vitest";
 import {
   ambiguousTargetError,

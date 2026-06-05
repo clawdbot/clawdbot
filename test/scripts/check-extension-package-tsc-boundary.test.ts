@@ -1,3 +1,4 @@
+// Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";

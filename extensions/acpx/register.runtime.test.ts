@@ -1,3 +1,4 @@
+// ACPX tests cover register plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { runtimeRegistry } = vi.hoisted(() => ({

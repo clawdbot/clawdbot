@@ -1,3 +1,4 @@
+// Telegram plugin module implements setup core behavior.
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,

@@ -1,3 +1,4 @@
+// Vitest config config wires the config test shard.
 import { defineConfig } from "vitest/config";
 import {
   resolveDefaultVitestPool,

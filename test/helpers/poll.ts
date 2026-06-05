@@ -1,3 +1,4 @@
+// Poll test helper retries assertions until a timeout.
 import { sleep } from "../../src/utils.js";
 
 // Polling helper for tests that wait on async state.

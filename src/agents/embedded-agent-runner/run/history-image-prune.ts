@@ -1,3 +1,6 @@
+/**
+ * Prunes already-processed image payloads from replayed prompt history.
+ */
 import type { AgentMessage } from "../../runtime/index.js";
 
 /** Replacement text for old image blocks that were already available to the model. */

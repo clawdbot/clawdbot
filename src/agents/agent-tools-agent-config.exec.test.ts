@@ -1,3 +1,7 @@
+/**
+ * Tests agent-specific exec defaults in assembled coding tools.
+ * Verifies per-agent exec host policy affects lazy exec/process behavior.
+ */
 import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";

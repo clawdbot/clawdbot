@@ -1,3 +1,4 @@
+// Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
@@ -7,6 +8,7 @@ import type { Model } from "../llm/types.js";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
+/** Normalized OAuth credential bundle persisted by provider auth profiles. */
 export type OAuthCredentials = {
   /** Refresh token or provider-equivalent long-lived credential. */
   refresh: string;
@@ -17,11 +19,13 @@ export type OAuthCredentials = {
   [key: string]: unknown;
 };
 
+/** Stable provider id used by OAuth credential and config routing. */
 export type OAuthProviderId = string;
 
 /** @deprecated Use OAuthProviderId instead. */
 export type OAuthProvider = OAuthProviderId;
 
+/** Manual input prompt shown during OAuth login flows. */
 export type OAuthPrompt = {
   /** Prompt text shown to the operator. */
   message: string;
@@ -31,6 +35,7 @@ export type OAuthPrompt = {
   allowEmpty?: boolean;
 };
 
+/** Parsed OAuth callback/code input accepted by manual and callback-server flows. */
 export type OAuthAuthorizationInput = {
   /** Authorization code parsed from a callback URL, query string, or pasted code. */
   code?: string;
@@ -38,6 +43,7 @@ export type OAuthAuthorizationInput = {
   state?: string;
 };
 
+/** Authorization URL and optional instructions shown before OAuth completion. */
 export type OAuthAuthInfo = {
   /** Provider authorization URL shown to the user. */
   url: string;
@@ -45,6 +51,7 @@ export type OAuthAuthInfo = {
   instructions?: string;
 };
 
+/** One selectable OAuth login option. */
 export type OAuthSelectOption = {
   /** Stable option id returned when the operator selects this entry. */
   id: string;
@@ -52,6 +59,7 @@ export type OAuthSelectOption = {
   label: string;
 };
 
+/** Selector prompt used when a provider offers multiple OAuth login choices. */
 export type OAuthSelectPrompt = {
   /** Prompt text shown above the selectable options. */
   message: string;
@@ -59,6 +67,7 @@ export type OAuthSelectPrompt = {
   options: OAuthSelectOption[];
 };
 
+/** UI/runtime callbacks used by provider OAuth login implementations. */
 export interface OAuthLoginCallbacks {
   /** Emits authorization URL/instructions to the UI before waiting for completion. */
   onAuth: (info: OAuthAuthInfo) => void;
@@ -74,6 +83,7 @@ export interface OAuthLoginCallbacks {
   signal?: AbortSignal;
 }
 
+/** Provider OAuth contract implemented by provider plugins. */
 export interface OAuthProviderInterface {
   /** Stable provider id used for credential and config routing. */
   readonly id: OAuthProviderId;

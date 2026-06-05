@@ -1,3 +1,4 @@
+// Doctor contract API fast-path tests cover lightweight channel doctor contract loading.
 import { describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({

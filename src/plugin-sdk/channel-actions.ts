@@ -1,3 +1,4 @@
+// Channel action schemas describe plugin-declared actions available through channel UIs.
 import { Type } from "typebox";
 import type { TSchema } from "typebox";
 import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";

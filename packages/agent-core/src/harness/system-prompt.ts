@@ -1,3 +1,4 @@
+// Agent Core module implements system prompt behavior.
 import type { Skill } from "./types.js";
 
 /** Format model-visible skill metadata for inclusion in the harness system prompt. */

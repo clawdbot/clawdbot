@@ -1,3 +1,4 @@
+// Slack plugin module implements slash harness behavior.
 import { vi } from "vitest";
 
 type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;

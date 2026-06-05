@@ -1,3 +1,5 @@
+// Gateway post-ready runtime services.
+// Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -35,6 +37,8 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   if (!maintenance) {
     return;
   }
+  // Maintenance startup can race shutdown. Clear every interval handle here so
+  // callers can discard partially-created maintenance safely.
   clearInterval(maintenance.tickInterval);
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);

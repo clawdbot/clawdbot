@@ -1,3 +1,4 @@
+/** Builds isolated cron runner config from global defaults plus agent overrides. */
 import type { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 

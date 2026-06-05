@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Validates that a referenced release-publish workflow run is usable for approval.
 import fs from "node:fs";
 
 const run = JSON.parse(fs.readFileSync(0, "utf8"));

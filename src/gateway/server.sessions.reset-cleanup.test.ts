@@ -1,3 +1,5 @@
+// Session reset cleanup tests protect ACP metadata resets, active run shutdown,
+// hook emission, thread bindings, and browser/MCP cleanup side effects.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";

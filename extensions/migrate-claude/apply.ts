@@ -1,3 +1,4 @@
+// Migrate Claude plugin module implements apply behavior.
 import path from "node:path";
 import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {

@@ -1,3 +1,4 @@
+// Control UI module implements main behavior.
 import "./styles.css";
 import "./ui/app.ts";
 import { inferControlUiPublicAssetPath } from "./ui/public-assets.ts";

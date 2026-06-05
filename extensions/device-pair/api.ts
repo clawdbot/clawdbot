@@ -1,3 +1,4 @@
+// Device Pair API module exposes the plugin public contract.
 export {
   approveDevicePairing,
   clearDeviceBootstrapTokens,

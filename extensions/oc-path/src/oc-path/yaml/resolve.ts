@@ -1,3 +1,4 @@
+// OC Path module implements resolve behavior.
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {

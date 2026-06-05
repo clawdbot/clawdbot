@@ -1,3 +1,4 @@
+// Zai Fallback Repro script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";

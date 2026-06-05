@@ -1,3 +1,4 @@
+// Feishu tests cover channel plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";

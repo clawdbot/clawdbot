@@ -1,3 +1,4 @@
+// Telegram tests cover reasoning lane coordinator plugin behavior.
 import { describe, expect, it } from "vitest";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 

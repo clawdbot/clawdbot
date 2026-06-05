@@ -1,3 +1,5 @@
+// Cron notification tests protect completion-delivery warning behavior,
+// including URL redaction for invalid webhook destinations.
 import { describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";

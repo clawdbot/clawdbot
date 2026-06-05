@@ -1,3 +1,4 @@
+// Public barrel for channel command handlers and option types.
 export type { ChannelsAddOptions } from "./channels/add.js";
 export { channelsAddCommand } from "./channels/add.js";
 export type { ChannelsCapabilitiesOptions } from "./channels/capabilities.js";

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover response snippet behavior.
 import { describe, expect, it } from "vitest";
 import { readResponseTextSnippet } from "./response-snippet.js";
 

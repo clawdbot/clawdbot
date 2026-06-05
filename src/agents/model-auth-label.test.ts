@@ -1,3 +1,4 @@
+// Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveModelAuthLabel } from "./model-auth-label.js";
 
@@ -56,6 +57,8 @@ describe("resolveModelAuthLabel", () => {
   });
 
   it("does not include token value in label for token profiles", () => {
+    // Labels may be shown in status output, so token-backed profiles identify
+    // the auth mode/profile only and never echo token material or refs.
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
@@ -130,6 +133,8 @@ describe("resolveModelAuthLabel", () => {
   });
 
   it("uses accepted provider ids before falling back to provider env auth", () => {
+    // Accepted provider ids let aliases share a profile match before env
+    // fallback would report a less-specific API-key label.
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {

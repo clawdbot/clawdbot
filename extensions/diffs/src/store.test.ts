@@ -1,3 +1,4 @@
+// Diffs tests cover store plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";

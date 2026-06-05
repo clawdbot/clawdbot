@@ -1,3 +1,9 @@
+/**
+ * Chrome MCP snapshot conversion helpers.
+ *
+ * Converts chrome-devtools-mcp structured snapshots into OpenClaw ARIA nodes
+ * and compact AI snapshots with stable refs and duplicate tracking.
+ */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeString } from "../record-shared.js";
 import type { SnapshotAriaNode } from "./client.types.js";
@@ -8,6 +14,7 @@ import {
 } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
+/** Structured snapshot node shape returned by chrome-devtools-mcp. */
 export type ChromeMcpSnapshotNode = {
   id?: string;
   role?: string;
@@ -75,6 +82,7 @@ function registerRef(
   return undefined;
 }
 
+/** Flatten a Chrome MCP snapshot tree into OpenClaw ARIA-style nodes. */
 export function flattenChromeMcpSnapshotToAriaNodes(
   root: ChromeMcpSnapshotNode,
   limit = 500,
@@ -109,6 +117,7 @@ export function flattenChromeMcpSnapshotToAriaNodes(
   return out;
 }
 
+/** Build a compact text snapshot and ref map from a Chrome MCP snapshot tree. */
 export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   root: ChromeMcpSnapshotNode;
   options?: RoleSnapshotOptions;

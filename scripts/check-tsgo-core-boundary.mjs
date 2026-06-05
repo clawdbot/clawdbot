@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Enforces core tsgo project boundaries and sparse-checkout safety.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";

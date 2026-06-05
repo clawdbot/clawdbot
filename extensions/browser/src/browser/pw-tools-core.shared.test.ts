@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 

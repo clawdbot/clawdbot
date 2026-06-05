@@ -1,3 +1,4 @@
+// Matrix plugin module implements credentials write behavior.
 import type {
   saveBackfilledMatrixDeviceId as saveBackfilledMatrixDeviceIdType,
   saveMatrixCredentials as saveMatrixCredentialsType,

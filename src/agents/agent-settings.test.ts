@@ -1,3 +1,4 @@
+/** Tests agent compaction settings and small-context auto-compaction guards. */
 import { describe, expect, it, vi } from "vitest";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import {

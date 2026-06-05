@@ -1,13 +1,12 @@
+/**
+ * Provider-scoped web-search config helpers.
+ *
+ * Bridges legacy top-level credentials with plugin-owned provider configuration.
+ */
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLegacyWebSearchProviderConfigKey } from "../../config/web-search-legacy-provider-keys.js";
 
-/**
- * Reads and writes provider-scoped web-search config.
- *
- * The helpers preserve legacy top-level apiKey behavior while routing modern
- * plugin-owned provider config through plugins.entries.<plugin>.config.webSearch.
- */
 /** Reads the legacy top-level web search credential value. */
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;

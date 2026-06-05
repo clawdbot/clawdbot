@@ -1,3 +1,4 @@
+/** Tests Chutes OAuth token exchange and refresh HTTP flows. */
 import { describe, expect, it } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -30,6 +31,8 @@ function expectRefreshedCredential(
   refreshed: Awaited<ReturnType<typeof refreshChutesTokens>>,
   now: number,
 ) {
+  // Refresh responses may omit refresh_token; the stored token remains valid and
+  // expiry keeps the safety skew applied.
   expect(refreshed.access).toBe("at_new");
   expect(refreshed.refresh).toBe("rt_old");
   expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);

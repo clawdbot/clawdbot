@@ -1,3 +1,5 @@
+// Environment gateway methods summarize the local gateway and paired/connected
+// nodes as execution environments for UI and automation clients.
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type EnvironmentSummary,

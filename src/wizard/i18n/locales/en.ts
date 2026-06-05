@@ -1,3 +1,4 @@
+// English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const en = {

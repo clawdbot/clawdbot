@@ -1,3 +1,4 @@
+// Web Content Core module implements provider runtime shared behavior.
 export type WebProviderConfigSource = {
   tools?: {
     web?: {

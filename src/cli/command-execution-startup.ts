@@ -1,3 +1,4 @@
+// CLI startup context, banner/log presentation, and bootstrap orchestration.
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -18,6 +19,7 @@ export function resolveCliExecutionStartupContext(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
+  // Resolve argv once so startup policy, routing, and bootstrap share the same command path.
   const invocation = resolveCliArgvInvocation(params.argv);
   const { commandPath } = invocation;
   return {
@@ -40,6 +42,7 @@ export async function applyCliExecutionStartupPresentation(params: {
   showBanner?: boolean;
   version?: string;
 }) {
+  // JSON-mode commands must keep stdout machine-readable; route diagnostics away first.
   if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
     routeLogsToStderr();
   }

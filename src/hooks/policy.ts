@@ -1,3 +1,4 @@
+// Hook policy helpers decide when hooks may run for a configured event.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import { resolveHookKey } from "./frontmatter.js";
 import type { HookEntry, HookSource } from "./types.js";

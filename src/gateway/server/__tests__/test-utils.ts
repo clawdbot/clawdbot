@@ -1,3 +1,4 @@
+// Gateway server test utilities build plugin-registry fixtures for nested server suites.
 import { createEmptyPluginRegistry, type PluginRegistry } from "../../../plugins/registry.js";
 
 /**

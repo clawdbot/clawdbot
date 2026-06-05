@@ -1,3 +1,4 @@
+// Telegram plugin module implements targets behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 
 export type TelegramTarget = {

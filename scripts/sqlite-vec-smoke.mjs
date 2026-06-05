@@ -1,3 +1,5 @@
+// Verifies sqlite-vec can load and execute a simple vector query in Node's
+// built-in SQLite runtime.
 import { DatabaseSync } from "node:sqlite";
 import { load, getLoadablePath } from "sqlite-vec";
 import { formatErrorMessage } from "./lib/error-format.mjs";

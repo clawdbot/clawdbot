@@ -1,3 +1,4 @@
+// Plugins CLI update tests cover plugin update command behavior and output.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

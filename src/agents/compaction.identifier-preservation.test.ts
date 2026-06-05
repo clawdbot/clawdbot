@@ -1,3 +1,5 @@
+// Covers identifier-preservation instructions through single and staged
+// compaction summarization paths.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +51,8 @@ describe("compaction identifier-preservation instructions", () => {
     messageCount: number,
     overrides: Partial<Omit<SummarizeInStagesInput, "messages">> = {},
   ) {
+    // Each run gets a fresh AbortSignal because summarizeInStages treats the
+    // signal as a per-request lifecycle boundary.
     await summarizeInStages({
       ...summarizeBase,
       ...overrides,
@@ -129,6 +133,8 @@ describe("compaction identifier-preservation instructions", () => {
 });
 
 function extractSummaryInstructions(call: unknown[] | undefined): string {
+  // generateSummary has compatibility parameters; scan from the tail so the
+  // instruction argument is found across old and new call shapes.
   if (!call) {
     return "";
   }
@@ -156,6 +162,8 @@ describe("buildCompactionSummarizationInstructions", () => {
   });
 
   it("appends custom instructions in a stable format", () => {
+    // Stable formatting matters because staged merge prompts append this block
+    // again if duplicate headers are not guarded.
     const result = buildCompactionSummarizationInstructions("Keep deployment details.");
     expect(result).toContain("Preserve all opaque identifiers exactly as written");
     expect(result).toContain("Additional focus:");

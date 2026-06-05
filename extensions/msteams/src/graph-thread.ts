@@ -1,3 +1,4 @@
+// Msteams plugin module implements graph thread behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

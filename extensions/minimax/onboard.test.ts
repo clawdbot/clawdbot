@@ -1,3 +1,4 @@
+// Minimax tests cover onboard plugin behavior.
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import {
   expectProviderOnboardMergedLegacyConfig,

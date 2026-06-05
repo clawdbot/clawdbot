@@ -1,3 +1,4 @@
+// Loads the generated host environment security policy JSON for JS consumers.
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
 
 function sortUniqueUppercase(values) {
@@ -34,6 +35,9 @@ function derivePolicyArrays(policy) {
   };
 }
 
+/**
+ * Normalizes raw host environment policy JSON into immutable lookup arrays.
+ */
 export function loadHostEnvSecurityPolicy(rawPolicy = HOST_ENV_SECURITY_POLICY_JSON) {
   const derived = derivePolicyArrays(rawPolicy);
   return Object.freeze({
@@ -51,4 +55,7 @@ export function loadHostEnvSecurityPolicy(rawPolicy = HOST_ENV_SECURITY_POLICY_J
   });
 }
 
+/**
+ * Process-wide host environment security policy derived from generated JSON.
+ */
 export const HOST_ENV_SECURITY_POLICY = loadHostEnvSecurityPolicy();

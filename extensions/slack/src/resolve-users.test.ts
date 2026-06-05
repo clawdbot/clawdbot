@@ -1,3 +1,4 @@
+// Slack tests cover resolve users plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 

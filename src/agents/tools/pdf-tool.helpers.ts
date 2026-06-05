@@ -1,3 +1,8 @@
+/**
+ * PDF tool parsing and response helpers.
+ *
+ * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
+ */
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

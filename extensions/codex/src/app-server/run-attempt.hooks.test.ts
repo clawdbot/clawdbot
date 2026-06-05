@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
 import {
   abortAgentHarnessRun,

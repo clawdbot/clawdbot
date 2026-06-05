@@ -1,3 +1,4 @@
+// Interactive transcript export template used by auto-reply HTML reports.
 (function () {
   "use strict";
 

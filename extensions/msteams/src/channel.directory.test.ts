@@ -1,3 +1,4 @@
+// Msteams tests cover channelirectory plugin behavior.
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,

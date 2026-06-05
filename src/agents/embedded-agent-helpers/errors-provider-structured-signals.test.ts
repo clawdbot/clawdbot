@@ -1,3 +1,4 @@
+// Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { classifyFailoverSignal } from "./errors.js";
@@ -20,6 +21,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
+    // HTTP 403 is ambiguous; provider-owned stable codes can refine it to
+    // billing or rate-limit without weakening default auth handling.
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
       if (
         context.provider === "demo-provider" &&
@@ -62,6 +65,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("does not call the direct provider hook for unstructured classified messages", () => {
+    // Plain message classifiers run first; provider hooks only see structured
+    // descriptors where a plugin can make a reliable decision.
     expect(
       classifyFailoverSignal({
         provider: "demo-provider",
@@ -84,6 +89,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("passes nested provider error types through failover error normalization", () => {
+    // SDK wrappers often put the provider code under error.type; normalization
+    // should preserve that code for provider hooks.
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
       return context.provider === "demo-provider" &&
         context.errorType === "PROVIDER_QUOTA_EXHAUSTED"

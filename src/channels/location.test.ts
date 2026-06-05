@@ -1,3 +1,4 @@
+// Location tests cover channel location payload normalization and display helpers.
 import { describe, expect, it } from "vitest";
 import { formatLocationText, toLocationContext } from "./location.js";
 

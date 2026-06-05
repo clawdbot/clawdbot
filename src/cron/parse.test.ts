@@ -1,3 +1,4 @@
+// Cron parse tests cover CLI and config parsing for scheduled jobs.
 import { describe, expect, it } from "vitest";
 import { parseAbsoluteTimeMs } from "./parse.js";
 

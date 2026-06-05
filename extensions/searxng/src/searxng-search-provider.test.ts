@@ -1,3 +1,4 @@
+// Searxng tests cover searxng search provider plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSearxngBaseUrl,

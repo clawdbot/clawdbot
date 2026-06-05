@@ -1,3 +1,4 @@
+// Control UI view renders exec approval screen content.
 import { html, nothing } from "lit";
 import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
 import { t } from "../../i18n/index.ts";

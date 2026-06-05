@@ -1,3 +1,4 @@
+// Setup helper tests cover channel setup helper outputs and lifecycle cleanup.
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";

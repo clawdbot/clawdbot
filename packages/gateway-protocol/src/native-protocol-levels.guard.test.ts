@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it } from "vitest";

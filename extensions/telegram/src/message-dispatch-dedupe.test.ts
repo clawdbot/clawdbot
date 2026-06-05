@@ -1,3 +1,4 @@
+// Telegram tests cover message dispatch dedupe plugin behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

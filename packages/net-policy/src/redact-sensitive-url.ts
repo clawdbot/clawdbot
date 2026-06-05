@@ -1,3 +1,4 @@
+// Network Policy module implements redact sensitive url behavior.
 type ConfigUiHintTags = {
   tags?: string[];
 };

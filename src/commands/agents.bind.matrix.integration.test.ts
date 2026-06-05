@@ -1,3 +1,4 @@
+// Agent bind Matrix integration tests cover account binding resolution through plugin registry surfaces.
 import { afterEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {

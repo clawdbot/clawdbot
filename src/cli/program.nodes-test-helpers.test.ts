@@ -1,3 +1,4 @@
+// Program nodes test-helper tests cover node command fixture helpers.
 import { describe, expect, it } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
 

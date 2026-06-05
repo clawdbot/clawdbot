@@ -1,3 +1,4 @@
+// Verifies live session model selection, switch queuing, and pending-flag cleanup.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
@@ -63,6 +64,8 @@ type ShouldSwitchParams = Parameters<
 >[0];
 
 function makeShouldSwitchParams(overrides: Partial<ShouldSwitchParams> = {}): ShouldSwitchParams {
+  // Defaults model an active Anthropic run so individual tests can override
+  // only the persisted/live selection fields under scrutiny.
   return {
     cfg: { session: { store: "/tmp/custom-store.json" } },
     sessionKey: "main",
@@ -232,6 +235,8 @@ describe("live model switch", () => {
   });
 
   it("preserves provider when runtime model is a vendor-prefixed OpenRouter id", async () => {
+    // OpenRouter models often contain provider-like slashes. An explicit
+    // runtime provider must keep the full nested model id intact.
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         modelProvider: "openrouter",
@@ -310,6 +315,8 @@ describe("live model switch", () => {
   });
 
   it("routes normalized overrides back through persisted ref resolution", async () => {
+    // Normalization strips duplicate provider prefixes before handing the
+    // choice to the shared persisted-ref resolver.
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         providerOverride: "z-ai",
@@ -337,6 +344,8 @@ describe("live model switch", () => {
   });
 
   it("queues a live switch only when an active run was aborted", async () => {
+    // Switching live runs is two-phase: abort the active run, then queue the
+    // selected provider/model for the restarted embedded run to consume.
     state.abortEmbeddedAgentRunMock.mockReturnValue(true);
 
     const { requestLiveSessionModelSwitch } = await loadModule();
@@ -508,6 +517,8 @@ describe("live model switch", () => {
     });
 
     it("clears the stale liveModelSwitchPending flag when models already match", async () => {
+      // A stale pending flag should self-heal once the active runtime already
+      // matches the persisted selection.
       const sessionEntry = {
         liveModelSwitchPending: true,
         providerOverride: "anthropic",

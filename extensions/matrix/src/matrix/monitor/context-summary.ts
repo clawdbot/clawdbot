@@ -1,3 +1,4 @@
+// Matrix plugin module implements context summary behavior.
 import {
   formatMatrixMessageText,
   resolveMatrixMessageAttachment,

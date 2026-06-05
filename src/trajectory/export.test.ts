@@ -1,3 +1,4 @@
+// Trajectory export tests cover packaged trajectory output and metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

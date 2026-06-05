@@ -1,3 +1,4 @@
+// Model Catalog Core module implements configured model refs behavior.
 import { normalizeProviderId } from "./provider-id.js";
 
 // Collects configured model references from OpenClaw config-shaped objects.

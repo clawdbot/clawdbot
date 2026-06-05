@@ -1,3 +1,4 @@
+// Stage Bundled Plugin Runtime tests cover stage bundled plugin runtime script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

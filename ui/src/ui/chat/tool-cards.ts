@@ -1,3 +1,4 @@
+// Control UI chat module implements tool cards behavior.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";

@@ -1,3 +1,4 @@
+// Twitch tests cover access control plugin behavior.
 import { describe, expect, it } from "vitest";
 import { checkTwitchAccessControl } from "./access-control.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";

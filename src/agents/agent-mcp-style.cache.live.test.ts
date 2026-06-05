@@ -1,3 +1,4 @@
+/** Live cache test for MCP-style tool turns against direct model providers. */
 import type { AssistantMessage, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,5 @@
+// Common tool helper tests cover shared parsing and media result shapes used by
+// multiple agent tools.
 import { describe, expect, test } from "vitest";
 import { imageResult, parseAvailableTags } from "./common.js";
 
@@ -31,6 +33,8 @@ describe("parseAvailableTags", () => {
 });
 describe("imageResult", () => {
   test("stores media delivery in details.media instead of MEDIA text", async () => {
+    // Binary media should travel through typed content/details, not a textual
+    // MEDIA sentinel that providers can display or reinterpret.
     const result = await imageResult({
       label: "test:image",
       path: "/tmp/test.png",

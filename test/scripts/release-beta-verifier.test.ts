@@ -1,3 +1,4 @@
+// Release Beta Verifier tests cover release beta verifier script behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseNpmViewFields,

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements setup finalize behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   splitSetupEntries,

@@ -1,3 +1,4 @@
+// Channel import guardrail tests cover forbidden imports across channel plugin boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";

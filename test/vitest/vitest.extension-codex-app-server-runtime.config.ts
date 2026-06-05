@@ -1,3 +1,4 @@
+// Vitest extension codex app server runtime config wires the extension codex app server runtime test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createExtensionCodexAppServerRuntimeVitestConfig(

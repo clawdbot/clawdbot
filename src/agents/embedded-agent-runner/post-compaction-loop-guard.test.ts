@@ -1,3 +1,4 @@
+// Coverage for detecting repeated tool loops immediately after compaction.
 import { describe, expect, it } from "vitest";
 import {
   createPostCompactionLoopGuard,
@@ -5,6 +6,8 @@ import {
 } from "./post-compaction-loop-guard.js";
 
 function callOutcome(toolName: string, args: unknown, result: string) {
+  // The guard compares stable hashes instead of full payloads to keep runtime
+  // state bounded.
   return { toolName, argsHash: JSON.stringify(args), resultHash: result };
 }
 
@@ -36,6 +39,8 @@ describe("createPostCompactionLoopGuard", () => {
   });
 
   it("aborts on the windowSize-th identical (tool,args,result) call within the window", () => {
+    // Repeating the same tool, args, and result right after compaction means the
+    // model likely lost progress and is stuck replaying the same recovery step.
     const guard = createPostCompactionLoopGuard({ windowSize: 3 });
     guard.armPostCompaction();
     expect(

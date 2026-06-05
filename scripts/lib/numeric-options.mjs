@@ -1,3 +1,5 @@
+// Numeric CLI option parsers shared by script planning helpers.
+/** Parse a safe positive integer option. */
 export function parsePositiveInt(raw, label) {
   const text = String(raw).trim();
   if (!/^\d+$/u.test(text)) {
@@ -10,6 +12,7 @@ export function parsePositiveInt(raw, label) {
   return value;
 }
 
+/** Parse a safe non-negative integer option. */
 export function parseNonNegativeInt(raw, label) {
   const text = String(raw).trim();
   if (!/^\d+$/u.test(text)) {
@@ -22,6 +25,7 @@ export function parseNonNegativeInt(raw, label) {
   return value;
 }
 
+/** Parse a finite positive number option. */
 export function parsePositiveNumber(raw, label) {
   const text = String(raw).trim();
   if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {

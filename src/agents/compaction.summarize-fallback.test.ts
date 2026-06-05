@@ -1,3 +1,4 @@
+// Covers final fallback behavior when model-backed summarization fails.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
@@ -73,6 +74,8 @@ describe("summarizeWithFallback", () => {
   });
 
   it("still attempts partial summarization when oversized messages were excluded", async () => {
+    // Oversized-message fallback tries the safe subset so a huge attachment or
+    // tool output does not prevent summarizing the rest of the transcript.
     agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const content =
         typeof (message as { content?: unknown }).content === "string"

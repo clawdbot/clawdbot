@@ -1,3 +1,4 @@
+// Package Artifact script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

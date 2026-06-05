@@ -1,3 +1,8 @@
+/**
+ * Subagent registry cleanup decisions.
+ *
+ * Decides whether completed runs can be cleaned up, deferred for descendants, retried, or abandoned.
+ */
 import { getDeliveryAttemptCount } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -5,8 +10,6 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-// Cleanup decisions for completed subagent registry records. Completion-message
-// flows can defer while descendants are active, then retry or give up.
 type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";

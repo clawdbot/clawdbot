@@ -1,11 +1,12 @@
+/**
+ * Channel status issue helper utilities.
+ *
+ * Formats status metadata and finds enabled/configured account ids for diagnostics.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../../utils.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
 export { isRecord };
-
-/**
- * Shared helpers for channel status issue collectors.
- */
 
 /**
  * Normalizes optional string metadata in status issue helpers.

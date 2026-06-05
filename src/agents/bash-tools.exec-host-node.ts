@@ -1,3 +1,8 @@
+/**
+ * Node-host exec orchestration.
+ * Combines local policy, remote node policy, auto-review, approval follow-ups,
+ * and `node.invoke system.run` execution for host=node calls.
+ */
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
@@ -34,12 +39,6 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
-/**
- * Executes shell commands on a named node through the Gateway approval/invoke path.
- *
- * The node host differs from local exec because approval policy can come from
- * both the caller config and the remote node policy.
- */
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
 function resolveNodeAutoReviewReason(params: {
@@ -89,7 +88,10 @@ function nodePolicyBlocksAutoReview(params: {
   );
 }
 
-/** Executes a command on a remote node, requesting approval when policy requires it. */
+/**
+ * Executes a command on a remote node, requesting approval when policy requires it.
+ * Node-host approval combines caller policy and remote node approval snapshots.
+ */
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {

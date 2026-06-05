@@ -1,3 +1,4 @@
+// Telegram User Credential Paths script supports OpenClaw repository automation.
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 

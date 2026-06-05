@@ -1,3 +1,4 @@
+// Imessage tests cover monitor reply cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetIMessageShortIdState,

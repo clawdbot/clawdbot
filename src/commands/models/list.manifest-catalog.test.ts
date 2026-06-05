@@ -1,3 +1,4 @@
+// Model manifest catalog tests cover loading model catalog entries from plugin manifests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

@@ -1,3 +1,5 @@
+// OpenAI-compatible audio transcription adapter for providers exposing the
+// /audio/transcriptions API shape.
 import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,

@@ -1,3 +1,8 @@
+/**
+ * Regression tests for adapter interaction with after_tool_call hooks.
+ * Ensures embedded run subscription handling remains the single after-hook
+ * execution path.
+ */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";

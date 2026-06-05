@@ -1,3 +1,4 @@
+// Signal tests cover client adapter plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,

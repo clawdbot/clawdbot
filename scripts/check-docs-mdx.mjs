@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Validates docs MDX files for syntax and repository-specific conventions.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +92,9 @@ function parsePositiveIntegerArg(raw, label) {
   return value;
 }
 
+/**
+ * Parses docs MDX check arguments.
+ */
 export function parseArgs(argv) {
   const roots = [];
   let jsonOut = "";

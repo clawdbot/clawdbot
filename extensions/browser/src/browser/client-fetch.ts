@@ -1,3 +1,9 @@
+/**
+ * Browser control client transport.
+ *
+ * Sends requests to either an absolute HTTP browser-control URL or the local
+ * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
+ */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -274,6 +280,7 @@ async function fetchHttpJson<T>(
   }
 }
 
+/** Fetch JSON from browser control over HTTP or local dispatcher transport. */
 export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
@@ -386,6 +393,7 @@ export async function fetchBrowserJson<T>(
   }
 }
 
+/** Focused test hooks for browser client transport internals. */
 export const testApi = {
   withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
 };

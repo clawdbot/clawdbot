@@ -1,3 +1,7 @@
+/**
+ * Browser setup entry. It auto-enables the Browser plugin when config or tool
+ * policies reference browser control.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -26,6 +30,7 @@ function hasBrowserToolReference(config: OpenClawConfig): boolean {
     : false;
 }
 
+/** Setup entry that detects existing Browser configuration references. */
 export default definePluginEntry({
   id: "browser",
   name: "Browser Setup",

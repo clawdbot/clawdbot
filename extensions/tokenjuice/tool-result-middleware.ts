@@ -1,3 +1,4 @@
+// Tokenjuice plugin module implements tool result middleware behavior.
 import process from "node:process";
 import type {
   AgentToolResultMiddleware,

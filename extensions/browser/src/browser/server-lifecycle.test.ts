@@ -1,3 +1,4 @@
+// Browser tests cover server lifecycle plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { stopOpenClawChromeMock } = vi.hoisted(() => ({

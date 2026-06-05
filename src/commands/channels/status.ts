@@ -1,3 +1,4 @@
+// Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -75,6 +76,7 @@ function formatEventLoopBits(value: unknown): string | null {
     .join(" ");
 }
 
+/** Render gateway channel status payloads into terminal-friendly lines. */
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
@@ -211,6 +213,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   return lines;
 }
 
+/** Query gateway channel status, falling back to config-only output when unreachable. */
 export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,

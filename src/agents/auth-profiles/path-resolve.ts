@@ -1,3 +1,8 @@
+/**
+ * Auth profile path resolution.
+ * Centralizes JSON store paths, display paths, legacy store paths, auth-state
+ * paths, and cross-agent OAuth refresh lock paths.
+ */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
@@ -10,26 +15,31 @@ import {
 } from "./path-constants.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
+/** Resolve the persisted auth profile store path for an agent dir. */
 export function resolveAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
   return path.join(resolved, AUTH_PROFILE_FILENAME);
 }
 
+/** Resolve the legacy auth store path used by migration code. */
 export function resolveLegacyAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
   return path.join(resolved, LEGACY_AUTH_FILENAME);
 }
 
+/** Resolve the auth-state sidecar path for usage/cooldown metadata. */
 export function resolveAuthStatePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
   return path.join(resolved, AUTH_STATE_FILENAME);
 }
 
+/** Resolve the user-facing auth profile database path. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
+/** Resolve the user-facing auth state database path. */
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
   const pathname = resolveAuthProfileDatabasePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);

@@ -1,3 +1,4 @@
+// Coverage for embedded run auth initialization and runtime credential refresh.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -29,6 +30,7 @@ vi.mock("../../model-auth.js", async () => {
 import { createEmbeddedRunAuthController } from "./auth-controller.js";
 
 function createDeferred<T>() {
+  // Manual deferreds let refresh tests prove in-flight auth state and ordering.
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
@@ -77,6 +79,8 @@ type MutableAuthControllerHarness = {
 type RuntimeApiKeySetter = Mock<(provider: string, apiKey: string) => void>;
 
 function createMutableAuthControllerHarness(): MutableAuthControllerHarness {
+  // Mutable harness mirrors the runner fields the auth controller updates
+  // through injected getters/setters.
   return {
     runtimeModel: createTestModel(),
     effectiveModel: createTestModel(),
@@ -151,6 +155,8 @@ describe("createEmbeddedRunAuthController", () => {
   });
 
   it("applies runtime request overrides on the first auth exchange", async () => {
+    // Provider runtime auth can replace baseUrl, headers, and runtime API key in
+    // one exchange; both runtime and effective models must see the override.
     const harness = createMutableAuthControllerHarness();
     const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 

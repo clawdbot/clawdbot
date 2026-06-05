@@ -1,3 +1,4 @@
+// Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,

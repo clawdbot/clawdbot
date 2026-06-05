@@ -1,3 +1,5 @@
+// Transcript rewrite tests cover in-memory and persisted JSONL rewrites for
+// tool-result externalization, labels, compaction markers, and write locks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +54,8 @@ function getMessageContent(message: AgentMessage): unknown {
 }
 
 function createReadRewriteSession(options?: { tailAssistantText?: string }) {
+  // Read rewrite fixtures include a suffix assistant turn so branch rewrites
+  // must re-append downstream entries after replacing the tool result.
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
     asAppendMessage({
@@ -137,6 +141,8 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
 }
 
 function requireValue<T>(value: T | undefined, label: string): T {
+  // Fail with a labeled invariant instead of letting optional entries produce
+  // weak assertions later in transcript-branch tests.
   if (value === undefined) {
     throw new Error(`expected ${label}`);
   }
@@ -221,6 +227,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {
+    // Re-appending entries changes ids; compaction records must follow the new
+    // first-kept entry or future branch reconstruction points at stale ids.
     const {
       sessionManager,
       toolResultEntryId,

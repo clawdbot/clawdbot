@@ -1,3 +1,4 @@
+// Slack tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeSlack } from "./probe.js";
 

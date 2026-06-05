@@ -1,3 +1,7 @@
+/**
+ * Canvas document materialization helpers for hosted HTML, media, documents,
+ * and asset manifests.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -122,6 +126,7 @@ function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir(
   return path.join(resolveCanvasRootDir(rootDir, stateDir), CANVAS_DOCUMENTS_DIR_NAME);
 }
 
+/** Resolves the on-disk directory for one Canvas document id. */
 export function resolveCanvasDocumentDir(
   documentId: string,
   options?: { rootDir?: string; stateDir?: string },
@@ -129,6 +134,7 @@ export function resolveCanvasDocumentDir(
   return path.join(resolveCanvasDocumentsDir(options?.rootDir, options?.stateDir), documentId);
 }
 
+/** Builds the hosted URL path for a Canvas document entrypoint. */
 export function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
   const normalizedEntrypoint = normalizeLogicalPath(entrypoint);
   const encodedEntrypoint = normalizedEntrypoint
@@ -142,6 +148,7 @@ function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): s
   return buildCanvasDocumentEntryUrl(documentId, logicalPath);
 }
 
+/** Maps a Canvas hosted document URL path back to a local file path. */
 export function resolveCanvasHttpPathToLocalPath(
   requestPath: string,
   options?: { rootDir?: string; stateDir?: string },
@@ -289,6 +296,7 @@ async function materializeEntrypoint(
   };
 }
 
+/** Creates a Canvas document directory, copies assets, and writes its manifest. */
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
   options?: { stateDir?: string; workspaceDir?: string; canvasRootDir?: string },
@@ -322,6 +330,7 @@ export async function createCanvasDocument(
   return manifest;
 }
 
+/** Resolves manifest assets to local paths and hosted URLs. */
 export function resolveCanvasDocumentAssets(
   manifest: CanvasDocumentManifest,
   options?: { baseUrl?: string; stateDir?: string; canvasRootDir?: string },

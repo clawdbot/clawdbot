@@ -1,3 +1,4 @@
+// Verifies agents_list reports only subagents visible to the requester.
 import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -19,6 +20,7 @@ describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
 
   function setConfigWithAgentList(agentList: AgentConfig[]) {
+    // Each test gets a fresh per-sender session config plus its agent list.
     configOverride = {
       session: createPerSenderSessionConfig(),
       agents: {
@@ -34,6 +36,7 @@ describe("agents_list", () => {
   }
 
   function readAgentList(result: unknown) {
+    // Tool results expose the machine-readable agent list in details.
     return (result as { details?: { agents?: Array<{ id: string; configured?: boolean }> } })
       .details?.agents;
   }

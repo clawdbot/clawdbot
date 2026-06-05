@@ -1,3 +1,4 @@
+// Verifies the small lifecycle callback adapter used during agent attempts.
 import { describe, expect, it } from "vitest";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 
@@ -10,6 +11,8 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
+    // The callback mutates only the shared lifecycle state object; it should not
+    // need access to the wider runAgentAttempt closure.
     callbacks.onUserMessagePersisted?.({
       role: "user",
       content: "hello",

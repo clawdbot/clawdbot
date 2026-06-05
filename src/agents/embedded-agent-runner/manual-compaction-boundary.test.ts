@@ -1,3 +1,4 @@
+// Coverage for hardening manual compaction checkpoints in transcript files.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +49,7 @@ function createAssistantTextMessage(text: string, timestamp: number): AssistantM
 }
 
 function messageText(message: AgentMessage): string {
+  // Tests compare rebuilt context text across plain and block-style messages.
   if (!("content" in message)) {
     return "";
   }
@@ -76,6 +78,8 @@ function requireString(value: string | undefined, label: string): string {
 
 describe("hardenManualCompactionBoundary", () => {
   it("turns manual compaction into a true checkpoint for rebuilt context", async () => {
+    // Manual compaction should make the latest summary the new root; otherwise
+    // future context rebuilds can pull summarized turns back into the prompt.
     const dir = await makeTmpDir();
     const session = SessionManager.create(dir, dir);
 
@@ -98,6 +102,8 @@ describe("hardenManualCompactionBoundary", () => {
       .messages.map((message) => messageText(message));
     expect(beforeTexts.join("\n")).toContain("detailed new answer");
 
+    // Boundary hardening operates on file bytes after the session is persisted;
+    // reopening a manager here would hide direct rewrite mistakes.
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
       throw new Error("SessionManager.open should not be used for boundary hardening");
     });

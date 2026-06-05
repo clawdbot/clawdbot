@@ -1,3 +1,4 @@
+// Shell completion runtime: cache paths, profile installation, and shell detection.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -132,6 +133,7 @@ function updateCompletionProfile(
   cachePath: string | null,
   sourceLine: string,
 ): { next: string; changed: boolean; hadExisting: boolean } {
+  // Remove both cached and old dynamic blocks so installs converge to one fast source line.
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;

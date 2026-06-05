@@ -1,3 +1,4 @@
+// Feishu tests cover directory plugin behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";

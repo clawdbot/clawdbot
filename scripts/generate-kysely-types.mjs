@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Generates Kysely database types from the SQLite schema.
 import fs from "node:fs";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";

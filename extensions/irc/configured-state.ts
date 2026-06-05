@@ -1,3 +1,4 @@
+// Irc helper module supports configured state behavior.
 export function hasIrcConfiguredState(params: { env?: NodeJS.ProcessEnv }): boolean {
   return (
     typeof params.env?.IRC_HOST === "string" &&

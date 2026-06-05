@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite launch behavior.
 import type { QaSuiteRunParams } from "./suite.js";
 
 async function loadQaLabServerRuntime() {

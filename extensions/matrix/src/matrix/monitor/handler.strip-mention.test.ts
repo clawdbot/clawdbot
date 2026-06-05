@@ -1,3 +1,4 @@
+// Matrix tests cover handler.strip mention plugin behavior.
 import { describe, expect, it } from "vitest";
 import { stripMatrixMentionPrefix } from "./mentions.js";
 

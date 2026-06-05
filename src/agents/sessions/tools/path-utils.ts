@@ -1,3 +1,8 @@
+/**
+ * Session tool path normalization helpers.
+ *
+ * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
+ */
 import { accessSync, constants } from "node:fs";
 import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";

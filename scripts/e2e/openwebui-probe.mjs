@@ -1,3 +1,4 @@
+// Probe script for OpenWebUI E2E connectivity.
 import { Agent, setGlobalDispatcher } from "undici";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 

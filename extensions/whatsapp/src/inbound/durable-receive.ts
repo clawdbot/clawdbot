@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements durable receive behavior.
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
 import { createDurableInboundReceiveJournalFromQueue } from "openclaw/plugin-sdk/channel-outbound";

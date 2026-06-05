@@ -1,3 +1,6 @@
+/**
+ * Dispatches serialized embedded-agent subscription events to specific handlers.
+ */
 import {
   handleAgentEnd,
   handleAgentStart,

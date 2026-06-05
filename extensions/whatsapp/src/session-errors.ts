@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements session errors behavior.
 function safeStringify(value: unknown, limit = 800): string {
   try {
     const seen = new WeakSet();

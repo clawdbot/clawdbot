@@ -1,3 +1,4 @@
+// Isolated agent lane tests cover lane selection for scheduled agent runs.
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentLane } from "../agents/lanes.js";
 import {

@@ -1,3 +1,9 @@
+/**
+ * Browser tab management routes.
+ *
+ * Lists, opens, focuses, closes, and mutates tabs while applying navigation
+ * policy checks and profile reachability probes.
+ */
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   BrowserProfileUnavailableError,
@@ -191,6 +197,7 @@ async function runTabTargetMutation(params: {
   });
 }
 
+/** Register tab listing and mutation endpoints on the browser control server. */
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get(
     "/tabs",

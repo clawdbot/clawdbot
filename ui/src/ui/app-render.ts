@@ -1,3 +1,4 @@
+// Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";

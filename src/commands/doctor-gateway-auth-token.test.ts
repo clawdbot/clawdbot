@@ -1,3 +1,4 @@
+// Doctor gateway auth token tests cover token resolution, repair prompts, and credential status output.
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

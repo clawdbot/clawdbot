@@ -1,3 +1,4 @@
+// TTS provider registry resolves configured speech providers at runtime.
 import type { OpenClawConfig } from "../config/types.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import {

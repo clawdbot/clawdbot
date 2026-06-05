@@ -1,3 +1,7 @@
+/**
+ * Computer Use plugin/MCP readiness checks and optional install flow for Codex
+ * app-server sessions.
+ */
 import { existsSync } from "node:fs";
 import { describeControlFailure } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -18,6 +22,7 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
+/** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
@@ -34,6 +39,7 @@ type CodexComputerUseStatusReason =
   | "check_failed"
   | "auto_install_blocked";
 
+/** Readiness status for Codex Computer Use plugin and MCP server wiring. */
 export type CodexComputerUseStatus = {
   enabled: boolean;
   ready: boolean;
@@ -59,6 +65,7 @@ class CodexComputerUseSetupError extends Error {
   }
 }
 
+/** Inputs for checking, ensuring, or installing Codex Computer Use support. */
 export type CodexComputerUseSetupParams = {
   pluginConfig?: unknown;
   overrides?: Partial<CodexComputerUseConfig>;
@@ -102,6 +109,7 @@ const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curate
 const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
   "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled";
 
+/** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
   params: CodexComputerUseSetupParams = {},
 ): Promise<CodexComputerUseStatus> {
@@ -124,6 +132,10 @@ export async function readCodexComputerUseStatus(
   }
 }
 
+/**
+ * Ensures Computer Use is ready when enabled, optionally installing when config
+ * allows safe auto-install.
+ */
 export async function ensureCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
 ): Promise<CodexComputerUseStatus> {
@@ -160,6 +172,7 @@ export async function ensureCodexComputerUse(
   return status;
 }
 
+/** Forces Computer Use plugin installation and returns the ready status. */
 export async function installCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
 ): Promise<CodexComputerUseStatus> {

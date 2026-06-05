@@ -1,3 +1,8 @@
+/**
+ * Channel plugin catalog builder.
+ *
+ * Combines bundled, installed, and official external channel metadata for UI/setup surfaces.
+ */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

@@ -1,3 +1,4 @@
+// Discord tests cover outbound adapter plugin behavior.
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {

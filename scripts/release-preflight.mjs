@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks or refreshes generated release artifacts before a release publish.
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const args = new Set(process.argv.slice(2));

@@ -1,3 +1,4 @@
+// Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { scanConfiguredChannelPluginBlockers } from "./channel-plugin-blockers.js";

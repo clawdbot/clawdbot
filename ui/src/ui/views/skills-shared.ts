@@ -1,3 +1,4 @@
+// Control UI view renders skills shared screen content.
 import { html, nothing } from "lit";
 import type { SkillStatusEntry } from "../types.ts";
 

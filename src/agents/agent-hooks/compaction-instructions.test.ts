@@ -1,3 +1,4 @@
+/** Tests compaction instruction defaults, precedence, and split-turn composition. */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_COMPACTION_INSTRUCTIONS,

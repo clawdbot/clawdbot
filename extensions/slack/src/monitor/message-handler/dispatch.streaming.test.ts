@@ -1,3 +1,4 @@
+// Slack tests cover dispatch.streaming plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackEventDeliveryTracker,

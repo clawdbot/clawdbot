@@ -1,3 +1,4 @@
+// Mock OpenAI model config helpers for E2E fixture generation.
 export function applyMockOpenAiModelConfig(cfg, params) {
   const modelRef = params.modelRef ?? "openai/gpt-5.5";
   const modelId = modelRef.split("/").at(-1) ?? "gpt-5.5";

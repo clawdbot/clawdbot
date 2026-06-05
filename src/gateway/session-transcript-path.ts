@@ -1,10 +1,10 @@
+// Session transcript path comparison helper.
+// Normalizes transcript paths for cache, history, and update matching.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-/**
- * Resolves transcript file paths into a stable comparison key for history and update matching.
- */
+/** Resolve a transcript file path into a stable comparison key. */
 export function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {

@@ -1,3 +1,4 @@
+// Slack tests cover timestamp plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 

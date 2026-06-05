@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements server behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   LLMock,

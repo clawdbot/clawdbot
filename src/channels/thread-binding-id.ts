@@ -1,7 +1,7 @@
+// Thread binding id parsing helpers for account-scoped conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// Parses account-scoped thread binding ids back into conversation ids. Binding
-// ids are account-prefixed so cross-account conversations cannot collide.
+/** Parses an account-prefixed binding id back into a conversation id. */
 export function resolveThreadBindingConversationIdFromBindingId(params: {
   accountId: string;
   bindingId?: string;

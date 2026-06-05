@@ -1,3 +1,4 @@
+// Log level tests cover allowed levels and level ordering.
 import { describe, expect, it } from "vitest";
 import { levelToMinLevel } from "./levels.js";
 

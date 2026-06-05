@@ -1,3 +1,4 @@
+// Control UI tests cover provider quota summary behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatQuotaReset } from "./provider-quota-summary.ts";
 

@@ -1,3 +1,4 @@
+// Qa Matrix tests cover runtime api plugin behavior.
 import { describe, expect, it } from "vitest";
 
 describe("matrix qa runtime api surface", () => {

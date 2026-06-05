@@ -1,3 +1,4 @@
+// Setup group access tests cover group access setup flow decisions and outputs.
 import { describe, expect, it, vi } from "vitest";
 import {
   formatAllowlistEntries,

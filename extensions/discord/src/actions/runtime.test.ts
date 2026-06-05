@@ -1,3 +1,4 @@
+// Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";

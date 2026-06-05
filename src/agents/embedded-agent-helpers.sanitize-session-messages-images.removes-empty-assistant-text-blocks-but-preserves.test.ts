@@ -1,3 +1,5 @@
+// Covers session-message sanitization for empty blocks, tool ids, and
+// thought-signature replay rules.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -14,6 +16,8 @@ let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 
 function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessage> {
+  // The delimiter-heavy id mirrors provider ids that must survive normal replay
+  // but may need strict sanitization for specific backends.
   return [
     makeAgentAssistantMessage({
       content: [
@@ -61,6 +65,8 @@ function makeOpenAiResponsesAssistantMessage(
 }
 
 function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
+  // Tool call and result ids must stay in lockstep or replayed transcripts break
+  // provider tool-result matching.
   const assistant = out[0];
   expect(assistant.role).toBe("assistant");
   const assistantContent = assistant.role === "assistant" ? assistant.content : [];
@@ -125,6 +131,8 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("does not synthesize tool call input when missing", async () => {
+    // Some provider transcript formats omit input; adding it would create data
+    // that was not present in the original turn.
     const input = castAgentMessages([
       makeOpenAiResponsesAssistantMessage([
         { type: "toolCall", id: "call_1", name: "read", arguments: {} },
@@ -291,6 +299,8 @@ describe("sanitizeSessionMessagesImages", () => {
     ]);
   });
   it("uses a non-empty placeholder when user or tool result content becomes empty", async () => {
+    // User/tool-result turns cannot become empty arrays because several
+    // providers reject empty content on replay.
     const input = [
       {
         role: "user",
@@ -338,6 +348,7 @@ describe("sanitizeSessionMessagesImages", () => {
 
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
+      // msg_ values are OpenClaw message ids, not provider signatures.
       const input = castAgentMessages([
         {
           role: "assistant",
@@ -386,6 +397,8 @@ describe("sanitizeSessionMessagesImages", () => {
     });
 
     it("preserves interleaved thinking block order when signatures are preserved", async () => {
+      // Thinking blocks may surround visible text; sanitization must remove empty
+      // text without reordering signed reasoning blocks.
       const input = castAgentMessages([
         {
           role: "assistant",

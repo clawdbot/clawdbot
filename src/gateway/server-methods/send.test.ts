@@ -1,3 +1,5 @@
+// Send method tests cover outbound message routing, transcript mirroring, poll
+// dispatch, plugin channel selection, and durable delivery dependencies.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";

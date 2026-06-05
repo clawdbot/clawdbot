@@ -1,3 +1,7 @@
+/**
+ * Normalizes and sanitizes Codex dynamic-tool progress payloads before they are
+ * emitted into OpenClaw events or logs.
+ */
 import {
   inferToolMetaFromArgs,
   type EmbeddedRunAttemptParams,
@@ -11,12 +15,14 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/** Maps OpenClaw tool-progress config to the mode used by Codex progress metadata. */
 export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
 ): ToolProgressDetailMode {
   return value === "raw" ? "raw" : "explain";
 }
 
+/** Recursively redacts sensitive strings and handles circular values in event payloads. */
 export function sanitizeCodexAgentEventValue(
   value: unknown,
   seen = new WeakSet<object>(),
@@ -48,12 +54,14 @@ export function sanitizeCodexAgentEventValue(
   return value;
 }
 
+/** Sanitizes a record-shaped Codex agent event payload. */
 export function sanitizeCodexAgentEventRecord(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   return sanitizeCodexAgentEventValue(value) as Record<string, unknown>;
 }
 
+/** Sanitizes dynamic-tool arguments before diagnostic/event emission. */
 export function sanitizeCodexToolArguments(
   value: JsonValue | undefined,
 ): Record<string, unknown> | undefined {
@@ -63,12 +71,14 @@ export function sanitizeCodexToolArguments(
   return sanitizeCodexAgentEventRecord(value);
 }
 
+/** Sanitizes a Codex dynamic-tool response before diagnostic/event emission. */
 export function sanitizeCodexToolResponse(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
   return sanitizeCodexAgentEventRecord(response as unknown as Record<string, unknown>);
 }
 
+/** Infers compact human-readable tool metadata from Codex dynamic-tool arguments. */
 export function inferCodexDynamicToolMeta(
   call: Pick<CodexDynamicToolCallParams, "tool" | "arguments">,
   detailMode: ToolProgressDetailMode,

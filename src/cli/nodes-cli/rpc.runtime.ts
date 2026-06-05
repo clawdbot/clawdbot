@@ -1,3 +1,4 @@
+// Runtime gateway RPC helpers for node host and node pairing CLI commands.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -21,6 +22,7 @@ export async function callGatewayCliRuntime(
   params?: unknown,
   callOpts?: { transportTimeoutMs?: number },
 ) {
+  // Progress is suppressed for JSON callers so stdout remains structured.
   return await withProgress(
     {
       label: `Nodes ${method}`,

@@ -1,3 +1,6 @@
+/**
+ * Classifies embedded-agent run results for model fallback decisions.
+ */
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";

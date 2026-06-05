@@ -1,3 +1,5 @@
+// Operator approvals client tests cover connect lifecycle, request framing,
+// scope-upgrade errors, and graceful shutdown behavior for approval operations.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientState = vi.hoisted(() => ({

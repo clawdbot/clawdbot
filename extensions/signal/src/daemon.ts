@@ -1,3 +1,4 @@
+// Signal plugin module implements daemon behavior.
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Rtt Harness tests cover rtt harness script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";

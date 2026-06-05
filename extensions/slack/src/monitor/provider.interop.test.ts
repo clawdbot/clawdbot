@@ -1,3 +1,4 @@
+// Slack tests cover provider.interop plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createSlackBoltApp,

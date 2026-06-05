@@ -1,3 +1,4 @@
+// Qqbot plugin module implements runtime behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {

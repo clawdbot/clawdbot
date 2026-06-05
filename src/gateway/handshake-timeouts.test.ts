@@ -1,3 +1,5 @@
+// Handshake timeout tests document env/config/default precedence and supported
+// clamping for pre-auth and connect-challenge timeouts.
 import { describe, expect, test } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import {

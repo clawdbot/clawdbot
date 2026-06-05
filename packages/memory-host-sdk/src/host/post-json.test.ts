@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";

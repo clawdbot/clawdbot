@@ -1,3 +1,4 @@
+// Mistral API module exposes the plugin public contract.
 export { buildMistralProvider } from "./provider-catalog.js";
 export {
   buildMistralModelDefinition,

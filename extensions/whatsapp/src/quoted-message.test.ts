@@ -1,3 +1,4 @@
+// Whatsapp tests cover quoted message plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   cacheInboundMessageMeta,

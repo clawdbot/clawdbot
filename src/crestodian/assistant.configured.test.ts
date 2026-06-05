@@ -1,3 +1,4 @@
+// Configured Crestodian assistant tests cover config-driven assistant behavior.
 import { describe, expect, it, vi } from "vitest";
 import { planCrestodianCommandWithConfiguredModel } from "./assistant.js";
 

@@ -1,3 +1,5 @@
+// System prompt tests cover the main prompt facade, prompt-surface routing, and
+// user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
@@ -173,7 +175,7 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
-    // Isolated cron sessions use promptMode="minimal" but must still receive skills.
+    // Isolated cron sessions use promptMode="minimal" but still need skills.
     const skillsPrompt =
       "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
     const prompt = buildAgentSystemPrompt({

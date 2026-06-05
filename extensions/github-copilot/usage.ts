@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements usage behavior.
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import {
   buildUsageHttpErrorSnapshot,

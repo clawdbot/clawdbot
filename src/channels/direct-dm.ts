@@ -1,3 +1,8 @@
+/**
+ * Direct-DM dispatch compatibility facade.
+ *
+ * Routes legacy direct-message ingress through the standard channel reply pipeline.
+ */
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

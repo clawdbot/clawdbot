@@ -1,3 +1,4 @@
+// Slack plugin module implements setup core behavior.
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAccountScopedAllowFromSection,

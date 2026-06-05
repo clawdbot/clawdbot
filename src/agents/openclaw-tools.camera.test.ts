@@ -1,3 +1,4 @@
+// Verifies node camera/photo tool payloads, media URLs, and vision gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
@@ -47,6 +48,7 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
+  // Tests vary only model vision capability and media invoke permission.
   return createNodesTool({
     ...(options?.modelHasVision !== undefined ? { modelHasVision: options.modelHasVision } : {}),
     ...(options?.allowMediaInvokeCommands !== undefined
@@ -80,6 +82,7 @@ function expectInvokeParams(
     params?: Record<string, unknown>;
   },
 ) {
+  // Node command payloads are nested under the gateway node.invoke params object.
   const record = requireRecord(invokeParams, "node.invoke params");
   expect(record.command).toBe(expected.command);
   if (expected.nodeId !== undefined) {
@@ -146,6 +149,7 @@ function setupNodeInvokeMock(params: {
   onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
   invokePayload?: unknown;
 }) {
+  // Most camera tests need node.list followed by one node.invoke command.
   callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
     if (method === "node.list") {
       return mockNodeList({ commands: params.commands, remoteIp: params.remoteIp });

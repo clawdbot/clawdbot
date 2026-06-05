@@ -1,3 +1,8 @@
+/**
+ * Sandbox tool policy resolver.
+ *
+ * Merges global, agent, and default allow/deny lists into normalized policy plus source diagnostics.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

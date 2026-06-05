@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live transport scenarios behavior.
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   collectLiveTransportStandardScenarioCoverage,

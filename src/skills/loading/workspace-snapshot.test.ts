@@ -1,3 +1,4 @@
+// Workspace snapshot tests cover serialized snapshots of workspace skill state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";

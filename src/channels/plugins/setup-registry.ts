@@ -1,3 +1,8 @@
+/**
+ * Channel setup plugin registry.
+ *
+ * Resolves loaded or bundled setup plugins for onboarding flows.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getActivePluginChannelRegistry,
@@ -7,10 +12,6 @@ import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Setup plugin registry facade for channel onboarding flows.
- */
 
 type ChannelSetupPluginView = {
   sorted: ChannelPlugin[];

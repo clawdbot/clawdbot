@@ -1,3 +1,4 @@
+// Diagnostics Otel tests cover service plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {

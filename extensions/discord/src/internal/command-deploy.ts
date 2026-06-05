@@ -1,3 +1,4 @@
+// Discord plugin module implements command deploy behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";

@@ -1,3 +1,4 @@
+// Browser facade tests cover browser plugin facade loading and runtime API shape.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

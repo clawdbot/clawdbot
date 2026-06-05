@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock Mantle discovery and bearer-token handling. It resolves
+ * explicit tokens, IAM-generated tokens, model catalogs, and implicit provider config.
+ */
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -22,6 +26,7 @@ const DEFAULT_COST = {
 const DEFAULT_CONTEXT_WINDOW = 32000;
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
+/** Config auth marker meaning Mantle should mint runtime bearer tokens from IAM. */
 export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +157,7 @@ export function getCachedIamToken(region: string): string | undefined {
   return getCachedIamTokenEntry(region)?.token;
 }
 
+/** Resolve the actual runtime bearer token for Mantle, generating IAM tokens when needed. */
 export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
@@ -186,7 +192,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Reset the IAM token cache (for testing). */
+/** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
 }
@@ -241,7 +247,7 @@ type MantleDiscoveryConfig = {
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
-/** Clear the discovery cache (for testing). */
+/** Clear the Mantle discovery cache for tests. */
 export function resetMantleDiscoveryCacheForTest(): void {
   discoveryCache.clear();
 }
@@ -261,6 +267,7 @@ export function resetMantleDiscoveryCacheForTest(): void {
  * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
  * Returns an empty array if the request fails (no permission, network error, etc.).
  */
+/** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
@@ -334,6 +341,7 @@ export async function discoverMantleModels(params: {
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
+/** Resolve implicit Mantle provider config from env, IAM token support, and discovery. */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   pluginConfig?: { discovery?: MantleDiscoveryConfig };
@@ -408,6 +416,7 @@ export async function resolveImplicitMantleProvider(params: {
   };
 }
 
+/** Merge an implicit Mantle provider catalog with explicit user config. */
 export function mergeImplicitMantleProvider(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;

@@ -1,3 +1,4 @@
+// Signal plugin module implements sse reconnect behavior.
 import {
   computeBackoff,
   logVerbose,

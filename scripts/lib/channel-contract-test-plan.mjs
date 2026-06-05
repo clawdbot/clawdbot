@@ -1,3 +1,4 @@
+// Builds balanced Vitest shard plans for channel plugin contract tests.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -50,6 +51,7 @@ function resolveContractFileWeight(file) {
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
 }
 
+/** Create balanced channel contract test shards for CI check planning. */
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
   const suffixes = ["a", "b"];

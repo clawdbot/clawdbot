@@ -1,3 +1,4 @@
+// TTS status config helpers resolve status output paths for speech generation.
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {

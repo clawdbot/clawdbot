@@ -1,3 +1,4 @@
+// Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {

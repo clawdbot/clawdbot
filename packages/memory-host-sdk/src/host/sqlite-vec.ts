@@ -1,3 +1,4 @@
+// Memory Host SDK module implements sqlite vec behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.js";

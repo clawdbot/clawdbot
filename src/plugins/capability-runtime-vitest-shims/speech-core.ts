@@ -1,3 +1,4 @@
+// Speech-core Vitest shims expose speech capability types without loading full runtime code.
 export type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,

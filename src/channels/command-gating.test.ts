@@ -1,3 +1,4 @@
+// Command gating tests cover channel command allow/deny decisions before agent dispatch.
 import { describe, expect, it } from "vitest";
 import {
   resolveCommandAuthorizedFromAuthorizers,

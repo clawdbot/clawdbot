@@ -1,3 +1,4 @@
+// Skill runtime refresh helpers reload active skill state and notify subscribers.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

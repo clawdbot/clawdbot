@@ -1,3 +1,4 @@
+// Verifies provider auth resolution, synthetic auth, and auth header behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
@@ -48,6 +49,8 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",
+    // Synthetic auth is provider-owned. Tests model local/no-key and plugin
+    // config credentials without depending on real plugins.
     resolveProviderSyntheticAuthWithPlugin: (params: {
       provider: string;
       config?: {
@@ -223,6 +226,7 @@ function createCustomProviderConfig(
   modelId = "llama3",
   modelName = "Llama 3",
 ): ModelProviderConfig {
+  // Minimal custom OpenAI-compatible provider used across auth tests.
   return {
     baseUrl,
     api: "openai-completions" as const,

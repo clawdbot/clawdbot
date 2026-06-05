@@ -1,3 +1,5 @@
+// Gateway startup config loads, repairs, validates, and activates runtime config
+// plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
 import {
   formatInvalidConfigRecoveryHint,

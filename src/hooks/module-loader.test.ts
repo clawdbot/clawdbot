@@ -1,3 +1,4 @@
+// Hook module loader tests cover dynamic import and invalid module handling.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";

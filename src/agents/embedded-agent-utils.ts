@@ -1,3 +1,8 @@
+/**
+ * Embedded-agent message text utilities.
+ * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
+ * and compact tool metadata for channel delivery and transcript replay.
+ */
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
@@ -17,6 +22,7 @@ export {
 } from "../shared/text/assistant-visible-text.js";
 export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
 
+/** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
@@ -113,6 +119,7 @@ function extractAssistantTextForPhase(
   };
 }
 
+/** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
   const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
   if (finalAnswerExtraction.hadRequestedPhase) {
@@ -122,6 +129,7 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
   return extractAssistantTextForPhase(msg).text;
 }
 
+/** Extract sanitized assistant text across all text content blocks. */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -136,6 +144,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return finalizeAssistantExtraction(msg, extracted);
 }
 
+/** Extract native thinking block text or a placeholder when only signed reasoning exists. */
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";
@@ -161,6 +170,7 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
+/** Format reasoning text for markdown-friendly channel surfaces. */
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -195,11 +205,13 @@ const THINKING_TAG_CLOSE_GLOBAL_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
+/** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
 
+/** Split text that starts with thinking tags into structured thinking/text blocks. */
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
@@ -264,6 +276,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
   return blocks;
 }
 
+/** Promote inline thinking-tag text blocks into native thinking blocks in place. */
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
@@ -311,6 +324,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   message.content = next;
 }
 
+/** Extract closed thinking-tag content from a complete text payload. */
 export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
@@ -330,6 +344,7 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
+/** Extract thinking-tag content from a possibly incomplete streaming payload. */
 export function extractThinkingFromTaggedStream(text: string): string {
   if (!text) {
     return "";
@@ -353,6 +368,7 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
+/** Infer compact display metadata for a tool call from its args. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,

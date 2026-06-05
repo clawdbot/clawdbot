@@ -1,3 +1,4 @@
+// Verifies OpenAI-compatible payloads contain at least one sendable conversation turn.
 import { describe, expect, it } from "vitest";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 
@@ -40,6 +41,7 @@ describe("hasOpenAICompatibleConversationTurn", () => {
   });
 
   it("accepts assistant tool calls even when assistant content is empty", () => {
+    // Tool-call turns are sendable even when visible assistant text is absent.
     expect(
       hasOpenAICompatibleConversationTurn([
         {

@@ -1,3 +1,4 @@
+// Line tests cover reply chunks plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 

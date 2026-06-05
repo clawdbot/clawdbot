@@ -1,3 +1,4 @@
+// Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";

@@ -1,3 +1,4 @@
+/** Creates a WeakMap-backed runtime registry keyed by SessionManager object identity. */
 export function createSessionManagerRuntimeRegistry<TValue>() {
   // Session-scoped runtime registry keyed by object identity.
   // The SessionManager instance must stay stable across set/get calls.

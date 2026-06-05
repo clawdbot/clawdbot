@@ -1,3 +1,4 @@
+// End-to-end embedded-agent runner tests with mocked model/runtime seams.
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
@@ -101,6 +102,8 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
 });
 
 const installRunEmbeddedMocks = () => {
+  // Install only the runtime seams needed by runner orchestration so tests avoid
+  // loading real providers, MCP runtimes, or gateway side effects.
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -213,6 +216,8 @@ const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
+  // Builds a session with an orphaned user message to exercise retry/resume
+  // cleanup paths from persisted JSONL.
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({

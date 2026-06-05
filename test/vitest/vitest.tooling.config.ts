@@ -1,3 +1,4 @@
+// Vitest tooling config wires the tooling test shard.
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";

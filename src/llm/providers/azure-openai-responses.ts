@@ -1,3 +1,4 @@
+// Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";

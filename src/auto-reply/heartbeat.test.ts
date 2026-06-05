@@ -192,6 +192,38 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns true for comments only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(
+        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
+      ),
+    ).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!--
+Heartbeat template.
+Keep this comment-only file quiet.
+-->`),
+    ).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!--
+tasks:
+  - name: inbox
+    interval: 30m
+    prompt: Check inbox
+-->`),
+    ).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
+  });
+
+  it("returns true for HTML comments only", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- runtime template note -->")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
+
+# HEARTBEAT.md
+`),
+    ).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
@@ -304,5 +336,16 @@ interval: should-not-bleed
         prompt: "Check for urgent emails",
       },
     ]);
+  });
+
+  it("ignores task blocks inside HTML comments", () => {
+    const content = `<!--
+tasks:
+  - name: inbox
+    interval: 30m
+    prompt: Check inbox
+-->
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([]);
   });
 });

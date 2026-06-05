@@ -1,3 +1,4 @@
+// Persistent dedupe helpers give plugins bounded replay protection across process restarts.
 import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveNonNegativeIntegerOption } from "../infra/numeric-options.js";
 import type { FileLockOptions } from "./file-lock.js";
@@ -6,6 +7,7 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 
 type PersistentDedupeData = Record<string, number>;
 
+/** Configuration for a disk-backed dedupe namespace cache. */
 export type PersistentDedupeOptions = {
   /** Milliseconds a recorded key remains recent; `0` keeps keys until cache pruning. */
   ttlMs: number;
@@ -19,6 +21,7 @@ export type PersistentDedupeOptions = {
   onDiskError?: (error: unknown) => void;
 };
 
+/** Per-call options used when checking or recording a dedupe key. */
 export type PersistentDedupeCheckOptions = {
   /** Logical bucket for the key; omitted/blank values use `global`. */
   namespace?: string;
@@ -28,6 +31,7 @@ export type PersistentDedupeCheckOptions = {
   onDiskError?: (error: unknown) => void;
 };
 
+/** Disk-backed dedupe guard that records recently seen keys per namespace. */
 export type PersistentDedupe = {
   /** Returns true only when the key was not recently seen and was recorded for future checks. */
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
@@ -41,11 +45,13 @@ export type PersistentDedupe = {
   memorySize: () => number;
 };
 
+/** Claim attempt result for dedupe flows that need in-flight ownership. */
 export type ClaimableDedupeClaimResult =
   | { kind: "claimed" }
   | { kind: "duplicate" }
   | { kind: "inflight"; pending: Promise<boolean> };
 
+/** Options for a claimable dedupe guard, either persistent or memory-only. */
 export type ClaimableDedupeOptions =
   | {
       ttlMs: number;
@@ -64,6 +70,7 @@ export type ClaimableDedupeOptions =
       onDiskError?: undefined;
     };
 
+/** Dedupe guard that lets one caller own a key while others wait or detect duplicates. */
 export type ClaimableDedupe = {
   /** Starts ownership of a key, reports duplicates, or returns the active claim's pending result. */
   claim: (

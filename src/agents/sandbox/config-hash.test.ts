@@ -1,3 +1,5 @@
+// Sandbox config hash tests pin which runtime settings require container
+// recreation versus reuse.
 import { describe, expect, it } from "vitest";
 import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
 import type { SandboxDockerConfig } from "./types.js";
@@ -86,6 +88,8 @@ describe("computeSandboxConfigHash", () => {
   });
 
   it.each(ORDER_SENSITIVE_ARRAY_CASES)("treats $field order as significant", (testCase) => {
+    // Docker arrays are command-line arguments; reordering can change runtime
+    // behavior and must invalidate an existing sandbox.
     const shared = {
       workspaceAccess: "rw" as const,
       workspaceDir: "/tmp/workspace",
@@ -107,6 +111,8 @@ describe("computeSandboxConfigHash", () => {
     expect(left).not.toBe(right);
   });
   it("changes when read-only workspace skill mount state changes", () => {
+    // Skill overlays affect what the sandbox can read, so they are part of the
+    // reuse identity even though they are read-only.
     const shared = {
       docker: createDockerConfig(),
       dockerEnvPolicyEpoch: undefined,

@@ -1,3 +1,4 @@
+// Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";

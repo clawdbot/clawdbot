@@ -1,3 +1,7 @@
+/**
+ * Static provider discovery entry for Codex, used before the full plugin entry
+ * is loaded.
+ */
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -20,6 +24,7 @@ async function runCodexCatalog(ctx: ProviderCatalogContext) {
   });
 }
 
+/** Provider discovery descriptor with static fallback and synthetic auth. */
 export const codexProviderDiscovery: ProviderPlugin = {
   id: CODEX_PROVIDER_ID,
   label: "Codex",

@@ -1,3 +1,4 @@
+// Memory Core plugin module implements test runtime mocks behavior.
 import { vi } from "vitest";
 
 // Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).

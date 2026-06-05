@@ -1,3 +1,4 @@
+// Control UI tests cover theme behavior.
 import { describe, expect, it, vi } from "vitest";
 import { parseThemeSelection, resolveSystemTheme, resolveTheme } from "./theme.ts";
 

@@ -1,3 +1,8 @@
+/**
+ * Web-search provider credential resolver.
+ *
+ * Reads config values, env-backed secret refs, and provider-specific environment variables.
+ */
 import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 

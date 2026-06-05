@@ -1,3 +1,4 @@
+// Mattermost tests cover gateway auth bypass plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectMattermostSlashCallbackPaths,

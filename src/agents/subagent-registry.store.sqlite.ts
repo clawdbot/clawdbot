@@ -1,3 +1,8 @@
+/**
+ * Persists subagent run records in the shared sqlite state database. The
+ * store preserves typed columns for hot delivery state while retaining the
+ * normalized payload JSON for forward-compatible record hydration.
+ */
 import fs from "node:fs";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";

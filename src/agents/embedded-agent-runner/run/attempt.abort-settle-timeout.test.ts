@@ -1,3 +1,4 @@
+// Coverage for resolving abort-settle timeout overrides.
 import { describe, expect, it } from "vitest";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
@@ -11,6 +12,8 @@ describe("resolveEmbeddedAbortSettleTimeoutMs", () => {
   });
 
   it.each(["0x10", "1e3", "12.5"])("ignores non-decimal-integer overrides: %s", (value) => {
+    // Keep the env contract narrow; partial numeric parsing would make timeout
+    // behavior depend on JavaScript coercion quirks.
     expect(
       resolveEmbeddedAbortSettleTimeoutMs({
         OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: value,

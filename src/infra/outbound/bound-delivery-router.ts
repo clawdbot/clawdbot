@@ -1,3 +1,5 @@
+// Bound delivery router maps task-completion delivery back to active
+// conversation bindings, failing closed when requester context is ambiguous.
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,

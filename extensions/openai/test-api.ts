@@ -1,3 +1,4 @@
+// Openai API module exposes the plugin public contract.
 export { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 export { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 export { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";

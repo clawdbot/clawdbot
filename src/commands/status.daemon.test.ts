@@ -1,3 +1,4 @@
+// Status daemon tests cover managed gateway daemon summary resolution.
 import { describe, expect, it, vi } from "vitest";
 import { getDaemonStatusSummary } from "./status.daemon.js";
 

@@ -1,3 +1,6 @@
+/**
+ * Small shared normalization helpers for embedded-agent runner settings.
+ */
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 

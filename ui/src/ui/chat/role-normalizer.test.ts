@@ -1,3 +1,4 @@
+// Control UI tests cover role normalizer behavior.
 import { describe, expect, it } from "vitest";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 

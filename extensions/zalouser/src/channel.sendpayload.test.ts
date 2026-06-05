@@ -1,3 +1,4 @@
+// Zalouser tests cover channel.sendpayload plugin behavior.
 import {
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,

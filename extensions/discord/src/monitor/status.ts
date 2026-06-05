@@ -1,3 +1,4 @@
+// Discord plugin module implements status behavior.
 type DiscordMonitorStatusPatch = {
   connected?: boolean;
   lastEventAt?: number | null;

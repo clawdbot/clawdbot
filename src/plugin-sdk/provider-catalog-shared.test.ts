@@ -1,3 +1,4 @@
+// Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

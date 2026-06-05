@@ -1,3 +1,5 @@
+// Control UI CSP tests keep script, style, media, image, font, and connection
+// directives tight while allowing the known runtime surfaces.
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";

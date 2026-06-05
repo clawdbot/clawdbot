@@ -1,3 +1,4 @@
+// Msteams tests cover graph upload plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";

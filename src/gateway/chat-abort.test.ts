@@ -1,3 +1,5 @@
+// Chat abort tests protect in-flight run tracking, stop-command parsing, provider
+// abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,

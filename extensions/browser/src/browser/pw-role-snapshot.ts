@@ -1,3 +1,9 @@
+/**
+ * Playwright role snapshot helpers.
+ *
+ * Converts ARIA or AI snapshots into compact role/name text with stable refs
+ * and duplicate disambiguation for agent actions.
+ */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -8,6 +14,7 @@ type RoleRef = {
   nth?: number;
 };
 
+/** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
 type RoleSnapshotStats = {
@@ -17,6 +24,7 @@ type RoleSnapshotStats = {
   interactive: number;
 };
 
+/** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -26,6 +34,7 @@ export type RoleSnapshotOptions = {
   compact?: boolean;
 };
 
+/** Compute snapshot line/char/ref statistics. */
 export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
@@ -257,6 +266,7 @@ function buildInteractiveSnapshotLines(params: {
   return out;
 }
 
+/** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -276,6 +286,7 @@ export function parseRoleRef(raw: string): string | null {
   return null;
 }
 
+/** Build a role snapshot and refs from Playwright ARIA snapshot text. */
 export function buildRoleSnapshotFromAriaSnapshot(
   ariaSnapshot: string,
   options: RoleSnapshotOptions = {},
@@ -348,6 +359,7 @@ function parseAiSnapshotRef(suffix: string): string | null {
  * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
  * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
  */
+/** Build a role snapshot and refs from Playwright AI snapshot text. */
 export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},

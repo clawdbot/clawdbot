@@ -1,3 +1,4 @@
+// Voice Call tests cover tts provider voice plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolvePreferredTtsVoice } from "./tts-provider-voice.js";
 

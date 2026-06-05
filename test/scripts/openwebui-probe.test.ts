@@ -1,3 +1,4 @@
+// Openwebui Probe tests cover openwebui probe script behavior.
 import { spawn } from "node:child_process";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";

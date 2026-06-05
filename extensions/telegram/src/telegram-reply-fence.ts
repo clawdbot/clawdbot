@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram reply fence behavior.
 import {
   isExplicitCommandTurn,
   type CommandTurnContext,

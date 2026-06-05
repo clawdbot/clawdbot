@@ -1,8 +1,12 @@
+// Session manager cache tests cover TTL pruning and explicit cache-disable
+// behavior for transcript-backed session managers.
 import { describe, expect, it } from "vitest";
 import { createSessionManagerCache } from "./session-manager-cache.js";
 
 describe("session manager cache", () => {
   it("prunes expired entries during later cache activity even without revisiting them", () => {
+    // Pruning happens opportunistically on cache activity, not only when the
+    // stale key is accessed again.
     let now = 1_000;
     const cache = createSessionManagerCache({
       clock: () => now,

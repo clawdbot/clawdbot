@@ -1,3 +1,4 @@
+// Nodes CLI plugin registration tests cover node command plugin registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";

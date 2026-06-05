@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.reaction plugin behavior.
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,

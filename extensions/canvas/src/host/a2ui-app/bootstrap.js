@@ -1,3 +1,7 @@
+/**
+ * Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+ * helpers.
+ */
 import { v0_8 } from "@a2ui/lit";
 import { ContextProvider } from "@lit/context";
 import { themeContext } from "@openclaw/a2ui-theme-context";

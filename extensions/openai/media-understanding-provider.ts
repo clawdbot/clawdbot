@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   describeImageWithModel,
   describeImagesWithModel,

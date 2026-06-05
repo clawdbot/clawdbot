@@ -1,3 +1,4 @@
+// Channel ingress helpers normalize inbound channel messages before agent routing.
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   decideChannelIngress,
@@ -55,15 +56,22 @@ export type {
   RouteSenderPolicy,
 } from "../channels/message-access/index.js";
 
+/** Redacted identifier material that can be matched against channel allowlist entries. */
 export type ChannelIngressSubjectIdentifier = InternalMatchMaterial;
+/** Inbound actor identity described by one or more channel-specific identifiers. */
 export type ChannelIngressSubject = InternalChannelIngressSubject;
+/** Normalized allowlist entry produced by a channel ingress adapter. */
 export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
+/** Adapter normalization output split into matchable, invalid, and disabled entries. */
 export type ChannelIngressAdapterNormalizeResult = InternalChannelIngressNormalizeResult;
+/** Channel-specific allowlist normalizer and subject matcher used by ingress policy. */
 export type ChannelIngressAdapter = InternalChannelIngressAdapter;
+/** SDK-facing input shape for resolving redacted channel ingress state. */
 export type ChannelIngressStateInput = MessageAccessChannelIngressStateInput;
 
 declare const CHANNEL_INGRESS_PLUGIN_ID: unique symbol;
 
+/** Branded plugin id used in stable ingress diagnostics and generated gate identifiers. */
 export type ChannelIngressPluginId = string & {
   readonly [CHANNEL_INGRESS_PLUGIN_ID]: true;
 };
@@ -92,6 +100,7 @@ export type ChannelIngressSideEffectResult =
   | { kind: "pending-history-recorded" }
   | { kind: "local-event-handled" };
 
+/** Minimal redacted decision summary suitable for logs and plugin diagnostics. */
 export type RedactedIngressDiagnostics = {
   decisiveGateId?: string;
   reasonCode: IngressReasonCode;
@@ -106,6 +115,7 @@ export const CHANNEL_INGRESS_GATE_SELECTORS = {
   event: { phase: "event", kind: "event" },
 } as const satisfies Record<string, ChannelIngressGateSelector>;
 
+/** Input descriptor for a single channel subject identifier before redacted normalization. */
 export type ChannelIngressSubjectIdentifierInput = {
   value: string;
   opaqueId?: string;
@@ -114,6 +124,7 @@ export type ChannelIngressSubjectIdentifierInput = {
   sensitivity?: "normal" | "pii";
 };
 
+/** Options for the common one-string-id allowlist adapter. */
 export type CreateChannelIngressStringAdapterParams = {
   kind?: ChannelIngressIdentifierKind;
   normalizeEntry?: (value: string) => string | null | undefined;
@@ -124,6 +135,7 @@ export type CreateChannelIngressStringAdapterParams = {
   sensitivity?: "normal" | "pii";
 };
 
+/** Options for adapters that expand each allowlist entry into multiple identifier records. */
 export type CreateChannelIngressMultiIdentifierAdapterParams = {
   normalizeEntry: (entry: string, index: number) => readonly ChannelIngressAdapterEntry[];
   getEntryMatchKey?: (entry: ChannelIngressAdapterEntry) => string | null | undefined;
@@ -133,12 +145,14 @@ export type CreateChannelIngressMultiIdentifierAdapterParams = {
   isWildcardEntry?: (entry: ChannelIngressAdapterEntry) => boolean;
 };
 
+/** Legacy DM/group access projection retained for older channel runtime callers. */
 export type ChannelIngressDmGroupAccessProjection = {
   decision: DmGroupAccessDecision;
   reasonCode: DmGroupAccessReasonCode;
   reason: string;
 };
 
+/** Sender-only group access projection used when command and sender gates are evaluated separately. */
 export type ChannelIngressSenderGroupAccessProjection = {
   allowed: boolean;
   groupPolicy: ChannelIngressPolicyInput["groupPolicy"];
@@ -324,6 +338,7 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
   };
 }
 
+/** Convert an ingress graph decision plus any local side effect into channel turn admission. */
 export function mapChannelIngressDecisionToTurnAdmission(
   decision: ChannelIngressDecision,
   sideEffect: ChannelIngressSideEffectResult,

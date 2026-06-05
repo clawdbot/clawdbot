@@ -1,3 +1,4 @@
+// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

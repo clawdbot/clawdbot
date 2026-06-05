@@ -1,3 +1,4 @@
+// Update CLI option collision tests cover update command flag registration boundaries.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";

@@ -1,3 +1,5 @@
+// HTTP authorization utility tests protect gateway request authorization,
+// declared operator scopes, origin handling, and failure response routing.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,3 +1,4 @@
+// Signal tests cover format.chunking plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToSignalTextChunks } from "./format.js";
 

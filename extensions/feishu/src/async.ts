@@ -1,3 +1,4 @@
+// Feishu plugin module implements async behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 const RACE_TIMEOUT = Symbol("race-timeout");

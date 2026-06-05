@@ -1,3 +1,4 @@
+// Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.js";

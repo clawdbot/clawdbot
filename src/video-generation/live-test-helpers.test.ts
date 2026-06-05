@@ -1,3 +1,4 @@
+// Video live test helper tests cover live provider test configuration helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {

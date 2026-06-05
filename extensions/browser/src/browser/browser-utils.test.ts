@@ -1,3 +1,4 @@
+// Browser tests cover browser utils plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   appendCdpPath,

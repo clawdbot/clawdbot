@@ -1,3 +1,4 @@
+// Dependency Ownership Surface Report tests cover dependency ownership surface report script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

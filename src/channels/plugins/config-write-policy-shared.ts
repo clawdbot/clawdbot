@@ -1,3 +1,8 @@
+/**
+ * Shared channel config-write policy helpers.
+ *
+ * Authorizes config writes by origin/target channel and account scope.
+ */
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 

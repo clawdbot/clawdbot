@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements gateway log sentinel behavior.
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,

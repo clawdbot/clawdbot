@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime flow plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());

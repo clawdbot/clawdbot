@@ -1,3 +1,4 @@
+// Plugin Isolation script supports OpenClaw repository automation.
 import { shellQuote } from "./host-command.ts";
 import { providerIdFromModelId } from "./provider-auth.ts";
 

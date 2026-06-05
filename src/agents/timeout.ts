@@ -1,3 +1,8 @@
+/**
+ * Agent run timeout resolver.
+ *
+ * Converts config and per-run overrides into timer-safe millisecond deadlines.
+ */
 import {
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,

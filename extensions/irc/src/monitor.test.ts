@@ -1,3 +1,4 @@
+// Irc tests cover monitor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveIrcInboundTarget } from "./monitor.js";
 

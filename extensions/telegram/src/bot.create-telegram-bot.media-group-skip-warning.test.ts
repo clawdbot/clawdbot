@@ -1,3 +1,4 @@
+// Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

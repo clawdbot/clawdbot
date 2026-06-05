@@ -1,3 +1,4 @@
+// Twitch tests cover plugin plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { twitchPlugin } from "./plugin.js";

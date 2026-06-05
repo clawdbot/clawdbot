@@ -1,3 +1,4 @@
+// Status scan config tests cover scan command config loading and cold-start resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadStatusScanCommandConfig,

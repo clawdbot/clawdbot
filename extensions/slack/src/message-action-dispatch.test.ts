@@ -1,3 +1,4 @@
+// Slack tests cover message action dispatch plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 

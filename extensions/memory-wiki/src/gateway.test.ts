@@ -1,3 +1,4 @@
+// Memory Wiki tests cover gateway plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyMemoryWikiMutation,

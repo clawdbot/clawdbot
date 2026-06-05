@@ -1,3 +1,4 @@
+// Approval client helpers build approval URLs and status payloads for plugin clients.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

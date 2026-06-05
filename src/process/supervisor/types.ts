@@ -1,3 +1,4 @@
+// Process supervisor types describe supervised runs, states, and termination reasons.
 export type RunState = "starting" | "running" | "exiting" | "exited";
 
 export type TerminationReason =

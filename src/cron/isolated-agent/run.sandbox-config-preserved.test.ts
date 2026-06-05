@@ -1,3 +1,4 @@
+// Sandbox config preservation tests cover cron runs keeping sandbox settings intact.
 import { describe, expect, it } from "vitest";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";

@@ -1,6 +1,11 @@
+/**
+ * Lazy ACP runtime proxy for ACPX. It defers resolving the real runtime until
+ * the first ACP call while preserving the SDK runtime shape.
+ */
 import type { AcpRuntime } from "../runtime-api.js";
 import { lazyStartRuntimeTurn } from "./runtime-turn.js";
 
+/** Create an ACP runtime facade backed by an async runtime resolver. */
 export function createLazyAcpRuntimeProxy<T extends AcpRuntime>(
   resolveRuntime: () => Promise<T>,
 ): AcpRuntime {

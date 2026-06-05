@@ -1,3 +1,4 @@
+// Control UI view renders markdown sidebar screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";

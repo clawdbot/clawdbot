@@ -1,6 +1,8 @@
+/**
+ * Minimal TOML inline serializer for CLI config overrides.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-// Minimal TOML inline serializer for CLI config overrides.
 function escapeTomlString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }

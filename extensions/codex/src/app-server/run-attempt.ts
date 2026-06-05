@@ -1,3 +1,4 @@
+// Codex plugin module implements run attempt behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

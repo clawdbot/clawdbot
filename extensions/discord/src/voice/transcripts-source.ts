@@ -1,3 +1,4 @@
+// Discord plugin module implements transcripts source behavior.
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,

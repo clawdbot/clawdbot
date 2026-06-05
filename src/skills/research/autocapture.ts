@@ -1,3 +1,4 @@
+// Research autocapture helpers decide when skill research signals should be captured.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";

@@ -1,3 +1,4 @@
+// Msteams plugin module implements graph users behavior.
 import { escapeOData, fetchGraphJson, type GraphResponse, type GraphUser } from "./graph.js";
 
 export async function searchGraphUsers(params: {

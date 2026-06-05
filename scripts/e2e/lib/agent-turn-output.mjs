@@ -1,3 +1,4 @@
+// Helpers for extracting agent turn output from E2E protocol events.
 import fs from "node:fs";
 import { readTextFileTail, tailText } from "./text-file-utils.mjs";
 

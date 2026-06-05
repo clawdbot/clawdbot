@@ -1,3 +1,5 @@
+// Transcript echo delivery sends best-effort preflight audio transcripts back
+// through deliverable message channels.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -7,6 +9,8 @@ import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
 
 function loadMessageRuntime() {
+  // The message runtime is heavy and only needed when echo delivery actually
+  // proceeds to a deliverable channel.
   messageRuntimePromise ??= import("../channels/message/runtime.js");
   return messageRuntimePromise;
 }

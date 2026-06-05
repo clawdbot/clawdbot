@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements token efficiency report behavior.
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 
 export type TokenEfficiencyRuntimeUsage = {

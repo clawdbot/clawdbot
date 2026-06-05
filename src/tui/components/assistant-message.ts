@@ -1,3 +1,4 @@
+// Assistant message component renders assistant responses and spacing in the TUI log.
 import { Container, Spacer } from "@earendil-works/pi-tui";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";

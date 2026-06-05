@@ -1,3 +1,5 @@
+// Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
+// lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
@@ -220,6 +222,8 @@ describe("subagent registry lifecycle error grace", () => {
   };
 
   const waitForCleanupHandledFalse = async (runId: string) => {
+    // Cleanup can be released asynchronously after announce failure; poll fake
+    // time until the retry-grace state is observable.
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)

@@ -1,3 +1,7 @@
+/**
+ * Tests required parameter validation for model-facing tools.
+ * Covers retry guidance and path-only XML suffix cleanup for file operations.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   assertRequiredParams,

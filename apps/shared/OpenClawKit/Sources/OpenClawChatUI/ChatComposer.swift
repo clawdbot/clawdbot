@@ -201,6 +201,7 @@ struct OpenClawChatComposer: View {
                 Image(systemName: "paperclip")
             }
             .help("Add Image")
+            .accessibilityLabel("Attachments")
             .buttonStyle(.plain)
             .controlSize(.small)
         } else {
@@ -210,6 +211,7 @@ struct OpenClawChatComposer: View {
                 Image(systemName: "paperclip")
             }
             .help("Add Image")
+            .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
@@ -219,6 +221,7 @@ struct OpenClawChatComposer: View {
                 Image(systemName: "paperclip")
             }
             .help("Add Image")
+            .accessibilityLabel("Attachments")
             .buttonStyle(.plain)
             .controlSize(.small)
             .onChange(of: self.pickerItems) { _, newItems in
@@ -229,6 +232,7 @@ struct OpenClawChatComposer: View {
                 Image(systemName: "paperclip")
             }
             .help("Add Image")
+            .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
             .onChange(of: self.pickerItems) { _, newItems in

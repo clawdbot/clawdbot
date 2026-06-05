@@ -1,3 +1,4 @@
+// Setup completion tests cover final onboarding instructions and paths.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCompletionProfilePath } from "../cli/completion-runtime.js";

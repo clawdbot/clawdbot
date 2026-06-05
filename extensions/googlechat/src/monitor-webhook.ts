@@ -1,3 +1,4 @@
+// Googlechat plugin module implements monitor webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -14,6 +15,8 @@ import {
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
+  GoogleChatAction,
+  GoogleChatActionParameter,
   GoogleChatEvent,
   GoogleChatMessage,
   GoogleChatSpace,
@@ -41,6 +44,18 @@ type ParsedGoogleChatInboundPayload =
   | { ok: false };
 type ParsedGoogleChatInboundSuccess = Extract<ParsedGoogleChatInboundPayload, { ok: true }>;
 
+function recordParamsToActionParameters(
+  params?: Record<string, string>,
+): GoogleChatActionParameter[] | undefined {
+  if (!params) {
+    return undefined;
+  }
+  const entries = Object.entries(params)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .map(([key, value]) => ({ key, value }));
+  return entries.length > 0 ? entries : undefined;
+}
+
 function parseGoogleChatInboundPayload(
   raw: unknown,
   res: ServerResponse,
@@ -56,14 +71,31 @@ function parseGoogleChatInboundPayload(
 
   // Transform Google Workspace Add-on format to standard Chat API format.
   const rawObj = raw as {
-    commonEventObject?: { hostApp?: string };
+    commonEventObject?: {
+      hostApp?: string;
+      invokedFunction?: string;
+      parameters?: Record<string, string>;
+    };
     chat?: {
       messagePayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      buttonClickedPayload?: {
+        space?: GoogleChatSpace;
+        message?: GoogleChatMessage;
+        user?: GoogleChatUser;
+        action?: GoogleChatAction;
+      };
       user?: GoogleChatUser;
       eventTime?: string;
     };
     authorizationEventObject?: { systemIdToken?: string };
   };
+
+  if (rawObj.commonEventObject?.hostApp === "CHAT") {
+    addOnBearerToken =
+      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+        ? rawObj.authorizationEventObject.systemIdToken.trim()
+        : "";
+  }
 
   if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
     const chat = rawObj.chat;
@@ -75,10 +107,30 @@ function parseGoogleChatInboundPayload(
       user: chat.user,
       eventTime: chat.eventTime,
     };
-    addOnBearerToken =
-      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
-        ? rawObj.authorizationEventObject.systemIdToken.trim()
-        : "";
+  } else if (rawObj.commonEventObject?.hostApp === "CHAT") {
+    const chat = rawObj.chat;
+    const buttonClickedPayload = chat?.buttonClickedPayload;
+    if (buttonClickedPayload) {
+      const invokedFunction = rawObj.commonEventObject.invokedFunction;
+      const actionParameters = recordParamsToActionParameters(rawObj.commonEventObject.parameters);
+      eventPayload = {
+        type: "CARD_CLICKED",
+        space: buttonClickedPayload.space,
+        message: buttonClickedPayload.message,
+        user: buttonClickedPayload.user ?? chat.user,
+        eventTime: chat.eventTime,
+        action:
+          buttonClickedPayload.action ??
+          ({
+            ...(typeof invokedFunction === "string" ? { actionMethodName: invokedFunction } : {}),
+            ...(actionParameters ? { parameters: actionParameters } : {}),
+          } satisfies GoogleChatAction),
+        commonEventObject: {
+          ...(typeof invokedFunction === "string" ? { invokedFunction } : {}),
+          parameters: rawObj.commonEventObject.parameters,
+        },
+      };
+    }
   }
 
   const event = eventPayload as GoogleChatEvent;
@@ -97,6 +149,12 @@ function parseGoogleChatInboundPayload(
 
   if (eventType === "MESSAGE") {
     if (!event.message || typeof event.message !== "object" || Array.isArray(event.message)) {
+      res.statusCode = 400;
+      res.end("invalid payload");
+      return { ok: false };
+    }
+  } else if (eventType === "CARD_CLICKED") {
+    if (!event.user || typeof event.user !== "object" || Array.isArray(event.user)) {
       res.statusCode = 400;
       res.end("invalid payload");
       return { ok: false };

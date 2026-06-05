@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";

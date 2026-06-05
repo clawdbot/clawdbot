@@ -1,3 +1,4 @@
+// Voice Call tests cover stream frame adapter plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelnyxStreamFrameAdapter, TwilioStreamFrameAdapter } from "./stream-frame-adapter.js";
 

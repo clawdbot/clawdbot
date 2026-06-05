@@ -1,3 +1,4 @@
+/** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
@@ -21,6 +22,7 @@ import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
   beforeEach(() => {
+    // Restore spies because these helpers use real modules with per-test mocks.
     vi.restoreAllMocks();
   });
 
@@ -51,6 +53,7 @@ describe("loadPromptRefImages", () => {
       }),
     ).resolves.toStrictEqual([]);
 
+    // Cached image paths are generated output, not fresh user references.
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
@@ -149,6 +152,8 @@ describe("buildCliArgs", () => {
   });
 
   it("strips the internal cache boundary from CLI system prompt args", () => {
+    // The boundary is internal prompt-cache metadata and must never reach the
+    // downstream CLI as literal text.
     expect(
       buildCliArgs({
         backend: {

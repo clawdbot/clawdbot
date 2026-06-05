@@ -1,3 +1,4 @@
+// Video Generation Core tests cover runtime plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js";
 

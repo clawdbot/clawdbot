@@ -1,3 +1,4 @@
+// ACP Core tests cover errors behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { configureAcpErrorRedactor } from "../error-format.js";
 import {

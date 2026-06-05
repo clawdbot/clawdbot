@@ -1,3 +1,8 @@
+/**
+ * In-memory registry for bash exec sessions.
+ * Tracks running/backgrounded sessions, bounded pending output, finished
+ * session retention, and process cleanup for reconnect/poll flows.
+ */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
@@ -19,8 +24,10 @@ function clampTtl(value: number | undefined) {
 
 let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
 
+/** Lifecycle status recorded for background process sessions. */
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
+/** Writable stdin surface shared by child-process and PTY-backed sessions. */
 export type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
@@ -32,6 +39,7 @@ export type SessionStdin = {
   writableFinished?: boolean;
 };
 
+/** Mutable session state for a running bash exec process. */
 export interface ProcessSession {
   id: string;
   command: string;
@@ -78,6 +86,7 @@ export interface ProcessSession {
   cursorKeyMode: "unknown" | "normal" | "application";
 }
 
+/** Retained summary for a completed background session. */
 export interface FinishedSession {
   id: string;
   command: string;
@@ -104,28 +113,34 @@ function isSessionIdTaken(id: string) {
   return runningSessions.has(id) || finishedSessions.has(id);
 }
 
+/** Creates a unique short session id that avoids running and retained sessions. */
 export function createSessionSlug(): string {
   return createSessionSlugId(isSessionIdTaken);
 }
 
+/** Adds a running session and starts retention sweeping if needed. */
 export function addSession(session: ProcessSession) {
   runningSessions.set(session.id, session);
   startSweeper();
 }
 
+/** Returns a running session by id. */
 export function getSession(id: string) {
   return runningSessions.get(id);
 }
 
+/** Returns a retained finished background session by id. */
 export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
+/** Removes a session from both running and finished registries. */
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   finishedSessions.delete(id);
 }
 
+/** Appends process output while enforcing aggregate and pending-output caps. */
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
   session.pendingStdout ??= [];
   session.pendingStderr ??= [];
@@ -156,6 +171,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   session.tail = tail(session.aggregated, 2000);
 }
 
+/** Drains pending stdout/stderr chunks returned by a process poll. */
 export function drainSession(session: ProcessSession) {
   const stdout = session.pendingStdout.join("");
   const stderr = session.pendingStderr.join("");
@@ -166,6 +182,7 @@ export function drainSession(session: ProcessSession) {
   return { stdout, stderr };
 }
 
+/** Moves a session to finished state and records exit metadata. */
 export function markExited(
   session: ProcessSession,
   exitCode: number | null,
@@ -181,6 +198,7 @@ export function markExited(
   moveToFinished(session, status);
 }
 
+/** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
 }
@@ -240,6 +258,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   });
 }
 
+/** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
@@ -286,6 +305,7 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   return pendingChars;
 }
 
+/** Keeps only the last `max` characters for bounded aggregate output storage. */
 export function trimWithCap(text: string, max: number) {
   if (text.length <= max) {
     return text;
@@ -293,24 +313,29 @@ export function trimWithCap(text: string, max: number) {
   return text.slice(text.length - max);
 }
 
+/** Lists backgrounded running sessions visible to reconnect/poll callers. */
 export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
 }
 
+/** Lists retained finished background sessions. */
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
 
+/** Clears retained finished sessions without touching running processes. */
 export function clearFinished() {
   finishedSessions.clear();
 }
 
+/** Test-only reset for in-memory registry state and retention timers. */
 export function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
   stopSweeper();
 }
 
+/** Overrides finished-session retention TTL, clamped to supported bounds. */
 export function setJobTtlMs(value?: number) {
   if (value === undefined || Number.isNaN(value)) {
     return;

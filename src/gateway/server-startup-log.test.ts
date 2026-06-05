@@ -1,3 +1,5 @@
+// Startup log tests cover security warnings, model detail formatting, plugin
+// summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";

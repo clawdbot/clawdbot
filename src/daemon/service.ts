@@ -1,3 +1,4 @@
+/** Platform service registry and shared gateway service start/repair logic. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -101,6 +102,8 @@ function mergeGatewayServiceEnv(
     "OPENCLAW_SYSTEMD_UNIT",
     "OPENCLAW_WINDOWS_TASK_NAME",
   ]) {
+    // Explicit caller env selects the target service identity; installed command
+    // env may come from a different profile or stale service file.
     const value = baseEnv[key]?.trim();
     if (value) {
       merged[key] = value;
@@ -142,6 +145,8 @@ function collectGatewayServiceStartRepairIssues(
   const issues: GatewayServiceStartRepairIssue[] = [];
   const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
   if (serviceVersion && serviceVersion !== VERSION) {
+    // Version drift often means the service points at old package paths; require
+    // reinstall/repair before pretending restart succeeded.
     issues.push({
       code: "version-mismatch",
       message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
@@ -305,6 +310,8 @@ function withFutureConfigGuard(service: GatewayService): GatewayService {
   return {
     ...service,
     stage: async (args) => {
+      // Service mutations rewrite durable launchd/systemd/schtasks files, so
+      // block them when config was produced by a newer OpenClaw.
       await assertFutureConfigActionAllowed("rewrite the gateway service");
       return await service.stage(args);
     },

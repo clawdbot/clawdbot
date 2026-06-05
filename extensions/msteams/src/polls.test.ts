@@ -1,3 +1,4 @@
+// Msteams tests cover polls plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -152,7 +153,7 @@ describe("state poll store", () => {
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
-  it("imports legacy JSON polls once and removes the old file", async () => {
+  it("ignores legacy JSON polls at runtime", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
     const filePath = path.join(stateDir, "msteams-polls.json");
     await fs.promises.writeFile(
@@ -173,18 +174,18 @@ describe("state poll store", () => {
     );
 
     const store = createMSTeamsPollStoreState({ stateDir });
-    await expect(store.getPoll("poll-legacy")).resolves.toMatchObject({
-      id: "poll-legacy",
-      question: "Legacy?",
-    });
-    await expect(fs.promises.access(filePath)).rejects.toThrow();
+    await expect(store.getPoll("poll-legacy")).resolves.toBeNull();
+    await expect(fs.promises.access(filePath)).resolves.toBeUndefined();
 
-    const updated = await store.recordVote({
-      pollId: "poll-legacy",
-      voterId: "user-1",
-      selections: ["1"],
+    await store.createPoll({
+      id: "poll-new",
+      question: "New?",
+      options: ["A", "B"],
+      maxSelections: 1,
+      createdAt: new Date().toISOString(),
+      votes: {},
     });
-    expect(updated?.votes["user-1"]).toEqual(["1"]);
+    await expect(store.getPoll("poll-new")).resolves.toMatchObject({ id: "poll-new" });
     await expect(
       fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite")),
     ).resolves.toBeUndefined();
@@ -262,106 +263,6 @@ describe("state poll store", () => {
     const stored = await store.getPoll("poll-large");
     expect(Object.keys(stored?.votes ?? {})).toHaveLength(501);
     expect(stored?.votes["user-new"]).toEqual(["1"]);
-  });
-
-  it("fills missing legacy vote buckets after a partial metadata import", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const filePath = path.join(stateDir, "msteams-polls.json");
-    const metadata = {
-      id: "poll-partial",
-      question: "Partial?",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-    };
-    const metadataStore = createPluginStateKeyedStoreForTests<typeof metadata>("msteams", {
-      namespace: "polls",
-      maxEntries: 2000,
-      env,
-    });
-    await metadataStore.register("poll-partial", metadata);
-    const voterHash = crypto
-      .createHash("sha256")
-      .update("poll-partial")
-      .update("\0")
-      .update("user-legacy")
-      .digest("hex");
-    const bucket = String(Number.parseInt(voterHash.slice(0, 8), 16) % 32).padStart(4, "0");
-    const pollHash = crypto.createHash("sha256").update("poll-partial").digest("hex");
-    const voteBucketStore = createPluginStateKeyedStoreForTests<{
-      pollId: string;
-      bucket: string;
-      votes: Record<string, string[]>;
-      updatedAt: string;
-    }>("msteams", {
-      namespace: "poll-vote-buckets",
-      maxEntries: 32_032,
-      env,
-    });
-    await voteBucketStore.register(`${pollHash}:${bucket}`, {
-      pollId: "poll-partial",
-      bucket,
-      votes: { "user-legacy": ["0"] },
-      updatedAt: metadata.createdAt,
-    });
-    await fs.promises.writeFile(
-      filePath,
-      `${JSON.stringify({
-        version: 1,
-        polls: {
-          "poll-partial": {
-            ...metadata,
-            votes: {
-              "user-legacy": ["1"],
-              "user-missing": ["1"],
-            },
-          },
-        },
-      })}\n`,
-    );
-
-    const store = createMSTeamsPollStoreState({ env });
-
-    await expect(store.getPoll("poll-partial")).resolves.toMatchObject({
-      votes: {
-        "user-legacy": ["0"],
-        "user-missing": ["1"],
-      },
-    });
-  });
-
-  it("keeps newest legacy polls by update timestamp at the row cap", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
-    const filePath = path.join(stateDir, "msteams-polls.json");
-    const pollRows: Record<string, MSTeamsPoll> = {};
-    const baseMs = Date.now() - 60_000;
-    pollRows["poll-recent"] = {
-      id: "poll-recent",
-      question: "Recent?",
-      options: ["A", "B"],
-      maxSelections: 1,
-      createdAt: new Date(baseMs + 2_000_000).toISOString(),
-      updatedAt: new Date(baseMs + 2_000_000).toISOString(),
-      votes: {},
-    };
-    for (let index = 0; index < 1000; index += 1) {
-      const id = `poll-${String(index).padStart(4, "0")}`;
-      pollRows[id] = {
-        id,
-        question: "Old?",
-        options: ["A", "B"],
-        maxSelections: 1,
-        createdAt: new Date(baseMs + index).toISOString(),
-        votes: {},
-      };
-    }
-    await fs.promises.writeFile(filePath, `${JSON.stringify({ version: 1, polls: pollRows })}\n`);
-
-    const store = createMSTeamsPollStoreState({ stateDir });
-
-    await expect(store.getPoll("poll-recent")).resolves.toMatchObject({ id: "poll-recent" });
-    await expect(store.getPoll("poll-0000")).resolves.toBeNull();
   });
 
   it("deletes vote buckets when pruning over the poll cap", async () => {

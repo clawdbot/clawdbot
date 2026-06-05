@@ -1,3 +1,4 @@
+// Simple provider option helpers normalize lightweight provider configuration.
 import type {
   Model,
   SimpleStreamOptions,

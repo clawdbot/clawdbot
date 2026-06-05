@@ -1,3 +1,6 @@
+/**
+ * Detects, resolves, and loads prompt image references for model input.
+ */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";

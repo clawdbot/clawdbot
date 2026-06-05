@@ -1,3 +1,4 @@
+// Google turn ordering helpers keep Google model conversations in supported order.
 import type { AgentMessage } from "../agents/runtime/index.js";
 
 const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";

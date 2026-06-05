@@ -1,3 +1,4 @@
+// Whatsapp tests cover auto reply.web auto reply.last route plugin behavior.
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";

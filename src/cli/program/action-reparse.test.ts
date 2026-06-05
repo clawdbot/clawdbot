@@ -1,3 +1,4 @@
+// Action reparse tests cover Commander action reparsing for nested CLI commands.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";

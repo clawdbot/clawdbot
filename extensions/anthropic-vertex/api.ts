@@ -1,3 +1,7 @@
+/**
+ * Public Anthropic Vertex API barrel. It exposes lightweight discovery helpers
+ * and lazy stream factories without eagerly importing the Vertex SDK runtime.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -24,6 +28,7 @@ const loadStreamRuntimeModule = async () => {
   return await streamRuntimeModulePromise;
 };
 
+/** Merge an implicit Anthropic Vertex provider with explicit user config. */
 export function mergeImplicitAnthropicVertexProvider(params: {
   existing?: ReturnType<typeof buildAnthropicVertexProvider>;
   implicit: ReturnType<typeof buildAnthropicVertexProvider>;
@@ -42,6 +47,7 @@ export function mergeImplicitAnthropicVertexProvider(params: {
   };
 }
 
+/** Resolve an implicit Anthropic Vertex provider when ADC credentials are available. */
 export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.ProcessEnv }) {
   const env = params?.env ?? process.env;
   if (!hasAnthropicVertexAvailableAuth(env)) {
@@ -51,6 +57,7 @@ export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.P
   return buildAnthropicVertexProvider({ env });
 }
 
+/** Create a lazy Anthropic Vertex stream function for a known project/region/base URL. */
 export function createAnthropicVertexStreamFn(
   projectId: string | undefined,
   region: string,
@@ -66,6 +73,7 @@ export function createAnthropicVertexStreamFn(
   };
 }
 
+/** Create a lazy Anthropic Vertex stream function using model base URL and env hints. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

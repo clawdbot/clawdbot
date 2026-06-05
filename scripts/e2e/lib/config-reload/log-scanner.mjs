@@ -1,3 +1,4 @@
+// Streaming log scanner for config reload E2E scenarios.
 import {
   createIncrementalLineReader,
   resolvePositiveInteger,

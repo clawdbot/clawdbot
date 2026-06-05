@@ -1,3 +1,4 @@
+// Session key resolution maps inbound message context to persisted store buckets.
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   buildAgentMainSessionKey,

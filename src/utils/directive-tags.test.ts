@@ -1,3 +1,4 @@
+// Directive tag tests cover parsing and filtering inline directive tags.
 import { describe, expect, test } from "vitest";
 import {
   parseInlineDirectives,

@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile portability decisions.
+ * Verifies static credential copy, OAuth opt-in behavior, and explicit
+ * copy-to-agent opt-outs.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildPortableAuthProfileSecretsStoreForAgentCopy,

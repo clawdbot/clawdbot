@@ -1,3 +1,4 @@
+// Slack helper module supports blocks helpers behavior.
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 

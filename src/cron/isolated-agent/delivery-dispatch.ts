@@ -1,3 +1,4 @@
+/** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
@@ -332,6 +333,8 @@ function rememberCompletedDirectCronDelivery(
   idempotencyKey: string,
   results: readonly OutboundDeliveryResult[],
 ) {
+  // Cache completed sends by idempotency key so retry paths can report the
+  // original delivery result instead of double-announcing a cron run.
   const now = Date.now();
   COMPLETED_DIRECT_CRON_DELIVERIES.set(idempotencyKey, {
     ts: now,
@@ -391,6 +394,8 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   runStartedAt: number;
   delivery: SuccessfulDeliveryTarget;
 }): string {
+  // Include route identity, not just the cron execution id, because one run can
+  // target different channels/accounts/threads across retry and fallback paths.
   const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
@@ -492,6 +497,8 @@ function buildDirectCronTranscriptMirrorPayloads(
     if (!spokenText) {
       return payload;
     }
+    // For TTS auto payloads the spoken text is the transcript content; keep
+    // non-audio media only so mirrors do not show generated voice files twice.
     const mediaUrls = [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(
       (url): url is string => Boolean(url) && !isAudioFileName(url),
     );
@@ -599,6 +606,8 @@ async function resolveDirectCronDeliverySessionKey(params: {
   delivery: SuccessfulDeliveryTarget;
 }): Promise<string> {
   if (isCustomCronSessionTarget(params.job.sessionTarget)) {
+    // Custom session targets are already caller-selected; do not remap them
+    // through outbound routing or the explicit session identity would drift.
     return params.agentSessionKey;
   }
 

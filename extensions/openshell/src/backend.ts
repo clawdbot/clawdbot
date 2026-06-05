@@ -1,3 +1,4 @@
+// Openshell plugin module implements backend behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {

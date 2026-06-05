@@ -1,3 +1,4 @@
+// Parallels Update Job Timeout tests cover parallels update job timeout script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runTimedUpdateJob } from "../../scripts/e2e/parallels/update-job-timeout.ts";
 

@@ -1,3 +1,4 @@
+// Duplicate timer tests cover cron service guards against repeated timer arms.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

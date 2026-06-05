@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare thread context behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";

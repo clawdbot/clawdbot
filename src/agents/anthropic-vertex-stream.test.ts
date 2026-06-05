@@ -1,3 +1,7 @@
+/**
+ * Tests Anthropic Vertex stream facade loading.
+ * Ensures core routes through the bundled provider public surface.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const facadeRuntimeMocks = vi.hoisted(() => ({

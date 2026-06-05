@@ -1,3 +1,4 @@
+// Codex tests cover native execution policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 

@@ -1,3 +1,6 @@
+/**
+ * Canvas host server and static-file/live-reload handler implementation.
+ */
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -29,6 +32,7 @@ import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 type ChokidarWatch = typeof import("chokidar").watch;
 
+/** Options for Canvas host creation. */
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
@@ -40,17 +44,20 @@ export type CanvasHostOpts = {
   webSocketServerClass?: typeof WebSocketServer;
 };
 
+/** Options for starting a standalone Canvas host HTTP server. */
 export type CanvasHostServerOpts = CanvasHostOpts & {
   handler?: CanvasHostHandler;
   ownsHandler?: boolean;
 };
 
+/** Running Canvas host server handle. */
 export type CanvasHostServer = {
   port: number;
   rootDir: string;
   close: () => Promise<void>;
 };
 
+/** Options for creating only the Canvas host request handler. */
 export type CanvasHostHandlerOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
@@ -61,6 +68,7 @@ export type CanvasHostHandlerOpts = {
   webSocketServerClass?: typeof WebSocketServer;
 };
 
+/** Canvas host handler for HTTP requests, WebSocket upgrades, and teardown. */
 export type CanvasHostHandler = {
   rootDir: string;
   basePath: string;
@@ -244,6 +252,7 @@ function resolveDefaultWatchFactory(): ChokidarWatch {
   throw new Error("chokidar.watch unavailable");
 }
 
+/** Creates a Canvas static-file handler with optional live reload. */
 export async function createCanvasHostHandler(
   opts: CanvasHostHandlerOpts,
 ): Promise<CanvasHostHandler> {
@@ -451,6 +460,7 @@ export async function createCanvasHostHandler(
   };
 }
 
+/** Starts a standalone loopback Canvas host HTTP server. */
 export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<CanvasHostServer> {
   if (isDisabledByEnv() && opts.allowInTests !== true) {
     return { port: 0, rootDir: "", close: async () => {} };

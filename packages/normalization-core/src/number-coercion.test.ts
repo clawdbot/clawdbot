@@ -1,3 +1,4 @@
+// Normalization Core tests cover number coercion behavior.
 import { describe, expect, test } from "vitest";
 import {
   asDateTimestampMs,

@@ -1,6 +1,8 @@
+// Coverage for global Undici timeout wiring during embedded attempts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  // Hoisted because attempt-http-runtime imports Undici wiring at module load.
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 30 * 60 * 1000,
   ensureGlobalUndiciDispatcherStreamTimeouts: vi.fn(),
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -21,6 +23,8 @@ describe("runEmbeddedAttempt undici timeout wiring", () => {
   });
 
   it("does not lower global undici stream tuning below the shared default", () => {
+    // Attempt timeouts can be shorter than the shared stream timeout, but global
+    // dispatcher tuning must not be reduced for other in-flight streams.
     configureEmbeddedAttemptHttpRuntime({ timeoutMs: 123_456 });
 
     expect(mocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();

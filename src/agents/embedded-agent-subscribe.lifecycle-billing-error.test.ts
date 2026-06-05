@@ -1,3 +1,5 @@
+// Lifecycle billing error tests ensure subscription error events include enough
+// provider/model context for users to fix account or quota issues.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSubscribedSessionHarness,
@@ -7,6 +9,8 @@ import {
 
 describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+    // Harness captures lifecycle events only; stream/block reply paths are not
+    // relevant to billing-error attribution.
     const onAgentEvent = vi.fn();
     const { emit } = createSubscribedSessionHarness({
       runId: options?.runId ?? "run",

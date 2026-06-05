@@ -1,3 +1,4 @@
+// Microsoft Foundry provider module implements model/runtime integration.
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
 import type {
   ModelProviderConfig,

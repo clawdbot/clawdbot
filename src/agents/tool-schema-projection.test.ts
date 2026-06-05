@@ -1,3 +1,5 @@
+// Tool schema projection tests cover runtime/provider filtering for plugin tool
+// schemas before they are exposed to model providers.
 import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
@@ -69,6 +71,8 @@ describe("runtime tool input schema projection", () => {
   });
 
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
+    // Dynamic keywords are only invalid as JSON Schema control fields; property
+    // names and definitions can legally contain the same strings.
     expect(
       projectRuntimeToolInputSchema({
         type: "object",

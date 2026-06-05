@@ -1,3 +1,4 @@
+// Session action contract tests cover plugin session action metadata and execution contracts.
 import {
   createPluginRegistryFixture,
   registerTestPlugin,

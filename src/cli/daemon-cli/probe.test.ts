@@ -1,3 +1,4 @@
+// Daemon probe tests cover gateway probe command behavior and output.
 import { describe, expect, it, vi } from "vitest";
 import { probeGatewayStatus } from "./probe.js";
 

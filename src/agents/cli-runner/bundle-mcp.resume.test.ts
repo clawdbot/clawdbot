@@ -1,3 +1,4 @@
+/** Tests bundle-MCP resume hash stability across loopback endpoint changes. */
 import { describe, expect, it } from "vitest";
 import {
   prepareBundleProbeCliConfig,
@@ -8,6 +9,8 @@ setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig resume hash", () => {
   it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+    // Loopback ports are volatile per gateway run and should not force CLI
+    // session abandonment when stable MCP semantics are unchanged.
     const first = await prepareBundleProbeCliConfig({
       additionalConfig: {
         mcpServers: {

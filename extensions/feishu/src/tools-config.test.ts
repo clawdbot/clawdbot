@@ -1,3 +1,4 @@
+// Feishu tests cover tools config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";

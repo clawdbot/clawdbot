@@ -1,3 +1,4 @@
+// Media read capability helpers gate file reads by configured media access rules.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";

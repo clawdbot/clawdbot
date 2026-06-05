@@ -1,3 +1,4 @@
+// Setup promotion helper tests cover setup-result promotion into configured channel state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());

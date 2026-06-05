@@ -1,3 +1,4 @@
+// Zalouser tests cover message sid plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatZalouserMessageSidFull,

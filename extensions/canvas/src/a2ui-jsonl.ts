@@ -1,3 +1,6 @@
+/**
+ * A2UI JSONL helpers for Canvas text rendering and validation.
+ */
 const A2UI_ACTION_KEYS = [
   "beginRendering",
   "surfaceUpdate",
@@ -6,8 +9,10 @@ const A2UI_ACTION_KEYS = [
   "createSurface",
 ] as const;
 
+/** Supported A2UI message dialects accepted by the Canvas host. */
 export type A2UIVersion = "v0.8" | "v0.9";
 
+/** Builds a minimal A2UI JSONL payload that renders text in a single surface. */
 export function buildA2UITextJsonl(text: string) {
   const surfaceId = "main";
   const rootId = "root";
@@ -35,6 +40,7 @@ export function buildA2UITextJsonl(text: string) {
   return payloads.map((payload) => JSON.stringify(payload)).join("\n");
 }
 
+/** Validates A2UI JSONL and returns the detected dialect/version metadata. */
 export function validateA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
   const errors: string[] = [];

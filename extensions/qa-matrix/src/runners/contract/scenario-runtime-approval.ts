@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime approval behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";

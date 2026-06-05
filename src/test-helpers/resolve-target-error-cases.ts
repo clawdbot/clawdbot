@@ -1,3 +1,4 @@
+// Resolve target error helpers share common route-target validation cases.
 import { expect, it } from "vitest";
 
 // Shared resolve-target negative cases used by messaging/channel tests. The

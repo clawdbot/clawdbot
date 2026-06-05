@@ -1,3 +1,4 @@
+// Zai setup module handles plugin onboarding behavior.
 import {
   applyProviderConfigWithModelCatalogPreset,
   type OpenClawConfig,

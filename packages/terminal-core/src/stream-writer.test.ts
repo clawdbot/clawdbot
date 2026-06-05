@@ -1,3 +1,4 @@
+// Terminal Core tests cover stream writer behavior.
 import { describe, expect, it } from "vitest";
 import { createSafeStreamWriter } from "./stream-writer.js";
 

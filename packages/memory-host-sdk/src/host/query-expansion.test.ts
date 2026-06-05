@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover query expansion behavior.
 import { describe, expect, it } from "vitest";
 import { expandQueryForFts, extractKeywords } from "./query-expansion.js";
 

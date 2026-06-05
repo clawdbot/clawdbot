@@ -1,3 +1,4 @@
+// Browser tests cover dispatcher.abort plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
 

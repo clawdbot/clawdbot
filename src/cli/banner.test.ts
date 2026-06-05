@@ -1,3 +1,4 @@
+// Banner tests cover CLI banner rendering and suppression behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliBannerLine } from "./banner.js";
 

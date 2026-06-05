@@ -1,3 +1,5 @@
+// Resolution helpers derive media-understanding timeouts, prompts, byte/char
+// caps, scope decisions, model entries, concurrency, and active-model fallback.
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -169,6 +171,8 @@ export function resolveEntriesWithActiveFallback(params: {
   if (entries.length > 0) {
     return entries;
   }
+  // Active chat model fallback is opt-in and only valid when its provider has
+  // declared the requested media capability.
   if (params.config?.enabled !== true) {
     return entries;
   }

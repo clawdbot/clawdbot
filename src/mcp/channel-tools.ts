@@ -1,3 +1,4 @@
+// Channel MCP tools expose channel operations through an MCP server.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";

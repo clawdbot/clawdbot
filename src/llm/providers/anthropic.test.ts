@@ -1,3 +1,4 @@
+// Anthropic provider tests cover stream events, tools, and message mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";

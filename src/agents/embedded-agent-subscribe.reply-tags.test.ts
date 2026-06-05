@@ -1,3 +1,5 @@
+// Reply-tag tests cover streaming directive parsing for reply_to markers across
+// block replies and partial reply chunks.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +29,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
   }
 
   function createBlockReplyHarness() {
+    // Small chunk sizes force directive-only and text chunks through the block
+    // reply path where reply metadata must be preserved.
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
@@ -83,6 +87,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {
+    // Split tags are buffered until complete so partial replies never expose raw
+    // directive syntax.
     const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();

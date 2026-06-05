@@ -1,3 +1,4 @@
+// Message lifecycle tests cover channel message state transitions and notifications.
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,

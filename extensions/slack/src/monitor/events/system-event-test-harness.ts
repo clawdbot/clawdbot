@@ -1,3 +1,4 @@
+// Slack plugin module implements system event test harness behavior.
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {

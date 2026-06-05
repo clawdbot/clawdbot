@@ -1,3 +1,4 @@
+// Gateway-status helper tests cover target selection, auth summaries, probe budgets, and SSH target sanitizing.
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {

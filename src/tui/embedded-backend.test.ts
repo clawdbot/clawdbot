@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const agentCommandFromIngressMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -740,9 +741,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("aborts local post-turn maintenance when stop grace elapses", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const pending = deferred<{
         payloads: Array<{ text: string }>;
@@ -781,13 +780,7 @@ describe("EmbeddedTuiBackend", () => {
 
       expect(abortListener).toHaveBeenCalledTimes(1);
       expect(isEmbeddedMode()).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("queues same-session sends behind local post-turn maintenance", async () => {
@@ -846,9 +839,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("queues same-session sends behind active local runs", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -898,13 +889,7 @@ describe("EmbeddedTuiBackend", () => {
 
       second.resolve({ payloads: [{ text: "second done" }], meta: {} });
       await flushMicrotasks();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("does not queue stop commands behind active local runs", async () => {
@@ -1271,9 +1256,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("fails a queued local send when the previous finishing run does not settle", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "5";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -1326,19 +1309,11 @@ describe("EmbeddedTuiBackend", () => {
             ),
         ),
       ).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("fails a queued local send immediately when shutdown grace is zero", async () => {
-    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "0";
-    try {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "0" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
       const first = deferred<{
         payloads: Array<{ text: string }>;
@@ -1384,13 +1359,7 @@ describe("EmbeddedTuiBackend", () => {
             ),
         ),
       ).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
-      } else {
-        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
-      }
-    }
+    });
   });
 
   it("clears local finishing state before surfacing a post-turn failure", async () => {

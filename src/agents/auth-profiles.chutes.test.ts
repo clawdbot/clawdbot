@@ -1,3 +1,8 @@
+/**
+ * Chutes auth profile integration tests.
+ * Verifies expired OAuth profiles refresh through the provider token endpoint
+ * while preserving the shared auth-profile store contracts.
+ */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "./auth-profiles.js";

@@ -1,3 +1,4 @@
+// Discord plugin module implements components behavior.
 export {
   BaseComponent,
   BaseMessageInteractiveComponent,

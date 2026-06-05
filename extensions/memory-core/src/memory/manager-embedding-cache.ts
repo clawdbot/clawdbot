@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager embedding cache behavior.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   parseEmbedding,

@@ -1,3 +1,4 @@
+// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,

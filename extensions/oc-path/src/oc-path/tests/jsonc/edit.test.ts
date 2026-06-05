@@ -1,3 +1,4 @@
+// OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
 import { emitJsonc } from "../../jsonc/emit.js";

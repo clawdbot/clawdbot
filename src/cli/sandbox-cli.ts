@@ -1,3 +1,4 @@
+// Commander registration for sandbox container list, recreate, and explain commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -44,6 +45,7 @@ const SANDBOX_EXAMPLES = {
 function createRunner(
   commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
 ) {
+  // Sandbox commands share the default runtime error/exit behavior.
   return async (opts: CommandOptions) => {
     try {
       await commandFn(opts, defaultRuntime);

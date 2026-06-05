@@ -1,3 +1,5 @@
+// Image tool tests cover model routing, provider auth, path safety, inbound
+// media refs, data URLs, response validation, and compression policy.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,6 +25,8 @@ import { testing, createImageTool, resolveImageModelConfigForTool } from "./imag
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
+  // Anthropic rejects union-heavy schemas, so schema snapshots must survive the
+  // same JSON serialization path used for model-facing tool definitions.
   const serialized = JSON.stringify(value);
   return JSON.parse(serialized) as T;
 }
@@ -305,6 +309,8 @@ function createLargeColorBlockPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The tests inspect JPEG SOF markers directly so resize assertions do not
+  // depend on an external decoder.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {

@@ -1,3 +1,4 @@
+// Vitest agents support config wires the agents support test shard.
 import { agentsSupportExcludePatterns, agentsSupportTestPatterns } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

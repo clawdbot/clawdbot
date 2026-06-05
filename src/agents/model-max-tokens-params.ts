@@ -1,6 +1,10 @@
+/**
+ * Max-token parameter normalization across provider/native naming variants.
+ * Callers canonicalize aliases before dispatch so payloads cannot carry
+ * conflicting limits.
+ */
 const MAX_TOKENS_PARAM_KEYS = ["maxTokens", "max_completion_tokens", "max_tokens"] as const;
 
-// Max-token parameter normalization across provider/native naming variants.
 /** Return a finite non-negative max-token value, or undefined for invalid input. */
 export function resolveNonNegativeMaxTokensParam(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;

@@ -1,3 +1,4 @@
+// Slack plugin module implements dm auth behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

@@ -1,3 +1,8 @@
+/**
+ * Native command session target resolver.
+ *
+ * Chooses storage and command target session keys for channel-native command events.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**

@@ -1,3 +1,4 @@
+// Browser tests cover server context.remote profile tab ops.playwright plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   installRemoteProfileTestLifecycle,

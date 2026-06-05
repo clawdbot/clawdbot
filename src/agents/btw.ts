@@ -1,3 +1,7 @@
+/**
+ * Runs `/btw` side questions against the active conversation without resuming
+ * or continuing the main task.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -312,6 +316,7 @@ type RunBtwSideQuestionParams = {
   currentChannelId?: string;
 };
 
+/** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
   params: RunBtwSideQuestionParams,
 ): Promise<ReplyPayload | undefined> {

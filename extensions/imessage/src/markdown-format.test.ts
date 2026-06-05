@@ -1,3 +1,4 @@
+// Imessage tests cover markdown format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 

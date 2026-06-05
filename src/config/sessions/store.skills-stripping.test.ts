@@ -1,3 +1,4 @@
+// Session store skill stripping tests cover omitting skill payloads from persisted state.
 import type { MakeDirectoryOptions, Mode, PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

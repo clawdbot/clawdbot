@@ -1,3 +1,5 @@
+// Source reply mirroring records successful same-conversation message-tool
+// sends back into the owning session transcript.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

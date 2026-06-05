@@ -1,3 +1,5 @@
+// Text-end append tests cover deduplication between streamed deltas and
+// provider message_end snapshots.
 import { describe, expect, it, vi } from "vitest";
 import {
   createTextEndBlockReplyHarness,
@@ -8,6 +10,8 @@ import {
 
 describe("subscribeEmbeddedAgentSession", () => {
   function setupTextEndSubscription() {
+    // text_end block replies expose snapshot/delta merge behavior without the
+    // extra message-end terminal path.
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
@@ -55,6 +59,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("sends only the suffix when text_end block replies grow across assistant messages", async () => {
+    // After a tool call, providers can resend the full accumulated text; only
+    // the newly grown suffix should be emitted as a block reply.
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 

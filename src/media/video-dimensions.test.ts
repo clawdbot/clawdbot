@@ -1,3 +1,4 @@
+// Video dimension tests cover ffprobe parsing and fallback behavior.
 import { describe, expect, it, vi } from "vitest";
 import { parseFfprobeVideoDimensions, probeVideoDimensions } from "./video-dimensions.js";
 

@@ -1,3 +1,4 @@
+// Coverage for repairing malformed streamed tool-call arguments.
 import { describe, expect, it } from "vitest";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -19,6 +20,8 @@ function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
 }): FakeWrappedStream {
+  // Minimal fake stream lets repair tests assert both streamed events and final
+  // result mutation.
   return {
     async result() {
       return params.resultMessage;
@@ -38,6 +41,8 @@ async function invokeProviderStream(params: {
   modelApi: string;
   baseFn: FakeStreamFn;
 }): Promise<FakeWrappedStream> {
+  // Repair is provider/API gated; this helper mirrors the production wrapper
+  // selection before invoking the fake stream.
   const streamFn = shouldRepairMalformedToolCallArguments({
     provider: params.provider,
     modelApi: params.modelApi,
@@ -64,6 +69,8 @@ async function runToolCallRepairCase(params: {
   includePreamble?: boolean;
   preambleToolName?: string;
 }): Promise<ToolCallRepairCaseResult> {
+  // One case tracks every representation of the tool call so repairs stay
+  // synchronized across partial, end, and final messages.
   const toolName = params.toolName ?? "write";
   const partialToolCall = { type: "functionCall", name: toolName, arguments: {} };
   const streamedToolCall = { type: "functionCall", name: toolName, arguments: {} };

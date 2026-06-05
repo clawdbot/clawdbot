@@ -1,3 +1,4 @@
+// Imessage plugin module implements self chat cache behavior.
 import { createHash } from "node:crypto";
 import { formatIMessageChatTarget } from "../targets.js";
 

@@ -1,3 +1,4 @@
+// Matrix plugin module implements approval handler behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
   ChannelApprovalCapabilityHandlerContext,

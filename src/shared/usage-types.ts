@@ -1,3 +1,4 @@
+// Usage types define shared usage accounting structures for sessions and runs.
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
   CostUsageSummary,

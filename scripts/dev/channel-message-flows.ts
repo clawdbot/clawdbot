@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Channel Message Flows script supports OpenClaw repository automation.
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Bot, type ApiClientOptions } from "grammy";

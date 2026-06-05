@@ -1,3 +1,4 @@
+// Reset helpers classify session keys and route reset config by session/channel type.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -31,6 +32,7 @@ export function resolveSessionResetType(params: {
   isGroup?: boolean;
   isThread?: boolean;
 }): SessionResetType {
+  // Thread wins over group because thread-specific reset policy should apply to grouped replies.
   if (params.isThread || isThreadSessionKey(params.sessionKey)) {
     return "thread";
   }
@@ -76,6 +78,7 @@ export function resolveChannelResetConfig(params: {
   }
   const normalized = normalizeMessageChannel(params.channel);
   const fallback = normalizeOptionalLowercaseString(params.channel);
+  // Channel ids can arrive as public message-channel names or raw provider keys.
   const key = normalized ?? fallback;
   if (!key) {
     return undefined;

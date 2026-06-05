@@ -1,3 +1,8 @@
+/**
+ * Login-shell environment snapshot capture.
+ *
+ * Caches safe shell-derived environment variables while filtering secrets and stale snapshots.
+ */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";

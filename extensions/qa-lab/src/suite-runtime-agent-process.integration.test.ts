@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime agent process.integration plugin behavior.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

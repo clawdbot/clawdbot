@@ -1,3 +1,4 @@
+// Tool Call Repair helper module supports stream normalizer behavior.
 import {
   consumeJsonToolClosingMarker,
   END_TOOL_REQUEST,

@@ -1,3 +1,5 @@
+// Gateway channel health monitor.
+// Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
@@ -74,6 +76,7 @@ function resolveTimingPolicy(
   };
 }
 
+/** Start the periodic channel health monitor and return its stop handle. */
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,

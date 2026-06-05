@@ -1,3 +1,4 @@
+/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -25,12 +26,14 @@ type RuntimeHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
+/** Formats the platform-specific gateway service runtime into a compact status line. */
 export function formatGatewayRuntimeSummary(
   runtime: GatewayServiceRuntime | undefined,
 ): string | null {
   return formatRuntimeStatus(runtime);
 }
 
+/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},

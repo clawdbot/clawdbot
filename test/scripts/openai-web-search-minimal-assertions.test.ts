@@ -1,3 +1,4 @@
+// Openai Web Search Minimal Assertions tests cover openai web search minimal assertions script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

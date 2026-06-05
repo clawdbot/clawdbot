@@ -1,3 +1,8 @@
+/**
+ * Gateway call helpers for built-in tools.
+ *
+ * Resolves gateway URL/token overrides, local credentials, and least-privilege operator scopes.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -20,9 +25,7 @@ import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
-/**
- * Optional gateway connection overrides accepted by agent tools.
- */
+/** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -31,9 +34,7 @@ export type GatewayCallOptions = {
 
 type GatewayOverrideTarget = "local" | "remote";
 
-/**
- * Reads common gateway options from tool parameters while preserving explicit token whitespace.
- */
+/** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),

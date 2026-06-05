@@ -1,3 +1,4 @@
+// OC Path tests cover sentinel cross kind plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { setJsoncOcPath } from "../../jsonc/edit.js";

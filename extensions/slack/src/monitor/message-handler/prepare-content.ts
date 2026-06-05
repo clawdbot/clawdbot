@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare content behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

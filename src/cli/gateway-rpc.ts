@@ -1,3 +1,4 @@
+// Lazy gateway RPC facade and shared Commander options for CLI subcommands.
 import type { Command } from "commander";
 import type {
   GatewayClientMode,
@@ -16,6 +17,7 @@ const gatewayRpcRuntimeLoader = createLazyImportLoader<GatewayRpcRuntimeModule>(
 );
 
 async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
+  // Keep gateway transport/runtime imports out of help and shell completion startup.
   return gatewayRpcRuntimeLoader.load();
 }
 

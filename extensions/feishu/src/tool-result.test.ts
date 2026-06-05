@@ -1,3 +1,4 @@
+// Feishu tests cover tool result plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   jsonToolResult,

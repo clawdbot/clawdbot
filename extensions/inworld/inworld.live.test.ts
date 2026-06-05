@@ -1,3 +1,4 @@
+// Inworld tests cover inworld plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

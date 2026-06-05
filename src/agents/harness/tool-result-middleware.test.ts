@@ -1,8 +1,11 @@
+// Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
 import { describe, expect, it } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("fails closed when middleware throws", async () => {
+    // Middleware errors may contain sensitive tool data. The public result must
+    // collapse to a generic error instead of returning the thrown message.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
@@ -65,6 +68,8 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("rejects oversized middleware details", async () => {
+    // Details are serialized into harness/tool payloads; cap them before a
+    // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {

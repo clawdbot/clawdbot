@@ -1,3 +1,4 @@
+// Control UI i18n module implements translate behavior.
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
 import {

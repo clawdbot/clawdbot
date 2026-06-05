@@ -1,3 +1,4 @@
+// Creates reusable import-boundary guards for bundled extension source trees.
 import { promises as fs } from "node:fs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./bundled-plugin-paths.mjs";
 import {
@@ -8,12 +9,12 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./guard-inventory-utils.mjs";
+import { mapWithConcurrency } from "./source-file-scan-cache.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveRepoRoot,
   resolveSourceRoots,
 } from "./ts-guard-utils.mjs";
-import { mapWithConcurrency } from "./source-file-scan-cache.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 
@@ -64,6 +65,7 @@ function scanImportBoundaryViolations(source, filePath, boundaryLabel, allowReso
   return entries;
 }
 
+/** Create a boundary checker with cached inventory collection and a CLI-style main function. */
 export function createExtensionImportBoundaryChecker(params) {
   const scanRoots = resolveSourceRoots(repoRoot, params.roots);
 
@@ -73,25 +75,21 @@ export function createExtensionImportBoundaryChecker(params) {
       .toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-    const entriesByFile = await mapWithConcurrency(
-      files,
-      undefined,
-      async (filePath) => {
-        const source = await fs.readFile(filePath, "utf8");
-        if (
-          params.skipSourcesWithoutBundledPluginPrefix &&
-          !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
-        ) {
-          return [];
-        }
-        return scanImportBoundaryViolations(
-          source,
-          filePath,
-          params.boundaryLabel,
-          params.allowResolvedPath,
-        );
-      },
-    );
+    const entriesByFile = await mapWithConcurrency(files, undefined, async (filePath) => {
+      const source = await fs.readFile(filePath, "utf8");
+      if (
+        params.skipSourcesWithoutBundledPluginPrefix &&
+        !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
+      ) {
+        return [];
+      }
+      return scanImportBoundaryViolations(
+        source,
+        filePath,
+        params.boundaryLabel,
+        params.allowResolvedPath,
+      );
+    });
     const inventory = entriesByFile.flat();
     return inventory.toSorted(compareEntries);
   });

@@ -1,3 +1,4 @@
+// Imessage tests cover message tool api plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import { describeMessageTool } from "../message-tool-api.js";
 import {

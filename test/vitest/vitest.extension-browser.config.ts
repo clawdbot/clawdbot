@@ -1,3 +1,4 @@
+// Vitest extension browser config wires the extension browser test shard.
 import { browserExtensionTestRoots } from "./vitest.extension-browser-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

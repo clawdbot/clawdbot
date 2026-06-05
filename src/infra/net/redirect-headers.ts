@@ -1,3 +1,4 @@
+// Redirect header helpers retain only cross-origin-safe request headers.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 

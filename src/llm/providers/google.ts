@@ -1,3 +1,4 @@
+// Google provider adapts Gemini streams and tools to the agent runtime.
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";

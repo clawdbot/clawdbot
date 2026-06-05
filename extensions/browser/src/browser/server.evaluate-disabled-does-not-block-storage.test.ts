@@ -1,3 +1,4 @@
+// Browser tests cover server.evaluate disabled does not block storage plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "./test-port.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";

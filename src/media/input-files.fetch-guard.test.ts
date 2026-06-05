@@ -1,3 +1,4 @@
+// Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();

@@ -1,3 +1,4 @@
+// Control UI module implements control ui auth behavior.
 import { normalizeOptionalString, uniqueStrings } from "./string-coerce.ts";
 
 type ControlUiAuthSource = {

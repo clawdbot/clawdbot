@@ -1,3 +1,4 @@
+// Node daemon tests cover node daemon command runtime behavior and errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { runNodeDaemonStatus } from "./daemon.js";

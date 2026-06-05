@@ -1,8 +1,12 @@
+// Verifies installed packages can bootstrap the default OpenClaw workspace files.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+/**
+ * Template pack files that must be present in installed packages.
+ */
 export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/AGENTS.md",
   "docs/reference/templates/SOUL.md",
@@ -26,6 +30,9 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
 const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 
+/**
+ * Creates a minimal isolated environment for workspace bootstrap smoke runs.
+ */
 export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {
   const allowlistedEnvEntries = [
     "TMPDIR",
@@ -90,6 +97,9 @@ function describeExecFailure(error) {
   return [error.message, stdout, stderr].filter(Boolean).join(" | ");
 }
 
+/**
+ * Runs the installed CLI workspace bootstrap smoke and validates created files.
+ */
 export function runInstalledWorkspaceBootstrapSmoke(params) {
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-workspace-bootstrap-smoke-"));
   const homeDir = join(tempRoot, "home");

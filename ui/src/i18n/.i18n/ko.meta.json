@@ -32,11 +32,11 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-03T22:35:02.176Z",
+  "generatedAt": "2026-06-05T02:10:23.243Z",
   "locale": "ko",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "045696b27bf36b4d0ef74cfd8ec76124de70c9bcef7ca7cb378a0d07f1bdfa61",
+  "sourceHash": "f70b6a841addd3bd15207867930a15d303b1d8408de36584925865436cfeb4f7",
   "totalKeys": 1333,
   "translatedKeys": 1302,
   "workflow": 1

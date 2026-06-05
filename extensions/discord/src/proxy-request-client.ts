@@ -1,3 +1,4 @@
+// Discord plugin module implements proxy request client behavior.
 import { RequestClient, type RequestClientOptions } from "./internal/discord.js";
 
 type ProxyRequestClientOptions = RequestClientOptions;

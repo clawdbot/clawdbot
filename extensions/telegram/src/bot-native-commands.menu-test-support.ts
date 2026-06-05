@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native commands.menu test support behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";

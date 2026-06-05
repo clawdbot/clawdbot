@@ -1,3 +1,4 @@
+// Discord helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   createResolvedDirectoryEntriesLister,

@@ -1,3 +1,4 @@
+// Comfy tests cover index plugin behavior.
 import fs from "node:fs";
 import {
   registerSingleProviderPlugin,

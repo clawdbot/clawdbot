@@ -1,3 +1,7 @@
+/**
+ * Azure Speech provider descriptor. It reads config/env defaults, parses speech
+ * directives, lists voices, and calls the Azure TTS runtime helper.
+ */
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -189,6 +193,7 @@ function resolveGeneratedAudioMaxBytes(req: {
   return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
 }
 
+/** Build the Azure Speech provider descriptor for the speech-core runtime. */
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "azure-speech",

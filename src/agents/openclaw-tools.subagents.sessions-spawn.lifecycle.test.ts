@@ -1,3 +1,4 @@
+// Verifies sessions_spawn lifecycle hooks, cleanup, and completion announcements.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -52,6 +53,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectAcceptedRunDetails(details: unknown): string {
+  // Accepted details must include the run id used by later lifecycle events.
   const rec = details as { status?: string; runId?: unknown } | undefined;
   const runId = rec?.runId;
   expect(rec?.status).toBe("accepted");
@@ -138,6 +140,7 @@ async function emitLifecycleEndAndFlush(params: {
   startedAt: number;
   endedAt: number;
 }) {
+  // Lifecycle handlers use timers for cleanup/announce work; fake timers flush them deterministically.
   vi.useFakeTimers();
   try {
     emitAgentEvent({

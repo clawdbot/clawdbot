@@ -1,3 +1,5 @@
+// Interactive surface auth tests document token precedence for remote gateway
+// surfaces that need browser or control-UI access.
 import { describe, expect, it } from "vitest";
 import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

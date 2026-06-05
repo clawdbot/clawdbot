@@ -1,3 +1,4 @@
+/** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {

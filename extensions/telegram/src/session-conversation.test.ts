@@ -1,3 +1,4 @@
+// Telegram tests cover session conversation plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveTelegramSessionConversation,

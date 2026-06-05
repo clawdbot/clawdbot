@@ -1,3 +1,5 @@
+// Gateway agent methods implement agent.run, agent.wait, agent.reset, identity,
+// and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {

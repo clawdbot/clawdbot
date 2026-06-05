@@ -1,3 +1,4 @@
+// Slack tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SlackConfigSchema } from "../config-api.js";
 

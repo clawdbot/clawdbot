@@ -1,3 +1,4 @@
+// Feishu plugin module implements comment shared behavior.
 import {
   isRecord as sharedIsRecord,
   normalizeOptionalString,

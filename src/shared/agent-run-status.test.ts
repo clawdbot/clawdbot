@@ -1,3 +1,4 @@
+// Agent run status tests cover status normalization for agent run records.
 import { describe, expect, it } from "vitest";
 import { isNonTerminalAgentRunStatus } from "./agent-run-status.js";
 

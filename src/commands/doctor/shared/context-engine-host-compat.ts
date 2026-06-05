@@ -1,3 +1,4 @@
+// Doctor checks for context engine host requirements against configured agent runtimes.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
@@ -22,8 +23,11 @@ import { defaultSlotIdForKey } from "../../../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
 export type HostCandidate = {
+  /** Runtime or harness id that will host an agent run. */
   runtimeId: string;
+  /** Context-engine host capability descriptor for the runtime. */
   host: ContextEngineHostSupport;
+  /** Config paths that caused doctor to consider this host. */
   paths: string[];
 };
 

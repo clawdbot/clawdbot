@@ -1,3 +1,4 @@
+// Check No Conflict Markers tests cover check no conflict markers script behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

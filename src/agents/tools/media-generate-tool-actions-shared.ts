@@ -1,3 +1,8 @@
+/**
+ * Shared media generation list/status actions.
+ *
+ * Builds provider list output, active-task status, and duplicate-guard responses for image/video/music tools.
+ */
 import {
   listMediaGenerationProviderModels,
   synthesizeMediaGenerationCatalogEntries,
@@ -8,12 +13,6 @@ import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isCapabilityProviderConfigured } from "./media-tool-shared.js";
 
-/**
- * Shared list/status action builders for media generation tools.
- *
- * The image, video, and music tools share provider list output plus active-task
- * status/duplicate-guard responses.
- */
 type MediaGenerateActionResult = {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;

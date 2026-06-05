@@ -1,3 +1,4 @@
+// Text chunking tests cover splitting text into bounded model-safe chunks.
 import { describe, expect, it } from "vitest";
 import { chunkTextByBreakResolver } from "./text-chunking.js";
 

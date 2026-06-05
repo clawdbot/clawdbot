@@ -1,3 +1,4 @@
+// Agent Core module implements branch summarization behavior.
 import type { Model, StreamFn } from "../../../../llm-core/src/index.js";
 import {
   type AgentCoreCompletionRuntimeDeps,

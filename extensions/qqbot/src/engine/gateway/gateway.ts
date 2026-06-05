@@ -1,3 +1,4 @@
+// Qqbot plugin module implements gateway behavior.
 import path from "node:path";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";

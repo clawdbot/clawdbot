@@ -1,3 +1,5 @@
+// Tool mutation tests cover the fail-closed classification and fingerprinting
+// used to decide whether repeated tool actions can recover prior failures.
 import { describe, expect, it } from "vitest";
 import {
   buildToolActionFingerprint,
@@ -130,6 +132,8 @@ describe("tool mutation helpers", () => {
   });
 
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
+    // Missing fingerprint data cannot be assumed equivalent; recovery should
+    // only happen when both sides expose the same stable action identity.
     expect(
       isSameToolMutationAction(
         { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },

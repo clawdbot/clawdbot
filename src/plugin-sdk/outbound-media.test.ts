@@ -1,3 +1,4 @@
+// Outbound media tests cover plugin media attachment normalization and access policy.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());

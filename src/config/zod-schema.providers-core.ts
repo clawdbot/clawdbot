@@ -102,11 +102,9 @@ const ChannelStreamingProgressSchema = z
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
+    commentary: z.boolean().optional(),
   })
   .strict();
-const ChannelCommentaryStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  commentary: z.boolean().optional(),
-}).strict();
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -122,9 +120,7 @@ const ChannelPreviewStreamingConfigSchema = z
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: TelegramStreamingPreviewSchema.optional(),
 }).strict();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelCommentaryStreamingProgressSchema.optional(),
-}).strict();
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
@@ -1705,7 +1701,3 @@ export const MSTeamsConfigSchema = z
     // so we cannot require them in the config object itself.
     // Runtime validation happens in resolveMSTeamsCredentials().
   });
-
-// Keep this runtime-only widening out of exported schema declarations.
-TelegramPreviewStreamingConfigSchema.shape.progress =
-  ChannelCommentaryStreamingProgressSchema.optional();

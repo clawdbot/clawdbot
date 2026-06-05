@@ -1,3 +1,4 @@
+// Control UI module implements app polling behavior.
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import type { LogsState } from "./controllers/logs.ts";

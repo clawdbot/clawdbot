@@ -1,3 +1,4 @@
+// Matrix plugin module implements startup abort behavior.
 export function createMatrixStartupAbortError(): Error {
   const error = new Error("Matrix startup aborted");
   error.name = "AbortError";

@@ -1,3 +1,4 @@
+// Control UI module implements usage helpers behavior.
 export type UsageQueryTerm = {
   key?: string;
   value: string;

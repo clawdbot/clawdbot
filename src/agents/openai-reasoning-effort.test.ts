@@ -1,3 +1,4 @@
+// Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
   resolveOpenAIReasoningEffortForModel,
@@ -38,6 +39,7 @@ describe("OpenAI reasoning effort support", () => {
   });
 
   it("allows provider-native compat values when explicitly declared", () => {
+    // Some OpenAI-compatible providers expose their own reasoning effort labels.
     const model = {
       provider: "groq",
       id: "qwen/qwen3-32b",

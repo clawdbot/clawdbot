@@ -1,3 +1,4 @@
+// Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
   normalizeMainKey,

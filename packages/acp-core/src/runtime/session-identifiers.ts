@@ -1,3 +1,4 @@
+// ACP Core module implements session identifiers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeText } from "../normalize-text.js";
 import type { SessionAcpIdentity, SessionAcpMeta } from "../types.js";

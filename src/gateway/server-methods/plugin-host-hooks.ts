@@ -1,3 +1,5 @@
+// Plugin host hook methods expose plugin UI descriptors and validate plugin
+// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

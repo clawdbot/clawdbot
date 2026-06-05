@@ -1,6 +1,10 @@
+// Parses report CLI output arguments and writes optional artifacts.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/**
+ * Parses shared `--root`, `--json`, and `--markdown` flags for report scripts.
+ */
 export function parseReportCliArgs(argv) {
   const options = {
     rootDir: process.cwd(),
@@ -29,6 +33,9 @@ export function parseReportCliArgs(argv) {
   return options;
 }
 
+/**
+ * Writes an optional report artifact, creating its parent directory first.
+ */
 export async function writeReportArtifact(filePath, content) {
   if (!filePath) {
     return;

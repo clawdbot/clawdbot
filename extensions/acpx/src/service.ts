@@ -1,3 +1,7 @@
+/**
+ * ACPX plugin service lifecycle. It resolves config, prepares isolated adapter
+ * wrappers, registers the ACP backend, and manages startup/cleanup probes.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -61,6 +65,7 @@ function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
   return runtimeModulePromise;
 }
 
+/** Convert ACPX timeout seconds into timer-safe milliseconds. */
 export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
   if (timeoutSeconds === undefined) {
     return undefined;
@@ -295,6 +300,7 @@ async function reapOpenAcpxProcessLeases(params: {
   return { inspectedPids, terminatedPids };
 }
 
+/** Create the ACPX plugin service that owns runtime registration and cleanup. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {

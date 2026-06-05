@@ -1,3 +1,4 @@
+// Lmstudio setup module handles plugin onboarding behavior.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   removeProviderAuthProfilesWithLock,

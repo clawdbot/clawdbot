@@ -1,3 +1,5 @@
+// Runtime-context prompt tests keep hidden OpenClaw context separate from the
+// user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
 import {
   buildCurrentInboundPrompt,
@@ -18,6 +20,8 @@ describe("runtime context prompt submission", () => {
   });
 
   it("moves hidden runtime context out of the visible prompt", () => {
+    // Hidden context is provider input, not user-authored transcript text; it
+    // must be split before persistence and display.
     const effectivePrompt = [
       "visible ask",
       "",
@@ -146,6 +150,8 @@ describe("runtime context prompt submission", () => {
   });
 
   it("ignores repeated inline marker mentions without recursive stack growth", () => {
+    // Marker-like text in normal prompt lines should stay literal and must not
+    // trigger recursive delimiter scanning.
     const inlineMarkers = Array.from(
       { length: 250 },
       () => "inline <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> marker",
@@ -177,6 +183,8 @@ describe("runtime context prompt submission", () => {
   });
 
   it("fails closed for unterminated hidden runtime context blocks", () => {
+    // Unterminated internal context is ambiguous; keep only the known transcript
+    // prompt rather than leaking partial hidden content.
     const effectivePrompt = [
       "visible ask",
       "",

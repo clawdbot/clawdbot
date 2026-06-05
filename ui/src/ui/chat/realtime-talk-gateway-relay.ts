@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk gateway relay behavior.
 import { bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
 import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
 import {

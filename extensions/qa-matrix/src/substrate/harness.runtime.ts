@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements harness behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Codex plugin module implements thread lifecycle behavior.
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,
@@ -153,10 +154,8 @@ export function shouldWarnCodexThreadLifecycleTimingSummary(
   summary: CodexThreadLifecycleTimingSummary,
   options: CodexThreadLifecycleTimingOptions = {},
 ): boolean {
-  const totalThresholdMs =
-    options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
-  const stageThresholdMs =
-    options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
+  const totalThresholdMs = options.totalThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_TOTAL_MS;
+  const stageThresholdMs = options.stageThresholdMs ?? CODEX_THREAD_LIFECYCLE_TIMING_WARN_STAGE_MS;
   return (
     summary.totalMs >= totalThresholdMs ||
     summary.spans.some((span) => span.durationMs >= stageThresholdMs)
@@ -310,8 +309,7 @@ export async function startOrResumeThread(params: {
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
     ...params.timing,
-    enabled:
-      params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
+    enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
   });
   const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
     fingerprintDynamicTools(params.dynamicTools),

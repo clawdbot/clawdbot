@@ -1,3 +1,4 @@
+// Consult transcript tests cover transcript formatting for talk consults.
 import { describe, expect, it } from "vitest";
 import { classifySkippableRealtimeVoiceConsultTranscript } from "./consult-transcript.js";
 

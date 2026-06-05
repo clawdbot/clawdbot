@@ -1,3 +1,4 @@
+// Legacy cron JSON/state store loader and archiver for doctor migration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
@@ -213,6 +214,7 @@ function resolveCronStateId(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
+/** Return true when legacy cron JSON or state files exist for a store path. */
 export async function legacyCronStoreFilesExist(storePath: string): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   return (
@@ -221,6 +223,7 @@ export async function legacyCronStoreFilesExist(storePath: string): Promise<bool
   );
 }
 
+/** Rename legacy cron JSON/state files after successful migration. */
 export async function archiveLegacyCronStoreForMigration(storePath: string): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   await Promise.all([
@@ -229,6 +232,7 @@ export async function archiveLegacyCronStoreForMigration(storePath: string): Pro
   ]);
 }
 
+/** Load legacy cron JSON/state files into the current loaded-store shape for migration. */
 export async function loadLegacyCronStoreForMigration(storePath: string): Promise<LoadedCronStore> {
   const resolvedStorePath = path.resolve(storePath);
   try {

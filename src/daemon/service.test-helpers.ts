@@ -1,3 +1,4 @@
+/** Test helpers for exercising generic daemon service orchestration. */
 import { vi } from "vitest";
 import type { GatewayService } from "./service.js";
 

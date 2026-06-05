@@ -1,3 +1,4 @@
+/** Windows Task Scheduler installer, startup fallback, and lifecycle controls. */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -43,6 +44,8 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 }
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
+  // Permission failures and hung schtasks calls can still be served by the
+  // per-user Startup folder fallback.
   return (
     params.code === 1 ||
     /(?:access is denied|acceso denegado)/i.test(params.detail) ||
@@ -93,6 +96,8 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
+  // Hidden VBS launchers supersede cmd launchers, but uninstall must remove the
+  // legacy cmd path from older installs too.
   return uniqueStrings([primaryPath, legacyCmdPath]);
 }
 
@@ -257,6 +262,7 @@ export async function readScheduledTaskCommand(
       if (lower.startsWith("set ")) {
         const assignment = parseCmdSetAssignment(line.slice(4));
         if (assignment) {
+          // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
         }
         continue;

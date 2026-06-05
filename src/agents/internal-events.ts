@@ -1,3 +1,8 @@
+/**
+ * Internal runtime event prompt formatting.
+ * Sanitizes background task completion events into protected runtime-context
+ * blocks or plain prompt text.
+ */
 import {
   formatGeneratedAttachmentLines,
   type AgentGeneratedAttachment,
@@ -14,8 +19,6 @@ import {
 } from "./internal-runtime-context.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 
-// Formats internal runtime events into prompt blocks. Delimiters and fields are
-// sanitized because child output can be arbitrary model/user text.
 type AgentTaskCompletionInternalEvent = {
   type: typeof AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION;
   source: AgentInternalEventSource;
@@ -32,6 +35,7 @@ type AgentTaskCompletionInternalEvent = {
   replyInstruction: string;
 };
 
+/** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };

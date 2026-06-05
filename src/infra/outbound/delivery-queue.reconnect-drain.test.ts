@@ -1,3 +1,5 @@
+// Covers reconnect-triggered queue drain selection, active claims, backoff
+// bypass, and concurrent drain suppression.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";

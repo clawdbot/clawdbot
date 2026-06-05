@@ -1,3 +1,4 @@
+// Zalo tests cover outbound payload.contract plugin behavior.
 import {
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,

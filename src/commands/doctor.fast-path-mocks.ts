@@ -1,3 +1,4 @@
+/** Fast-path module mocks for doctor command tests that do not need full integrations. */
 import { vi } from "vitest";
 
 vi.mock("./doctor-completion.js", () => ({

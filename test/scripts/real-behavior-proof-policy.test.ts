@@ -1,3 +1,4 @@
+// Real Behavior Proof Policy tests cover real behavior proof policy script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   MOCK_ONLY_PROOF_LABEL,

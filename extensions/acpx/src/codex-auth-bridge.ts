@@ -1,3 +1,7 @@
+/**
+ * Prepares isolated Codex and Claude ACP wrapper commands for ACPX. The bridge
+ * copies safe auth/config state into plugin-owned homes and redacts diagnostics.
+ */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -724,6 +728,7 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
 }
 
+/** Prepare ACPX agent commands and isolated auth homes for Codex/Claude adapters. */
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;

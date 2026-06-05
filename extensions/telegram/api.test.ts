@@ -1,3 +1,4 @@
+// Telegram tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { escapeTelegramHtml, markdownToTelegramHtml } from "./api.js";
 

@@ -1,11 +1,10 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-
 /**
  * Docker network mode safety helpers.
  *
- * Host networking and container namespace joins bypass normal sandbox network
- * isolation, so callers must gate them explicitly.
+ * Flags host networking and container namespace joins because they bypass normal sandbox network isolation.
  */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+
 /** Reason a requested network mode is blocked by sandbox policy. */
 export type NetworkModeBlockReason = "host" | "container_namespace_join";
 

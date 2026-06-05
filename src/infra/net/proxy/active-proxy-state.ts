@@ -1,3 +1,5 @@
+// Active managed proxy registry tracks process-local proxy ownership plus
+// inherited child-process loopback policy carried through environment vars.
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import type { ManagedProxyTlsOptions } from "./proxy-tls.js";
 

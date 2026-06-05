@@ -1,3 +1,5 @@
+// Shared threading test helpers build small tool contexts and auto-thread
+// resolvers without importing delivery runtime.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 

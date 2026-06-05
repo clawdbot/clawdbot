@@ -1,3 +1,5 @@
+// Gateway startup-time runtime services.
+// Starts mode-dependent background monitors with inert handles for disabled paths.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";

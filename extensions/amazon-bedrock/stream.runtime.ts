@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock Converse streaming runtime. It maps OpenClaw messages/tools,
+ * thinking, cache points, images, and usage into Bedrock Converse Stream calls.
+ */
 import {
   CachePointType,
   CacheTTL,
@@ -51,6 +55,7 @@ import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-opt
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 
+/** Stream a Bedrock Converse request using Bedrock-specific options. */
 export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
@@ -267,6 +272,7 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
+/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
@@ -948,6 +954,7 @@ function createImageBlock(mimeType: string, data: string) {
   return { source: { bytes }, format };
 }
 
+/** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
 export const testing = {
   convertMessages,
   getConfiguredBedrockRegion,

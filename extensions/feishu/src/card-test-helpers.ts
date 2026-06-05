@@ -1,3 +1,4 @@
+// Feishu helper module supports card test helpers behavior.
 import { expect } from "vitest";
 
 type MockCalls = {

@@ -1,3 +1,4 @@
+// Zalo plugin module implements setup surface behavior.
 import {
   buildSingleChannelSecretPromptState,
   createStandardChannelSetupStatus,

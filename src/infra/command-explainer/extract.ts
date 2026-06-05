@@ -1,3 +1,5 @@
+// Rich shell command explainer walks tree-sitter-bash nodes into command steps,
+// nested wrapper payloads, source spans, and risk annotations.
 import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {

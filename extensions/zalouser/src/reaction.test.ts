@@ -1,3 +1,4 @@
+// Zalouser tests cover reaction plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 

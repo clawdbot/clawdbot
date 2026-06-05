@@ -1,3 +1,4 @@
+// Signal helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,

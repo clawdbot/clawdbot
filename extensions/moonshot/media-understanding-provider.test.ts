@@ -1,3 +1,4 @@
+// Moonshot tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,

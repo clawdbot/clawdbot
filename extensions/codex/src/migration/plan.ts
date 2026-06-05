@@ -1,3 +1,4 @@
+// Codex plugin module implements plan behavior.
 import path from "node:path";
 import {
   createMigrationItem,

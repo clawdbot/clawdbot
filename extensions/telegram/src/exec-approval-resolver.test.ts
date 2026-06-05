@@ -1,3 +1,4 @@
+// Telegram tests cover exec approval resolver plugin behavior.
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

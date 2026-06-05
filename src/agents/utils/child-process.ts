@@ -1,3 +1,8 @@
+/**
+ * Child-process compatibility helpers for agent utilities.
+ *
+ * Wraps platform-specific spawn behavior and safe close handling for inherited stdio.
+ */
 import {
   type ChildProcess,
   type ChildProcessByStdio,

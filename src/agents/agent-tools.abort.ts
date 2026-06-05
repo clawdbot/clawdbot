@@ -1,3 +1,8 @@
+/**
+ * Abort-signal wrapping for agent tools.
+ * Combines per-call cancellation with run-level aborts while preserving plugin,
+ * channel, and before_tool_call metadata on wrapped tools.
+ */
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
@@ -46,6 +51,7 @@ function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | un
   return controller.signal;
 }
 
+/** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
   abortSignal?: AbortSignal,

@@ -1,3 +1,4 @@
+// Ollama plugin module implements model id behavior.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 

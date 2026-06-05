@@ -1,3 +1,4 @@
+// Matrix plugin module implements verification events behavior.
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import type { MatrixRawEvent } from "./types.js";

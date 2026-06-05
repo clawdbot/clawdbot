@@ -1,3 +1,4 @@
+// Voice Call plugin module implements manager harness behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

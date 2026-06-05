@@ -1,3 +1,4 @@
+// Video provider registry tests cover provider registration and lookup.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 

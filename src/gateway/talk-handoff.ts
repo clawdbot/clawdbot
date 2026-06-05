@@ -1,3 +1,5 @@
+// Gateway Talk handoff registry.
+// Manages short-lived browser Talk rooms, tokens, events, and turn ownership.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -17,12 +19,6 @@ import {
   type TalkTransport,
 } from "../talk/talk-session-controller.js";
 
-/**
- * In-memory managed-room handoff registry for browser Talk rooms.
- *
- * Handoffs are intentionally process-local because the token and active client
- * state only protect the short-lived room URL created by this gateway process.
- */
 const DEFAULT_TALK_HANDOFF_TTL_MS = 10 * 60 * 1000;
 const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;
 

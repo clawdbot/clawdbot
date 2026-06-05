@@ -1,3 +1,5 @@
+// Stream resolution tests cover how embedded runs choose provider, boundary,
+// native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getApiProvider } from "../../llm/api-registry.js";
@@ -25,12 +27,16 @@ vi.mock("../provider-transport-stream.js", async (importOriginal) => {
 });
 
 const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
+  // Boundary wrapping remains real by default; individual cases replace only
+  // the inner stream when they need to inspect forwarded options.
   vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel).mockReturnValueOnce(
     streamFn,
   );
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  // Test streams return their options/context as plain records; fail early if a
+  // route returns an unexpected shape.
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }
@@ -148,6 +154,8 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   });
 
   it("routes Codex responses fallbacks through OpenClaw native transport", async () => {
+    // Codex OAuth models use the OpenClaw native transport, with prompt-cache
+    // markers stripped before the harness sees system prompt text.
     const nativeStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
     testing.setOpenClawNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
@@ -275,6 +283,8 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   });
 
   it("propagates prompt cache identity separately from the session id", async () => {
+    // Cron and shared runs can use a stable prompt cache key while keeping each
+    // run's session id distinct for transcripts and aborts.
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,

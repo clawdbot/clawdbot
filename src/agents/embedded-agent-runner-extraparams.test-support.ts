@@ -1,3 +1,4 @@
+// Shared fixtures for asserting payload mutations from extra-params wrappers.
 import type { Context, Model } from "../llm/types.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import type { StreamFn } from "./runtime/index.js";
@@ -9,6 +10,8 @@ export function runExtraParamsPayloadCase(params: {
   payload?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
 }) {
+  // Captures the model-provider payload after applyExtraParamsToAgent wraps the
+  // stream function, without invoking a real provider runtime.
   const payloads: Record<string, unknown>[] = [];
   const baseStreamFn: StreamFn = (model, _context, options) => {
     const payload = { ...params.payload };

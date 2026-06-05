@@ -1,3 +1,4 @@
+// Control UI view renders config form.shared screen content.
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHint, ConfigUiHints } from "../types.ts";
 

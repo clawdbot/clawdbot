@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.topic agentid plugin behavior.
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

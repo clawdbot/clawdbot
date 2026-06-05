@@ -1,8 +1,9 @@
+// Msteams tests cover sso token store plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -11,10 +12,6 @@ describe("msteams sso token store (plugin state)", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   it("keeps distinct tokens when connectionName and userId contain the legacy delimiter", async () => {
@@ -47,7 +44,7 @@ describe("msteams sso token store (plugin state)", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("loads legacy flat-key files by rebuilding keys from stored token payloads", async () => {
+  it("ignores legacy flat-key token files at runtime", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-legacy-"));
     const storePath = path.join(stateDir, "msteams-sso-tokens.json");
     await fs.writeFile(
@@ -76,13 +73,8 @@ describe("msteams sso token store (plugin state)", () => {
         connectionName: "conn",
         userId: "user-1",
       }),
-    ).toEqual({
-      connectionName: "conn",
-      userId: "user-1",
-      token: "token-1",
-      updatedAt: "2026-04-10T00:00:00.000Z",
-    });
-    await expect(fs.access(storePath)).rejects.toThrow();
+    ).toBeNull();
+    await expect(fs.access(storePath)).resolves.toBeUndefined();
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {
@@ -99,73 +91,5 @@ describe("msteams sso token store (plugin state)", () => {
     expect(await store.get(token)).toEqual(token);
     expect(await store.remove(token)).toBe(true);
     expect(await store.get(token)).toBeNull();
-  });
-
-  it("imports a legacy token file that appears after an empty migration marker", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-late-"));
-    const storePath = path.join(stateDir, "msteams-sso-tokens.json");
-    const store = createMSTeamsSsoTokenStoreFs({ storePath });
-
-    expect(await store.get({ connectionName: "conn", userId: "user-late" })).toBeNull();
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify({
-        version: 1,
-        tokens: {
-          late: {
-            connectionName: "conn",
-            userId: "user-late",
-            token: "token-late",
-            updatedAt: "2026-04-10T00:00:00.000Z",
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
-
-    expect(await store.get({ connectionName: "conn", userId: "user-late" })).toEqual({
-      connectionName: "conn",
-      userId: "user-late",
-      token: "token-late",
-      updatedAt: "2026-04-10T00:00:00.000Z",
-    });
-    await expect(fs.access(storePath)).rejects.toThrow();
-  });
-
-  it("does not resurrect removed tokens when a migrated legacy file cannot be deleted", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-stale-"));
-    const storePath = path.join(stateDir, "msteams-sso-tokens.json");
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify({
-        version: 1,
-        tokens: {
-          stale: {
-            connectionName: "conn",
-            userId: "user-stale",
-            token: "token-stale",
-            updatedAt: "2026-04-10T00:00:00.000Z",
-          },
-        },
-      })}\n`,
-      "utf8",
-    );
-    const originalRm = fs.rm;
-    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (target === storePath) {
-        throw new Error("cannot remove");
-      }
-      return await originalRm(target, options);
-    });
-
-    const store = createMSTeamsSsoTokenStoreFs({ storePath });
-    expect(await store.get({ connectionName: "conn", userId: "user-stale" })).toEqual({
-      connectionName: "conn",
-      userId: "user-stale",
-      token: "token-stale",
-      updatedAt: "2026-04-10T00:00:00.000Z",
-    });
-    expect(await store.remove({ connectionName: "conn", userId: "user-stale" })).toBe(true);
-    expect(await store.get({ connectionName: "conn", userId: "user-stale" })).toBeNull();
   });
 });

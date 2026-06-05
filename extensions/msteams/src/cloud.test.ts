@@ -1,3 +1,4 @@
+// Msteams tests cover cloud plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveMSTeamsSdkCloudOptions,

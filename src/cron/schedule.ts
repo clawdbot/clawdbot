@@ -1,3 +1,4 @@
+/** Computes at/every/cron schedule timestamps with bounded Croner caching. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron } from "croner";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -27,6 +28,8 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
     return cached;
   }
   if (cronEvalCache.size >= CRON_EVAL_CACHE_MAX) {
+    // Expression parsing is expensive enough to cache, but cron jobs can be
+    // edited dynamically; keep the cache bounded and LRU-like.
     const oldest = cronEvalCache.keys().next().value;
     if (oldest) {
       cronEvalCache.delete(oldest);

@@ -1,3 +1,7 @@
+/**
+ * Diagnostic helpers for Codex app-server model calls and plugin-thread config
+ * eligibility.
+ */
 import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -7,6 +11,7 @@ import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
+/** Reads a tool schema field in either app-server or OpenClaw naming. */
 export function readCodexDiagnosticToolParameters(tool: {
   inputSchema?: unknown;
   parameters?: unknown;
@@ -14,6 +19,7 @@ export function readCodexDiagnosticToolParameters(tool: {
   return tool.inputSchema ?? tool.parameters;
 }
 
+/** Builds compact diagnostic tool definitions for trusted private telemetry. */
 export function buildCodexDiagnosticToolDefinitions(
   tools: readonly {
     name: string;
@@ -29,6 +35,7 @@ export function buildCodexDiagnosticToolDefinitions(
   }));
 }
 
+/** Returns the serialized UTF-8 byte length for a JSON-compatible value. */
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -37,6 +44,7 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
   }
 }
 
+/** Builds a short namespaced fingerprint for sensitive log values. */
 export function fingerprintCodexLogValue(namespace: string, value: string): string {
   const hash = createHash("sha256");
   hash.update(namespace);
@@ -45,6 +53,10 @@ export function fingerprintCodexLogValue(namespace: string, value: string): stri
   return `sha256:${hash.digest("hex").slice(0, 16)}`;
 }
 
+/**
+ * Builds redacted diagnostics explaining whether plugin thread config was
+ * eligible for a Codex app-server attempt.
+ */
 export function buildCodexPluginThreadConfigEligibilityLogData(params: {
   sessionId: string;
   sessionKey: string;
@@ -91,6 +103,10 @@ type CodexModelCallDiagnosticTool = {
   parameters?: unknown;
 };
 
+/**
+ * Creates lifecycle emitters for trusted model-call diagnostics with optional
+ * private payload capture.
+ */
 export function createCodexModelCallDiagnosticEmitter(params: {
   baseFields: Record<string, unknown>;
   capture: CodexModelCallDiagnosticCapture;
@@ -185,6 +201,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   };
 }
 
+/** Classifies model-call failures into timeout/abort buckets for diagnostics. */
 export function classifyCodexModelCallFailureKind(params: {
   error: unknown;
   timedOut: boolean;

@@ -1,3 +1,4 @@
+// Usage format tests cover display formatting for token and cost usage.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,7 @@ import {
   setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resetUsageFormatCachesForTest,
   estimateUsageCost,
@@ -42,12 +44,12 @@ function requireTieredPricing(
 }
 
 describe("usage-format", () => {
-  const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let agentDir: string;
   let stateDir: string;
 
   beforeEach(async () => {
+    envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "OPENCLAW_STATE_DIR"]);
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
     agentDir = path.join(stateDir, "agents", "main", "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -58,16 +60,8 @@ describe("usage-format", () => {
   });
 
   afterEach(async () => {
-    if (originalAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
-    }
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
     resetUsageFormatCachesForTest();
     resetGatewayModelPricingCacheForTest();
     await fs.rm(stateDir, { recursive: true, force: true });

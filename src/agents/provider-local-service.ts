@@ -1,3 +1,7 @@
+/**
+ * Manages optional local provider sidecar processes attached to models. Leases
+ * keep shared services alive while requests run and stop them after idle.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
@@ -8,8 +12,6 @@ import type { ModelProviderLocalServiceConfig } from "../config/types.models.js"
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-// Manages optional local provider sidecar processes attached to models. Leases
-// keep shared services alive while requests run and stop them after idle.
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
@@ -38,6 +40,7 @@ type LocalServiceExit = {
   signal: NodeJS.Signals | null;
 };
 
+/** Lease returned for a started or already-running local provider service. */
 export type ProviderLocalServiceLease = {
   release: () => void;
 };

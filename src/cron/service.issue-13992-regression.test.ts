@@ -1,3 +1,4 @@
+// Cron service regression tests cover historical scheduling edge cases.
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";

@@ -1,3 +1,4 @@
+// Workspace audit helpers inspect local skill folders for security and trust issues.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";

@@ -1,3 +1,4 @@
+/** Parses user-provided cron delivery fields into narrow runtime values. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z, type ZodType } from "zod";
 
@@ -8,6 +9,7 @@ const trimLowercaseStringPreprocess = (value: unknown) =>
 
 const DeliveryModeFieldSchema = z
   .preprocess(trimLowercaseStringPreprocess, z.enum(["deliver", "announce", "none", "webhook"]))
+  // "deliver" is the historical CLI spelling; runtime delivery uses announce.
   .transform((value) => (value === "deliver" ? "announce" : value));
 
 /** Accepts non-empty string fields after trimming and lowercasing user-provided delivery input. */

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Checks CLI bootstrap chunks for forbidden eager imports and size regressions.
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
@@ -57,6 +58,9 @@ function resolveRelativeImport(importer, specifier, fsImpl = fs) {
   });
 }
 
+/**
+ * Lists static import/export specifiers from a JavaScript source string.
+ */
 export function listStaticImportSpecifiers(source) {
   return [...source.matchAll(STATIC_IMPORT_RE)].map((match) => match.groups?.specifier ?? "");
 }
@@ -110,6 +114,9 @@ function walkStaticImportGraph(params) {
   return errors;
 }
 
+/**
+ * Collects forbidden external import errors for CLI bootstrap entrypoints.
+ */
 export function collectCliBootstrapExternalImportErrors(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const entrypoints = params.entrypoints ?? DEFAULT_ENTRYPOINTS;
@@ -152,6 +159,9 @@ function listJsFiles(dirPath, fsImpl = fs) {
   return files;
 }
 
+/**
+ * Collects gateway-run chunk budget errors from built CLI output.
+ */
 export function collectGatewayRunChunkBudgetErrors(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -227,6 +237,9 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Runs the CLI bootstrap import and chunk-budget checks.
+ */
 export function checkCliBootstrapExternalImports(params = {}) {
   const errors = [
     ...collectCliBootstrapExternalImportErrors(params),

@@ -1,3 +1,4 @@
+/** Tests embedded agent project settings policy, merge behavior, and prepared managers. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

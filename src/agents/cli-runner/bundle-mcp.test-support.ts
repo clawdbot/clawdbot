@@ -1,3 +1,4 @@
+/** Shared test harness for CLI runner bundle-MCP config preparation tests. */
 import { afterAll, beforeAll } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -27,6 +28,7 @@ export const cliBundleMcpHarness = {
 };
 
 export function requireMcpConfigPath(args: readonly string[] | undefined): string {
+  // Claude-style bundle MCP mode appends --mcp-config; callers need the generated path.
   const configFlagIndex = args?.indexOf("--mcp-config") ?? -1;
   if (configFlagIndex < 0) {
     throw new Error("expected --mcp-config arg");
@@ -40,6 +42,7 @@ export function requireMcpConfigPath(args: readonly string[] | undefined): strin
 
 export function setupCliBundleMcpTestHarness(): void {
   beforeAll(async () => {
+    // Use an empty bundled-dir override so only temp fixture plugins participate.
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
     bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
     bundleProbeWorkspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
@@ -69,6 +72,7 @@ export async function prepareBundleProbeCliConfig(params?: {
 }) {
   const env = captureEnv(["HOME"]);
   try {
+    // Bundle discovery reads HOME for per-user plugin roots.
     process.env.HOME = bundleProbeHomeDir;
     return await prepareCliBundleMcpConfig({
       enabled: true,

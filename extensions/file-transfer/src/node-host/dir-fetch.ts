@@ -1,3 +1,4 @@
+// File Transfer plugin module implements dir fetch behavior.
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";

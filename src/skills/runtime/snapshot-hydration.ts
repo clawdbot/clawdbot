@@ -1,3 +1,4 @@
+// Snapshot hydration helpers merge saved runtime skill snapshots into live state.
 type SnapshotWithRuntimeSkills = {
   resolvedSkills?: unknown;
 };

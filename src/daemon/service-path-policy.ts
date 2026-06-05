@@ -1,3 +1,4 @@
+/** Classifies service PATH entries that should not be frozen into daemons. */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
@@ -20,6 +21,8 @@ export function isNonMinimalServicePathEntry(entry: string, platform: NodeJS.Pla
     return false;
   }
   const normalized = normalizeServicePathEntry(entry, platform);
+  // User shell package-manager paths are fragile in non-interactive services and
+  // should be replaced by stable system/runtime paths.
   return (
     normalized.includes("/.nvm/") ||
     normalized.includes("/.fnm/") ||

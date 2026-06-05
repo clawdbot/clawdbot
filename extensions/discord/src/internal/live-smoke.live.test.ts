@@ -1,3 +1,4 @@
+// Discord tests cover live smoke plugin behavior.
 import { Routes } from "discord-api-types/v10";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";

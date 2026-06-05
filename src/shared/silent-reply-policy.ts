@@ -1,3 +1,4 @@
+// Silent reply policy helpers decide when automated replies should be suppressed.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SilentReplyPolicy = "allow" | "disallow";

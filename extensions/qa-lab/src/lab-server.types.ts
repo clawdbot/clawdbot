@@ -1,3 +1,4 @@
+// Qa Lab type declarations define plugin contracts.
 import type { QaBusState } from "./bus-state.js";
 import type { QaSelfCheckResult } from "./self-check.js";
 

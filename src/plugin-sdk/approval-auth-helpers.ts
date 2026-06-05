@@ -1,3 +1,4 @@
+// Approval auth helpers resolve actor and channel identity for approval requests.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 

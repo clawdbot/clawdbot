@@ -1,3 +1,4 @@
+// Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
@@ -9,6 +10,7 @@ function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
@@ -73,6 +75,7 @@ function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
+/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
 export function mergeLegacyCronJobs(params: {
   currentJobs: Array<Record<string, unknown>>;
   legacyJobs: Array<Record<string, unknown>>;
@@ -98,6 +101,7 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
+/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };
@@ -111,6 +115,7 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
   };
 }
 
+/** Return true when a SQLite cron projection row no longer matches config JSON. */
 export function needsSqliteProjectionBackfill(params: {
   configJob: Record<string, unknown>;
   projectedJob?: CronJob;

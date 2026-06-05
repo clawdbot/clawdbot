@@ -1,3 +1,8 @@
+/**
+ * Shared exec-host approval helper tests.
+ * Covers pending-state expiry, follow-up failure dedupe, elevated handoffs,
+ * policy merging, and unavailable approval surfaces.
+ */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

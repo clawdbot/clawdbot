@@ -1,3 +1,5 @@
+// Gateway channel manager.
+// Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -94,6 +96,8 @@ async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, 
   if (!task) {
     return true;
   }
+  // Channel stop hooks can hang during provider disconnects. Bound the wait so
+  // restart/reload can continue after aborting the runtime.
   return await new Promise<boolean>((resolve) => {
     let settled = false;
     const timer = setTimeout(() => {

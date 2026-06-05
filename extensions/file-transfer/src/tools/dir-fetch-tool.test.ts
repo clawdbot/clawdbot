@@ -1,3 +1,4 @@
+// File Transfer tests cover dir fetch tool plugin behavior.
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";

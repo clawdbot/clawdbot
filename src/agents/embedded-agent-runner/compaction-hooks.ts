@@ -1,3 +1,6 @@
+/**
+ * Runs compaction hooks and post-compaction side effects for embedded sessions.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -9,12 +12,6 @@ import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { log } from "./logger.js";
 
-/**
- * Compaction hook and side-effect helpers for embedded runner sessions.
- *
- * The runner calls these around transcript compaction so internal hooks, memory indexing, and
- * transcript listeners observe one canonical compacted-session event.
- */
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
   if (mode === "off" || mode === "async" || mode === "await") {

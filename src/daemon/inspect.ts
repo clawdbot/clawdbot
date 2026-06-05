@@ -1,3 +1,4 @@
+/** Inspects installed platform services for extra OpenClaw or legacy gateway jobs. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -75,7 +76,8 @@ function hasGatewaySubcommandArg(args: string[]): boolean {
 }
 
 export function detectMarkerLineWithGateway(contents: string): Marker | null {
-  // Join line continuations (trailing backslash) into single lines
+  // Join line continuations before scanning systemd ExecStart commands; marker
+  // detection must ignore relationship-only unit keys.
   const lower = normalizeLowercaseStringOrEmpty(contents.replace(/\\\r?\n\s*/g, " "));
   for (const line of lower.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -163,6 +165,8 @@ function detectLaunchdGatewayExecutionMarker(contents: string): Marker | null {
   if (!hasGatewaySubcommandArg(programArguments)) {
     return null;
   }
+  // Only execution command fields identify gateway jobs; labels alone catch too
+  // many unrelated helper jobs.
   const launchCommand = normalizeLowercaseStringOrEmpty(
     [...program, ...programArguments].filter(Boolean).join("\n"),
   );
@@ -296,6 +300,8 @@ async function scanLaunchdDir(params: {
     if (!marker) {
       continue;
     }
+    // Managed current services are expected; this scan reports extra jobs that
+    // can compete for ports or survive old installs.
     if (isIgnoredLaunchdLabel(label)) {
       continue;
     }

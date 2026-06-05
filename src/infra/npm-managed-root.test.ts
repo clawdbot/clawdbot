@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -21,7 +22,7 @@ const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-npm-managed-root-",
 });
 const tempDirs: string[] = [];
-let previousNpmGlobalConfig: string | undefined;
+let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -40,7 +41,7 @@ async function makeTempRoot(): Promise<string> {
 
 beforeAll(async () => {
   const fixtureRoot = await fixtureRootTracker.setup();
-  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
   const globalConfig = path.join(fixtureRoot, "global-npmrc");
   await fs.writeFile(globalConfig, "", "utf8");
   process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
@@ -51,11 +52,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  if (previousNpmGlobalConfig === undefined) {
-    delete process.env.NPM_CONFIG_GLOBALCONFIG;
-  } else {
-    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
-  }
+  npmConfigEnvSnapshot?.restore();
+  npmConfigEnvSnapshot = undefined;
   await fixtureRootTracker.cleanup();
 });
 

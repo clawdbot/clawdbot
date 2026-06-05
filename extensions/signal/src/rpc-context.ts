@@ -1,3 +1,4 @@
+// Signal plugin module implements rpc context behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 

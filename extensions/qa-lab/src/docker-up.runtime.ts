@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements docker up behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";

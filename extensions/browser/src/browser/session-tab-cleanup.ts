@@ -1,3 +1,6 @@
+/**
+ * Periodic cleanup for browser tabs tracked to primary OpenClaw sessions.
+ */
 import {
   isAcpSessionKey,
   isCronSessionKey,
@@ -13,6 +16,7 @@ function minutesToMs(minutes: number): number {
   return Math.max(0, Math.floor(minutes * 60_000));
 }
 
+/** Returns true for user-facing sessions whose tabs should be tracked for cleanup. */
 export function isPrimaryTrackedBrowserSessionKey(sessionKey: string): boolean {
   return (
     !isSubagentSessionKey(sessionKey) &&
@@ -26,6 +30,7 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
   return resolveBrowserConfig(cfg.browser, cfg).tabCleanup;
 }
 
+/** Runs one Browser tab cleanup sweep from runtime config or injected test config. */
 export async function runTrackedBrowserTabCleanupOnce(params?: {
   now?: number;
   cleanup?: ResolvedBrowserTabCleanupConfig;
@@ -46,6 +51,7 @@ export async function runTrackedBrowserTabCleanupOnce(params?: {
   });
 }
 
+/** Starts the recurring Browser tab cleanup timer and returns its disposer. */
 export function startTrackedBrowserTabCleanupTimer(params: {
   onWarn: (message: string) => void;
 }): () => void {

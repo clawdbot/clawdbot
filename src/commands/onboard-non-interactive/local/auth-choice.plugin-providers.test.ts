@@ -1,3 +1,4 @@
+// Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { CodexRuntimePluginInstallResult } from "../../codex-runtime-plugin-install.js";

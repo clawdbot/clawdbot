@@ -1,3 +1,4 @@
+// Discord plugin module implements segment behavior.
 import path from "node:path";
 import { Readable } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

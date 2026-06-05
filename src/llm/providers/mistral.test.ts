@@ -1,3 +1,4 @@
+// Mistral provider tests cover request mapping and stream conversion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "../types.js";
 

@@ -1,3 +1,4 @@
+// Doctor legacy-config tests cover compatibility normalizers for old channel, browser, and config shapes.
 import { describe, expect, it } from "vitest";
 import { normalizeLegacyStreamingAliases } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/config.js";

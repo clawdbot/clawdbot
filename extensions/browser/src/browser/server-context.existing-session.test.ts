@@ -1,3 +1,4 @@
+// Browser tests cover server context.existing session plugin behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";

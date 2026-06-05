@@ -1,3 +1,6 @@
+/**
+ * Scans remote provider model catalogs for configured providers.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,

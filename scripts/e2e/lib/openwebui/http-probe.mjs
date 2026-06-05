@@ -1,3 +1,4 @@
+// HTTP probe for OpenWebUI E2E scenarios.
 import { readPositiveIntEnv } from "../env-limits.mjs";
 
 const [url, expectedRaw = "200"] = process.argv.slice(2);

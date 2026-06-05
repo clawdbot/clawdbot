@@ -1,7 +1,13 @@
+/**
+ * Pure cooldown and unusable-window helpers for auth profile usage state.
+ * Mutation and persistence live in usage.ts; this module owns reusable state
+ * predicates used by rotation and failure handling.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+/** Returns true for providers whose auth-profile cooldowns are provider-managed. */
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === "openrouter" || normalized === "kilocode";
@@ -10,10 +16,12 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
 // Per-attempt transient failures (#87462): block only the failing model so
 // fallback models on the same auth profile can still try. Other reasons (auth,
 // billing, format, server_error) remain profile-wide.
+/** Returns true when a failure should only cool down the failing model. */
 export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
   return reason === "rate_limit" || reason === "timeout";
 }
 
+/** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "blockedUntil" | "cooldownUntil" | "disabledUntil">,
 ): number | null {
@@ -26,6 +34,7 @@ export function resolveProfileUnusableUntil(
   return Math.max(...values);
 }
 
+/** Returns true when an unusable timestamp is active at the supplied clock time. */
 export function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
   const timestamp = asDateTimestampMs(until);
   return timestamp !== undefined && timestamp > 0 && now < timestamp;

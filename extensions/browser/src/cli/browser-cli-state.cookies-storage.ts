@@ -1,3 +1,6 @@
+/**
+ * Browser CLI cookie and Web Storage commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -39,6 +42,7 @@ async function runMutationRequest(params: {
   }
 }
 
+/** Registers Browser cookies and storage subcommands. */
 export function registerBrowserCookiesAndStorageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

@@ -1,3 +1,4 @@
+// Openrouter provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";

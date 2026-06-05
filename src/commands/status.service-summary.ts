@@ -1,3 +1,6 @@
+// Reads service manager state for status reports.
+// Converts gateway/node launchd/systemd state into a compact summary shape.
+
 import {
   summarizeGatewayServiceLayout,
   type GatewayServiceLayoutSummary,
@@ -16,6 +19,7 @@ export type ServiceStatusSummary = {
   layout?: GatewayServiceLayoutSummary;
 };
 
+/** Reads a daemon service summary, falling back to unknown when service inspection fails. */
 export async function readServiceStatusSummary(
   service: GatewayService,
   fallbackLabel: string,
@@ -24,6 +28,7 @@ export async function readServiceStatusSummary(
     const state = await readGatewayServiceState(service, { env: process.env });
     const layout = await summarizeGatewayServiceLayout(state.command);
     const managedByOpenClaw = state.installed;
+    // A running unmanaged process still counts as installed for status display.
     const externallyManaged = !managedByOpenClaw && state.running;
     const installed = managedByOpenClaw || externallyManaged;
     const loadedText = externallyManaged
@@ -42,6 +47,7 @@ export async function readServiceStatusSummary(
       ...(layout ? { layout } : {}),
     };
   } catch {
+    // Status output should survive service-manager errors and show an unknown row.
     return {
       label: fallbackLabel,
       installed: null,

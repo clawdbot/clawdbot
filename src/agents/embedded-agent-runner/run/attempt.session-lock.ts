@@ -1,3 +1,6 @@
+/**
+ * Coordinates embedded-attempt session ownership, takeover, and prompt locks.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";

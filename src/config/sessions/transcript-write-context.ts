@@ -1,3 +1,4 @@
+// Transcript write contexts let nested append paths reuse an already-owned session write lock.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 
@@ -46,6 +47,7 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,
 ): (...args: TArgs) => TResult {
+  // Bind callbacks that will run later but must still see the parent write-lock context.
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
 }
 
@@ -92,6 +94,7 @@ async function runWithOwnedSessionTranscriptWriteContext<T>(
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
+    // No matching owner means the caller is responsible for acquiring its normal lock.
     return await run();
   }
   return await context.withSessionWriteLock(run, options);

@@ -1,3 +1,4 @@
+// Verifies prompt literals and data blocks strip control/spoofing characters.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeForPromptLiteral,

@@ -1,3 +1,4 @@
+// OC Path tests cover edit emit roundtrip plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setMdOcPath } from "../../edit.js";
 import { emitMd } from "../../emit.js";

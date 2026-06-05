@@ -1,3 +1,4 @@
+// Test Live Shard tests cover test live shard script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

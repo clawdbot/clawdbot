@@ -1,3 +1,4 @@
+// Crestodian assistant prompts constrain fuzzy requests to one validated command.
 import type { CrestodianOverview } from "./overview.js";
 
 /**
@@ -103,6 +104,7 @@ export function parseCrestodianAssistantPlanText(
   if (!text) {
     return null;
   }
+  // Model output may wrap JSON in prose; extraction stays narrow and validation happens after.
   const jsonText = extractFirstJsonObject(text);
   if (!jsonText) {
     return null;

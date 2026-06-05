@@ -1,3 +1,4 @@
+// Doctor config-flow test utilities share mock input symbols and config fixtures across repair suites.
 const DOCTOR_CONFIG_TEST_INPUT = Symbol.for("openclaw.doctorConfigFlow.testInput");
 
 type DoctorConfigTestInput = {

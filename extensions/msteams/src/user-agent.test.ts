@@ -1,3 +1,4 @@
+// Msteams tests cover user agent plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the runtime before importing buildUserAgent

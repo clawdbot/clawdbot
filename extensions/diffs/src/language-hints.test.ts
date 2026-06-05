@@ -1,3 +1,4 @@
+// Diffs tests cover language hints plugin behavior.
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 import {

@@ -1,3 +1,4 @@
+// Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 

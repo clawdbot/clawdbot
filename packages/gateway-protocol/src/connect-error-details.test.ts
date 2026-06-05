@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover connect error details behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildPairingConnectCloseReason,

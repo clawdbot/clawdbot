@@ -1,3 +1,4 @@
+// Telegram tests cover group policy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

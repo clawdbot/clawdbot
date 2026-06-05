@@ -1,3 +1,4 @@
+// E2E Run With Pty tests cover e2e run with pty script behavior.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";

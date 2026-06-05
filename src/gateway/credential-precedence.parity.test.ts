@@ -1,3 +1,5 @@
+// Credential precedence parity tests keep call, probe, status, and auth surfaces
+// aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";

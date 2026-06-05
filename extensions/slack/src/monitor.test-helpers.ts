@@ -1,3 +1,4 @@
+// Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { vi } from "vitest";
 import type { Mock } from "vitest";

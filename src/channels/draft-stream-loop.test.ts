@@ -1,3 +1,4 @@
+// Draft stream loop tests cover incremental draft updates while channel replies stream.
 import { setImmediate as nextMacrotask } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";

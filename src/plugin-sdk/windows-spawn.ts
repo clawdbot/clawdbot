@@ -1,3 +1,4 @@
+// Windows spawn helpers resolve Windows command execution details for plugin runtimes.
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import {
@@ -13,6 +14,7 @@ export type WindowsSpawnResolution =
   | "exe-entrypoint"
   | "shell-fallback";
 
+/** Direct-spawn resolution before shell fallback is considered. */
 export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
 
 /** Direct-spawn candidate before shell fallback policy is applied. */
@@ -55,10 +57,12 @@ export type ResolveWindowsSpawnProgramParams = {
   /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
+/** Inputs for candidate resolution that intentionally excludes shell fallback policy. */
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
   ResolveWindowsSpawnProgramParams,
   "allowShellFallback"
 >;
+/** Parsed executable plus inline arguments from a command string. */
 export type WindowsSpawnCommandInlineArgs = {
   executable: string;
   arguments: string;
@@ -114,6 +118,7 @@ function readCommandToken(command: string): { token: string; rest: string } | nu
   };
 }
 
+/** Detect command strings like `node script.js` that should be split before spawn. */
 export function detectWindowsSpawnCommandInlineArgs(
   command: string,
 ): WindowsSpawnCommandInlineArgs | null {

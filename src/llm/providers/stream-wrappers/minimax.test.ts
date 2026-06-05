@@ -1,3 +1,4 @@
+// MiniMax stream wrapper tests cover streamed text and reasoning conversion.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";

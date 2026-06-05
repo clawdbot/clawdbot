@@ -1,3 +1,4 @@
+// Control UI module implements theme behavior.
 export type ThemeName = "claw" | "knot" | "dash" | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =

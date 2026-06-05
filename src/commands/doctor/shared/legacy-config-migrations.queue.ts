@@ -1,3 +1,4 @@
+// Legacy message queue config migrations for retired steering modes.
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -49,6 +50,7 @@ const QUEUE_MODE_RULES: LegacyConfigRule[] = [
   },
 ];
 
+/** Legacy config migration specs for message queue mode compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_QUEUE: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "messages.queue.retired-steering-modes",

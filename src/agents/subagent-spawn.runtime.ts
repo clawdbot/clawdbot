@@ -1,4 +1,8 @@
-// Runtime dependency barrel for subagent spawning.
+/**
+ * Runtime dependency barrel for subagent spawning. Keeping these imports in a
+ * single module lets spawn tests replace runtime seams without loading the
+ * entire gateway/channel stack.
+ */
 export {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,

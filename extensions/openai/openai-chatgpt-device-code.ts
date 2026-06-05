@@ -1,3 +1,4 @@
+// Openai plugin module implements openai chatgpt device code behavior.
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,

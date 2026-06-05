@@ -1,3 +1,4 @@
+// Discord plugin module implements interactions behavior.
 import {
   ComponentType,
   InteractionResponseType,

@@ -1,3 +1,6 @@
+/**
+ * Native Codex app-server compaction bridge for bound OpenClaw sessions.
+ */
 import {
   embeddedAgentLog,
   type CompactEmbeddedAgentSessionParams,
@@ -15,6 +18,10 @@ import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
+/**
+ * Starts native Codex compaction for a manually requested bound session, or
+ * reports why Codex-owned automatic compaction should handle the trigger.
+ */
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedAgentSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
@@ -175,6 +182,8 @@ async function compactCodexNativeThread(
     binding.authProfileId &&
     binding.authProfileId !== requestedAuthProfileId
   ) {
+    // A session binding belongs to the auth profile that created it; compacting
+    // with another profile risks operating on a different Codex account.
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
 

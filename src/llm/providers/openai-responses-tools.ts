@@ -1,3 +1,4 @@
+// OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
 import { resolveOpenAIStrictToolSetting } from "../../agents/openai-strict-tool-setting.js";

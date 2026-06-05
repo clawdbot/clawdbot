@@ -1,3 +1,5 @@
+// Connected session-store test helper installs a suite-level gateway plus temp
+// session store path for session RPC tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

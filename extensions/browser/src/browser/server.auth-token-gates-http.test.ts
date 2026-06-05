@@ -1,3 +1,4 @@
+// Browser tests cover server.auth token gates http plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";

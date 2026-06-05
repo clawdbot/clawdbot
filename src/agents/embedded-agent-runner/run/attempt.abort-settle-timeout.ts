@@ -1,3 +1,6 @@
+/**
+ * Resolves how long aborted attempts wait for cleanup to settle.
+ */
 import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 
 type AbortSettleTimeoutEnv = Partial<

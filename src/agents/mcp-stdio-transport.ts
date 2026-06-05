@@ -1,3 +1,6 @@
+/**
+ * OpenClaw stdio transport wrapper for MCP server subprocesses.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { PassThrough } from "node:stream";

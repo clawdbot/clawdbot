@@ -1,3 +1,4 @@
+// Restart Mac tests cover restart mac script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,10 +92,10 @@ describe("scripts/restart-mac.sh", () => {
     );
 
     expect(chooseBlock).toContain('fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"');
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('/Applications/OpenClaw.app')).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf('${ROOT_DIR}/dist/OpenClaw.app')).toBeLessThan(
-      chooseBlock.indexOf('/Applications/OpenClaw.app'),
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("/Applications/OpenClaw.app")).toBeGreaterThan(-1);
+    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
+      chooseBlock.indexOf("/Applications/OpenClaw.app"),
     );
   });
 });

@@ -1,3 +1,4 @@
+// Temporary directory helper tests cover temp directory cleanup behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

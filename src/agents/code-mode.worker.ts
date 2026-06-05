@@ -1,3 +1,6 @@
+/**
+ * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
+ */
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -8,8 +11,6 @@ const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
-// QuickJS worker for Code Mode. It runs guest code, exposes host bridge stubs,
-// snapshots suspended VMs, and restores them after host tool calls settle.
 type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
 
 type CodeModeConfig = {

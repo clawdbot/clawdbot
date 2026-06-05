@@ -1,3 +1,7 @@
+/**
+ * Focused replay-policy tests for provider plugin-owned transcript behavior.
+ * Verifies plugin policy hooks override generic transport fallback choices.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";

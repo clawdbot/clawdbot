@@ -1,3 +1,8 @@
+/**
+ * Subagent spawn executor.
+ *
+ * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
+ */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";

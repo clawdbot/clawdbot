@@ -1,3 +1,5 @@
+// Covers outbound send service plugin/core routing, media access scoping,
+// transcript mirroring, and poll fallback.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

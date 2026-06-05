@@ -1,3 +1,4 @@
+// Register message tests cover message command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";

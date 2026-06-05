@@ -1,3 +1,4 @@
+// Session config tests cover session creation, updates, and persistence.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";

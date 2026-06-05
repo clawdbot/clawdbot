@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile failure messages.
+ * Verifies actionable recovery hints, transient-copy suppression, provider
+ * naming, and diagnostic cause handling.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";

@@ -1,3 +1,4 @@
+// Test Force tests cover test force script behavior.
 import { describe, expect, it } from "vitest";
 import { testForceTesting } from "../../scripts/test-force.js";
 

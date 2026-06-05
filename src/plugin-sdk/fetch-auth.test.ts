@@ -1,3 +1,4 @@
+// Fetch auth tests cover scoped bearer fallback retries and request header preservation.
 import { describe, expect, it, vi } from "vitest";
 import { fetchWithBearerAuthScopeFallback } from "./fetch-auth.js";
 import { resolveRequestUrl } from "./request-url.js";

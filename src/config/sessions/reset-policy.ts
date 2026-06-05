@@ -1,3 +1,4 @@
+// Session reset policy resolves daily/idle freshness for direct, group, and thread sessions.
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
@@ -86,6 +87,8 @@ export function evaluateSessionFreshness(params: {
   const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
   const lastInteractionAt =
     resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
+  // Daily reset uses session start, while idle reset uses last interaction; a continued session can
+  // stay idle-fresh even when its original transcript is old.
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)

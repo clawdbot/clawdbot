@@ -1,3 +1,4 @@
+// Skills CLI formatting tests cover skill listing and display formatting.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

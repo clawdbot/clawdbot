@@ -1,3 +1,4 @@
+// Discord plugin module implements retry after behavior.
 import {
   asFiniteNumberInRange,
   parseStrictFiniteNumber,

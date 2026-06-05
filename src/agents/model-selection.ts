@@ -1,3 +1,6 @@
+/**
+ * Public model-selection facade for persisted, configured, and allowed refs.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

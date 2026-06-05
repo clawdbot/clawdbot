@@ -1,3 +1,5 @@
+// Tool-call id tests cover provider-safe rewrites, collision handling, replay
+// preservation for signed thinking turns, and strict short-id mode.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
@@ -148,6 +150,8 @@ function expectReplaySafeSignedTurnOwnership(params: {
   preservedTurn: "first" | "second";
   firstToolCallIndex: number;
 }) {
+  // Signed thinking blocks bind the following tool call; replay repair may keep
+  // only the safe turn's id and must rewrite the colliding sibling turn.
   const out = sanitizeToolCallIdsForCloudCodeAssist(params.input, "strict", {
     preserveReplaySafeThinkingToolCallIds: true,
     allowedToolNames: ["read"],

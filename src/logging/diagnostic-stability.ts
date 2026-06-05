@@ -1,3 +1,4 @@
+// Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
   onDiagnosticEvent,
   type DiagnosticEventPayload,

@@ -1,3 +1,4 @@
+// Zalouser tests cover group policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildZalouserGroupCandidates,

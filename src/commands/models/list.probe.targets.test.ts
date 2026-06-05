@@ -1,7 +1,9 @@
+// Model probe target tests cover selecting provider/model targets for probing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 let mockStore: AuthProfileStore;
 let mockAgentStore: AuthProfileStore | undefined;
@@ -113,46 +115,12 @@ async function buildAnthropicProbePlan(order: string[]) {
   });
 }
 
-async function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
-  const previousAnthropic = process.env.ANTHROPIC_API_KEY;
-  const previousAnthropicOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
-  delete process.env.ANTHROPIC_API_KEY;
-  delete process.env.ANTHROPIC_OAUTH_TOKEN;
-  try {
-    return await fn();
-  } finally {
-    if (previousAnthropic === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = previousAnthropic;
-    }
-    if (previousAnthropicOauth === undefined) {
-      delete process.env.ANTHROPIC_OAUTH_TOKEN;
-    } else {
-      process.env.ANTHROPIC_OAUTH_TOKEN = previousAnthropicOauth;
-    }
-  }
+function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
+  return withEnvAsync({ ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined }, fn);
 }
 
-async function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
-  const previousZai = process.env.ZAI_API_KEY;
-  const previousLegacyZai = process.env.Z_AI_API_KEY;
-  delete process.env.ZAI_API_KEY;
-  delete process.env.Z_AI_API_KEY;
-  try {
-    return await fn();
-  } finally {
-    if (previousZai === undefined) {
-      delete process.env.ZAI_API_KEY;
-    } else {
-      process.env.ZAI_API_KEY = previousZai;
-    }
-    if (previousLegacyZai === undefined) {
-      delete process.env.Z_AI_API_KEY;
-    } else {
-      process.env.Z_AI_API_KEY = previousLegacyZai;
-    }
-  }
+function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
+  return withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, fn);
 }
 
 async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {

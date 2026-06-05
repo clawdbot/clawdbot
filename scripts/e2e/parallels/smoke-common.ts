@@ -1,3 +1,4 @@
+// Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { run, say } from "./host-command.ts";

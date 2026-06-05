@@ -1,3 +1,4 @@
+// Non-isolated runner helps execute tests without Vitest isolation.
 import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestSuite, vi } from "vitest";

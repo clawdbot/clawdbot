@@ -1,3 +1,4 @@
+// Line plugin module implements actions behavior.
 import type { messagingApi } from "@line/bot-sdk";
 
 export type Action = messagingApi.Action;

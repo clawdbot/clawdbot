@@ -1,3 +1,4 @@
+// Slack plugin module implements assistant behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";

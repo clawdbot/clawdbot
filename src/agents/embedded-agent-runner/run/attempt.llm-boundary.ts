@@ -1,3 +1,6 @@
+/**
+ * Installs runtime-context and prompt-transform boundaries before LLM calls.
+ */
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";

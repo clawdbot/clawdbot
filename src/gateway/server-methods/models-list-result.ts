@@ -1,3 +1,5 @@
+// Model list result building resolves visible model catalogs for an agent and
+// strips runtime-only provider params before sending the browse API payload.
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,

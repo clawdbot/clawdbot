@@ -86,6 +86,7 @@ export function resolvePreparedApprovalAccountId(params: {
   contextAccountId?: string | null;
   fallbackAccountId: string;
 }): string;
+/** Resolve prepared approval account id when every source may be missing. */
 export function resolvePreparedApprovalAccountId(params: {
   plannedAccountId?: string | null;
   contextAccountId?: string | null;

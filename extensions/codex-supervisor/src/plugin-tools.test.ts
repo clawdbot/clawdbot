@@ -1,3 +1,4 @@
+// Codex Supervisor tests cover plugin tools plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createCodexSupervisorTools } from "./plugin-tools.js";
 import type { CodexSupervisor } from "./supervisor.js";

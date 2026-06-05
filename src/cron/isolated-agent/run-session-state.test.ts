@@ -1,3 +1,4 @@
+// Run session state tests cover persisted session state for isolated cron agents.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

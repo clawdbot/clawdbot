@@ -1,3 +1,4 @@
+// Qqbot plugin module implements response timeout behavior.
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,

@@ -1,3 +1,4 @@
+// Remote skill runtime helpers send skill refresh and snapshot state across remotes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

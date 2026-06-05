@@ -1,3 +1,4 @@
+// Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import {
   isFutureDateTimestampMs,

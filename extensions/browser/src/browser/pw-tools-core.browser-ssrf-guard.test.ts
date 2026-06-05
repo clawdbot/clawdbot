@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core ssrf guard plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pageState = vi.hoisted(() => ({

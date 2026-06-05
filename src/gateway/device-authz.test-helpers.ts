@@ -1,3 +1,5 @@
+// Device auth test helpers create paired operator/node identities and tracked
+// WebSocket clients for gateway authorization suites.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";

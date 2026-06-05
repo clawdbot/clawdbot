@@ -1,3 +1,4 @@
+/** Shared daemon runtime status types and systemd cgroup hygiene helpers. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** systemd cgroup fields used to spot unhealthy gateway service supervision. */
@@ -46,6 +47,7 @@ function describeSystemdCgroupLoadWarnings(runtime?: GatewayServiceSystemdRuntim
   if (!isRiskySystemdKillMode(killMode)) {
     return [];
   }
+  // KillMode=process/none only becomes noisy when the cgroup is visibly large.
   const details: string[] = [];
   if (
     runtime.tasksCurrent !== undefined &&

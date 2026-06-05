@@ -1,3 +1,4 @@
+// OC Path module implements parse behavior.
 import { type ParseError, parseTree, printParseErrorCode } from "jsonc-parser/lib/esm/main.js";
 import type { Diagnostic } from "../ast.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";

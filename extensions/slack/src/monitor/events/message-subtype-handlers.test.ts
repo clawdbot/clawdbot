@@ -1,3 +1,4 @@
+// Slack tests cover message subtype handlers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";

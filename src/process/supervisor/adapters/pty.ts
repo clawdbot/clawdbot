@@ -1,3 +1,4 @@
+// PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";

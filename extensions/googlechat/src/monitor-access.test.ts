@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor access plugin behavior.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());

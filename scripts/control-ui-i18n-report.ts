@@ -1,3 +1,4 @@
+// Control Ui I18N Report script supports OpenClaw repository automation.
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

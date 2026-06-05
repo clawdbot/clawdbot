@@ -1,3 +1,4 @@
+// Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import type {

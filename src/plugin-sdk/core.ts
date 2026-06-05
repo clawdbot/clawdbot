@@ -1,3 +1,4 @@
+// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
@@ -275,6 +276,7 @@ export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 
+/** Ensure a configured ACP binding has live runtime state before channel delivery uses it. */
 export async function ensureConfiguredAcpBindingReady(params: {
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
@@ -295,6 +297,7 @@ export {
 } from "../routing/resolve-route.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
 
+/** Params passed to a channel adapter when resolving outbound session routing. */
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
@@ -317,6 +320,7 @@ function resolveSdkChatChannelMeta(id: string) {
   return cachedSdkChatChannelMeta.metaById[id];
 }
 
+/** Resolve bundled chat channel metadata while respecting the active bundled-plugin directory. */
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
   return resolveSdkChatChannelMeta(id);
 }
@@ -371,17 +375,20 @@ export function buildChannelOutboundSessionRoute(params: {
   };
 }
 
+/** Candidate source used when choosing a thread id for outbound session routing. */
 export type ThreadAwareOutboundSessionRouteThreadSource =
   | "replyToId"
   | "threadId"
   | "currentSession";
 
+/** Recovery context passed before reusing the current session thread id. */
 export type ThreadAwareOutboundSessionRouteRecoveryContext = {
   route: ChannelOutboundSessionRoute;
   currentBaseSessionKey: string;
   currentThreadId: string;
 };
 
+/** Recover the current thread id when the current session belongs to the same base route. */
 export function recoverCurrentThreadSessionId(params: {
   route: ChannelOutboundSessionRoute;
   currentSessionKey?: string | null;
@@ -408,6 +415,7 @@ export function recoverCurrentThreadSessionId(params: {
   return current.threadId;
 }
 
+/** Add thread-aware session keys and route thread ids to an outbound channel route. */
 export function buildThreadAwareOutboundSessionRoute(params: {
   route: ChannelOutboundSessionRoute;
   replyToId?: string | number | null;
@@ -789,8 +797,10 @@ function resolveChatChannelOutbound(
   };
 }
 
-// Shared higher-level builder for chat-style channels that mostly compose
-// scoped DM security, text pairing, reply threading, and attached send results.
+/**
+ * Build a chat-style channel plugin by composing common security, pairing,
+ * threading, and outbound adapters around a channel-specific base.
+ */
 export function createChatChannelPlugin<
   TResolvedAccount extends { accountId?: string | null },
   Probe = unknown,
@@ -817,7 +827,7 @@ export function createChatChannelPlugin<
   } as ChannelPlugin<TResolvedAccount, Probe, Audit>;
 }
 
-// Shared base object for channel plugins that only need to override a few optional surfaces.
+/** Create the shared base object for channel plugins that override only selected surfaces. */
 export function createChannelPluginBase<TResolvedAccount>(
   params: CreateChannelPluginBaseOptions<TResolvedAccount>,
 ): CreatedChannelPluginBase<TResolvedAccount> {

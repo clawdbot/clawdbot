@@ -1,3 +1,4 @@
+// Qqbot plugin module implements mention behavior.
 export interface RawMention {
   is_you?: boolean;
   bot?: boolean;

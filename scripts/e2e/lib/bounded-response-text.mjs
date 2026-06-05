@@ -1,3 +1,4 @@
+// Bounded response body reader used by E2E HTTP fixture clients.
 function bodyTooLargeError(label, byteLimit) {
   return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
     code: "ETOOBIG",

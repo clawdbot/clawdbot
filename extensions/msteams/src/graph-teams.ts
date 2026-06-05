@@ -1,3 +1,4 @@
+// Msteams plugin module implements graph teams behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
 import { type GraphResponse, fetchGraphJson, resolveGraphToken } from "./graph.js";
 

@@ -1,3 +1,4 @@
+// Shared delivery context helpers expose route normalization shared by modules.
 import {
   channelRouteCompactKey,
   channelRouteThreadId,

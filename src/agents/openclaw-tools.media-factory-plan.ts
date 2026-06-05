@@ -1,3 +1,8 @@
+/**
+ * Optional media tool factory planner.
+ *
+ * Combines config, tool policy, plugin capability metadata, and auth-profile availability before tool construction.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentModelFallbackValues,

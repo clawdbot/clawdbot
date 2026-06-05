@@ -1,3 +1,4 @@
+// Openai tests cover base url plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeCodexResponsesBaseUrl,

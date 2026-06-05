@@ -1,3 +1,4 @@
+// Feishu tests cover bot group name plugin behavior.
 import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
 import { resolveGroupName, clearGroupNameCache } from "./bot.js";
 import type { ResolvedFeishuAccount } from "./types.js";

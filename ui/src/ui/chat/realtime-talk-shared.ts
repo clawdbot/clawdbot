@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk shared behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,

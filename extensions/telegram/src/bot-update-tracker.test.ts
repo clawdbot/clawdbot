@@ -1,3 +1,4 @@
+// Telegram tests cover bot update tracker plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramUpdateTracker,

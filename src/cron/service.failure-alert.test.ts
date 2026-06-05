@@ -1,3 +1,4 @@
+// Cron failure alert tests cover notification behavior for failed scheduled jobs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

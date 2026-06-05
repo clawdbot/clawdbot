@@ -1,3 +1,5 @@
+// Gateway request context factory.
+// Wires live runtime state into method handlers and client management helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
@@ -143,6 +145,8 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
+        // Marking is separate from socket close so already-buffered requests
+        // fail authorization even if transport teardown has not completed.
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }

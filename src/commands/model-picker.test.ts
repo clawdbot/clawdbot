@@ -1,3 +1,4 @@
+// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
@@ -899,6 +900,52 @@ describe("promptDefaultModel", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "nvidia/moonshotai/kimi-k2.5",
     ]);
+  });
+
+  it("preselects the first live provider row when keep-current is disabled", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "z-ai/glm-5.1",
+        name: "GLM 5.1",
+      },
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "NVIDIA Nemotron 3 Super 120B",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-ultra-550b-a55b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("nvidia/z-ai/glm-5.1");
+    expect(pickerParams(select as MockCallSource).initialValue).toBe("nvidia/z-ai/glm-5.1");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "nvidia/z-ai/glm-5.1",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+    ]);
+    expect(
+      requireOption(pickerOptions(select as MockCallSource), "nvidia/nemotron-3-ultra-550b-a55b")
+        .hint,
+    ).toBe("current (not in catalog)");
   });
 
   it("keeps on-demand NVIDIA vendor labels single-prefixed after browsing", async () => {

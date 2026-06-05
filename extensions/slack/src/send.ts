@@ -1,3 +1,4 @@
+// Slack plugin module implements send behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {

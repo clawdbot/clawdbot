@@ -1,3 +1,8 @@
+/**
+ * Channel ingress sender gate helpers.
+ *
+ * Evaluates DM and group sender policies against normalized allowlists.
+ */
 import {
   allowlistFailureReason,
   applyMutableIdentifierPolicy,

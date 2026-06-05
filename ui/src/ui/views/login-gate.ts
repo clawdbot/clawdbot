@@ -1,3 +1,4 @@
+// Control UI view renders login gate screen content.
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { t } from "../../i18n/index.ts";

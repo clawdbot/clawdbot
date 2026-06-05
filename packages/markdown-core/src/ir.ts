@@ -1,3 +1,4 @@
+// Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";

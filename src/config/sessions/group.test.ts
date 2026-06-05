@@ -1,3 +1,4 @@
+// Session group tests cover grouping and lookup of related sessions.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveGroupSessionKey } from "./group.js";

@@ -1,3 +1,4 @@
+// Compatibility coverage for embedded runner barrel exports and runtime ids.
 import { describe, expect, it } from "vitest";
 import { normalizeEmbeddedAgentRuntime } from "../agent-runtime-id.js";
 import * as embeddedAgentRunner from "../embedded-agent-runner.js";
@@ -5,6 +6,8 @@ import * as embeddedAgent from "../embedded-agent.js";
 
 describe("embedded runner compatibility aliases", () => {
   it("keeps the embedded-agent barrel bound to the runner implementation", () => {
+    // Shipped imports still reach the runner through the embedded-agent barrel;
+    // keep these aliases exact so consumers do not fork stateful implementations.
     expect(embeddedAgent.runEmbeddedAgent).toBe(embeddedAgentRunner.runEmbeddedAgent);
     expect(embeddedAgent.compactEmbeddedAgentSession).toBe(
       embeddedAgentRunner.compactEmbeddedAgentSession,
@@ -13,6 +16,8 @@ describe("embedded runner compatibility aliases", () => {
   });
 
   it("normalizes shipped runtime aliases", () => {
+    // These aliases appear in persisted/runtime-facing config and must resolve
+    // before model/provider dispatch observes the runtime id.
     expect(normalizeEmbeddedAgentRuntime("pi")).toBe("openclaw");
     expect(normalizeEmbeddedAgentRuntime("codex-app-server")).toBe("codex");
   });

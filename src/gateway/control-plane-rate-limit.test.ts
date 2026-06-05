@@ -1,3 +1,5 @@
+// Covers control-plane write rate-limit windows, stale bucket pruning, and
+// hard bucket cap behavior.
 import { afterEach, describe, expect, test } from "vitest";
 import {
   consumeControlPlaneWriteBudget,

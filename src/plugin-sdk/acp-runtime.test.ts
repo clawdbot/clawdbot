@@ -1,3 +1,4 @@
+// ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 

@@ -1,3 +1,5 @@
+// Media-understanding runtime tests cover file APIs, provider dispatch, disabled
+// state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -62,6 +64,8 @@ vi.mock("../media/media-services.js", () => ({
 }));
 
 function requireRunCapabilityRequest(): unknown {
+  // File API tests verify the normalized request handed to runCapability, not
+  // just the public return shape.
   const [call] = mocks.runCapability.mock.calls;
   if (!call) {
     throw new Error("expected runCapability call");

@@ -1,3 +1,4 @@
+// Webhook request guards validate incoming HTTP requests before plugin webhook dispatch.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";

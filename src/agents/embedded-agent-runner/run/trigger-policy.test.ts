@@ -1,3 +1,5 @@
+// Trigger policy tests pin which embedded run triggers receive synthetic
+// heartbeat prompts instead of normal user/manual prompt handling.
 import { describe, expect, it } from "vitest";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 

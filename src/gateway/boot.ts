@@ -1,3 +1,5 @@
+// Gateway BOOT.md runner.
+// Runs per-workspace boot checks in an isolated boot session and restores mappings.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +44,7 @@ type SessionMappingSnapshot = {
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
+/** Result of attempting to run a workspace BOOT.md check. */
 export type BootRunResult =
   | { status: "skipped"; reason: "missing" | "empty" }
   | { status: "ran" }

@@ -1,3 +1,8 @@
+/**
+ * Guarded fetch wrappers for web tools.
+ *
+ * Applies SSRF policy, timeout normalization, and trusted/self-hosted endpoint modes.
+ */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
@@ -12,12 +17,6 @@ import {
 } from "../../infra/net/ssrf.js";
 import { readPositiveIntegerParam } from "./common.js";
 
-/**
- * Guarded fetch wrappers for web tools.
- *
- * These helpers apply SSRF policy, timeout normalization, and optional trusted
- * env proxy mode before tool-specific response handling runs.
- */
 const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
   allowRfc2544BenchmarkRange: true,

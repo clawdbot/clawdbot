@@ -1,3 +1,4 @@
+// Covers user-facing formatting and sanitization of assistant/provider errors.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -29,10 +30,8 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
   it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
-    // This is the new Anthropic error format that wasn't being detected.
-    // Without the fix, this falls through to the invalidRequest regex and returns
-    // "LLM request rejected: Request size exceeds model context window"
-    // instead of the context overflow message, preventing auto-compaction.
+    // This Anthropic shape must map to context overflow so auto-compaction can
+    // trigger instead of treating it as a generic schema rejection.
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
     );
@@ -118,6 +117,8 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
+    // The internal formatter keeps detail for logs, while user-facing text must
+    // not expose arbitrary provider-controlled structured payload content.
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
@@ -177,6 +178,8 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
   it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
+    // Some providers report billing exhaustion as 429; billing copy should win
+    // when the payload carries high-confidence credit language.
     const msg = makeAssistantError(
       '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
     );

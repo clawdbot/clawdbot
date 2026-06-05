@@ -1,3 +1,5 @@
+// Gateway client bootstrap tests keep URL override provenance wired into shared
+// auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { resolveGatewayConnectionAuth } from "./connection-auth.js";
 

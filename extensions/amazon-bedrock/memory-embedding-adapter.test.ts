@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover memory embedding adapter plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAwsCredentialsMock = vi.hoisted(() => vi.fn());

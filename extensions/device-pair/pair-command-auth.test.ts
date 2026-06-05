@@ -1,3 +1,4 @@
+// Device Pair tests cover pair command auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolvePairingCommandAuthState } from "./pair-command-auth.js";
 

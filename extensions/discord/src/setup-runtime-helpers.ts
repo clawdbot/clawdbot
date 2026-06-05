@@ -1,3 +1,4 @@
+// Discord helper module supports setup runtime helpers behavior.
 export {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,

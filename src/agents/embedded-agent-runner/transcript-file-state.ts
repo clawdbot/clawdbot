@@ -1,3 +1,6 @@
+/**
+ * Reads, mutates, and atomically writes embedded session transcript files.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

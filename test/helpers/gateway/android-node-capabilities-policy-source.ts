@@ -1,3 +1,4 @@
+// Android node capability policy source fixture describes gateway connection inputs.
 import type { GatewayConnectionDetails } from "../../../src/gateway/call.js";
 
 // Test helper for deciding when Android node policy config should be fetched remotely.

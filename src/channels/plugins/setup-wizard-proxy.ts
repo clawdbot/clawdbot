@@ -1,3 +1,8 @@
+/**
+ * Lazy setup wizard proxy helpers.
+ *
+ * Delegates setup wizard status, credential, allowlist, and finalization hooks to loaded wizards.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDelegatedSetupWizardStatusResolvers } from "./setup-wizard-binary.js";
 import type { ChannelSetupDmPolicy } from "./setup-wizard-types.js";

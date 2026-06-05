@@ -1,3 +1,4 @@
+// Control UI i18n script tests cover locale extraction and validation.
 import { describe, expect, it } from "vitest";
 import {
   findPlaceholderMismatches,

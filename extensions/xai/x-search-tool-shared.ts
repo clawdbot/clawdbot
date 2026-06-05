@@ -1,3 +1,4 @@
+// Xai plugin module implements x search tool shared behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 

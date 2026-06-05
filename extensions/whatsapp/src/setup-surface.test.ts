@@ -1,3 +1,4 @@
+// Whatsapp tests cover setup surface plugin behavior.
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,

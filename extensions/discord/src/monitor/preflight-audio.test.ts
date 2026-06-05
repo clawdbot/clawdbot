@@ -1,3 +1,4 @@
+// Discord tests cover preflight audio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());

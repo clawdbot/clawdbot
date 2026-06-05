@@ -1,3 +1,4 @@
+// Program smoke tests cover core CLI command registration and startup behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {

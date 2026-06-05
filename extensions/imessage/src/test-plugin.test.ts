@@ -1,3 +1,4 @@
+// Imessage tests cover test plugin plugin behavior.
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,

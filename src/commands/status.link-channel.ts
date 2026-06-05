@@ -1,3 +1,6 @@
+// Resolves the first channel that can report linked/unlinked auth state for status summaries.
+// Channel-specific linking logic stays inside plugin status hooks.
+
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -12,6 +15,7 @@ export type LinkChannelContext = {
   plugin: ChannelPlugin;
 };
 
+/** Returns link status for the first configured read-only channel that exposes linked state. */
 export async function resolveLinkChannelContext(
   cfg: OpenClawConfig,
   options: { sourceConfig?: OpenClawConfig } = {},
@@ -29,6 +33,7 @@ export async function resolveLinkChannelContext(
     const snapshot = plugin.config.describeAccount
       ? plugin.config.describeAccount(account, cfg)
       : ({
+          // Fallback snapshot keeps older/simple plugins visible in status.
           accountId: defaultAccountId,
           enabled,
           configured,
@@ -45,6 +50,7 @@ export async function resolveLinkChannelContext(
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) {
+      // Keep scanning until a plugin reports an explicit linked/unlinked value.
       continue;
     }
     const authAgeMs =

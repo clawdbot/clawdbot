@@ -1,3 +1,5 @@
+// Gateway WebSocket log formatting.
+// Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -39,6 +41,8 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
     return restMeta;
   }
   for (const [key, value] of Object.entries(meta)) {
+    // Core frame fields are rendered elsewhere; this loop only emits extra
+    // metadata so logs stay compact and stable.
     if (value === undefined) {
       continue;
     }

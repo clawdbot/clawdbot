@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming command plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginCommandDefinition,

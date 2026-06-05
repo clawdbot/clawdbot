@@ -1,3 +1,4 @@
+// Cron edit register tests cover cron edit command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

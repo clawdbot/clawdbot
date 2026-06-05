@@ -1,3 +1,4 @@
+// Vitest Shard Timings tests cover vitest shard timings script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

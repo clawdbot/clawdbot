@@ -1,3 +1,4 @@
+// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 
 vi.mock("../logging/subsystem.js", () => {
@@ -197,13 +198,7 @@ vi.mock("../agents/model-selection.js", () => {
       resolveDefaultRef(cfg),
     ),
     resolveModelRefFromString: vi.fn(
-      ({
-        raw,
-        defaultProvider,
-      }: {
-        raw: string;
-        defaultProvider?: string;
-      }) => {
+      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
         const ref = parseModelRef(raw, defaultProvider ?? "openai");
         return ref ? { ref, source: "parsed" } : null;
       },

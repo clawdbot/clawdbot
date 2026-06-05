@@ -1,3 +1,4 @@
+// Doctor update tests cover pre-doctor update prompts, state files, and declined update flows.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";

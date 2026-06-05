@@ -1,3 +1,5 @@
+// Embedded run registry tests cover active run handles, queueing, abort/drain,
+// abandonment tracking, diagnostics, snapshots, and live model-switch state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +51,8 @@ function createRunHandle(
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
+  // Minimal handle fixture with overrideable lifecycle probes for registry
+  // behavior; individual tests supply queue/abort behavior when needed.
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
@@ -61,6 +65,8 @@ function createRunHandle(
 
 describe("embedded-agent runner run registry", () => {
   afterEach(() => {
+    // Registry state is process-global so imported module instances can share
+    // it; every test must reset both embedded and reply-run registries.
     testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetDiagnosticSessionStateForTest();
@@ -100,6 +106,8 @@ describe("embedded-agent runner run registry", () => {
   });
 
   it("resolves active embedded runs by canonical session file", async () => {
+    // Session-file lookup canonicalizes symlinks so heartbeat/diagnostic callers
+    // can find the active handle from the file path they observe.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-registry-"));
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
@@ -279,6 +287,8 @@ describe("embedded-agent runner run registry", () => {
   });
 
   it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
+    // Some callers queue through the broader reply-run operation when the
+    // embedded handle cannot prove transcript commit support directly.
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -459,6 +469,8 @@ describe("embedded-agent runner run registry", () => {
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+    // Abandonment markers must catch retries addressed by any durable identity,
+    // then clear once a new run owns the same session key/file.
     const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
     const handle = createRunHandle();
 

@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {

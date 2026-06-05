@@ -1,3 +1,4 @@
+// Anthropic Vertex auth helpers detect local credential presence for provider setup flows.
 import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";

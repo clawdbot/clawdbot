@@ -1,3 +1,5 @@
+// Plugin-provided node.invoke policy adapter.
+// Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -86,6 +88,8 @@ function createApprovalRuntime(params: {
         record,
         excludeConnId: params.client?.connId,
       });
+      // Approval requests are routed to eligible operator clients only. Falling
+      // back to broadcast is safe because the event payload carries no secret.
       if (approvalClientConnIds) {
         params.context.broadcastToConnIds(
           "plugin.approval.requested",

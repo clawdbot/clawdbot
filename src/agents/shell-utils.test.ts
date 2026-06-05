@@ -1,3 +1,4 @@
+// Verifies shell selection, PATH lookup, and platform-specific shell helpers.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,7 @@ function createTempCommandDir(
   tempDirs: string[],
   files: Array<{ name: string; executable?: boolean }>,
 ): string {
+  // Temporary PATH entries model available shell binaries and permissions.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-"));
   tempDirs.push(dir);
   for (const file of files) {

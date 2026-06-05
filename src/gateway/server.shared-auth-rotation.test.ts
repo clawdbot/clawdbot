@@ -1,3 +1,5 @@
+// Shared auth rotation tests cover token generation changes, connected client
+// disconnects, device-token issuers, and secret-ref sourced gateway auth.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

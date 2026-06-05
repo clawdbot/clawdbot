@@ -1,3 +1,8 @@
+/**
+ * Session tool public barrel.
+ *
+ * Re-exports built-in tool factories, operation interfaces, contracts, and shared truncation helpers.
+ */
 export {
   type BashSpawnContext,
   type BashSpawnHook,

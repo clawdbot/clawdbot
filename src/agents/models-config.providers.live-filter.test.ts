@@ -1,3 +1,4 @@
+// Covers live-test provider filters before they reach runtime plugin discovery.
 import { describe, expect, it } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./models-config.providers.implicit.js";
 
 function liveFilterEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // VITEST enables the live-filter parsing path without requiring real live creds.
   return {
     VITEST: "1",
     ...overrides,
@@ -19,6 +21,7 @@ function resolveOwners(provider: string): readonly string[] | undefined {
 function metadataOwners(
   overrides: Partial<PluginMetadataSnapshotOwnerMaps>,
 ): PluginMetadataSnapshotOwnerMaps {
+  // Owner lookups are sparse in these tests, so default every map explicitly.
   return {
     channels: new Map(),
     channelConfigs: new Map(),
@@ -119,6 +122,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
       }),
     };
 
+    // Metadata owns concrete provider ids; auth/provider aliases stay a separate layer.
     expect(resolvePluginMetadataProviderOwnersForTest(snapshot, "bytedance")).toBeUndefined();
     expect(
       resolveProviderDiscoveryFilterForTest({

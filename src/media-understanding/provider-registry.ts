@@ -1,3 +1,5 @@
+// Media-understanding provider registry combines plugin capability providers,
+// config-derived image providers, and test/runtime overrides.
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
@@ -29,6 +31,8 @@ function mergeProviderIntoRegistry(
 function hydrateModelBackedMediaProvider(
   provider: MediaUnderstandingProvider,
 ): MediaUnderstandingProvider {
+  // Manifest-only image providers can still route through the generic model
+  // runtime when they declare image capability but no plugin hook.
   if (!provider.capabilities?.includes("image")) {
     return provider;
   }

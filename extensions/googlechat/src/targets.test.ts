@@ -1,6 +1,11 @@
+// Googlechat tests cover targets plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  clearGoogleChatApprovalCardBindingsForTest,
+  registerGoogleChatManualApprovalFollowupSuppression,
+} from "./approval-card-actions.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import {
   isGoogleChatSpaceTarget,
@@ -170,6 +175,7 @@ describe("googlechat group policy", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
+    clearGoogleChatApprovalCardBindingsForTest();
     authTesting.resetGoogleChatAuthForTests();
     mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
@@ -269,6 +275,53 @@ describe("sendGoogleChatMessage", () => {
     expect(String(url)).not.toContain("messageReplyOption=");
   });
 
+  it("sends cardsV2 with the text fallback", async () => {
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/125");
+    const cardsV2 = [
+      {
+        cardId: "approval",
+        card: {
+          header: { title: "Approval" },
+          sections: [{ widgets: [{ textParagraph: { text: "Approve?" } }] }],
+        },
+      },
+    ];
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "Approval required",
+      cardsV2,
+    });
+
+    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected Google Chat request body");
+    }
+    expect(JSON.parse(init.body)).toEqual({
+      text: "Approval required",
+      cardsV2,
+    });
+  });
+
+  it("suppresses text-only duplicate manual approval follow-ups at the API send boundary", async () => {
+    registerGoogleChatManualApprovalFollowupSuppression({
+      approvalId: "12345678-1234-1234-1234-123456789012",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    const result = await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "Please reply with:\n/approve 12345678 allow-once",
+    });
+
+    expect(result).toBeNull();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it("reports malformed send JSON with a stable API error", async () => {
     vi.stubGlobal(
       "fetch",
@@ -287,6 +340,43 @@ describe("sendGoogleChatMessage", () => {
         text: "hello",
       }),
     ).rejects.toThrow("Google Chat API request failed: malformed JSON response");
+  });
+});
+
+describe("updateGoogleChatMessage", () => {
+  afterEach(() => {
+    authTesting.resetGoogleChatAuthForTests();
+    mocks.fetchWithSsrFGuard.mockClear();
+    vi.unstubAllGlobals();
+  });
+
+  it("updates text and cardsV2 with a matching update mask", async () => {
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
+    const cardsV2 = [
+      {
+        cardId: "approval",
+        card: {
+          header: { title: "Resolved" },
+          sections: [{ widgets: [{ textParagraph: { text: "Done" } }] }],
+        },
+      },
+    ];
+
+    await updateGoogleChatMessage({
+      account,
+      messageName: "spaces/AAA/messages/123",
+      text: "Resolved",
+      cardsV2,
+    });
+
+    expect(String(mockCallArg(fetchMock))).toContain(
+      "spaces/AAA/messages/123?updateMask=text,cardsV2",
+    );
+    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected Google Chat request body");
+    }
+    expect(JSON.parse(init.body)).toEqual({ text: "Resolved", cardsV2 });
   });
 });
 

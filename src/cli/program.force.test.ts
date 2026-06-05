@@ -1,3 +1,4 @@
+// Program force tests cover root force flag behavior and command propagation.
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("node:child_process", async () => {

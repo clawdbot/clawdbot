@@ -1,11 +1,15 @@
+/**
+ * Compact references for active background bash sessions.
+ * These references are surfaced in agent context so follow-up turns can
+ * reconnect to prior long-running work.
+ */
 import { listRunningSessions } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
-// Builds compact references for currently running background process sessions.
-// These references are surfaced to agents so they can reconnect to prior work.
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
 
+/** Agent-facing summary of a reconnectable background process session. */
 export type ActiveProcessSessionReference = {
   sessionId: string;
   status: "running";

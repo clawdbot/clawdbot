@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for provider/model failover classification.
+ * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
+ */
 import { describe, expect, it } from "vitest";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {

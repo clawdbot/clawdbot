@@ -1,3 +1,4 @@
+// Qqbot plugin module implements state behavior.
 import type { ApproveRuntimeGetter, CommandsPort } from "../../adapter/commands.port.js";
 
 let resolveVersionGetter: () => string = () => "unknown";

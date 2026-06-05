@@ -1,3 +1,4 @@
+// Discord tests cover network config plugin behavior.
 import type * as dns from "node:dns";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

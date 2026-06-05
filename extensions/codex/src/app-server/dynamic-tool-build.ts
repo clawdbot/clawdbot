@@ -1,3 +1,8 @@
+/**
+ * Builds the Codex app-server dynamic tool list for one turn, including
+ * OpenClaw-owned tools, Codex native-tool fallback rules, sandbox shell shims,
+ * and provider allowlist normalization.
+ */
 import {
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
@@ -28,6 +33,8 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
 >;
+
+/** Factory seam for constructing OpenClaw runtime tools without eagerly loading agent-harness. */
 export type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
@@ -46,6 +53,7 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
 
+/** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 export type DynamicToolBuildParams = {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -66,14 +74,17 @@ export type DynamicToolBuildParams = {
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
 
+/** Overrides the runtime tool factory for tests that need deterministic tool catalogs. */
 export function setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
   openClawCodingToolsFactoryForTests = factory;
 }
 
+/** Clears the test-only runtime tool factory override. */
 export function resetOpenClawCodingToolsFactoryForTests(): void {
   openClawCodingToolsFactoryForTests = undefined;
 }
 
+/** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 export function resolveOpenClawCodingToolsSessionKeys(
   params: EmbeddedRunAttemptParams,
   sandboxSessionKey: string,
@@ -85,6 +96,7 @@ export function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+/** Resolves the channel id that hook events should target for this Codex app-server turn. */
 export function resolveCodexAppServerHookChannelId(
   params: EmbeddedRunAttemptParams,
   sandboxSessionKey: string,
@@ -112,6 +124,7 @@ type CodexDynamicToolBuildStageSummary = {
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
 
+/** Creates cheap optional timing instrumentation for the dynamic-tool hot path. */
 export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boolean } = {}): {
   mark: (name: string) => void;
   snapshot: () => CodexDynamicToolBuildStageSummary;
@@ -148,6 +161,7 @@ export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boo
   };
 }
 
+/** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
 ): boolean {
@@ -157,6 +171,7 @@ export function shouldWarnCodexDynamicToolBuildStageSummary(
   );
 }
 
+/** Formats per-stage timings into the compact form used by Codex app-server logs. */
 export function formatCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
 ): string {
@@ -167,6 +182,7 @@ export function formatCodexDynamicToolBuildStageSummary(
     : "none";
 }
 
+/** Builds, filters, and normalizes Codex-compatible runtime tools for a single turn. */
 export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -345,6 +361,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   return normalizedTools;
 }
 
+/** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
 export function includeForcedCodexDynamicToolAllow(
   toolsAllow: string[] | undefined,
   params: EmbeddedRunAttemptParams,
@@ -366,6 +383,7 @@ export function includeForcedCodexDynamicToolAllow(
   return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
 }
 
+/** Decides whether Codex native code mode can own shell/file tools for this turn. */
 export function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
   sandbox?: OpenClawSandboxContext,
@@ -400,6 +418,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   );
 }
 
+/** Returns true when OpenClaw policy requires the Node-owned exec/process tools instead. */
 export function isCodexNativeExecutionBlockedByNodeExecHost(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -472,6 +491,7 @@ function filterCodexMemoryFlushDynamicTools<T extends { name: string }>(tools: T
   );
 }
 
+/** Requires a Codex sandbox environment only when native tools must run inside OpenClaw sandboxing. */
 export function shouldRequireCodexSandboxExecServerEnvironment(params: {
   sandbox?: OpenClawSandboxContext;
   nativeToolSurfaceEnabled: boolean;
@@ -482,6 +502,7 @@ export function shouldRequireCodexSandboxExecServerEnvironment(params: {
   );
 }
 
+/** Selects the sandbox exec-server environment passed through the Codex app-server protocol. */
 export function resolveCodexSandboxEnvironmentSelection(
   environment: CodexSandboxExecEnvironment | undefined,
   nativeToolSurfaceEnabled: boolean,
@@ -489,6 +510,7 @@ export function resolveCodexSandboxEnvironmentSelection(
   return environment && nativeToolSurfaceEnabled ? [environment] : undefined;
 }
 
+/** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {
   effectiveCwd: string;
   environment?: CodexSandboxExecEnvironment;
@@ -499,6 +521,7 @@ export function resolveCodexAppServerExecutionCwd(params: {
     : params.effectiveCwd;
 }
 
+/** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
 export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
   sandbox: OpenClawSandboxContext | undefined,
 ): CodexSandboxPolicy {
@@ -518,6 +541,7 @@ function codexNetworkAccessForOpenClawSandbox(
   return Boolean(network && network !== "none");
 }
 
+/** Returns a Codex config copy with app-server Codex plugin loading disabled for thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
   return {
@@ -529,6 +553,7 @@ export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPlu
   };
 }
 
+/** Adds sandbox_exec/process aliases when native Code Mode cannot directly honor the sandbox. */
 export function addSandboxShellDynamicToolsIfAvailable(
   filteredTools: OpenClawDynamicTool[],
   allTools: OpenClawDynamicTool[],
@@ -644,6 +669,7 @@ function addNodeShellDynamicToolsIfNeeded(
   return next;
 }
 
+/** Applies a normalized tool allowlist while preserving sandbox shell aliases for exec/process. */
 export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -670,10 +696,12 @@ export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   });
 }
 
+/** Detects the wildcard allowlist marker after Codex tool-name normalization. */
 export function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 
+/** Forces message delivery through the message tool when the source channel requires it. */
 export function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (
     params.disableMessageTool !== true && params.sourceReplyDeliveryMode === "message_tool_only"

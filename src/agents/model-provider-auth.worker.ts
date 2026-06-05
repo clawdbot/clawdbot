@@ -1,3 +1,6 @@
+/**
+ * Worker entrypoint for warming provider auth state off the main thread.
+ */
 import { parentPort, workerData } from "node:worker_threads";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { replaceRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "./auth-profiles.js";

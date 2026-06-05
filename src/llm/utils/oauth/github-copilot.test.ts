@@ -1,3 +1,4 @@
+// GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refreshGitHubCopilotToken, testing } from "./github-copilot.js";

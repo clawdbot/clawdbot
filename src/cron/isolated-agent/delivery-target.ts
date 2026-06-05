@@ -1,3 +1,4 @@
+/** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
@@ -380,6 +381,8 @@ export async function resolveDeliveryTarget(
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
   if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {
+    // Prefer channel-canonical targets when the plugin can prove the route; this
+    // keeps stored session keys and delivery targets aligned for threaded sends.
     const routeTo = stripSelectedProviderPrefix({
       channel,
       to: route.to,
@@ -426,6 +429,8 @@ export async function resolveDeliveryTarget(
           })?.threadId,
         )
       : undefined;
+  // Thread precedence is explicit config, route canonicalization, parser-derived
+  // explicit target, then same-peer session history.
   const threadId =
     explicitThreadId ??
     route?.threadId ??

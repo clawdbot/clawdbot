@@ -1,3 +1,4 @@
+// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   buildUsageAggregateTail,

@@ -1,3 +1,4 @@
+// Discord plugin module implements reply delivery behavior.
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOutboundSessionContext,

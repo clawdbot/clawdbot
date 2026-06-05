@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements desktop browser smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

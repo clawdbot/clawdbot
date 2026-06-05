@@ -1,3 +1,5 @@
+// Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
+// lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
@@ -20,6 +22,8 @@ function createContext(
     onBlockReplyFlush?: () => void | Promise<void>;
   },
 ): EmbeddedAgentSubscribeContext {
+  // Lifecycle tests only need terminal state and delivery callbacks; omitted
+  // fields stay as no-op mocks so failure assertions stay focused.
   const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
   const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
   const emitBlockReply = vi.fn();
@@ -62,6 +66,7 @@ function createContext(
 }
 
 async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
+  // Error lifecycle assertions share the same structured warning envelope.
   await handleAgentEnd(ctx);
 
   const warn = vi.mocked(ctx.log.warn);
@@ -92,6 +97,8 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 
 describe("handleAgentEnd", () => {
   it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
+    // Canary text proves provider error strings are sanitized before lifecycle
+    // events reach channel integrations.
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {

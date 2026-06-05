@@ -1,3 +1,6 @@
+/**
+ * Decodes HTML-entity escaped tool-call arguments in stream wrappers.
+ */
 import { streamSimple } from "../../llm/stream.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";

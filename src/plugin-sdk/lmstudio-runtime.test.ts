@@ -1,3 +1,4 @@
+// LM Studio runtime tests cover provider runtime setup, auth status, and model discovery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

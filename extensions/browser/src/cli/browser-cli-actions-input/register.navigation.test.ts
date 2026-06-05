@@ -1,3 +1,4 @@
+// Browser tests cover register.navigation plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "../browser-cli-resize.js";

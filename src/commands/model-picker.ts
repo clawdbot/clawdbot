@@ -1,3 +1,4 @@
+/** Re-export seam for model picker command helpers. */
 export {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,

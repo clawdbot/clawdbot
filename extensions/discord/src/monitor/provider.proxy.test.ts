@@ -1,3 +1,4 @@
+// Discord tests cover provider.proxy plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 function createGatewayInfoBody(overrides?: {

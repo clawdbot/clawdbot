@@ -1,3 +1,4 @@
+// Channel config tests cover channel config normalization and account lookup behavior.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { typedCases } from "../test-utils/typed-cases.js";

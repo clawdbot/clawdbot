@@ -1,3 +1,4 @@
+// Media reference tests cover resolving refs to local, remote, and inline media.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

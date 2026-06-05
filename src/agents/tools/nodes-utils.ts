@@ -1,3 +1,8 @@
+/**
+ * Nodes lookup helpers.
+ *
+ * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";

@@ -1,3 +1,4 @@
+// Status service-summary tests cover managed gateway service status parsing and log path reporting.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";

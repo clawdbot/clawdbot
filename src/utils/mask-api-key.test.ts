@@ -1,3 +1,4 @@
+// API key masking tests cover redaction of provider credential values.
 import { describe, expect, it } from "vitest";
 import { maskApiKey } from "./mask-api-key.js";
 

@@ -1,3 +1,5 @@
+// Native JavaScript extension loader tests cover when compiled JS can bypass
+// jiti and when alias-sensitive graphs must keep jiti resolution.
 import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,6 +72,8 @@ export default async function extension(api) {
   });
 
   it("reloads native JavaScript extensions when the file changes without stat-key drift", async () => {
+    // Native dynamic imports use a content-aware cache key so same-size,
+    // same-mtime edits still reload the extension module.
     const { loadExtensions } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
@@ -184,6 +188,8 @@ export default async function extension(api) {
   });
 
   it("keeps SDK-alias JavaScript extensions on one shared jiti loader", async () => {
+    // SDK aliases need jiti's virtual resolution, but one shared loader keeps
+    // multi-extension imports consistent and cheap.
     const { loadExtensions } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);
@@ -236,6 +242,8 @@ module.exports = async function(api) {
   });
 
   it("keeps multi-file JavaScript extensions on jiti for graph-wide aliases", async () => {
+    // Alias detection walks relative helper files; a clean entrypoint can still
+    // need jiti when its dependency graph imports SDK/TypeBox aliases.
     const { loadExtensions } = await import("./loader.js");
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-js-"));
     tempDirs.push(dir);

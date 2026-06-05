@@ -1,3 +1,4 @@
+// Provider-index normalization tests cover preview catalogs, install metadata, auth choices, and malformed input.
 import { describe, expect, it } from "vitest";
 import { loadOpenClawProviderIndex, normalizeOpenClawProviderIndex } from "./index.js";
 

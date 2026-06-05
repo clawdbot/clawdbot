@@ -1,3 +1,4 @@
+// Event-loop health tests cover delay, CPU, and utilization degradation classification.
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import {

@@ -1,9 +1,11 @@
+/**
+ * Session async-task lookup helpers for avoiding duplicate long-running work
+ * and reporting the active task back through tool/status metadata.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../tasks/task-registry.types.js";
 
-// Session async-task lookup helpers for avoiding duplicate long-running work and
-// reporting the active task back through tool/status metadata.
 const DEFAULT_ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running"]);
 
 /** Find the active queued/running task that matches a session and optional filters. */

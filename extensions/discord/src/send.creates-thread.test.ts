@@ -1,3 +1,4 @@
+// Discord tests cover send.creates thread plugin behavior.
 import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

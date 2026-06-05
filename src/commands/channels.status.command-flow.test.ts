@@ -1,3 +1,4 @@
+// Channels status command-flow tests cover gateway calls, config fallback, and timeout validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { channelsStatusCommand } from "./channels/status.js";

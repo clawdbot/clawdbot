@@ -1,8 +1,10 @@
+// TTS status config tests cover status file path and config resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 
 let fixtureRoot = "";
@@ -20,31 +22,16 @@ afterAll(() => {
 
 async function withStatusTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = path.join(fixtureRoot, `case-${fixtureId++}`);
-  const previousHome = process.env.HOME;
-  const previousUserProfile = process.env.USERPROFILE;
-  const previousOpenClawHome = process.env.OPENCLAW_HOME;
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   fs.mkdirSync(home, { recursive: true });
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  delete process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-  try {
-    await run(home);
-  } finally {
-    restoreEnv("HOME", previousHome);
-    restoreEnv("USERPROFILE", previousUserProfile);
-    restoreEnv("OPENCLAW_HOME", previousOpenClawHome);
-    restoreEnv("OPENCLAW_STATE_DIR", previousStateDir);
-  }
-}
-
-function restoreEnv(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
+  await withEnvAsync(
+    {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+    },
+    async () => await run(home),
+  );
 }
 
 describe("resolveStatusTtsSnapshot", () => {
@@ -375,26 +362,28 @@ describe("resolveStatusTtsSnapshot", () => {
         }),
       );
 
-      delete process.env.OPENCLAW_STATE_DIR;
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      try {
-        expect(
-          resolveStatusTtsSnapshot({
-            cfg: {
-              messages: {
-                tts: {},
-              },
-            } as OpenClawConfig,
-          }),
-        ).toEqual({
-          autoMode: "always",
-          provider: "openai",
-          maxLength: 1500,
-          summarize: true,
-        });
-      } finally {
-        vi.unstubAllEnvs();
-      }
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        async () => {
+          expect(
+            resolveStatusTtsSnapshot({
+              cfg: {
+                messages: {
+                  tts: {},
+                },
+              } as OpenClawConfig,
+            }),
+          ).toEqual({
+            autoMode: "always",
+            provider: "openai",
+            maxLength: 1500,
+            summarize: true,
+          });
+        },
+      );
     });
   });
 });

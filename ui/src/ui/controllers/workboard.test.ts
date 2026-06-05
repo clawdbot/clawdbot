@@ -1,3 +1,4 @@
+// Control UI tests cover workboard behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
 import {

@@ -1,3 +1,4 @@
+// Channel route target tests cover target parsing and validation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectChannelRouteTargets } from "./channel-route-targets.js";

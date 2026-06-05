@@ -1,3 +1,8 @@
+/**
+ * Tool definition/AgentTool adapters.
+ *
+ * Bridges extension-style ToolDefinition objects and core runtime AgentTool objects.
+ */
 import type { TSchema } from "typebox";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";

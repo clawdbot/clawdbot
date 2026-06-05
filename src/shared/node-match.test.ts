@@ -1,3 +1,4 @@
+// Node match tests cover node selection from names, ids, and address hints.
 import { describe, expect, it } from "vitest";
 import { normalizeNodeKey, resolveNodeIdFromCandidates, resolveNodeMatches } from "./node-match.js";
 

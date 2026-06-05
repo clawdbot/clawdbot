@@ -1,3 +1,4 @@
+// Discord helper module supports native command helpers behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { vi } from "vitest";
 

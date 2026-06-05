@@ -1,3 +1,4 @@
+// Openai plugin module implements embedding batch behavior.
 import {
   applyEmbeddingBatchOutputLine,
   buildBatchHeaders,

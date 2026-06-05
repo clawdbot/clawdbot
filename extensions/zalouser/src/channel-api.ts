@@ -1,3 +1,4 @@
+// Zalouser API module exposes the plugin public contract.
 export { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 export type {
   ChannelDirectoryEntry,

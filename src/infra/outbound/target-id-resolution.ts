@@ -1,3 +1,5 @@
+// Id-like target resolution gates plugin directory lookups to inputs that are
+// specific enough to avoid broad name searches.
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { maybeResolvePluginMessagingTarget } from "./target-normalization.js";

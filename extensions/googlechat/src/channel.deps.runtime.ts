@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
   chunkTextForOutbound,

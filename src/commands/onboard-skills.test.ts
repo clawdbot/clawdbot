@@ -1,3 +1,4 @@
+// Onboard skills tests cover skill setup prompts, package manager config, and skip behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";

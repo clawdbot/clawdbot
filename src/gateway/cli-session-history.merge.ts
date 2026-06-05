@@ -1,3 +1,5 @@
+// Imported CLI history merge helpers.
+// Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
@@ -7,8 +9,6 @@ import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js"
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-// Imported CLI history can overlap local transcript writes. Dedupe prefers
-// stable imported external ids, then falls back to role/text/timestamp matching.
 function extractComparableText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;

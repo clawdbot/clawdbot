@@ -1,3 +1,8 @@
+/**
+ * Bundled channel bootstrap registry.
+ *
+ * Provides channel plugin metadata before the full runtime registry is installed.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
 import { resolveBundledChannelRootScope } from "./bundled-root.js";
@@ -9,10 +14,6 @@ import {
 } from "./bundled.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Bootstrap registry for bundled channel plugins before runtime registry install.
- */
 
 function resolveBootstrapChannelId(id: ChannelId): string {
   return normalizeOptionalString(id) ?? "";

@@ -1,3 +1,4 @@
+// Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Sessions model resolution tests cover displayed model metadata for stored session records.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockSessionsConfig,

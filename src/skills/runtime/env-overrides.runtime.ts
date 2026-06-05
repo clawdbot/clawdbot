@@ -1,3 +1,4 @@
+// Runtime env override facade keeps env override loading behind a lazy boundary.
 import { getActiveSkillEnvKeys as getActiveSkillEnvKeysImpl } from "./env-overrides.js";
 
 type GetActiveSkillEnvKeys = typeof import("./env-overrides.js").getActiveSkillEnvKeys;

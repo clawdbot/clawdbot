@@ -1,5 +1,10 @@
+/**
+ * Browser CLI metadata entry. It registers the `openclaw browser` command lazily
+ * so command discovery does not load the full browser runtime.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
+/** Plugin entry that contributes Browser CLI commands. */
 export default definePluginEntry({
   id: "browser",
   name: "Browser",

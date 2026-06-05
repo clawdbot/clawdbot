@@ -1,3 +1,8 @@
+/**
+ * Built-in ls session tool.
+ *
+ * Lists directory entries through local or injected operations with bounded output rendering.
+ */
 import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { Text } from "@earendil-works/pi-tui";

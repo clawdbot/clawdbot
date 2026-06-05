@@ -1,3 +1,4 @@
+// Qa Channel type declarations define plugin contracts.
 type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;

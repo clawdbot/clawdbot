@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements connection bound ids behavior.
 import { createHash } from "node:crypto";
 
 // Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs

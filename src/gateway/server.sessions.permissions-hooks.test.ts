@@ -1,3 +1,5 @@
+// Session permissions and hooks tests protect gateway access control around
+// patch/delete/compact/restore APIs plus emitted internal hook payloads.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

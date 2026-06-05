@@ -200,6 +200,36 @@ struct RootTabs: View {
                     RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
                 }
             }
+            .overlay {
+                if self.appModel.screen.isCanvasPresented {
+                    self.canvasPresentationOverlay
+                        .transition(.opacity)
+                        .zIndex(20)
+                }
+            }
+    }
+
+    private var canvasPresentationOverlay: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            ScreenWebView(controller: self.appModel.screen)
+                .ignoresSafeArea()
+            Button {
+                self.appModel.screen.hideCanvas()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.32), radius: 8, y: 2)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close canvas")
+            .safeAreaPadding(.top, 8)
+            .padding(.trailing, 12)
+        }
     }
 
     private func rootLifecycle(_ content: some View) -> some View {

@@ -1,3 +1,4 @@
+// Read-only session store loading parses JSON without repairing or writing the store.
 import fs from "node:fs";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";

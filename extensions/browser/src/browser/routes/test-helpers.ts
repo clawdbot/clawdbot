@@ -1,5 +1,12 @@
+/**
+ * Lightweight browser route test helpers.
+ *
+ * Provides an in-memory route registrar and response object for focused route
+ * unit tests without standing up the HTTP server.
+ */
 import type { BrowserResponse, BrowserRouteHandler, BrowserRouteRegistrar } from "./types.js";
 
+/** Create an in-memory route app that records handlers by method and path. */
 export function createBrowserRouteApp() {
   const getHandlers = new Map<string, BrowserRouteHandler>();
   const postHandlers = new Map<string, BrowserRouteHandler>();
@@ -12,6 +19,7 @@ export function createBrowserRouteApp() {
   return { app, getHandlers, postHandlers, deleteHandlers };
 }
 
+/** Create a minimal response object that captures status and JSON body. */
 export function createBrowserRouteResponse() {
   let statusCode = 200;
   let jsonBody: unknown;

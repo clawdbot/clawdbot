@@ -1,3 +1,5 @@
+// Shared media runner test utilities create temporary audio/video fixtures and
+// attachment caches with host tool discovery disabled.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

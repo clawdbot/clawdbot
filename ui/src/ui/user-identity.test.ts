@@ -1,3 +1,4 @@
+// Control UI tests cover user identity behavior.
 import { describe, expect, it } from "vitest";
 import {
   normalizeLocalUserIdentity,

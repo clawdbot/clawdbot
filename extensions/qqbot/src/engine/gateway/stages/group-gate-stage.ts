@@ -1,3 +1,4 @@
+// Qqbot plugin module implements group gate stage behavior.
 import type { HistoryPort } from "../../adapter/history.port.js";
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { MentionGatePort } from "../../adapter/mention-gate.port.js";

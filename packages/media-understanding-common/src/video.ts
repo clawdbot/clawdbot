@@ -1,3 +1,4 @@
+// Media Understanding Common module implements video behavior.
 import { DEFAULT_VIDEO_MAX_BASE64_BYTES } from "./defaults.js";
 
 // Video payload size helpers for base64-expanded request bodies.

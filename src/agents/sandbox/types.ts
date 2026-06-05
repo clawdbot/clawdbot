@@ -1,3 +1,8 @@
+/**
+ * Sandbox runtime configuration and context types.
+ *
+ * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
+ */
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";

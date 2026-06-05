@@ -1,3 +1,7 @@
+/**
+ * Public Codex Supervisor API barrel for plugin tools, MCP serving, config, and
+ * session types.
+ */
 export {
   CodexSupervisorPluginConfigSchema,
   loadCodexSupervisorEndpoints,

@@ -1,3 +1,5 @@
+// Sandbox fs bridge shell tests cover POSIX shell compatibility, path
+// canonicalization, bind reads, and pinned mutation helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -144,6 +146,8 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("writes via temp file + atomic rename (never direct truncation)", async () => {
+    // Writes must go through the Python mutation helper so validation and
+    // atomic replacement happen together inside the sandbox.
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });

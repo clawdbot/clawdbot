@@ -1,3 +1,9 @@
+/**
+ * SSRF policy adjustments for Chrome DevTools Protocol reachability checks.
+ *
+ * CDP control-plane probes may target loopback even when page navigation policy
+ * is stricter, so this module scopes the exception to browser control only.
+ */
 import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -30,4 +36,5 @@ export function resolveCdpReachabilityPolicy(
   return withCdpHostnameAllowed(profile, ssrfPolicy);
 }
 
+/** Alias used by callers that treat reachability and control as one CDP policy. */
 export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;

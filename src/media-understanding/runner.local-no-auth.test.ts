@@ -1,3 +1,5 @@
+// Local no-auth runner tests cover custom local providers, auth markers, and
+// profile/env isolation for audio and video providers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

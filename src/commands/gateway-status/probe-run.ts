@@ -1,3 +1,4 @@
+/** Runs gateway discovery, optional SSH tunneling, and per-target probes. */
 import {
   normalizeOptionalString,
   readStringValue,
@@ -19,6 +20,7 @@ import {
   type GatewayStatusTarget,
 } from "./helpers.js";
 
+/** Single gateway status target plus probe details and derived display metadata. */
 export type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
   probe: Awaited<ReturnType<typeof probeGateway>>;
@@ -27,6 +29,7 @@ export type GatewayStatusProbedTarget = {
   authDiagnostics: string[];
 };
 
+/** Probes configured, explicit, and optionally SSH-discovered gateway targets. */
 export async function runGatewayStatusProbePass(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -93,6 +96,8 @@ export async function runGatewayStatusProbePass(params: {
     });
   }
 
+  // Prefer the concurrently-started tunnel, but allow auto-discovered SSH
+  // targets to start after Bonjour finishes.
   const tunnel =
     tunnelFirst ||
     (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
@@ -159,7 +164,7 @@ export async function runGatewayStatusProbePass(params: {
       try {
         await tunnel.stop();
       } catch {
-        // best-effort
+        // Status output must not fail just because tunnel cleanup races process exit.
       }
     }
   }

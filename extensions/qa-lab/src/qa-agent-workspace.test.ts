@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa agent workspace plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";

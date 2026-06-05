@@ -1,3 +1,7 @@
+/**
+ * Agent-facing Canvas tool implementation for node canvas commands and
+ * snapshots.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -85,6 +89,7 @@ function resolveCanvasImageSanitizationLimits(
   return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
 }
 
+/** Creates the model-facing Canvas tool used to invoke paired node canvas commands. */
 export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   const imageSanitization = resolveCanvasImageSanitizationLimits(options?.config);
   return {

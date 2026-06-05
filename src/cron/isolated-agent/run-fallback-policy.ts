@@ -1,3 +1,4 @@
+/** Resolves model fallback chains for isolated cron runs and preflight. */
 import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

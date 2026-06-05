@@ -1,3 +1,8 @@
+/**
+ * Builds provider/model filters for live test lanes. Provider matches can
+ * follow plugin ownership aliases so scoped live runs include equivalent
+ * provider IDs.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeGooglePreviewModelId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {

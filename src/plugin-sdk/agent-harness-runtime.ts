@@ -24,6 +24,7 @@ import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
+/** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export type { AgentMessage } from "../agents/runtime/index.js";
@@ -154,9 +155,7 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type {
-  AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult,
-};
+export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -190,6 +189,7 @@ export type {
 } from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
 
+/** Detect prompt image references and load them through the same limits used by embedded runs. */
 export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
   workspaceDir: string;
@@ -227,6 +227,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   });
 }
 
+/** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
@@ -331,6 +332,7 @@ export {
  */
 export type ToolProgressDetailMode = "explain" | "raw";
 
+/** Infer compact display metadata for one tool invocation from its name and arguments. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,
@@ -359,6 +361,7 @@ export function formatToolProgressOutput(
   return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
 }
 
+/** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
   assistantTexts: readonly string[];
   reasoningText?: string | null;
@@ -367,6 +370,7 @@ export type AgentHarnessTerminalOutcomeInput = {
   turnCompleted: boolean;
 };
 
+/** Terminal fallback classification emitted by agent harness adapters. */
 export type AgentHarnessTerminalOutcomeClassification = NonNullable<
   EmbeddedRunAttemptResult["agentHarnessResultClassification"]
 >;

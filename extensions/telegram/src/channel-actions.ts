@@ -1,3 +1,4 @@
+// Telegram plugin module implements channel actions behavior.
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,

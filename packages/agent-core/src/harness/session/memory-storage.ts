@@ -1,3 +1,4 @@
+// Agent Core module implements memory storage behavior.
 import type { SessionMetadata, SessionTreeEntry } from "../types.js";
 import { BaseSessionStorage } from "./storage-base.js";
 import { uuidv7 } from "./uuid.js";

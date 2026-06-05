@@ -1,3 +1,4 @@
+/** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";

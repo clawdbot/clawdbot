@@ -1,3 +1,5 @@
+// OpenClaw Gateway client facade.
+// Wraps the shared gateway-client package with OpenClaw host dependencies.
 import {
   GatewayClient as BaseGatewayClient,
   GATEWAY_CLOSE_CODE_HINTS as BASE_GATEWAY_CLOSE_CODE_HINTS,
@@ -191,6 +193,8 @@ export class GatewayClient {
   #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
+    // Inject host deps here so the reusable package stays decoupled from
+    // OpenClaw device identity, token storage, proxy routing, and logging.
     this.#client = new BaseGatewayClient({
       ...opts,
       clientVersion: opts.clientVersion ?? VERSION,

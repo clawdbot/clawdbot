@@ -1,3 +1,8 @@
+/**
+ * Subagent capability resolution.
+ * Combines session-key shape, stored envelopes, spawn depth, and inherited tool
+ * policy to decide role, control scope, and subagent permissions.
+ */
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
@@ -18,8 +23,7 @@ import {
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
-// Subagent capability resolution for live and persisted sessions. Depth derives
-// defaults, while stored envelopes can override role/scope and inherited tools.
+/** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
   "main",
@@ -40,6 +44,7 @@ type SessionCapabilityEntry = {
   inheritedToolDeny?: unknown;
 };
 
+/** Minimal persisted session-store shape needed to resolve subagent capabilities. */
 export type SessionCapabilityStore = Record<
   string,
   {
@@ -126,6 +131,7 @@ function resolveSessionCapabilityEntry(params: {
   return store[params.sessionKey] ?? findEntryBySessionId(store, params.sessionKey);
 }
 
+/** Resolve the session-store subset used for subagent capability lookup. */
 export function resolveSubagentCapabilityStore(
   sessionKey: string | undefined | null,
   opts?: {
@@ -172,6 +178,7 @@ function resolveSubagentControlScopeForRole(role: SubagentSessionRole): Subagent
   return role === "leaf" ? "none" : "children";
 }
 
+/** Resolve depth-derived role, scope, and spawn/control booleans. */
 export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
   const depth = resolveNonNegativeIntegerOption(params.depth, 0);
   const role = resolveSubagentRoleForDepth(params);

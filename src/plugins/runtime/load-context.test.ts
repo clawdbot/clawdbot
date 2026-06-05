@@ -1,3 +1,4 @@
+// Load context tests cover agent and workspace context resolution for plugin runtimes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();

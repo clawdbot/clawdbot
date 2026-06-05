@@ -1,3 +1,4 @@
+// Qqbot helper module supports file utils behavior.
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";

@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile API-key resolution.
+ * Covers token/api-key/OAuth profile compatibility, SecretRefs, and provider
+ * runtime formatting behavior.
+ */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";

@@ -1,3 +1,6 @@
+/**
+ * Shared metadata and result types for embedded-agent runner surfaces.
+ */
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,

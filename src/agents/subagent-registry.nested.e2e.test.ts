@@ -1,3 +1,5 @@
+// Nested subagent registry e2e tests cover requester/controller relationships
+// across orchestrator and leaf child sessions.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 
@@ -76,7 +78,7 @@ describe("subagent registry nested agent tracking", () => {
 
   it("announce uses requesterSessionKey to route to the correct parent", () => {
     const { registerSubagentRun } = subagentRegistry;
-    // Register a sub-sub-agent whose parent is a sub-agent
+    // Register a sub-sub-agent whose parent is a sub-agent.
     registerSubagentRun({
       runId: "run-subsub",
       childSessionKey: "agent:main:subagent:orch:subagent:child",
@@ -87,9 +89,8 @@ describe("subagent registry nested agent tracking", () => {
       label: "nested-leaf",
     });
 
-    // When announce fires for the sub-sub-agent, it should target the sub-agent (depth-1),
-    // NOT the main session. The registry entry's requesterSessionKey ensures this.
-    // We verify the registry entry has the correct requesterSessionKey.
+    // Announce should target the depth-1 parent, not the main session. The
+    // registry entry's requesterSessionKey carries that routing boundary.
     const { listSubagentRunsForRequester } = subagentRegistry;
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch");
     expect(orchRuns).toHaveLength(1);

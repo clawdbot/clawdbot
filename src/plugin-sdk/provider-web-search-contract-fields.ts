@@ -1,3 +1,4 @@
+// Provider web-search contract fields expose shared config keys for web-search-capable providers.
 import type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 import {
   getScopedCredentialValue,
@@ -10,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WebSearchProviderPlugin } from "../plugins/types.js";
 
+/** Credential storage mode advertised by a web-search-capable provider. */
 export type WebSearchProviderContractCredential =
   | { type: "none" }
   | { type: "top-level" }

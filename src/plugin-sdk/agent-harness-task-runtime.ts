@@ -48,6 +48,7 @@ export type AgentHarnessTaskRuntimeScopeParams = {
   runIdPrefix?: string;
 };
 
+/** Create-task params with runtime and requester scope supplied by the scoped task runtime. */
 export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
   CreateRunningTaskRunParams,
   "runtime" | "taskKind" | "requesterSessionKey" | "ownerKey" | "scopeKind"
@@ -55,16 +56,19 @@ export type AgentHarnessScopedCreateRunningTaskRunParams = Omit<
   runId: string;
 };
 
+/** Progress params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedRecordTaskRunProgressParams = Omit<
   RecordTaskRunProgressParams,
   "runtime" | "sessionKey"
 >;
 
+/** Finalization params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedFinalizeTaskRunParams = Omit<
   FinalizeTaskRunParams,
   "runtime" | "sessionKey"
 >;
 
+/** Delivery-status params scoped to the requester session owned by the harness runtime. */
 export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
   SetDeliveryStatusParams,
   "runtime" | "sessionKey"
@@ -82,8 +86,10 @@ export type AgentHarnessTaskRuntime = {
   listTaskRecords(): TaskRecord[];
 };
 
+/** Completion states a harness task can report to its requester. */
 export type AgentHarnessCompletionStatus = "succeeded" | "failed" | "cancelled";
 
+/** Delivery result returned after routing a harness task completion announcement. */
 export type AgentHarnessCompletionDelivery = Awaited<
   ReturnType<typeof deliverSubagentAnnouncement>
 >;

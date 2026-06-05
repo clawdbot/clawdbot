@@ -1,3 +1,4 @@
+// Github Copilot tests cover provider discovery.contract plugin behavior.
 import { fileURLToPath } from "node:url";
 import { describeGithubCopilotProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
 

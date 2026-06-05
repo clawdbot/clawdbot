@@ -1,3 +1,4 @@
+// Slack helper module supports channel config behavior.
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,

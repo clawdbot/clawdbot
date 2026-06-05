@@ -1,3 +1,4 @@
+// Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -95,6 +96,7 @@ const writerStoreFileStats = new WeakMap<
 >();
 
 function loadSessionArchiveRuntime() {
+  // Archive cleanup is a cold maintenance path, so keep it lazy to avoid gateway import cycles.
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
 }
@@ -300,6 +302,8 @@ function restoreUnchangedSessionStoreCache(
 }
 
 function findJsonValueEnd(json: string, valueStart: number): number | null {
+  // Single-entry persistence rewrites one top-level JSON value; this scanner finds its end without
+  // reparsing the whole store string.
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -356,6 +360,7 @@ function buildSingleEntrySerializedStore(params: {
   const currentPromptRefs = getSerializedPromptRefs(params.storePath, currentSerialized);
   const marker = `\n  ${JSON.stringify(params.patch.sessionKey)}: `;
   const markerIndex = currentSerialized.indexOf(marker);
+  // Fast path only handles existing pretty-printed top-level entries in the cached JSON shape.
   if (markerIndex < 0) {
     return null;
   }
@@ -444,6 +449,8 @@ function storeHasUnsafeUntouchedHydratedSkillPrompts(
       ? getSerializedPromptRefs(storePath, currentSerialized)
       : undefined;
   for (const [key, entry] of Object.entries(store)) {
+    // If another hydrated entry lost its durable blob, single-entry JSON surgery would persist a
+    // store that cannot rehydrate that prompt later.
     if (key === changedSessionKey || typeof entry.skillsSnapshot?.prompt !== "string") {
       continue;
     }
@@ -585,6 +592,7 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
+      // Archive/remove artifacts only after the final live session-id set is known.
       const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
         removedSessionFiles,
         referencedSessionIds,
@@ -662,6 +670,8 @@ async function saveSessionStoreUnlocked(
       opts.singleEntryPersistence.sessionKey,
     )
   ) {
+    // Hot path for updating one entry: preserve the cached serialized store and replace only that
+    // entry's JSON when no maintenance or prompt-blob repair needs a full rewrite.
     const normalizedEntry = store[opts.singleEntryPersistence.sessionKey];
     const singleEntrySerialized = buildSingleEntrySerializedStore({
       storePath,

@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements shared runtime behavior.
 export {
   TOKEN_REFRESH_MARGIN_MS,
   buildFoundryProviderBaseUrl,

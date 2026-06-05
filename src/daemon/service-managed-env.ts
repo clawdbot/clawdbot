@@ -1,3 +1,4 @@
+/** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
@@ -92,6 +93,8 @@ function deleteManagedServiceEnvKeys(
   if (normalizedKeys.size === 0) {
     return;
   }
+  // Delete by normalized key so casing changes between installs do not leave
+  // stale service-owned values behind.
   for (const rawKey of Object.keys(environment)) {
     const key = normalizeServiceEnvKey(rawKey);
     if (key && normalizedKeys.has(key)) {
@@ -155,6 +158,8 @@ export function collectInlineManagedServiceEnvKeys(
     if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
       continue;
     }
+    // Only inline/file-overlap sources can be repaired from the service command
+    // itself; file-only values must stay owned by the generated env file.
     inlineKeys.push(normalized);
   }
   return sortUniqueStrings(inlineKeys);

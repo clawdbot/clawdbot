@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock embedding provider runtime. It normalizes model-specific
+ * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
+ */
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
@@ -20,6 +24,7 @@ type BedrockEmbeddingClient = {
   dimensions?: number;
 };
 
+/** Default Bedrock embedding model used when no explicit model is configured. */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
 /** Request/response format family — each has a different API shape. */

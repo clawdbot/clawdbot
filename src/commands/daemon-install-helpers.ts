@@ -1,3 +1,4 @@
+// Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -441,6 +442,7 @@ const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CONTAINER_HINT",
 ]);
 
+/** Preserve safe operator-owned env vars from an existing service definition. */
 export function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
@@ -596,6 +598,7 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
+/** Build command, working directory, and environment for installing the Gateway service. */
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -722,6 +725,7 @@ function omitEnvKey(
   return next;
 }
 
+/** Return the user-facing recovery hint for failed Gateway service installation. */
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."

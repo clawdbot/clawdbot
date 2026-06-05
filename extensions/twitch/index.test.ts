@@ -1,3 +1,4 @@
+// Twitch tests cover index plugin behavior.
 import { assertBundledChannelEntries } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe } from "vitest";
 import entry from "./index.js";

@@ -1,3 +1,4 @@
+// Msteams tests cover monitor.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";

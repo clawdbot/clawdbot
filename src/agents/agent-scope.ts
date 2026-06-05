@@ -1,3 +1,4 @@
+/** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -88,6 +89,7 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   }
 }
 
+/** Primary model probe metadata used to validate auto-fallback recovery. */
 export type AutoFallbackPrimaryProbe = {
   provider: string;
   model: string;
@@ -97,6 +99,7 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
 
+/** Detects old auto-fallback session entries that lack primary-origin metadata. */
 export function hasLegacyAutoFallbackWithoutOrigin(
   entry:
     | Pick<

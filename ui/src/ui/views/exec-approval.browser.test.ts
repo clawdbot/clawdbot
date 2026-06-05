@@ -1,3 +1,4 @@
+// Control UI tests cover exec approval behavior.
 import { html, render } from "lit";
 import { expect, test } from "vitest";
 import { i18n } from "../../i18n/index.ts";

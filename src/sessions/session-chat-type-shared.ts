@@ -1,3 +1,4 @@
+// Shared session chat type helpers expose cross-module chat type classification.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 

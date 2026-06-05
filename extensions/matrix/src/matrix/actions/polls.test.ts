@@ -1,3 +1,4 @@
+// Matrix tests cover polls plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { voteMatrixPoll } from "./polls.js";

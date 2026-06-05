@@ -1,3 +1,4 @@
+// Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
 import {
   decideChannelIngress,

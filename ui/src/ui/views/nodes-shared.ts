@@ -1,3 +1,4 @@
+// Control UI view renders nodes shared screen content.
 import { normalizeOptionalString } from "../string-coerce.ts";
 
 export type NodeTargetOption = {

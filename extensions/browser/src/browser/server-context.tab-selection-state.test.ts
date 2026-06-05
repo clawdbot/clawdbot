@@ -1,3 +1,4 @@
+// Browser tests cover server context.tab selection state plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";

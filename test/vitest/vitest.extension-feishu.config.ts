@@ -1,3 +1,4 @@
+// Vitest extension feishu config wires the extension feishu test shard.
 import { feishuExtensionTestRoots } from "./vitest.extension-feishu-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

@@ -1,3 +1,4 @@
+// Verifies exec host, sandbox, and approval-default resolution for embedded agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
@@ -139,6 +140,8 @@ describe("resolveExecDefaults", () => {
       sandboxAvailable: true,
     });
 
+    // Sandbox mode is intentionally self-contained: gateway approval floors
+    // must not leak into the local deny-by-default sandbox contract.
     expect(defaults.effectiveHost).toBe("sandbox");
     expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
@@ -174,6 +177,8 @@ describe("resolveExecDefaults", () => {
       agents: {},
     });
 
+    // Approval floors clamp normalized mode upward/downward after config mode
+    // mapping so persisted host policy remains the final safety boundary.
     expect(
       resolveExecDefaults({
         cfg: {
@@ -223,6 +228,8 @@ describe("resolveExecDefaults", () => {
   });
 
   it("keeps legacy security overrides ahead of higher-scope normalized mode", () => {
+    // Legacy security/ask overrides are still a shipped config shape. They win
+    // when scoped directly to the agent that is being resolved.
     expect(
       resolveExecDefaults({
         cfg: {

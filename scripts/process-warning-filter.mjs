@@ -1,5 +1,10 @@
+// Installs a process-wide warning filter for dependency warnings that are known
+// noise in current toolchains.
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
+/**
+ * Suppresses punycode deprecation warnings while preserving all other warnings.
+ */
 export function installProcessWarningFilter() {
   if (globalThis[warningFilterKey]?.installed) {
     return;

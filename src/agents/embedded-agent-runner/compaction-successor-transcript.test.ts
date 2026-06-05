@@ -1,3 +1,4 @@
+// Persistence coverage for transcript rotation after successful compaction.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,16 @@ afterEach(async () => {
 function makeAssistant(text: string, timestamp: number) {
   return makeAgentAssistantMessage({
     content: [{ type: "text", text }],
+    timestamp,
+  });
+}
+
+function makeThinkingAssistant(text: string, thinkingSignature: string, timestamp: number) {
+  return makeAgentAssistantMessage({
+    content: [
+      { type: "thinking", thinking: "reasoning", thinkingSignature } as never,
+      { type: "text", text },
+    ],
     timestamp,
   });
 }
@@ -82,6 +93,8 @@ function createCompactedSession(sessionDir: string): {
   firstKeptId: string;
   oldUserId: string;
 } {
+  // Fixture includes pre-compaction history, preserved branch metadata, and
+  // post-compaction turns so rotation can prove exactly which entries survive.
   const manager = SessionManager.create(sessionDir, sessionDir);
   manager.appendModelChange("openai", "gpt-5.2");
   manager.appendThinkingLevelChange("medium");
@@ -108,6 +121,8 @@ describe("rotateTranscriptAfterCompaction", () => {
     const dir = await createTmpDir();
     const { sessionFile } = createCompactedSession(dir);
 
+    // File-only rotation is used after the active manager has moved on; opening
+    // a new manager here would hide bugs in the direct persistence path.
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
       throw new Error("SessionManager.open should not be used for file rotation");
     });
@@ -501,5 +516,73 @@ describe("shouldRotateCompactionTranscript", () => {
         agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
       }),
     ).toBe(true);
+  });
+});
+
+describe("rotateTranscriptAfterCompaction — thinking signature stripping", () => {
+  it("strips thinkingSignature from kept assistant messages in the successor file", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    const oldUserId = manager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+    manager.appendMessage(makeThinkingAssistant("old answer", "stale_sig_old", 2));
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept question",
+      timestamp: 3,
+    });
+    manager.appendMessage(makeThinkingAssistant("kept answer", "stale_sig_kept", 4));
+    manager.appendCompaction("Summary of old work.", firstKeptId, 3000);
+    manager.appendMessage({ role: "user", content: "post question", timestamp: 5 });
+    manager.appendMessage(makeThinkingAssistant("post answer", "fresh_sig", 6));
+
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-06-04T00:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+
+    const entries = successor.getEntries();
+    function getThinkingSignatureForTimestamp(ts: number): unknown {
+      for (const entry of entries) {
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+          continue;
+        }
+        if ((entry.message as { timestamp?: number }).timestamp !== ts) {
+          continue;
+        }
+        const content = (entry.message as { content?: unknown[] }).content ?? [];
+        for (const block of content) {
+          if ((block as { type?: unknown }).type === "thinking") {
+            return (block as { thinkingSignature?: unknown }).thinkingSignature;
+          }
+        }
+      }
+      return undefined;
+    }
+
+    // Pre-compaction kept message (timestamp 4): signature stripped
+    expect(getThinkingSignatureForTimestamp(4)).toBeUndefined();
+    // Post-compaction message (timestamp 6): signature preserved intact
+    expect(getThinkingSignatureForTimestamp(6)).toBe("fresh_sig");
+
+    // Old summarized messages should not appear
+    expect(entries.find((e) => e.id === oldUserId)).toBeUndefined();
+
+    // Context should remain coherent: compaction summary + kept + post-compaction
+    const contextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(contextText).toContain("kept question");
+    expect(contextText).toContain("kept answer");
+    expect(contextText).toContain("post answer");
   });
 });

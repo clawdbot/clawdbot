@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Writes npm Telegram RTT config fixtures.
 import fs from "node:fs";
 
 const [configPath, mockPort, groupId, driverToken, sutToken, packageVersion] =

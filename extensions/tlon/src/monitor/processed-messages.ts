@@ -1,3 +1,4 @@
+// Tlon plugin module implements processed messages behavior.
 import { createDedupeCache } from "../../runtime-api.js";
 
 type ProcessedMessageTracker = {

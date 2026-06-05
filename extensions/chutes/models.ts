@@ -1,3 +1,6 @@
+/**
+ * Chutes model catalog, static model definitions, and dynamic model discovery.
+ */
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -13,13 +16,17 @@ import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js"
 
 const log = createSubsystemLogger("chutes-models");
 
+/** Base URL for Chutes OpenAI-compatible inference. */
 export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+/** Default Chutes model id used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-TEE";
+/** Default Chutes model ref used for onboarding. */
 export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
 
 const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
 const CHUTES_DEFAULT_MAX_TOKENS = 4096;
 
+/** Bundled fallback Chutes model catalog. */
 export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "Qwen/Qwen3-32B",
@@ -452,6 +459,7 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
   },
 ];
 
+/** Adds Chutes provider compat metadata to one model catalog entry. */
 export function buildChutesModelDefinition(
   model: (typeof CHUTES_MODEL_CATALOG)[number],
 ): ModelDefinitionConfig {
@@ -491,6 +499,7 @@ interface CacheEntry {
 
 const modelCache = new Map<string, CacheEntry>();
 
+/** Clears the dynamic Chutes model discovery cache for tests. */
 export function clearChutesModelCacheForTests(): void {
   modelCache.clear();
 }
@@ -521,6 +530,7 @@ function cacheAndReturn(
   return models;
 }
 
+/** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
   const trimmedKey = normalizeOptionalString(accessToken) ?? "";
   const now = Date.now();

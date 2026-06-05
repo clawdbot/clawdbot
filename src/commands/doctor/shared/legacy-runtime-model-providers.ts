@@ -1,3 +1,4 @@
+// Legacy model-provider aliases that encoded runtime/backend selection in model refs.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStaticProviderModelId } from "../../../agents/model-ref-shared.js";
 
@@ -57,10 +58,12 @@ const LEGACY_ALIAS_BY_PROVIDER = new Map(
   ]),
 );
 
+/** List legacy model-provider aliases that doctor can migrate to provider/runtime policy. */
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
+/** Return true when a legacy provider alias requires writing explicit runtime policy. */
 export function legacyRuntimeModelAliasRequiresRuntimePolicy(provider: string): boolean {
   return (
     LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider))
@@ -74,6 +77,7 @@ function resolveLegacyRuntimeModelProviderAlias(
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider));
 }
 
+/** Rewrite a legacy runtime-encoded model ref to canonical provider/model plus runtime intent. */
 export function migrateLegacyRuntimeModelRef(raw: string): {
   ref: string;
   legacyProvider: string;

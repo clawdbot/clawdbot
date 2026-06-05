@@ -1,3 +1,5 @@
+// Tool media handler tests cover media extraction from tool results, trusted
+// local media flags, and quiet/verbose tool-output emission paths.
 import { describe, expect, it, vi } from "vitest";
 import {
   handleToolExecutionEnd,
@@ -5,7 +7,6 @@ import {
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
-// Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
@@ -13,6 +14,8 @@ function createMockContext(overrides?: {
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): EmbeddedAgentSubscribeContext {
+  // Minimal mock context factory. Only the fields needed for the media emission
+  // path are modeled; everything else is a no-op handler dependency.
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
     params: {
@@ -88,6 +91,8 @@ async function emitPngMediaToolResult(
   ctx: EmbeddedAgentSubscribeContext,
   opts?: { isError?: boolean },
 ) {
+  // Browser-style image results carry a text block plus structured path details;
+  // media extraction should queue the path without emitting verbose output.
   await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
     toolName: "browser",

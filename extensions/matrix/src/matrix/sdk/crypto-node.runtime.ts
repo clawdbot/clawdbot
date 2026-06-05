@@ -1,3 +1,4 @@
+// Matrix plugin module implements crypto node behavior.
 import { createRequire } from "node:module";
 
 // Load via createRequire so the CJS package gets __dirname (its index.js

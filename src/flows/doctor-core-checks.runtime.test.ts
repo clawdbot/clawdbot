@@ -1,3 +1,4 @@
+// Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { setPluginToolMeta } from "../plugins/tools.js";

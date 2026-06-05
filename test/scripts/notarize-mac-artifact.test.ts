@@ -1,3 +1,4 @@
+// Notarize Mac Artifact tests cover notarize mac artifact script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,3 +1,4 @@
+// Imessage tests cover reflection guard plugin behavior.
 import { describe, expect, it } from "vitest";
 import { detectReflectedContent } from "./reflection-guard.js";
 

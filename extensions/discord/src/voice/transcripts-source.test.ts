@@ -1,3 +1,4 @@
+// Discord tests cover transcripts source plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscordVoiceManager } from "./manager.js";
 import {

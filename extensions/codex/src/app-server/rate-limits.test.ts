@@ -1,3 +1,4 @@
+// Codex tests cover rate limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatCodexUsageLimitErrorMessage,

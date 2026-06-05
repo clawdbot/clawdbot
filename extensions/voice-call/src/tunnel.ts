@@ -1,3 +1,4 @@
+// Voice Call plugin module implements tunnel behavior.
 import { spawn } from "node:child_process";
 import {
   appendBoundedChildOutput,

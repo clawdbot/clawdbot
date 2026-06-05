@@ -1,3 +1,4 @@
+// Verifies update_plan registration gates and base OpenClaw tool inclusion policy.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -21,6 +22,7 @@ function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
 }
 
 function createFastToolNames(options: CreateOpenClawToolsOptions): string[] {
+  // Disable unrelated dynamic surfaces so registration assertions stay deterministic.
   return toolNames(
     createOpenClawTools({
       disableMessageTool: true,
@@ -46,6 +48,7 @@ function openAiGpt5Params(
   config: OpenClawConfig,
   overrides: Partial<UpdatePlanGatingParams> = {},
 ): UpdatePlanGatingParams {
+  // Common OpenAI GPT-5 selection used by model-aware update_plan gates.
   const params: UpdatePlanGatingParams = {
     config,
     agentSessionKey: "agent:main:main",

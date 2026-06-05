@@ -1,3 +1,4 @@
+// Job identity normalization tests cover stable ids and names for cron jobs.
 import { describe, expect, it } from "vitest";
 import { normalizeCronJobIdentityFields } from "./normalize-job-identity.js";
 

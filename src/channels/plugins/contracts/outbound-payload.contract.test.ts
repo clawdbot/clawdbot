@@ -1,3 +1,4 @@
+// Outbound payload contract tests cover channel plugin outbound payload shape and normalization.
 import { describe, vi } from "vitest";
 import { createDirectTextMediaOutbound } from "../outbound/direct-text-media.js";
 import {

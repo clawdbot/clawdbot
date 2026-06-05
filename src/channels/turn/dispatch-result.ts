@@ -1,3 +1,4 @@
+// Dispatch-result helpers for counting visible channel turn deliveries.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 
 /** Minimal dispatch result shape needed to count visible channel deliveries. */

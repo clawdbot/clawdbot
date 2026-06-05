@@ -1,3 +1,4 @@
+// Terminal Core tests cover decorative emoji behavior.
 import { describe, expect, it } from "vitest";
 import {
   decorativeEmoji,

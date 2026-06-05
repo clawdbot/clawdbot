@@ -1,3 +1,5 @@
+// Vision skip tests cover auto image-model selection and text-only model
+// rejection across bundled provider metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";

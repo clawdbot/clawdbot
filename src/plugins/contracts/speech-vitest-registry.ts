@@ -1,3 +1,4 @@
+// Speech Vitest registry helpers load speech capability runtimes for contract tests.
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import type {
   ImageGenerationProviderPlugin,

@@ -1,3 +1,5 @@
+// Runtime plan build tests cover the assembled agent runtime policy object:
+// auth, transport, tools, prompt, delivery, transcript, and observability.
 import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -93,6 +95,8 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("defers default transport extra params until they are read", () => {
+    // Extra params are lazy so plan construction stays cheap and provider hooks
+    // only run if a transport path actually needs them.
     const prepareProviderExtraParamsMock = vi.mocked(prepareProviderExtraParams);
     prepareProviderExtraParamsMock.mockClear();
 
@@ -116,6 +120,8 @@ describe("AgentRuntimePlan", () => {
   });
 
   it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {
+    // This is the broad contract snapshot for the runtime plan facade; callers
+    // read these nested policies instead of recomputing runtime decisions.
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",

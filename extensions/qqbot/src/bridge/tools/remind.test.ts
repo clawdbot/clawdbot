@@ -1,3 +1,4 @@
+// Qqbot tests cover remind plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemindCronAction } from "../../engine/tools/remind-logic.js";
 

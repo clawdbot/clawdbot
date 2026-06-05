@@ -1,3 +1,4 @@
+// Collects plugin manifest and metric observations for gateway gauntlet reports.
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";

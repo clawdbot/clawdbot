@@ -1,3 +1,4 @@
+// Minimax API module exposes the plugin public contract.
 export {
   buildMinimaxImageGenerationProvider,
   buildMinimaxPortalImageGenerationProvider,

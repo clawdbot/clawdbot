@@ -1,3 +1,8 @@
+/**
+ * Per-session workspace bootstrap snapshot cache.
+ * Reuses unchanged bootstrap file arrays while refreshing each turn so edits
+ * become visible to long-lived agent sessions.
+ */
 import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
 
 type BootstrapSnapshot = {
@@ -38,6 +43,7 @@ function pruneOldestBootstrapSnapshots(): void {
   }
 }
 
+/** Load bootstrap files for a session, reusing the prior snapshot when content is unchanged. */
 export async function getOrLoadBootstrapFiles(params: {
   workspaceDir: string;
   sessionKey: string;
@@ -62,18 +68,22 @@ export async function getOrLoadBootstrapFiles(params: {
   return files;
 }
 
+/** Test helper exposing the bounded snapshot cache size. */
 export function getBootstrapSnapshotCacheSizeForTest(): number {
   return cache.size;
 }
 
+/** Test helper for asserting one session snapshot is cached. */
 export function hasBootstrapSnapshotForTest(sessionKey: string): boolean {
   return cache.has(sessionKey);
 }
 
+/** Drop one cached bootstrap snapshot. */
 export function clearBootstrapSnapshot(sessionKey: string): void {
   cache.delete(sessionKey);
 }
 
+/** Clear bootstrap state when a visible session rolls over to a new backing session. */
 export function clearBootstrapSnapshotOnSessionRollover(params: {
   sessionKey?: string;
   previousSessionId?: string;
@@ -85,6 +95,7 @@ export function clearBootstrapSnapshotOnSessionRollover(params: {
   clearBootstrapSnapshot(params.sessionKey);
 }
 
+/** Clear all cached bootstrap snapshots. */
 export function clearAllBootstrapSnapshots(): void {
   cache.clear();
 }

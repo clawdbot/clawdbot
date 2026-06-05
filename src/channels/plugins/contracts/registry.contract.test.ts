@@ -1,3 +1,4 @@
+// Registry contract tests cover shared channel plugin registry contract behavior.
 import { describe, expect, it } from "vitest";
 import { sessionBindingContractChannelIds } from "./test-helpers/manifest.js";
 

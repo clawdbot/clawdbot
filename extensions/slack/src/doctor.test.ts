@@ -1,3 +1,4 @@
+// Slack tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { slackDoctor } from "./doctor.js";
 

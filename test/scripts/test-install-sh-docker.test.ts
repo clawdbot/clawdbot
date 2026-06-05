@@ -1,3 +1,4 @@
+// Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";

@@ -1,3 +1,4 @@
+// OpenClaw SDK helper module supports normalize behavior.
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
 // Normalize raw Gateway events into stable SDK event types and common metadata.

@@ -1,3 +1,4 @@
+// Openrouter tests cover openrouter plugin behavior.
 import OpenAI from "openai";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {

@@ -1,3 +1,5 @@
+// Gateway live agent probe helpers.
+// Builds prompts and verification helpers for live image and cron probe tests.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
@@ -33,11 +35,13 @@ type LiveCronProbeSpec = {
   argsJson: string;
 };
 
+/** Return true for live agents that expose Claude-style MCP tool names. */
 export function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized === "claude" || normalized === "claude-cli";
 }
 
+/** Assert the live image probe answered with the expected cat description. */
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
@@ -45,6 +49,7 @@ export function assertLiveImageProbeReply(text: string): void {
   }
 }
 
+/** Resolve whether a live image probe should run for this agent/override. */
 export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
   const override = params.override?.trim();
   if (override) {

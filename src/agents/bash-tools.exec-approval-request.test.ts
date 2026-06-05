@@ -1,3 +1,8 @@
+/**
+ * Exec approval request tests.
+ * Covers two-phase gateway registration, decision waiting, timeout fallback,
+ * and lazy command highlighting for host/node approval payloads.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,

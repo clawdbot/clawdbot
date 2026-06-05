@@ -1,3 +1,4 @@
+// Package-version compatibility helpers for E2E acceptance scripts.
 export function legacyPackageAcceptanceCompat(version) {
   const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?/.exec(version || "");
   const [year, month, day] = match?.slice(1, 4).map(Number) ?? [];

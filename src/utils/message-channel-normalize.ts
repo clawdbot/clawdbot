@@ -1,3 +1,4 @@
+// Message channel normalization helpers canonicalize channel identifiers and aliases.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { listRegisteredChannelPluginIds } from "../channels/registry.js";

@@ -1,3 +1,4 @@
+// Imessage tests cover state migrations plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

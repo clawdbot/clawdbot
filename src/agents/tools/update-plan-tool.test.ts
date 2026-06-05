@@ -1,3 +1,4 @@
+// update_plan tool tests cover compact plan payloads and plan-shape validation.
 import { describe, expect, it } from "vitest";
 import { createUpdatePlanTool } from "./update-plan-tool.js";
 
@@ -26,6 +27,8 @@ describe("update_plan tool", () => {
   });
 
   it("rejects multiple in-progress steps", async () => {
+    // The UI and agent state assume one current step; multiple active steps
+    // make progress reporting ambiguous.
     const tool = createUpdatePlanTool();
 
     await expect(

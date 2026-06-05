@@ -1,3 +1,4 @@
+// Imessage plugin module implements imessage plugin behavior.
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

@@ -1,3 +1,4 @@
+// Bench Model script supports OpenClaw repository automation.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 
 type Usage = {

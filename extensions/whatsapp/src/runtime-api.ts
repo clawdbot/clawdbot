@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";

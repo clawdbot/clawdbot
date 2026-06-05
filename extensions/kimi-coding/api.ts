@@ -1,3 +1,4 @@
+// Kimi Coding API module exposes the plugin public contract.
 export {
   buildKimiCodingProvider,
   KIMI_CODING_BASE_URL,

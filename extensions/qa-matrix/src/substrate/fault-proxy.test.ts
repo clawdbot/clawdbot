@@ -1,3 +1,4 @@
+// Qa Matrix tests cover fault proxy plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { startMatrixQaFaultProxy, type MatrixQaFaultProxy } from "./fault-proxy.js";

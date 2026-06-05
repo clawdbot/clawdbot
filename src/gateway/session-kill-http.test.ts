@@ -1,3 +1,5 @@
+// Session kill HTTP tests cover subagent kill authorization, requester/admin
+// scope handling, local request checks, and error responses.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

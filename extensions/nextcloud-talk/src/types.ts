@@ -1,3 +1,4 @@
+// Nextcloud Talk type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   BlockStreamingCoalesceConfig,

@@ -1,3 +1,4 @@
+// Provider-index loader normalizes bundled installable-provider metadata and falls back to an empty index.
 import { normalizeOpenClawProviderIndex } from "./normalize.js";
 import { OPENCLAW_PROVIDER_INDEX } from "./openclaw-provider-index.js";
 import type { OpenClawProviderIndex } from "./types.js";

@@ -1,3 +1,4 @@
+// Postinstall Bundled Plugins tests cover postinstall bundled plugins script behavior.
 import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";

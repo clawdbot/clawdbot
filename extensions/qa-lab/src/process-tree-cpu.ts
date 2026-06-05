@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 

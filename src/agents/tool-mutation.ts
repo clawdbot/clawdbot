@@ -1,3 +1,8 @@
+/**
+ * Tool mutation classification and fingerprinting.
+ *
+ * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

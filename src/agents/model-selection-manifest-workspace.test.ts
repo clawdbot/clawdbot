@@ -1,3 +1,4 @@
+// Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -44,6 +45,8 @@ describe("configured model manifest workspace scope", () => {
   });
 
   it("does not reuse workspace manifest policies without a workspace context", async () => {
+    // Workspace plugin normalization must not leak into unscoped callers; they
+    // can only use the current global metadata snapshot.
     const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
     const cfg = {
       models: {
@@ -129,6 +132,8 @@ describe("configured model manifest workspace scope", () => {
   });
 
   it("does not load manifest metadata for empty configured model aliases", async () => {
+    // Alias indexing is a hot config path. Empty inputs should avoid manifest
+    // scans entirely.
     const { buildModelAliasIndex } = await import("./model-selection-shared.js");
     const cfg = {} as unknown as OpenClawConfig;
 

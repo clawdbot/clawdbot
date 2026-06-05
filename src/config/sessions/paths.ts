@@ -1,3 +1,4 @@
+// Session path helpers keep stores and transcripts inside agent-owned session directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,6 +89,7 @@ function resolvePathFromAgentSessionsDir(
     safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
   const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
   const relative = path.relative(agentBase, realCandidate);
+  // Realpath both sides when possible so symlinked session dirs still enforce containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return undefined;
   }
@@ -98,6 +100,8 @@ function resolveSiblingAgentSessionsDir(
   baseSessionsDir: string,
   agentId: string,
 ): string | undefined {
+  // Multi-agent stores share a common .../agents/<id>/sessions shape; sibling resolution keeps
+  // persisted absolute files portable across active agent stores.
   const resolvedBase = path.resolve(baseSessionsDir);
   if (path.basename(resolvedBase) !== "sessions") {
     return undefined;
@@ -292,6 +296,7 @@ export function resolveStorePath(
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
   if (store.includes("{agentId}")) {
+    // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
       return path.resolve(

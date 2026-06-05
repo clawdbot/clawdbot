@@ -1,3 +1,8 @@
+/**
+ * Agent path formatting helpers.
+ *
+ * Canonicalizes local paths and formats paths relative to a workspace when possible.
+ */
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 

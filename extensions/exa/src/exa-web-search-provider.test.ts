@@ -1,3 +1,4 @@
+// Exa tests cover exa web search provider plugin behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";

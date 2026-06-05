@@ -1,3 +1,4 @@
+// Web Content Core tests cover provider runtime shared behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasWebProviderEntryCredential,

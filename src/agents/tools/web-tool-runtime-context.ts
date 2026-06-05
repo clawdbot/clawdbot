@@ -1,3 +1,8 @@
+/**
+ * Late-bound runtime context for web fetch/search tools.
+ *
+ * Resolves active secrets/runtime provider metadata for long-lived tool instances.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -7,12 +12,6 @@ import type {
   RuntimeWebSearchMetadata,
 } from "../../secrets/runtime-web-tools.types.js";
 
-/**
- * Resolves late-bound runtime context for web fetch/search tools.
- *
- * Tools can capture config at construction time, but secret/provider setup may
- * change before execution; late binding reads the active runtime snapshots.
- */
 type WebProviderKind = "fetch" | "search";
 
 type WebProviderRuntimeMetadata = RuntimeWebFetchMetadata | RuntimeWebSearchMetadata;

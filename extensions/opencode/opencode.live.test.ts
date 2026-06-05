@@ -1,3 +1,4 @@
+// Opencode tests cover opencode plugin behavior.
 import {
   completeSimple,
   type AssistantMessage,

@@ -1,3 +1,6 @@
+/**
+ * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
+ */
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";

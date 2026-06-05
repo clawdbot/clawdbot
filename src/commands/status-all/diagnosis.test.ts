@@ -1,3 +1,4 @@
+// Status-all diagnosis tests cover port checks, restart logs, config issues, and safe diagnostic output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 

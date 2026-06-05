@@ -1,3 +1,4 @@
+// Chat message content tests cover visible text extraction from message parts.
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantTextForPhase,

@@ -1,3 +1,4 @@
+// Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeCatalogEntry,

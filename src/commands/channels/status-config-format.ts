@@ -1,3 +1,4 @@
+// Config-only channel status formatter used when the gateway is unreachable.
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -31,6 +32,7 @@ type ChannelStatusPluginLabel = {
   meta: { label?: string };
 };
 
+/** Render channel status lines from config snapshots without calling the gateway. */
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },

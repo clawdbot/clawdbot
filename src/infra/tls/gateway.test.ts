@@ -1,3 +1,5 @@
+// Covers gateway TLS loading, fingerprint reporting, generated certificate
+// paths, and error handling for missing or invalid material.
 import { X509Certificate } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";

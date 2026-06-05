@@ -1,3 +1,4 @@
+// Browser tests cover pw role snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAiSnapshot,

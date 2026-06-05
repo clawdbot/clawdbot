@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {

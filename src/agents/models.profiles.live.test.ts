@@ -1,3 +1,4 @@
+// Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
@@ -132,6 +133,7 @@ function parseModelFilter(raw?: string): Set<string> | null {
 function parseExplicitLiveModelRefs(
   filter: Set<string> | null,
 ): Array<{ provider: string; id: string }> {
+  // Explicit refs use provider/model syntax; bare provider filters are handled elsewhere.
   if (!filter) {
     return [];
   }
@@ -202,6 +204,7 @@ function resolveLiveProviderDiscoveryProviderIds(params: {
   explicitRefs: readonly { provider: string; id: string }[];
   priorityRefs?: readonly { provider: string; id: string }[];
 }): string[] | undefined {
+  // Narrow startup discovery to providers that can affect the requested live target set.
   const providers = new Set<string>();
   for (const provider of params.providerFilter ?? []) {
     const normalized = normalizeProviderId(provider);

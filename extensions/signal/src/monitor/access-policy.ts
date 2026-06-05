@@ -1,3 +1,4 @@
+// Signal plugin module implements access policy behavior.
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,

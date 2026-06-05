@@ -1,3 +1,4 @@
+// Matrix plugin module implements legacy crypto inspector availability behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

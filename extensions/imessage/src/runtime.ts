@@ -1,3 +1,4 @@
+// Imessage plugin module implements runtime behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 

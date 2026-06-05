@@ -1,3 +1,8 @@
+/**
+ * Sandbox filesystem mount and path resolution helpers.
+ *
+ * Builds the container-to-host mount table and maps requested sandbox paths to writable/read-only host targets.
+ */
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";

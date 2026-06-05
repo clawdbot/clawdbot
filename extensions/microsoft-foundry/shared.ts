@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements shared behavior.
 import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,

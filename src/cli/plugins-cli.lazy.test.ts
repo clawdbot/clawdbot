@@ -1,3 +1,4 @@
+// Plugins CLI lazy tests cover lazy plugin command registration and imports.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

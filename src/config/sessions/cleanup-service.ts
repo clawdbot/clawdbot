@@ -1,3 +1,6 @@
+// Session cleanup service for store entries and transcript/artifact files.
+// Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
+
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -134,6 +137,7 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
     return false;
   }
   if (!stat.isFile() || stat.size > EMPTY_TRANSCRIPT_MAX_BYTES) {
+    // Only inspect small transcript files; larger files are assumed to contain real history.
     return false;
   }
 
@@ -162,6 +166,7 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
   return true;
 }
 
+/** Resolves the action label for one session key from cleanup key sets. */
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
@@ -274,6 +279,7 @@ function pruneMissingTranscriptEntries(params: {
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
+        // Agent-scoped keys without session ids are valid routing entries; keep them.
         continue;
       }
       delete params.store[key];
@@ -332,6 +338,7 @@ async function previewStoreCleanup(params: {
   fixDmScope?: boolean;
 }) {
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
+  // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = cloneSessionStoreRecord(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
@@ -458,6 +465,7 @@ async function previewStoreCleanup(params: {
   };
 }
 
+/** Runs session cleanup preview/apply for the selected store targets. */
 export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
@@ -510,6 +518,7 @@ export async function runSessionsCleanup(params: {
             removed += missingApplied;
           }
           if (opts.fixDmScope) {
+            // DM-scope retirement removes stale main-scope direct entries during apply.
             dmScopeRetiredApplied = retireMainScopeDirectSessionEntries({
               cfg,
               store,
@@ -534,6 +543,7 @@ export async function runSessionsCleanup(params: {
         },
       );
       if (dmScopeRemovedSessionFiles.size > 0) {
+        // Archive removed direct-session transcripts unless still referenced by surviving entries.
         const storeAfterDmScopeRetire = loadSessionStore(target.storePath, { skipCache: true });
         await archiveRemovedSessionTranscripts({
           removedSessionFiles: dmScopeRemovedSessionFiles,

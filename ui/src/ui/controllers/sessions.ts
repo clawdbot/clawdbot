@@ -1,3 +1,4 @@
+// Control UI controller manages sessions gateway state.
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,

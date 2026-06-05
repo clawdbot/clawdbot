@@ -1,3 +1,4 @@
+// Capability CLI tests cover capability command registration and output formatting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

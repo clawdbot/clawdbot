@@ -1,3 +1,4 @@
+// Slack plugin module implements interactions.modal behavior.
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";

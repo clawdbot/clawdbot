@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for live prompt-cache integration tests.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseStrictInteger } from "../infra/parse-finite-number.js";

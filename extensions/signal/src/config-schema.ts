@@ -1,3 +1,4 @@
+// Signal helper module supports config schema behavior.
 import { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 

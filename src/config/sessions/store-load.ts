@@ -1,3 +1,4 @@
+// Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -119,6 +120,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
       return;
     }
     if (next === entry) {
+      // Copy-on-write keeps unchanged entries referentially stable for cache reuse.
       next = { ...entry };
     }
     if (value === undefined) {
@@ -182,6 +184,7 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
 
   let changed = false;
   const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  // Plugin state is an external boundary; only JSON-safe keyed records are persisted back.
   for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
@@ -427,6 +430,7 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
+    // Any in-memory repair invalidates the original serialized bytes for future write projection.
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {

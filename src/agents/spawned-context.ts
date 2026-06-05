@@ -1,11 +1,13 @@
+/**
+ * Spawned run metadata helpers.
+ *
+ * Projects tool runtime context into persisted lineage, group routing, workspace, and inherited policy metadata.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
-// Normalized metadata passed from session-spawn tools into child run records.
-// It captures lineage, group routing, workspace inheritance, and inherited tool
-// policy without exposing the broader tool context object.
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
   groupId?: string | null;

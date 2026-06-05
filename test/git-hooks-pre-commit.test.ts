@@ -1,3 +1,4 @@
+// Git hook tests validate pre-commit hook behavior and scripts.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";

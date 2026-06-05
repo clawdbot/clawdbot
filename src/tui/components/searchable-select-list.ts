@@ -1,3 +1,4 @@
+// Searchable select list component adds search input to selectable TUI lists.
 import {
   type Component,
   Input,

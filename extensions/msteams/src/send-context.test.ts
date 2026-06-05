@@ -1,3 +1,4 @@
+// Msteams tests cover send context plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";

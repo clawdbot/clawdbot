@@ -1,3 +1,5 @@
+// Extension loader tests cover SDK import resolution for jiti-loaded TypeScript
+// extensions.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +14,8 @@ afterEach(async () => {
 
 describe("loadExtensions", () => {
   it("resolves plugin SDK subpaths in jiti-loaded extensions", async () => {
+    // Extensions import both public SDK helpers and runtime helper subpaths; the
+    // loader must route those aliases without package-manager involvement.
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.ts");

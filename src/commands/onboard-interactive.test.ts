@@ -1,3 +1,4 @@
+// Interactive onboarding tests cover wizard cancellation, setup routing, and runtime output.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";

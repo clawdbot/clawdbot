@@ -1,3 +1,4 @@
+// Documents how failover reasons map to cooldown probe slot decisions.
 import { describe, expect, it } from "vitest";
 import type { FailoverReason } from "./embedded-agent-helpers.js";
 import {
@@ -13,6 +14,8 @@ type ReasonCase = {
   preserveTransientProbeSlot: boolean;
 };
 
+// Keep the three decisions in one matrix so reason additions update cooldown
+// eligibility, transient-slot use, and slot preservation together.
 const CASES: ReasonCase[] = [
   {
     reason: "rate_limit",

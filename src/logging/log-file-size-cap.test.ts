@@ -1,3 +1,4 @@
+// Log file size cap tests cover truncation and rotation guards for log files.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

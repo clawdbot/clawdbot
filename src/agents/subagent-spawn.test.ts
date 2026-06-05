@@ -1,3 +1,5 @@
+// Subagent spawn tests cover target policy, session patching, runtime model
+// persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -47,6 +49,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function gatewayRequestRecords(): Record<string, unknown>[] {
+  // Gateway calls are the seam proof for spawn orchestration; assertions inspect
+  // structured requests instead of matching rendered text.
   return hoisted.callGatewayMock.mock.calls.map((call) => requireRecord(call[0]));
 }
 

@@ -1,3 +1,4 @@
+// Matrix plugin module implements devices behavior.
 import { summarizeMatrixDeviceHealth } from "../device-health.js";
 import { withResolvedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";

@@ -1,3 +1,4 @@
+// Memory Core tests cover mmr plugin behavior.
 import { describe, it, expect } from "vitest";
 import {
   tokenize,

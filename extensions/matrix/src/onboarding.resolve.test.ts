@@ -1,3 +1,4 @@
+// Matrix tests cover onboarding.resolve plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";

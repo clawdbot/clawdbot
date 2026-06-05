@@ -1,3 +1,6 @@
+/**
+ * Builds runtime context prompt fragments and custom session messages.
+ */
 import {
   extractInternalRuntimeContext,
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,

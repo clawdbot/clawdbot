@@ -1,9 +1,12 @@
+// Coverage for inline provider model normalization and inheritance.
 import { describe, expect, it } from "vitest";
 import { buildInlineProviderModels, resolveProviderModelInput } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
   it("attaches provider ids to inline models", () => {
+    // Provider object keys are the source of truth for inline model provider ids;
+    // trim them before runtime lookup stores the model.
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
       beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
@@ -87,6 +90,8 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("model-level api takes precedence over provider-level api", () => {
+    // Model-level API is the narrower contract and must override provider
+    // defaults when mixed transports share one configured provider.
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
@@ -126,6 +131,8 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
+    // Google Generative AI requires the versioned endpoint even when users
+    // configure the bare service host.
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       "google-paid ": {
         baseUrl: "https://generativelanguage.googleapis.com",

@@ -1,3 +1,4 @@
+// Standalone runtime registry loader tests cover registry loading outside gateway startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginLoaderCache, testing } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";

@@ -1,6 +1,7 @@
+// Covers partial-summary recovery when compaction chunk summarization fails.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const compactionMocks = vi.hoisted(() => {
   function readText(value: unknown): string {
@@ -98,6 +99,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
   });
 
   it("returns partial summary when a later chunk fails with a non-abort error", async () => {
+    // A completed earlier chunk is useful context; keep it with an explicit
+    // partial marker instead of discarding all summarization progress.
     compactionMocks.generateSummary
       .mockResolvedValueOnce("Summary of chunk 1")
       .mockRejectedValue(new Error("API quota exceeded"));
@@ -123,8 +126,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
 
     const result = await callSummarize();
 
-    // Abort error propagates from summarizeChunks; summarizeWithFallback catches it
-    // and falls through to the final fallback (not the partial summary).
+    // Abort errors represent caller intent, so partial recovery must not mask
+    // cancellation as successful summarization.
     expect(result).not.toBe("Summary of chunk 1");
     expect(result).toContain("Context contained");
     expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
@@ -196,8 +199,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
 
     const result = await callSummarize(mixedMessages);
 
-    // The oversized retry should have recovered more content than
-    // the partial summary from chunk 1 alone.
+    // The oversized retry should have recovered more content than the partial
+    // summary from chunk 1 alone.
     expect(result).toContain("Summary of small messages (oversized retry)");
     // The partial summary should NOT be the final result because the
     // oversized retry succeeded.
@@ -217,6 +220,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       { role: "user", content: "b".repeat(400), timestamp: 4 },
     ];
 
+    // The retry excludes oversized messages and can produce a better partial
+    // summary than the original attempt, so fallback ordering matters.
     compactionMocks.generateSummary
       // Full attempt: chunk 1 succeeds, chunk 2 fails (oversized message)
       .mockResolvedValueOnce("Full attempt chunk 1")

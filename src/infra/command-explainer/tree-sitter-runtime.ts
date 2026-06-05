@@ -1,3 +1,5 @@
+// Lazy tree-sitter runtime resolves WASM assets, caches the bash parser, and
+// enforces source-size/time limits for command explanation.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -62,6 +64,8 @@ async function loadParser(): Promise<TreeSitter.Parser> {
 }
 
 export function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
+  // Reset the cache on load failure so transient filesystem or WASM init errors
+  // do not poison all later command explanations in the process.
   parserPromise ??= parserLoader().catch((error: unknown) => {
     parserPromise = null;
     throw error;

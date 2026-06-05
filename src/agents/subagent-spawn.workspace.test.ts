@@ -1,3 +1,5 @@
+// Subagent spawn workspace tests cover same-agent inheritance, cross-agent
+// workspace selection, sandboxed cwd rejection, and cleanup deletion calls.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -111,6 +113,8 @@ function findLastSessionDeleteCall() {
 }
 
 async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
+  // Registered run workspace is the canonical child workspace; gateway params
+  // should not receive ad hoc workspace overrides for native subagent calls.
   const result = await spawnSubagentDirect(
     {
       task: "inspect workspace",

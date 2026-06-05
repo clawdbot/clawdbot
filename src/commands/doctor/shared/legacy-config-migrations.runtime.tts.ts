@@ -1,3 +1,4 @@
+// Legacy TTS runtime config migrations for provider aliases, enabled toggles, and voices.
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -533,6 +534,7 @@ const LEGACY_TTS_SPEAKER_SELECTION_RULES: LegacyConfigRule[] = [
   },
 ];
 
+/** Legacy config migration specs for TTS runtime compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",

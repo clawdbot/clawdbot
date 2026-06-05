@@ -1,3 +1,4 @@
+// Matrix tests cover create client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());

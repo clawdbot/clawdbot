@@ -1,3 +1,6 @@
+/**
+ * Resolves public avatar sources for configured agent identities.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

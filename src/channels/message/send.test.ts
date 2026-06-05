@@ -1,3 +1,4 @@
+// Message send tests cover outbound channel message dispatch and error handling.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";

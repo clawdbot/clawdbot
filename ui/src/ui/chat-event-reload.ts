@@ -1,3 +1,4 @@
+// Control UI module implements chat event reload behavior.
 import { extractText } from "./chat/message-extract.ts";
 import type { ChatEventPayload } from "./controllers/chat.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";

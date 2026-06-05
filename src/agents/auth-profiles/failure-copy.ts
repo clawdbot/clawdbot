@@ -1,3 +1,8 @@
+/**
+ * User-facing auth-profile failure copy.
+ * Maps failover reasons into provider-specific recovery guidance while keeping
+ * raw error detail as a short diagnostic suffix.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";

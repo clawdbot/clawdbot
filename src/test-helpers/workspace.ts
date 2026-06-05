@@ -1,3 +1,4 @@
+// Workspace test helpers build isolated workspace directories for tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

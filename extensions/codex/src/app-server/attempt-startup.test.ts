@@ -1,3 +1,4 @@
+// Codex tests cover attempt startup plugin behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager status state plugin behavior.
 import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {

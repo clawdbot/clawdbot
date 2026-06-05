@@ -1,3 +1,4 @@
+/** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
@@ -119,6 +120,8 @@ export async function resolveCronModelSelection(
       })
     : null;
   if (hooksGmailModelRef) {
+    // Gmail hook models are specialized defaults: apply them only when the
+    // configured ref is allowed, otherwise keep the broader cron default.
     const status = getModelRefStatus({
       cfg: params.cfg,
       catalog: await loadCatalogOnce(),
@@ -137,6 +140,8 @@ export async function resolveCronModelSelection(
   const modelOverrideRaw = params.payload.kind === "agentTurn" ? params.payload.model : undefined;
   const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
   if (modelOverride !== undefined && modelOverride.length > 0) {
+    // Payload model overrides are explicit cron config, so reject disallowed
+    // refs instead of silently falling back to defaults.
     const resolvedOverride = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,
       catalog: await loadCatalogOnce(),

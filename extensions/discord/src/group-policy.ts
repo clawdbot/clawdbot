@@ -1,3 +1,4 @@
+// Discord plugin module implements group policy behavior.
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveToolsBySender,

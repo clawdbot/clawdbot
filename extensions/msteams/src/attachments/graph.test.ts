@@ -1,3 +1,4 @@
+// Msteams tests cover graph plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock shared.js to avoid transitive runtime-api imports that pull in uninstalled packages.

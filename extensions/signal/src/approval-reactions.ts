@@ -1,3 +1,4 @@
+// Signal plugin module implements approval reactions behavior.
 import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
 import {
   buildApprovalReactionHint,

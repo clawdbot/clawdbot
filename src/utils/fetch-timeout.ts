@@ -1,3 +1,4 @@
+// Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 

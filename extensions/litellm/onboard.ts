@@ -1,3 +1,4 @@
+// Litellm setup module handles plugin onboarding behavior.
 import {
   createDefaultModelPresetAppliers,
   type ModelDefinitionConfig,

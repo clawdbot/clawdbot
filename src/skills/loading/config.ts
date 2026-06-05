@@ -1,3 +1,4 @@
+// Skill loading config helpers resolve configured skill sources and enablement.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

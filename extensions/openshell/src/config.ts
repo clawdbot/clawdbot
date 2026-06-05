@@ -1,3 +1,4 @@
+// Openshell helper module supports config behavior.
 import path from "node:path";
 import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import {

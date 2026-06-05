@@ -1,3 +1,4 @@
+// Matrix tests cover logger plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConsoleLogger, setMatrixConsoleLogging } from "./logger.js";
 

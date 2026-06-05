@@ -1,3 +1,4 @@
+// Crestodian test helpers build runtime environments for rescue tests.
 import type { RuntimeEnv } from "../runtime.js";
 
 /**

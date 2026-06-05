@@ -1,3 +1,4 @@
+// Qqbot tests cover media tags plugin behavior.
 import { describe, it, expect } from "vitest";
 import { FUZZY_MEDIA_TAG_REGEX, SELF_CLOSING_TAG_REGEX } from "./media-tags.js";
 

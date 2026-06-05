@@ -1,13 +1,7 @@
+// Announce loop-guard tests prove deferred subagent delivery eventually gives
+// up instead of retrying forever after gateway delivery keeps returning false.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-/**
- * Regression test for #18264: Gateway announcement delivery loop.
- *
- * When `runSubagentAnnounceFlow` repeatedly returns `false` (deferred),
- * `finalizeSubagentCleanup` must eventually give up rather than retrying
- * forever via the max-retry and expiration guards.
- */
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({
@@ -200,7 +194,8 @@ describe("announce loop guard (#18264)", () => {
     const entry = createEntry(Date.now());
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    // Initialization attempts resume once, then gives up for exhausted entries.
+    // Initialization attempts one resume, then relies on expiry/retry-budget
+    // guards so old pending rows do not loop after restart.
     const beforeInit = Date.now();
     registry.initSubagentRegistry();
     await flushAsync();

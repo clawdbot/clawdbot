@@ -1,3 +1,4 @@
+// Plugin npm manifest tests validate generated plugin package manifests.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";

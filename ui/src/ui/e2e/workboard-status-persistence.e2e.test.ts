@@ -1,3 +1,4 @@
+// Control UI tests cover workboard status persistence behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";

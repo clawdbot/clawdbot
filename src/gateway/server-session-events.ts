@@ -1,3 +1,5 @@
+// Gateway session event broadcaster.
+// Projects transcript and lifecycle updates to websocket subscribers.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -20,10 +22,6 @@ import {
   type GatewaySessionRow,
 } from "./session-utils.js";
 
-// Session event broadcasting bridges transcript/lifecycle stores to live
-// Gateway websocket subscribers. Message updates go to session-specific
-// subscribers plus broad session listeners; non-display messages still trigger
-// sessions.changed so lists refresh.
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 

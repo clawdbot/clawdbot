@@ -1,3 +1,4 @@
+// Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../../commands/health.js";
 

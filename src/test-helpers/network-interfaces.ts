@@ -1,3 +1,4 @@
+// Network interface test helpers mock OS network interface state.
 import os from "node:os";
 import type { NetworkInterfacesSnapshot } from "../infra/network-interfaces.js";
 

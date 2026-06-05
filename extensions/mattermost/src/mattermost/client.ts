@@ -1,3 +1,4 @@
+// Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {

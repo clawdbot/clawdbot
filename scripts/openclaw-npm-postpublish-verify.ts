@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
 import {
   existsSync,

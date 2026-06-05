@@ -1,3 +1,4 @@
+// Matrix plugin module implements decrypt bridge behavior.
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { DecryptionFailureCode } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";

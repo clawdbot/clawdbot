@@ -1,3 +1,4 @@
+// Msteams tests cover monitor handler.feedback authz plugin behavior.
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

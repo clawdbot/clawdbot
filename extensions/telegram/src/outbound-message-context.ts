@@ -1,3 +1,4 @@
+// Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

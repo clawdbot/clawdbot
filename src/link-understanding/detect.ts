@@ -1,3 +1,4 @@
+// Link detection extracts unique safe bare HTTP(S) URLs from inbound text while filtering SSRF targets.
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 

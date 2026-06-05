@@ -1,3 +1,8 @@
+/**
+ * Normalizes model-facing tool parameter schemas across provider quirks.
+ * Handles local JSON Schema refs, OpenAPI nullable syntax, top-level unions,
+ * and provider-specific unsupported keyword stripping.
+ */
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
@@ -589,6 +594,7 @@ function inlineLocalSchemaRefsWithDefs(
   return result;
 }
 
+/** Inline local $ref pointers so providers receive self-contained tool schemas. */
 export function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
   if (!schema || typeof schema !== "object") {
     return schema as TSchema;
@@ -881,6 +887,7 @@ function normalizeToolParameterSchemaUncached(
   return applyProviderCleaning(flattenedSchema);
 }
 
+/** Return a provider-compatible JSON schema for a model-facing tool. */
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,

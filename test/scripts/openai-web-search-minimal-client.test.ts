@@ -1,3 +1,4 @@
+// Openai Web Search Minimal Client tests cover openai web search minimal client script behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 

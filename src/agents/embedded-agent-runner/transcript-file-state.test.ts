@@ -1,3 +1,5 @@
+// Transcript file state tests cover tolerant JSONL reads, malformed entries,
+// branch leaf recovery, and repair-supported legacy payload shapes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +10,8 @@ import { rewriteTranscriptEntriesInState } from "./transcript-rewrite.js";
 const roots: string[] = [];
 
 async function makeRoot(prefix: string): Promise<string> {
+  // Each file-state case writes a full JSONL transcript under its own root so
+  // orphan/leaf behavior stays isolated.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   roots.push(root);
   return root;
@@ -19,6 +23,8 @@ afterEach(async () => {
 
 describe("readTranscriptFileState", () => {
   it("skips malformed session entries without moving the active leaf", async () => {
+    // Bad rows are ignored for branch construction, but valid legacy orphan
+    // roots remain reachable so partial imports can still be replayed.
     const root = await makeRoot("openclaw-transcript-state-malformed-");
     const sessionFile = path.join(root, "session.jsonl");
     await fs.writeFile(

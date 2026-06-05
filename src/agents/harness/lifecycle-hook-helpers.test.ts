@@ -1,3 +1,4 @@
+// Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitAgentHarnessAgentEndHook,
@@ -138,6 +139,8 @@ describe("agent harness lifecycle hook helpers", () => {
       }),
     };
 
+    // Retry budgets are per run. A finalize hook may ask for exactly one
+    // revision, and clearing the run id should make that run eligible again.
     await expect(
       runAgentHarnessBeforeAgentFinalizeHook({
         event: EVENT,
@@ -286,6 +289,8 @@ describe("agent harness lifecycle hook helpers", () => {
       reason: "retry generated artifacts\n\nretry focused tests",
       retry: firstRetry,
     };
+    // retryCandidates is intentionally non-enumerable in production hook
+    // results, so callers do not serialize internal retry bookkeeping.
     Object.defineProperty(result, "retryCandidates", {
       enumerable: false,
       value: [firstRetry, secondRetry],
@@ -350,6 +355,8 @@ describe("agent harness lifecycle hook helpers", () => {
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+    // Fallback keys include a digest of the full instruction. Prefix-only
+    // truncation would spend unrelated long retry requests together.
     const sharedPrefix = "x".repeat(180);
     const firstInstruction = `${sharedPrefix} first`;
     const secondInstruction = `${sharedPrefix} second`;

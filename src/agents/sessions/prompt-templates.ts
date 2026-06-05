@@ -1,3 +1,8 @@
+/**
+ * Prompt template discovery and loading.
+ *
+ * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
+ */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";

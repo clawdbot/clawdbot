@@ -1,3 +1,4 @@
+// Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeAttemptResult,
@@ -33,6 +34,8 @@ function requireMockCallArg(
   mock: { mock: { calls: unknown[][] } },
   index: number,
 ): Record<string, unknown> {
+  // Compaction tests inspect positional mock params from the runner loop; fail
+  // fast with a readable label when expected calls are missing.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`expected mock call ${index}`);
@@ -49,6 +52,8 @@ function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: str
 }
 
 function expectRetryContinuesFromTranscript() {
+  // Once the inbound user message was persisted, retry must continue from the
+  // transcript instead of re-persisting the original prompt.
   const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
   expect(String(retryParams.prompt)).toContain("Continue from the current transcript");
   expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
@@ -140,6 +145,8 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("does not suppress the next user turn when precheck overflow never persisted it", async () => {
+    // Precheck overflow happens before the inbound message enters the transcript,
+    // so the retry should still persist the original prompt.
     const overflowError = makeOverflowError(
       "Context overflow: prompt too large for the model (precheck).",
     );

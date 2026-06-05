@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager atomic reindex behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";

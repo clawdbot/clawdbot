@@ -1,3 +1,4 @@
+// Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";

@@ -1,3 +1,4 @@
+// Auth wizard helpers drive authentication wizard flows in tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";

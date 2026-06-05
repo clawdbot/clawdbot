@@ -1,3 +1,4 @@
+// Npm Verify Exec tests cover npm verify exec script behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

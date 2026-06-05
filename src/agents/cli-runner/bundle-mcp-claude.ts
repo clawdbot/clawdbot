@@ -1,7 +1,8 @@
+/**
+ * Claude CLI argument helpers for OpenClaw-managed bundle MCP config.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// Claude CLI MCP argument helpers. OpenClaw owns the generated config path, so
-// existing mcp-config flags are stripped before injecting strict config args.
 /** Find an existing Claude `--mcp-config` argument value. */
 export function findClaudeMcpConfigPath(args?: string[]): string | undefined {
   if (!args?.length) {

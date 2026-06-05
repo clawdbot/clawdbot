@@ -1,3 +1,4 @@
+// Whatsapp tests cover accounts.whatsapp auth plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

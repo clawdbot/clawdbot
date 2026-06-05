@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for model special-token stripping.
+ * Ensures provider wrapper tokens do not leak into visible assistant text.
+ */
 import { describe, expect, it } from "vitest";
 import { stripModelSpecialTokens } from "./embedded-agent-utils.js";
 

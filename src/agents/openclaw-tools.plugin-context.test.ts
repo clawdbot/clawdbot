@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for plugin tool context and delivery defaults.
+ * Verifies requester metadata, plugin tool wrapping, and default preservation.
+ */
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";

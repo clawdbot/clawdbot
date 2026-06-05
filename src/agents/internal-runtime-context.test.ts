@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for internal runtime-context stripping and extraction.
+ * Verifies protected delimiters, legacy blocks, and custom-message filtering.
+ */
 import { describe, expect, it } from "vitest";
 import {
   escapeInternalRuntimeContextDelimiters,

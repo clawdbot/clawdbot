@@ -1,3 +1,5 @@
+// Subagent run liveness tests cover stale-unended detection and child-link
+// retention windows for registry list/read paths.
 import { describe, expect, it, vi } from "vitest";
 import {
   isLiveUnendedSubagentRun,
@@ -54,6 +56,8 @@ describe("subagent run liveness", () => {
   });
 
   it("ignores non-real fixture timestamps as unknown instead of stale", () => {
+    // Small fixture timestamps appear in tests and old synthetic records; they
+    // should not be interpreted as Unix epoch production runs.
     const entry = {
       createdAt: 100,
     };

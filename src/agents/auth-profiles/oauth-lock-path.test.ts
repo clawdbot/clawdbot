@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth refresh lock path generation.
+ * Ensures provider/profile lock keys are deterministic, collision-resistant,
+ * short, and confined to the refresh lock directory.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

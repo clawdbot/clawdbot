@@ -1,3 +1,4 @@
+// Feishu tests cover post plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parsePostContent } from "./post.js";
 

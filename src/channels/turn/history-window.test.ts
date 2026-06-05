@@ -1,3 +1,4 @@
+// Turn history window tests cover channel turn transcript window selection.
 import { describe, expect, it } from "vitest";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import { createChannelHistoryWindow } from "./history-window.js";

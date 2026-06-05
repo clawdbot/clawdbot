@@ -1,3 +1,4 @@
+// Coverage for timeout decisions and snapshots during compaction.
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -19,6 +20,8 @@ function expectSelectedSnapshot(params: {
   >[0]["preCompactionSnapshot"];
   timedOutDuringCompaction: boolean;
 }) {
+  // Snapshot selection determines what can be replayed after compaction timeout,
+  // so tests assert source, session id, and messages together.
   const selected = selectCompactionTimeoutSnapshot({
     timedOutDuringCompaction: params.timedOutDuringCompaction,
     preCompactionSnapshot: params.preCompactionSnapshot,
@@ -112,6 +115,8 @@ describe("compaction-timeout helpers", () => {
   });
 
   it("trims assistant-tailed pre-compaction snapshots after compaction timeout", () => {
+    // Assistant tails are not continuable after compaction timeout; keep the
+    // latest safe user/tool boundary instead.
     const user = castAgentMessage({ role: "user", content: "pre-user" });
     const pre = [user, castAgentMessage({ role: "assistant", content: "pre-assistant" })] as const;
     const current = [

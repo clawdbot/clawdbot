@@ -1,3 +1,4 @@
+// Voyage provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
   normalizeEmbeddingModelWithPrefixes,

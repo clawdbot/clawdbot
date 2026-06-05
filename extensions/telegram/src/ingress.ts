@@ -1,3 +1,4 @@
+// Telegram plugin module implements ingress behavior.
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,

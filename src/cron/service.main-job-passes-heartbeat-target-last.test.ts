@@ -1,3 +1,4 @@
+// Main job heartbeat tests cover target ordering for heartbeat delivery.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements approval reactions behavior.
 import type { WAMessage } from "baileys";
 import {
   buildApprovalReactionHint,

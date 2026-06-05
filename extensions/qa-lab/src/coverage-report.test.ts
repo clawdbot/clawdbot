@@ -1,3 +1,4 @@
+// Qa Lab tests cover coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
@@ -25,16 +26,11 @@ describe("qa coverage report", () => {
     const personalPack = inventory.scenarioPacks.find((pack) => pack.id === "personal-agent");
     const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");
     expect(personalPack?.missingScenarioIds).toStrictEqual([]);
-    expect(personalPack?.scenarioIds).toContain(
-      "personal-share-safe-diagnostics-artifact",
-    );
+    expect(personalPack?.scenarioIds).toContain("personal-share-safe-diagnostics-artifact");
     expect(personalPack?.coverageIds).toContain("personal.redaction");
     expect(personalPack?.coverageIds).toContain("qa.artifact-safety");
     expect(observabilityPack?.missingScenarioIds).toStrictEqual([]);
-    expect(observabilityPack?.scenarioIds).toEqual([
-      "otel-trace-smoke",
-      "docker-prometheus-smoke",
-    ]);
+    expect(observabilityPack?.scenarioIds).toEqual(["otel-trace-smoke", "docker-prometheus-smoke"]);
     expect(observabilityPack?.coverageIds).toContain("telemetry.otel");
     expect(observabilityPack?.coverageIds).toContain("telemetry.prometheus");
     expect(inventory.byTheme.memory.map((feature) => feature.id)).toContain("memory.recall");
@@ -56,9 +52,7 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- personal-agent (Personal Agent Benchmark Pack): 10 scenarios; coverage:",
     );
-    expect(report).toContain(
-      "- observability (Observability Smoke Pack): 2 scenarios; coverage:",
-    );
+    expect(report).toContain("- observability (Observability Smoke Pack): 2 scenarios; coverage:");
     expect(report).toContain("otel-trace-smoke, docker-prometheus-smoke");
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Live Transport Lanes");

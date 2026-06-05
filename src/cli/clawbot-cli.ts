@@ -1,3 +1,4 @@
+// Legacy clawbot command namespace kept for QR/linking aliases.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";

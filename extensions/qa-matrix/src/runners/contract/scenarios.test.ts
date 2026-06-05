@@ -1,3 +1,4 @@
+// Qa Matrix tests cover scenarios plugin behavior.
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";

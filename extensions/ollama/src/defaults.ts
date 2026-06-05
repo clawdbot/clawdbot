@@ -1,3 +1,4 @@
+// Ollama plugin module implements defaults behavior.
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DOCKER_HOST_BASE_URL = "http://host.docker.internal:11434";
 export const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";

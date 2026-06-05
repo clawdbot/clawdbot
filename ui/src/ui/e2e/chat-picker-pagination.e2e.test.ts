@@ -1,3 +1,4 @@
+// Control UI tests cover chat picker pagination behavior.
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {

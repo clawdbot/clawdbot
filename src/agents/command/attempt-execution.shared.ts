@@ -1,3 +1,7 @@
+/**
+ * Shared session persistence and prompt-body helpers for agent attempt
+ * execution paths.
+ */
 import { updateSessionStore } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import {

@@ -1,3 +1,4 @@
+// Slack tests cover monitor.thread resolution plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";

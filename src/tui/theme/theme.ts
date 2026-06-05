@@ -1,3 +1,4 @@
+// TUI theme defines shared colors and text styles for Pi TUI components.
 import type {
   EditorTheme,
   MarkdownTheme,

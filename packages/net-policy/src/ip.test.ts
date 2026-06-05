@@ -1,3 +1,4 @@
+// Network Policy tests cover ip behavior.
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {

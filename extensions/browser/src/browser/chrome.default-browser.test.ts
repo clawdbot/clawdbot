@@ -1,3 +1,4 @@
+// Browser tests cover chromeefault browser plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {

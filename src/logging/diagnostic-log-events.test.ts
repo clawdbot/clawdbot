@@ -1,3 +1,4 @@
+// Diagnostic log event tests cover structured events written to diagnostic logs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,

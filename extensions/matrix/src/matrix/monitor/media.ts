@@ -1,3 +1,4 @@
+// Matrix plugin module implements media behavior.
 import { getMatrixRuntime } from "../../runtime.js";
 import { MatrixMediaSizeLimitError, isMatrixMediaSizeLimitError } from "../media-errors.js";
 import type { MatrixClient } from "../sdk.js";

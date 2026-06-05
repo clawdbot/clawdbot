@@ -1,9 +1,11 @@
+// Formats generated TypeScript/JavaScript modules through the repo formatter.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 
+/** Resolve the fastest available oxfmt command for a generated module path. */
 export function resolveGeneratedModuleFormatter(params) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
@@ -26,6 +28,7 @@ export function resolveGeneratedModuleFormatter(params) {
   });
 }
 
+/** Format generated source in a temporary file and return the formatter output. */
 export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel }) {
   const resolvedRepoRoot = path.resolve(repoRoot);
   const resolvedOutputPath = path.resolve(

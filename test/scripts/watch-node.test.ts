@@ -1,3 +1,4 @@
+// Watch Node tests cover watch node script behavior.
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWatchMain } from "../../scripts/watch-node.mjs";

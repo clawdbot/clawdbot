@@ -1,3 +1,4 @@
+// Copilot tests cover permission bridge plugin behavior.
 import type {
   PermissionRequest as SdkPermissionRequest,
   PermissionRequestResult as SdkPermissionRequestResult,

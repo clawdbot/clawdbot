@@ -1,3 +1,4 @@
+// List Prod Store Packages tests cover list prod store packages script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

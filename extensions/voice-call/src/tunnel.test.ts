@@ -1,3 +1,4 @@
+// Voice Call tests cover tunnel plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

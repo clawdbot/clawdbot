@@ -1,3 +1,4 @@
+// Qa Lab tests cover live artifacts plugin behavior.
 import { describe, expect, it } from "vitest";
 import { redactQaLiveLaneIssues } from "./live-artifacts.js";
 

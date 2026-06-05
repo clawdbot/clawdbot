@@ -1,3 +1,4 @@
+// OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setMdOcPath as setOcPath } from "../edit.js";
 import { parseOcPath } from "../oc-path.js";

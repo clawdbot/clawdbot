@@ -1,3 +1,4 @@
+// Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements security fix behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/channel-pairing";

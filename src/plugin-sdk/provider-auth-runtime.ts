@@ -1,3 +1,4 @@
+// Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";

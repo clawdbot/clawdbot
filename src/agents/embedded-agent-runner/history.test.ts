@@ -1,9 +1,12 @@
+// Coverage for resolving channel and DM history limits from session keys.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getHistoryLimitFromSessionKey } from "./history.js";
 
 describe("getHistoryLimitFromSessionKey", () => {
   it("does not match channel history limits across provider id variants", () => {
+    // Channel ids and provider ids are not normalized across spelling variants;
+    // guessing here could apply the wrong retention policy.
     expect(
       getHistoryLimitFromSessionKey("agent:main:z-ai:channel:general", {
         channels: {
@@ -45,6 +48,8 @@ describe("getHistoryLimitFromSessionKey", () => {
   });
 
   it("strips numeric thread and topic suffixes from direct message session keys", () => {
+    // Numeric thread/topic suffixes are routing detail, not part of the DM id
+    // used for per-contact history limit overrides.
     const config = {
       channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
     } as OpenClawConfig;

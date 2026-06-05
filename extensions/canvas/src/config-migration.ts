@@ -1,3 +1,6 @@
+/**
+ * Canvas config migration from legacy root canvasHost config to plugin config.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -10,6 +13,7 @@ function mergeHostConfig(params: {
   return Object.assign({}, params.legacyHost, params.existingHost);
 }
 
+/** Migrates root canvasHost config into plugins.entries.canvas.config.host. */
 export function migrateLegacyCanvasHostConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

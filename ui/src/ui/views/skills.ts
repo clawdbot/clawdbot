@@ -1,3 +1,4 @@
+// Control UI view renders skills screen content.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";

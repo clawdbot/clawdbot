@@ -1,3 +1,5 @@
+// Gateway miscellaneous tests cover shared utility edges around control UI,
+// diagnostics, proxy state, node command policy, and server helper behavior.
 import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";

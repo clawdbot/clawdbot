@@ -1,3 +1,4 @@
+// Progress draft line tests cover line splitting and display limits for progress drafts.
 import { describe, expect, it } from "vitest";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import { buildChannelProgressDraftLine } from "./streaming.js";

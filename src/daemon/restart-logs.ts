@@ -1,3 +1,4 @@
+/** Resolves daemon log paths and shell snippets for restart handoff diagnostics. */
 import path from "node:path";
 import { quoteCmdScriptArg } from "./cmd-argv.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
@@ -49,6 +50,8 @@ export function resolveGatewaySupervisorLogPaths(
   env: GatewayServiceEnv,
   options?: { platform?: NodeJS.Platform },
 ): GatewayLogPaths {
+  // launchd supervisors write to ~/Library/Logs; systemd and schtasks use the
+  // OpenClaw state dir so generated service users can create the directory.
   return (options?.platform ?? process.platform) === "darwin"
     ? resolveMacLaunchAgentLogPaths(env)
     : resolveGatewayLogPaths(env);
@@ -67,6 +70,8 @@ export function renderPosixRestartLogSetup(env: GatewayServiceEnv): string {
   const logPath = resolveGatewayRestartLogPath(env);
   const escapedLogDir = shellEscapeRestartLogValue(logDir);
   const escapedLogPath = shellEscapeRestartLogValue(logPath);
+  // Logging is best-effort; restart handoffs must still run when the log path
+  // cannot be created in constrained service environments.
   return `if mkdir -p '${escapedLogDir}' 2>/dev/null && : >>'${escapedLogPath}' 2>/dev/null; then
   exec >>'${escapedLogPath}' 2>&1
 fi`;

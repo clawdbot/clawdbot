@@ -1,3 +1,4 @@
+// Codex plugin module implements command rpc behavior.
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import {
   CODEX_CONTROL_METHODS,

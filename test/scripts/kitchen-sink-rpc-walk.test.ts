@@ -1,3 +1,4 @@
+// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { EventEmitter } from "node:events";
 import fs, {
   existsSync,

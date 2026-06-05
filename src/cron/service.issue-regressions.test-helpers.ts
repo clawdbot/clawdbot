@@ -1,3 +1,4 @@
+// Cron issue regression helpers share mocks for service regression tests.
 import { vi } from "vitest";
 import {
   createDefaultIsolatedRunner,

@@ -1,3 +1,4 @@
+// OC Path tests cover jsonl resolver edges plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { JsoncValue } from "../../jsonc/ast.js";
 import { parseJsonl } from "../../jsonl/parse.js";

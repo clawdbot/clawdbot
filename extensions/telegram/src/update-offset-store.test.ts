@@ -1,3 +1,4 @@
+// Telegram tests cover update offset store plugin behavior.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,

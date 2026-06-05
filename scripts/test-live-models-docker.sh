@@ -56,18 +56,23 @@ elif openclaw_live_is_ci; then
 else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
-mkdir -p "$CACHE_HOME_DIR"
-if openclaw_live_is_ci; then
+openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
+if openclaw_live_uses_managed_bind_dirs; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
+  openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
   DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
 fi
 
 PROFILE_MOUNT=()
 PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+    openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+  else
+    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  fi
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
@@ -191,6 +196,13 @@ node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
+if openclaw_live_uses_managed_bind_dirs; then
+  openclaw_live_chown_bind_dirs_for_container_user \
+    "$LIVE_IMAGE_NAME" \
+    "$DOCKER_USER" \
+    "$CACHE_HOME_DIR" \
+    "${DOCKER_HOME_DIR:-}"
+fi
 
 echo "==> Run live model tests (profile keys)"
 echo "==> Target: src/agents/models.profiles.live.test.ts"

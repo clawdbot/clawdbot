@@ -1,3 +1,4 @@
+// Whatsapp tests cover media plugin behavior.
 import { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockNormalizeMessageContent } from "../../../../test/mocks/baileys.js";

@@ -1,3 +1,4 @@
+// Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
@@ -48,6 +49,8 @@ function redirectWithoutLocationResponse(status = 302): Response {
 }
 
 function latestStreamableTransportOptions(): StreamableTransportOptions {
+  // The SDK transport is constructor-injected; tests inspect the most recent
+  // options to exercise OpenClaw's wrapped fetch implementation directly.
   const latestCall = streamableTransportConstructorMock.mock.calls[
     streamableTransportConstructorMock.mock.calls.length - 1
   ] as unknown[] | undefined;
@@ -85,6 +88,8 @@ describe("resolveMcpTransport", () => {
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
+    // Cross-origin redirects keep safe protocol headers but drop operator
+    // secrets such as API keys before following the Location target.
     runtimeFetchMock
       .mockResolvedValueOnce(redirectResponse("https://redirect.example/next"))
       .mockResolvedValueOnce(new Response("ok"));
@@ -142,6 +147,8 @@ describe("resolveMcpTransport", () => {
   });
 
   it("preserves replayable request bodies for cross-origin streamable HTTP redirects", async () => {
+    // 307/308 redirects preserve method/body, while custom auth headers are
+    // still stripped when the destination origin changes.
     runtimeFetchMock
       .mockResolvedValueOnce(redirectResponse("https://redirect.example/mcp", 307))
       .mockResolvedValueOnce(new Response("ok"));

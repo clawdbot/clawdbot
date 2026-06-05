@@ -1,3 +1,9 @@
+/**
+ * Browser permission routes.
+ *
+ * Grants required and optional browser permissions for an origin, preferring
+ * Playwright context APIs when available and falling back to raw CDP.
+ */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -14,6 +20,7 @@ const permissionRouteDeps = {
   getPwAiModule,
 };
 
+/** Test hook for replacing optional Playwright permission dependencies. */
 export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
@@ -138,6 +145,7 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
+/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

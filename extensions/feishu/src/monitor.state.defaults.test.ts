@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.stateefaults plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveFeishuWebhookAnomalyDefaultsForTest,

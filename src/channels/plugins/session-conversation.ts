@@ -1,3 +1,8 @@
+/**
+ * Session conversation key helpers.
+ *
+ * Resolves threaded channel session keys through plugin hooks and generic parsing.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,10 +18,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
-
-/**
- * Session-key conversation resolution helpers for threaded channel targets.
- */
 
 /**
  * Normalized conversation id details for one channel raw id.

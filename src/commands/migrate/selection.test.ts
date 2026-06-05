@@ -1,3 +1,4 @@
+// Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {

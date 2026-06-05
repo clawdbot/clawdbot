@@ -1,3 +1,5 @@
+// Tool media payload tests cover how generated media from tools is attached to
+// visible embedded-run replies without disturbing source-reply metadata.
 import { describe, expect, it } from "vitest";
 import {
   getReplyPayloadMetadata,
@@ -7,6 +9,8 @@ import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 describe("mergeAttemptToolMediaPayloads", () => {
   it("attaches tool media to the first visible reply", () => {
+    // Reasoning payloads are not user-visible replies, so media attaches to the
+    // first final/visible payload instead.
     expect(
       mergeAttemptToolMediaPayloads({
         payloads: [
@@ -91,6 +95,8 @@ describe("mergeAttemptToolMediaPayloads", () => {
   });
 
   it("does not attach tool media to message-tool-only source reply mirrors", () => {
+    // Source reply mirrors already represent delivered message-tool output;
+    // adding separate tool media would duplicate or mutate the transcript mirror.
     const sourceReply = setReplyPayloadMetadata(
       { text: "sent through message tool" },
       {

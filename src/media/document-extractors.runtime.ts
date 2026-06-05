@@ -1,3 +1,4 @@
+// Document extractor runtime helpers choose lazy extraction adapters by media type.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {

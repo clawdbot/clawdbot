@@ -1,3 +1,4 @@
+// Chat command invocation helpers execute skill-provided chat command handlers.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

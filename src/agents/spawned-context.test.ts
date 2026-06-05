@@ -1,3 +1,5 @@
+// Spawned context tests cover metadata cleanup and workspace inheritance for
+// child runs launched from agent tools.
 import { describe, expect, it } from "vitest";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -44,6 +46,8 @@ describe("mapToolContextToSpawnedRunMetadata", () => {
 });
 
 describe("resolveSpawnedWorkspaceInheritance", () => {
+  // Workspace inheritance prefers explicit caller intent, then target agent
+  // config, then requester context so child runs stay in the expected checkout.
   const config = {
     agents: {
       list: [

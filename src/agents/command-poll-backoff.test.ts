@@ -1,3 +1,4 @@
+// Verifies command polling backoff state used by diagnostic/session commands.
 import { describe, expect, it } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
@@ -39,7 +40,8 @@ describe("command-poll-backoff", () => {
       };
       const retryMs = recordCommandPoll(state, "cmd-123", false);
       expect(retryMs).toBe(5000);
-      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0); // First poll = index 0
+      // Poll counts are zero-based indexes into the backoff schedule.
+      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0);
     });
 
     it("increments count and increases backoff on consecutive no-output polls", () => {
@@ -49,13 +51,13 @@ describe("command-poll-backoff", () => {
         queueDepth: 0,
       };
 
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(5000); // count=0 -> 5s
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(10000); // count=1 -> 10s
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(30000); // count=2 -> 30s
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000); // count=3 -> 60s
-      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000); // count=4 -> 60s (capped)
+      expect(recordCommandPoll(state, "cmd-123", false)).toBe(5000);
+      expect(recordCommandPoll(state, "cmd-123", false)).toBe(10000);
+      expect(recordCommandPoll(state, "cmd-123", false)).toBe(30000);
+      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000);
+      expect(recordCommandPoll(state, "cmd-123", false)).toBe(60000);
 
-      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(4); // 5 polls = index 4
+      expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(4);
     });
 
     it("resets count when poll returns new output", () => {
@@ -70,9 +72,9 @@ describe("command-poll-backoff", () => {
       recordCommandPoll(state, "cmd-123", false);
       expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(2); // 3 polls = index 2
 
-      // New output resets count
+      // New output resets count so the next quiet poll starts at the fast lane.
       const retryMs = recordCommandPoll(state, "cmd-123", true);
-      expect(retryMs).toBe(5000); // Back to first poll delay
+      expect(retryMs).toBe(5000);
       expect(state.commandPollCounts?.get("cmd-123")?.count).toBe(0);
     });
 
@@ -150,12 +152,12 @@ describe("command-poll-backoff", () => {
         state: "processing",
         queueDepth: 0,
         commandPollCounts: new Map([
-          ["cmd-old", { count: 5, lastPollAt: Date.now() - 7200000 }], // 2 hours ago
-          ["cmd-new", { count: 3, lastPollAt: Date.now() - 1000 }], // 1 second ago
+          ["cmd-old", { count: 5, lastPollAt: Date.now() - 7200000 }],
+          ["cmd-new", { count: 3, lastPollAt: Date.now() - 1000 }],
         ]),
       };
 
-      pruneStaleCommandPolls(state, 3600000); // 1 hour max age
+      pruneStaleCommandPolls(state, 3600000);
 
       expect(state.commandPollCounts?.has("cmd-old")).toBe(false);
       expect(state.commandPollCounts?.has("cmd-new")).toBe(true);

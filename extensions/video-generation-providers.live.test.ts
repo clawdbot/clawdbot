@@ -1,3 +1,4 @@
+// Video Generation Providers.Live.Test.Ts tests cover video generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,

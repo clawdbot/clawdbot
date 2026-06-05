@@ -1,3 +1,4 @@
+// Bundled plugin root helpers resolve plugin root paths for contract test fixtures.
 import { relative, resolve } from "node:path";
 import { loadPluginManifestRegistry } from "../../manifest-registry.js";
 

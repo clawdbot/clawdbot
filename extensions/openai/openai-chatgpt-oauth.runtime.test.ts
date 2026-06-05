@@ -1,3 +1,4 @@
+// Openai tests cover openai chatgpt oauth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "./openai-chatgpt-oauth.runtime.js";

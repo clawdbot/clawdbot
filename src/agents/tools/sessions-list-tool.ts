@@ -1,3 +1,8 @@
+/**
+ * sessions_list built-in tool.
+ *
+ * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
+ */
 import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
@@ -49,12 +54,6 @@ import {
   stripToolMessages,
 } from "./sessions-helpers.js";
 
-/**
- * `sessions_list` tool for visible session discovery and optional transcript hydration.
- *
- * Visibility filtering happens before derived titles/last messages are read so sandboxed agents do
- * not learn metadata from sessions they cannot address.
- */
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
   limit: optionalPositiveIntegerSchema(),

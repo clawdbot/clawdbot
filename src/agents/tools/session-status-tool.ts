@@ -1,3 +1,8 @@
+/**
+ * session_status built-in tool.
+ *
+ * Reports and updates session runtime state, model overrides, visibility, task status, and delivery context.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";

@@ -1,3 +1,4 @@
+// Synology Chat helper module supports test http utils behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 

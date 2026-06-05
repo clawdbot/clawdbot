@@ -1,3 +1,4 @@
+// Cron cause display tests cover cron error-cause formatting for users.
 import { describe, expect, it } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { printCronJson } from "./shared.js";

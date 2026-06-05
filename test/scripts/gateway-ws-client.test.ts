@@ -1,3 +1,4 @@
+// Gateway Ws Client tests cover gateway ws client script behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";

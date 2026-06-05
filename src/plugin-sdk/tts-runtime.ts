@@ -1,3 +1,4 @@
+// TTS runtime exports expose text-to-speech runtime helpers through the plugin SDK.
 export {
   TtsAutoSchema,
   TtsConfigSchema,

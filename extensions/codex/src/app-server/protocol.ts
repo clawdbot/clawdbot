@@ -1,3 +1,4 @@
+// Codex plugin module implements protocol behavior.
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;

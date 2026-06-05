@@ -1,3 +1,8 @@
+/**
+ * Live Anthropic transport smoke tests.
+ * Runs only when live credentials are enabled and verifies the native messages
+ * transport against the configured provider.
+ */
 import http from "node:http";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";

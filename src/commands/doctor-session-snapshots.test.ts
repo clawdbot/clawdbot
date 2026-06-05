@@ -1,3 +1,4 @@
+// Doctor session snapshot tests cover session snapshot validation and repair guidance.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Rejects raw Node http2 imports in source and extension code.
 import fs from "node:fs";
 import path from "node:path";
 const SOURCE_ROOTS = ["src", "extensions"];

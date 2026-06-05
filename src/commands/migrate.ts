@@ -1,3 +1,4 @@
+/** CLI command orchestration for migration list, plan, and apply flows. */
 import { cancel, confirm, isCancel, log } from "@clack/prompts";
 import {
   stylePromptHint,
@@ -130,6 +131,8 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
     }
     return initialPlan;
   }
+  // Build the first plan without secrets, then only rescan with secrets after
+  // explicit consent so credential handling is opt-in for interactive users.
   const includeSecrets = await confirm({
     message: stylePromptMessage("Do you want to migrate your auth credentials as well?"),
     initialValue: true,
@@ -334,6 +337,7 @@ function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
   runtime.log("No Codex skills or native Codex plugins selected for migration.");
 }
 
+/** Lists available migration providers as JSON or terse terminal rows. */
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const cfg = getRuntimeConfig();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
@@ -363,6 +367,7 @@ export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boo
   );
 }
 
+/** Creates and prints a migration plan without applying it. */
 export async function migratePlanCommand(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions,
@@ -387,10 +392,12 @@ export async function migratePlanCommand(
   return plan;
 }
 
+/** Applies a migration non-interactively when `yes` is true. */
 export async function migrateApplyCommand(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions & { yes: true },
 ): Promise<MigrationApplyResult>;
+/** Plans interactively when needed, prompts, then applies the selected migration. */
 export async function migrateApplyCommand(
   runtime: RuntimeEnv,
   opts: MigrateApplyOptions,
@@ -458,6 +465,7 @@ export async function migrateApplyCommand(
   });
 }
 
+/** Default migrate command: list providers, plan, dry-run, or apply based on flags. */
 export async function migrateDefaultCommand(
   runtime: RuntimeEnv,
   opts: MigrateDefaultOptions,

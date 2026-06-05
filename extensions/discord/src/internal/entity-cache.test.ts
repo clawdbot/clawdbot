@@ -1,3 +1,4 @@
+// Discord tests cover entity cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
 import type { RequestClient } from "./rest.js";

@@ -1,3 +1,4 @@
+// Matrix helper module supports migration config behavior.
 import fs from "node:fs";
 import os from "node:os";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";

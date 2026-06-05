@@ -1,3 +1,4 @@
+// Slack tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isSlackApprovalAuthorizedSender, slackApprovalAuth } from "./approval-auth.js";
 

@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager async state behavior.
 export function startAsyncSearchSync(params: {
   enabled: boolean;
   dirty: boolean;

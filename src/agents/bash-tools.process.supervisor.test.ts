@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process-tool supervisor cancellation.
+ * Verifies managed session cancellation, process-tree fallback, and registry state.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({

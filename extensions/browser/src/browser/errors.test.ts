@@ -1,3 +1,4 @@
+// Browser tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import { BrowserTabNotFoundError } from "./errors.js";
 

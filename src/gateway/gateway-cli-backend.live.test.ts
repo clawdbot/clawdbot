@@ -1,3 +1,4 @@
+// CLI backend live gateway tests exercise configured backend sessions, model switching, MCP loopback, and image probes.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

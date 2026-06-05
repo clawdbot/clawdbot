@@ -1,3 +1,4 @@
+// Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";

@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 2
           fetch-tags: false
           persist-credentials: false
           submodules: false
@@ -74,6 +74,7 @@ jobs:
       - name: Run opengrep on PR diff
         env:
           OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
+          OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1"
         # Findings from precise rules block this workflow. Pull requests scan
         # changed first-party source paths only so findings stay attributable to
         # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`

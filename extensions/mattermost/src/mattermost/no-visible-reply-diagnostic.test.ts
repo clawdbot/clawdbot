@@ -1,3 +1,4 @@
+// Mattermost tests cover no visible reply diagnostic plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   evaluateMattermostNoVisibleReply,

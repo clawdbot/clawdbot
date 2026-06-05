@@ -1,3 +1,5 @@
+// Simple completion transport tests cover provider-specific stream alias
+// selection before the generic completion helper invokes the LLM layer.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -46,6 +48,8 @@ let prepareModelForSimpleCompletion: typeof import("./simple-completion-transpor
 
 describe("prepareModelForSimpleCompletion", () => {
   beforeAll(async () => {
+    // Dynamic import lets the mocked transport/provider modules settle before
+    // the unit under test captures custom stream registration helpers.
     ({ prepareModelForSimpleCompletion } = await import("./simple-completion-transport.js"));
   });
 
@@ -278,6 +282,8 @@ describe("prepareModelForSimpleCompletion", () => {
 
       const result = prepareModelForSimpleCompletion({ model });
 
+      // ChatGPT/Codex response endpoints share the transport stream, but the
+      // simple-completion API must normalize caller-supplied base URLs first.
       expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(
         {
           ...model,

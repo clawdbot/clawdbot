@@ -1,3 +1,4 @@
+// Models set e2e tests cover persisted model selection updates through command handlers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

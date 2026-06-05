@@ -1,3 +1,4 @@
+// Agent Core tests cover memory storage behavior.
 import { describe, expect, it } from "vitest";
 import type { SessionTreeEntry } from "../types.js";
 import { InMemorySessionStorage } from "./memory-storage.js";

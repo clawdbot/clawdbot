@@ -1,3 +1,5 @@
+// Usage accumulator tests cover multi-call token aggregation and last-call
+// snapshots used for billing metadata on embedded run results.
 import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
@@ -36,6 +38,8 @@ const FINAL_USAGE: UsageInput = {
 };
 
 function createAccumulatorWithUsage(...usages: UsageInput[]) {
+  // Helper feeds usage snapshots in order so tests can distinguish accumulated
+  // totals from the exact final provider call.
   const acc = createUsageAccumulator();
   for (const usage of usages) {
     mergeUsageIntoAccumulator(acc, usage);
@@ -162,6 +166,8 @@ describe("usage-accumulator", () => {
 
   describe("resolveLastCallUsage", () => {
     it("prefers raw assistant usage when present", () => {
+      // Raw assistant usage is the provider's final-call truth; the accumulator
+      // is only a fallback when that snapshot is absent or unusable.
       const acc = createUsageAccumulator();
       mergeUsageIntoAccumulator(acc, {
         input: 150,

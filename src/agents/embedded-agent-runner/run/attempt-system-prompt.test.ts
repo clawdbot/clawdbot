@@ -1,3 +1,4 @@
+// Coverage for assembling provider-transformed embedded attempt system prompts.
 import { beforeAll, describe, expect, it } from "vitest";
 
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
@@ -22,6 +23,8 @@ const transformProviderSystemPrompt: Parameters<
 
 describe("buildAttemptSystemPrompt", () => {
   it("injects workspace identity context", () => {
+    // Workspace identity files are part of the base system prompt and must
+    // survive provider transformation.
     const result = buildAttemptSystemPrompt({
       isRawModelRun: false,
       transformProviderSystemPrompt,
@@ -145,6 +148,8 @@ describe("buildAttemptSystemPrompt", () => {
   });
 
   it("omits system prompts for raw model probes", () => {
+    // Raw model probes still build a base prompt for diagnostics, but the final
+    // provider prompt must be empty.
     const result = buildAttemptSystemPrompt({
       isRawModelRun: true,
       transformProviderSystemPrompt,

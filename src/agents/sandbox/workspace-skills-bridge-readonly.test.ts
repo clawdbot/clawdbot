@@ -1,3 +1,5 @@
+// Workspace skills bridge tests cover read-only skill mounts across local and
+// remote sandbox filesystem bridges.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +13,8 @@ import {
 } from "./remote-fs-bridge.js";
 
 const runRemoteShellScript: RemoteShellSandboxHandle["runRemoteShellScript"] = async (command) => {
+  // Run the remote shell bridge scripts locally so path and permission checks are
+  // exercised without an SSH server.
   const result = command.script.includes('python3 /dev/fd/3 "$@" 3<<')
     ? spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...(command.args ?? [])], {
         input: command.stdin,
@@ -130,6 +134,8 @@ describe("workspace skills bridge mount policy", () => {
   it.runIf(process.platform !== "win32")(
     "rejects remote bridge writes through symlinks into skill roots",
     async () => {
+      // Symlink resolution must happen on the remote side too; otherwise writes
+      // can bypass read-only skill root detection.
       await withTempDir("openclaw-skills-remote-link-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");

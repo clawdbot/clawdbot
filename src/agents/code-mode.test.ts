@@ -1,3 +1,4 @@
+/** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -27,6 +28,7 @@ import {
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, description: string): AnyAgentTool {
+  // Minimal tool shape keeps Code Mode catalog tests runtime-free.
   return {
     name,
     label: name,
@@ -70,6 +72,7 @@ function mcpTool(params: {
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
+  // MCP metadata drives Code Mode grouping and raw tool routing.
   const tool: AnyAgentTool = {
     name: params.name,
     label: params.toolName,
@@ -138,6 +141,8 @@ async function runUntilCompleted(params: {
   code: string;
   language?: "javascript" | "typescript";
 }) {
+  // Code Mode may return a waiting state before completion; tests poll through
+  // the public wait tool instead of reaching into activeRuns.
   let details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,

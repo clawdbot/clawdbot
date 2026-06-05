@@ -1,3 +1,4 @@
+// Mattermost tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MattermostConfigSchema } from "./config-schema-core.js";
 

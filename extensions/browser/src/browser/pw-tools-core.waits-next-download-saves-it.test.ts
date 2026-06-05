@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.waits next download saves it plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

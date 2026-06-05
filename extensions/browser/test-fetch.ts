@@ -1,3 +1,6 @@
+/**
+ * Test fetch helper that adds no-op preconnect support expected by Browser tests.
+ */
 type FetchPreconnectOptions = {
   dns?: boolean;
   tcp?: boolean;
@@ -10,6 +13,7 @@ type FetchWithPreconnect = {
   __openclawAcceptsDispatcher: true;
 };
 
+/** Adds Browser test preconnect metadata to a fetch-like function. */
 export function withBrowserFetchPreconnect<T extends typeof fetch>(fn: T): T & FetchWithPreconnect;
 export function withBrowserFetchPreconnect<T extends object>(
   fn: T,

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Inventories core web-search surfaces that still mention bundled providers.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +154,9 @@ function scanGenericCoreImports(lines, relativeFile, inventory) {
   }
 }
 
+/**
+ * Collects web-search provider boundary inventory from core source files.
+ */
 export async function collectWebSearchProviderBoundaryInventory() {
   if (!webSearchProviderInventoryPromise) {
     webSearchProviderInventoryPromise = (async () => {
@@ -184,6 +188,9 @@ export async function collectWebSearchProviderBoundaryInventory() {
   return await webSearchProviderInventoryPromise;
 }
 
+/**
+ * Reads the expected web-search provider boundary inventory baseline.
+ */
 export async function readExpectedInventory() {
   try {
     return JSON.parse(await fs.readFile(baselinePath, "utf8"));
@@ -195,6 +202,9 @@ export async function readExpectedInventory() {
   }
 }
 
+/**
+ * Diffs expected and actual web-search provider boundary inventory entries.
+ */
 export function diffInventory(expected, actual) {
   return diffInventoryEntries(expected, actual, compareInventoryEntries);
 }
@@ -219,6 +229,9 @@ function formatEntry(entry) {
   return `${entry.provider} ${entry.file}:${entry.line} ${entry.reason}`;
 }
 
+/**
+ * Runs the web-search provider boundary baseline check.
+ */
 export async function runWebSearchProviderBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
     argv: argv ?? process.argv.slice(2),
@@ -231,6 +244,9 @@ export async function runWebSearchProviderBoundaryCheck(argv, io) {
   });
 }
 
+/**
+ * Entrypoint wrapper for the web-search provider boundary check.
+ */
 export async function main(argv, io) {
   const exitCode = await runWebSearchProviderBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {

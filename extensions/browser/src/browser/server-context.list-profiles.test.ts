@@ -1,3 +1,4 @@
+// Browser tests cover server context.list profiles plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";

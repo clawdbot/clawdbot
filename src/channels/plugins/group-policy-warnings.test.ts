@@ -1,3 +1,4 @@
+// Group policy warning tests cover user-facing warnings for channel group access policy.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

@@ -1,3 +1,4 @@
+// Discord tests cover exec approvals plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";

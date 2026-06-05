@@ -1,10 +1,10 @@
-import { EventEmitter } from "node:events";
-
 /**
  * Tiny event bus abstraction for session UI/runtime notifications.
  *
- * Handlers are isolated so one bad subscriber cannot break later listeners.
+ * Isolates handler failures so one bad subscriber cannot break later listeners.
  */
+import { EventEmitter } from "node:events";
+
 /** Minimal publish/subscribe interface used by session components. */
 export interface EventBus {
   emit(channel: string, data: unknown): void;

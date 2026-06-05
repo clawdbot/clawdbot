@@ -1,3 +1,6 @@
+/**
+ * Formats selected model references for UI/session display.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Inputs used to choose the visible model ref/name for status surfaces. */

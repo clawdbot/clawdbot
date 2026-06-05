@@ -1,3 +1,4 @@
+// Transcript headers record session identity and version as the first JSONL entry.
 import { randomUUID } from "node:crypto";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 

@@ -1,3 +1,4 @@
+// Program route tests cover CLI route table registration and dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { findRoutedCommand } from "./routes.js";

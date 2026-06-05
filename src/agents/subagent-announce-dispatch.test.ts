@@ -1,3 +1,5 @@
+// Subagent announce dispatch tests lock down direct-vs-steer ordering for
+// progress updates and completion messages.
 import { describe, expect, it, vi } from "vitest";
 import {
   mapSteerOutcomeToDeliveryResult,
@@ -112,6 +114,8 @@ describe("runSubagentAnnounceDispatch", () => {
       terminal: true,
     }));
 
+    // Terminal direct failures can represent partial media delivery; fallback
+    // steering would risk duplicate or contradictory completion messages.
     const result = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,
       steer,

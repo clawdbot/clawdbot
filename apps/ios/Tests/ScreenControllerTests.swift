@@ -45,6 +45,23 @@ private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoo
         #expect(screen.urlString.isEmpty)
     }
 
+    @Test @MainActor func canvasPresentationTracksExplicitPresentAndHide() {
+        let screen = ScreenController()
+
+        #expect(screen.isCanvasPresented == false)
+
+        screen.showDefaultCanvas()
+        #expect(screen.isCanvasPresented == false)
+
+        screen.presentDefaultCanvas()
+        #expect(screen.isCanvasPresented == true)
+        #expect(screen.urlString.isEmpty)
+
+        screen.hideCanvas()
+        #expect(screen.isCanvasPresented == false)
+        #expect(screen.urlString.isEmpty)
+    }
+
     @Test @MainActor func evalExecutesJavaScript() async throws {
         let screen = ScreenController()
         let (coordinator, _) = try mountScreen(screen)

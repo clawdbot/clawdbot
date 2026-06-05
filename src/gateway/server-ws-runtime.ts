@@ -1,3 +1,5 @@
+// WebSocket runtime adapter wires a built GatewayRequestContext into the lower
+// level connection handler and shared gateway WebSocket plumbing.
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   attachGatewayWsConnectionHandler,

@@ -1,3 +1,7 @@
+/**
+ * Builds stable Codex plugin/app inventory cache keys from app-server startup,
+ * auth, account, and version inputs without storing secret material.
+ */
 import { createHash } from "node:crypto";
 import {
   buildCodexAppInventoryCacheKey,
@@ -6,6 +10,7 @@ import {
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
 
+/** Inputs that identify the Codex app inventory cache scope for one runtime. */
 export type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
@@ -14,6 +19,7 @@ export type CodexPluginAppCacheKeyParams = Omit<
   agentDir?: string;
 };
 
+/** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
   return buildCodexAppInventoryCacheKey({
     codexHome: resolveCodexPluginAppCacheCodexHome(params.appServer, params.agentDir),
@@ -25,6 +31,7 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
   });
 }
 
+/** Serializes app-server endpoint identity, including credential fingerprints. */
 export function resolveCodexPluginAppCacheEndpoint(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
 ): string {
@@ -37,6 +44,7 @@ export function resolveCodexPluginAppCacheEndpoint(
   });
 }
 
+/** Resolves the CODEX_HOME value that scopes local app-server inventory. */
 export function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,

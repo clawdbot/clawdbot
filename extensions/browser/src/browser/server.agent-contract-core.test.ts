@@ -1,3 +1,4 @@
+// Browser tests cover server.agent contract core plugin behavior.
 import fs from "node:fs";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";

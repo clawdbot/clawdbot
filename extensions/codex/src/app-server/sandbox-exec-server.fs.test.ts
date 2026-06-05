@@ -1,3 +1,4 @@
+// Codex tests cover sandbox exec server.fs plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeCodexSandboxExecServersForTests,

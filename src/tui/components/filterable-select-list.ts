@@ -1,3 +1,4 @@
+// Filterable select list component supports filtered keyboard selection.
 import type { Component } from "@earendil-works/pi-tui";
 import {
   Input,

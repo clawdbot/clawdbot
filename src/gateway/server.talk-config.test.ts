@@ -1,3 +1,5 @@
+// Talk config tests cover speech-provider config resolution, secret redaction,
+// device-authenticated access, and protocol payload validation.
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

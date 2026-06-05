@@ -1,3 +1,4 @@
+// Line plugin module implements media control cards behavior.
 import type {
   FlexBox,
   FlexBubble,

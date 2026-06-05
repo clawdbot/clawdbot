@@ -1,3 +1,4 @@
+// Google Meet helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asNullableRecord as asRecord,

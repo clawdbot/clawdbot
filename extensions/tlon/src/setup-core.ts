@@ -1,3 +1,4 @@
+// Tlon plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,

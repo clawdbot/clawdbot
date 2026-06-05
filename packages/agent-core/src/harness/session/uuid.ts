@@ -1,3 +1,4 @@
+// Agent Core module implements uuid behavior.
 let lastTimestamp = -Infinity;
 let sequence = 0;
 

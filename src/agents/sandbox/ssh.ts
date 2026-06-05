@@ -1,3 +1,8 @@
+/**
+ * SSH sandbox transport helpers.
+ *
+ * Materializes temporary SSH config, validates remote shell snippets, runs commands, and uploads workspace trees.
+ */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,8 +14,6 @@ import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
-// SSH sandbox transport helpers. This module materializes temporary SSH config,
-// validates remote shell snippets, runs commands, and uploads workspace trees.
 export type SshSandboxSettings = {
   command: string;
   target: string;

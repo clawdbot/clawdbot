@@ -1,3 +1,4 @@
+// Markdown Core tests cover ir.table block behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToIRWithMeta } from "./ir.js";
 

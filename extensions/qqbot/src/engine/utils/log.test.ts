@@ -1,3 +1,4 @@
+// Qqbot tests cover log plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { debugLog, sanitizeDebugLogValue } from "./log.js";
 

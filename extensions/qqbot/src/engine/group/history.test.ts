@@ -1,3 +1,4 @@
+// Qqbot tests cover history plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMergedMessageContext,

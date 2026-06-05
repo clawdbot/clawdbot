@@ -1,3 +1,8 @@
+/**
+ * Adapts runtime AgentTool objects into session ToolDefinition entries.
+ * Owns hook execution, client-tool delegation, result coercion, and safe
+ * logging for failed tool calls.
+ */
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
@@ -304,6 +309,7 @@ function finalizeToolParamsBeforeExecute(params: {
 
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
+/** Find client-hosted tool names that collide with runtime or sibling tools. */
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
   existingToolNames?: Iterable<string>;
@@ -338,14 +344,17 @@ export function findClientToolNameConflicts(params: {
   return Array.from(conflicts);
 }
 
+/** Build a recognizable error for rejecting conflicting client tool names. */
 export function createClientToolNameConflictError(conflicts: string[]): Error {
   return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
 
+/** Detect client tool conflict errors without depending on object identity. */
 export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
+/** Convert executable agent tools into session definitions with hook handling. */
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
@@ -477,8 +486,7 @@ function coerceParamsRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-// Convert client tools (OpenResponses hosted tools) to ToolDefinition format
-// These tools are intercepted to return a "pending" result instead of executing
+/** Convert client-hosted tools into pending session definitions. */
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,

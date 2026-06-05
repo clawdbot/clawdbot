@@ -1,3 +1,4 @@
+// Openai Image Auth Docker Client tests cover openai image auth docker client script behavior.
 import { describe, expect, it } from "vitest";
 import {
   startMockServer,

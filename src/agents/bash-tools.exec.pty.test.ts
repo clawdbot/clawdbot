@@ -1,3 +1,8 @@
+/**
+ * Exec PTY integration tests.
+ * Starts PTY sessions, polls them through the process tool, and verifies
+ * terminal input/output handling.
+ */
 import { afterEach, expect, test } from "vitest";
 import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";

@@ -1,3 +1,4 @@
+/** Tests materializing MCP catalog tools into agent tool definitions and results. */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";

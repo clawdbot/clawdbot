@@ -1,3 +1,4 @@
+// Discord plugin module implements rest routes behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

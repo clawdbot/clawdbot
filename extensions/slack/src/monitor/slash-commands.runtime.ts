@@ -1,3 +1,4 @@
+// Slack plugin module implements slash commands behavior.
 import {
   buildCommandTextFromArgs as buildCommandTextFromArgsImpl,
   findCommandByNativeName as findCommandByNativeNameImpl,

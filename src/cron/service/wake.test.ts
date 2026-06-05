@@ -1,3 +1,4 @@
+// Cron wake tests cover waking the scheduler for due jobs and service changes.
 import { describe, expect, it, vi } from "vitest";
 import { wake } from "./wake.js";
 

@@ -1,3 +1,4 @@
+// Device pairing runtime commands for gateway and loopback-local fallback operations.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -155,6 +156,7 @@ function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
 ): { details: ConnectPairingRequiredDetails } | null {
+  // Local fallback is only safe for implicit loopback gateway URLs.
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
   if (!details) {

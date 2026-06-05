@@ -1,3 +1,4 @@
+// Matrix tests cover rooms plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 

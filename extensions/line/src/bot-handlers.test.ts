@@ -1,3 +1,4 @@
+// Line tests cover bot handlers plugin behavior.
 import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

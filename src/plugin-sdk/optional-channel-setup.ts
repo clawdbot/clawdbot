@@ -1,3 +1,4 @@
+// Optional channel setup helpers describe setup steps that plugins may expose to users.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";

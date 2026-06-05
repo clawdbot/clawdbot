@@ -1,3 +1,8 @@
+/**
+ * Test helpers for subagent registry persistence scenarios. They create
+ * minimal session-store files and runtime dependency mocks without loading
+ * the production embedded-agent stack.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
@@ -8,6 +13,7 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
+/** Reads a test session-store JSON file, returning an empty store on missing/invalid input. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   try {
     const raw = await fs.readFile(storePath, "utf8");
@@ -21,6 +27,7 @@ export async function readSubagentSessionStore(storePath: string): Promise<Sessi
   return {};
 }
 
+/** Writes or updates one subagent session-store entry for persistence tests. */
 export async function writeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
@@ -45,6 +52,7 @@ export async function writeSubagentSessionEntry(params: {
   return storePath;
 }
 
+/** Removes one subagent session-store entry for persistence tests. */
 export async function removeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
@@ -58,6 +66,7 @@ export async function removeSubagentSessionEntry(params: {
   return storePath;
 }
 
+/** Builds default dependency mocks used by subagent registry persistence tests. */
 export function createSubagentRegistryTestDeps(
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {

@@ -1,3 +1,4 @@
+// ACPX tests cover mcp proxy plugin behavior.
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

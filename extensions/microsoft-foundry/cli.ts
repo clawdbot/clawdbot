@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements cli behavior.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   normalizeOptionalString,

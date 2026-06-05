@@ -1,3 +1,4 @@
+// Deepinfra plugin entrypoint registers its OpenClaw integration.
 import {
   type ProviderCatalogContext,
   type ConfiguredProviderCatalogEntry,

@@ -1,3 +1,4 @@
+// Channel config helpers normalize account and channel config values for plugin setup.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {

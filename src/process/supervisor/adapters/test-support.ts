@@ -1,3 +1,4 @@
+// Supervisor adapter test support builds mock process handles for adapter tests.
 import { expect, vi } from "vitest";
 
 /**

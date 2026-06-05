@@ -1,8 +1,10 @@
+// Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
 
 function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSelectionForAgent>) {
+  // Narrows absent selections so each case can assert parsed provider/model fields.
   if (!selection) {
     throw new Error("expected simple completion selection");
   }

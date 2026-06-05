@@ -1,3 +1,6 @@
+/**
+ * Test helpers for seeding and observing compaction counts in session stores.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 

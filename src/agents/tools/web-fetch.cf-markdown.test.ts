@@ -1,3 +1,5 @@
+// Cloudflare Markdown web_fetch tests cover direct markdown extraction,
+// provider bypass, and privacy-safe token logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
@@ -99,6 +101,8 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
+    // Runtime metadata is authoritative for the current credential snapshot; a
+    // stale configured provider should not force provider fallback.
     const fetchSpy = vi
       .fn()
       .mockResolvedValue(
@@ -149,6 +153,8 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
   });
 
   it("logs x-markdown-tokens when header is present", async () => {
+    // Token diagnostics are useful, but the logged URL must be scrubbed before
+    // query strings or private paths reach debug output.
     const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
     const fetchSpy = vi
       .fn()

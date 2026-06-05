@@ -1,3 +1,5 @@
+// Covers startup delivery recovery, backoff, permanent failures, unknown-send
+// reconciliation, commit hooks, and retry budget deferral.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";

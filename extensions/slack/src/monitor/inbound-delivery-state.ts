@@ -1,3 +1,4 @@
+// Slack plugin module implements inbound delivery state behavior.
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";

@@ -1,3 +1,4 @@
+// Ensure Extension Memory Build tests cover ensure extension memory build script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

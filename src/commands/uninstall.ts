@@ -1,3 +1,6 @@
+// Implements `openclaw uninstall`.
+// Handles interactive scope selection, service removal, state/workspace cleanup, and macOS app cleanup.
+
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import {
@@ -64,6 +67,7 @@ function buildScopeSelection(opts: UninstallOptions): {
 
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
+    // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
     runtime.error(
       `Nix mode detected; service uninstall is disabled. Manage the service through your Nix profile instead, then run ${formatCliCommand("openclaw status")} to verify.`,
     );
@@ -115,6 +119,7 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
   runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
 }
 
+/** Runs the uninstall flow for selected service/state/workspace/app scopes. */
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const { scopes, hadExplicit } = buildScopeSelection(opts);
   const interactive = !opts.nonInteractive;
@@ -195,6 +200,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state")) {
+    // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
     await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,

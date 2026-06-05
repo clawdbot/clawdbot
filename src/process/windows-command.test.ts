@@ -1,3 +1,4 @@
+// Windows command tests cover command quoting and shell resolution on Windows.
 import { describe, expect, it } from "vitest";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 

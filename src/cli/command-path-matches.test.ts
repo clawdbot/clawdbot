@@ -1,3 +1,4 @@
+// Command path match tests cover CLI command path matching and normalization.
 import { describe, expect, it } from "vitest";
 import {
   matchesAnyCommandPath,

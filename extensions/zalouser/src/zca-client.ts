@@ -1,3 +1,4 @@
+// Zalouser plugin module implements zca client behavior.
 import {
   LoginQRCallbackEventType,
   Reactions,

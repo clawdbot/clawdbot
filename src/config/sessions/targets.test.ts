@@ -1,3 +1,4 @@
+// Session target tests cover persisted channel targets for sessions.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

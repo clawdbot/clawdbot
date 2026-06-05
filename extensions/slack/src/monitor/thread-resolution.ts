@@ -1,3 +1,4 @@
+// Slack plugin module implements thread resolution behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {

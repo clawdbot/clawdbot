@@ -1,3 +1,4 @@
+// Qqbot plugin module implements sdk adapter behavior.
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   createChannelIngressResolver,

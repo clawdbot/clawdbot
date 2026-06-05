@@ -1,3 +1,4 @@
+// Msteams tests cover sdk plugin behavior.
 import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsApp, createMSTeamsTokenProvider } from "./sdk.js";

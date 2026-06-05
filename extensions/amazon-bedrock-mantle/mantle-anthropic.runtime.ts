@@ -1,3 +1,7 @@
+/**
+ * Anthropic Messages stream adapter for Bedrock Mantle. It rewrites Mantle
+ * endpoints to Anthropic-compatible URLs and adjusts thinking-token budgets.
+ */
 import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -7,6 +11,7 @@ type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
 type AnthropicStreamClient = Anthropic;
 
+/** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
 export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/anthropic")) {
@@ -76,6 +81,7 @@ function adjustMaxTokensForThinking(
   return { maxTokens, thinkingBudget };
 }
 
+/** Create the Mantle Anthropic Messages stream function. */
 export function createMantleAnthropicStreamFn(deps?: {
   createClient?: (options: AnthropicOptions) => Anthropic;
   stream?: MantleAnthropicStream;

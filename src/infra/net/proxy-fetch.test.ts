@@ -1,3 +1,5 @@
+// Proxy fetch tests cover explicit/env proxy dispatchers, managed proxy TLS,
+// FormData conversion, metadata markers, and proxy env recovery.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetActiveManagedProxyStateForTests,

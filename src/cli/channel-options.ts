@@ -1,3 +1,4 @@
+// CLI channel option formatter backed by generated startup metadata when available.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 

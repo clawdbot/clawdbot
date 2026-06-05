@@ -1,12 +1,16 @@
+/**
+ * Shared provider-auth runtime types and errors. Provider calls use these
+ * helpers to fail with actionable auth provenance while keeping secret
+ * normalization local.
+ */
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
-// Shared provider-auth runtime types and errors. Provider calls use these helpers
-// to fail with actionable auth provenance while keeping secret normalization local.
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
 
+/** Resolved credential material and provenance for one provider request. */
 export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
@@ -14,6 +18,7 @@ export type ResolvedProviderAuth = {
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
 };
 
+/** Stable provider auth error code used by fallback/retry paths. */
 export type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
 
 /** Base provider auth error with a stable code for retry/fallback logic. */

@@ -1,3 +1,9 @@
+/**
+ * Minimal setup command.
+ *
+ * Ensures config, default workspace, and session directories exist without
+ * running the full onboarding wizard.
+ */
 import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
@@ -53,6 +59,8 @@ const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
   () => import("../config/logging.js"),
 );
 
+// Keep setup's cold path small; config/workspace modules are loaded only when
+// their default dependency is actually needed.
 function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
   return agentWorkspaceModuleLoader.load();
 }
@@ -124,10 +132,13 @@ async function readConfigFileRaw(configPath: string): Promise<{
     const parsed = safeParseWithSchema(JsonRecordSchema, JSON5.parse(raw));
     return { exists: true, parsed: (parsed ?? {}) as OpenClawConfig };
   } catch {
+    // Missing or malformed config should not block setup; setup writes only the
+    // minimal defaults it owns and leaves deeper repair to doctor/onboard.
     return { exists: false, parsed: {} };
   }
 }
 
+/** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string },
   runtime: RuntimeEnv = defaultRuntime,
@@ -167,6 +178,8 @@ export async function setupCommand(
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
+    // Preserve all existing config fields and touch only workspace/gateway mode
+    // defaults that this command owns.
     const replaceConfig =
       deps.replaceConfigFile ?? ((params) => writeDefaultConfigFile(params.nextConfig));
     await replaceConfig({

@@ -1,3 +1,4 @@
+// Openai tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 

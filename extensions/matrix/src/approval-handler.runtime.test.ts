@@ -1,3 +1,4 @@
+// Matrix tests cover approval handler plugin behavior.
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,

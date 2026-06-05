@@ -1,3 +1,5 @@
+// Covers provider-owned target prefixes, generic kind prefixes, topic suffixes,
+// and selected-channel prefix validation.
 import { describe, expect, it } from "vitest";
 import { stripTargetTopicSuffix } from "./channel-target-prefix.js";
 

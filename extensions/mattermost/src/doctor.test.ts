@@ -1,3 +1,4 @@
+// Mattermost tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { mattermostDoctor } from "./doctor.js";
 

@@ -1,3 +1,4 @@
+// Qqbot tests cover audio plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   pcmToWav,

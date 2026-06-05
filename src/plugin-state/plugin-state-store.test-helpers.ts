@@ -1,3 +1,4 @@
+// Plugin state test helpers seed SQLite plugin state fixtures.
 import { seedPluginStateDatabaseEntriesForTests } from "./plugin-state-store.sqlite.js";
 
 // Test-only seed helpers for plugin state. Values are serialized through the

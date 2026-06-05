@@ -1,9 +1,14 @@
+/**
+ * Target id resolution helpers for Browser tab aliases and user-facing ids.
+ */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+/** Result for resolving a user-supplied tab id, label, or target prefix. */
 type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
 
+/** Resolves exact tab ids/labels first, then unique target-id prefixes. */
 export function resolveTargetIdFromTabs(
   input: string,
   tabs: Array<{ targetId: string; suggestedTargetId?: string; tabId?: string; label?: string }>,

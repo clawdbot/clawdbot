@@ -1,3 +1,4 @@
+// Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -159,6 +160,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+  // Fallback reads local files only for implicit loopback Gateway RPC failures.
   if (!isLocalGatewayRpcUnavailableError(error)) {
     return false;
   }

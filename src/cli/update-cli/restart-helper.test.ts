@@ -1,3 +1,4 @@
+// Restart helper tests cover update restart helper process selection and error handling.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Control UI chat module implements tool message refs behavior.
 import {
   isToolCallContentType,
   isToolResultContentType,

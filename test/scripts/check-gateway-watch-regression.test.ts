@@ -1,3 +1,4 @@
+// Check Gateway Watch Regression tests cover check gateway watch regression script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";

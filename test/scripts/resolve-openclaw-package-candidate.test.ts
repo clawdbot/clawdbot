@@ -1,3 +1,4 @@
+// Resolve Openclaw Package Candidate tests cover resolve openclaw package candidate script behavior.
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

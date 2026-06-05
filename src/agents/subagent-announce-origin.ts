@@ -1,3 +1,8 @@
+/**
+ * Subagent announcement origin resolver.
+ *
+ * Merges requester and session delivery context while avoiding stale thread ids after retargeting.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -18,8 +23,6 @@ import type {
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 export type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-// Resolves where subagent completion announcements should appear. The merge
-// keeps requester context primary while avoiding stale thread IDs on retargets.
 function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
   const rawTo = normalizeOptionalString(context?.to);
   if (!rawTo) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Blocks host-random tmpdir usage in messaging/channel runtime sources.
 import ts from "typescript";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
@@ -9,6 +10,9 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
+/**
+ * Source roots scanned for unsafe messaging tmpdir usage.
+ */
 export const messagingTmpdirGuardSourceRoots = [
   "src/channels",
   "src/infra/outbound",
@@ -53,6 +57,9 @@ function collectOsTmpdirImports(sourceFile) {
   return { osNamespaceOrDefault, namedTmpdir };
 }
 
+/**
+ * Finds `os.tmpdir()` or imported `tmpdir()` call lines in source.
+ */
 export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
@@ -70,6 +77,9 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   });
 }
 
+/**
+ * Runs the messaging tmpdir guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

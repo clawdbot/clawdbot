@@ -1,7 +1,11 @@
+// Runs the repository check lanes selected by CLI arguments.
 import { performance } from "node:perf_hooks";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
+/**
+ * Returns command usage text for the aggregate check runner.
+ */
 export function usage() {
   return [
     "Usage: node scripts/check.mjs [--timed] [--include-architecture] [--include-test-types]",
@@ -16,6 +20,9 @@ export function usage() {
   ].join("\n");
 }
 
+/**
+ * Parses aggregate check runner arguments.
+ */
 export function parseCheckArgs(argv) {
   const args = {
     help: false,
@@ -39,6 +46,9 @@ export function parseCheckArgs(argv) {
   return args;
 }
 
+/**
+ * Runs selected repository check lanes.
+ */
 export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -158,6 +168,9 @@ async function runSerial(commands) {
   return results;
 }
 
+/**
+ * Runs one managed check command and returns timing/status details.
+ */
 export async function runCommand(command, runManagedCommandImpl = runManagedCommand) {
   const startedAt = performance.now();
   let status = 1;

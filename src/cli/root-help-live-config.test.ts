@@ -1,3 +1,4 @@
+// Root help live config tests cover root help output derived from live config state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadRootHelpRenderOptionsForConfigSensitivePlugins } from "./root-help-live-config.js";
 

@@ -1,3 +1,4 @@
+// Control UI type declarations define channels contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,

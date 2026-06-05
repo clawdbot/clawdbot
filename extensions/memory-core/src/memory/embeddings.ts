@@ -1,3 +1,4 @@
+// Memory Core plugin module implements embeddings behavior.
 import {
   getEmbeddingProvider,
   type EmbeddingProviderAdapter,

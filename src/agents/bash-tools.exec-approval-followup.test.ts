@@ -1,3 +1,8 @@
+/**
+ * Exec approval follow-up delivery tests.
+ * Covers denied prompts, agent-session resume, wait handling, direct fallback,
+ * and elevated runtime handoff routing.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({

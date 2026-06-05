@@ -1,3 +1,4 @@
+// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,

@@ -1,3 +1,7 @@
+/**
+ * Active Memory plugin entry and runtime implementation. It recalls recent
+ * memory context through configured agents and injects bounded context snippets.
+ */
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -2861,6 +2865,7 @@ async function maybeResolveActiveRecall(params: {
   }
 }
 
+/** Plugin entry registering Active Memory hooks, tools, config schema, and doctor cleanup. */
 export default definePluginEntry({
   id: "active-memory",
   name: "Active Memory",

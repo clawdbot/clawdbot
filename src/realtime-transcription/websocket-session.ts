@@ -1,3 +1,4 @@
+// Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
 import WebSocket, { type RawData } from "ws";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";

@@ -1,3 +1,8 @@
+/**
+ * video_generate action result helpers.
+ *
+ * Formats provider listing, active-task status, and duplicate-guard responses for the tool.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";

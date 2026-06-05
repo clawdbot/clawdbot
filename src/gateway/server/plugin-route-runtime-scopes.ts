@@ -1,3 +1,4 @@
+// Plugin route runtime scopes map authenticated HTTP callers to operator scopes exposed inside plugin handlers.
 import type { IncomingMessage } from "node:http";
 import {
   getHeader,

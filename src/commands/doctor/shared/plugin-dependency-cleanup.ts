@@ -1,3 +1,4 @@
+// Doctor cleanup for stale plugin dependency install state and dangling runtime symlinks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
@@ -384,6 +385,7 @@ async function collectLegacyPluginDependencyTargets(
   );
 }
 
+/** Remove legacy plugin dependency state under trusted OpenClaw cleanup roots. */
 export async function cleanupLegacyPluginDependencyState(params: {
   env?: NodeJS.ProcessEnv;
   packageRoot?: string | null;

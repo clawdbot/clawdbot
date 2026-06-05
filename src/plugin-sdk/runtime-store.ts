@@ -1,3 +1,4 @@
+// Runtime store exports expose plugin runtime type contracts without loading runtime code.
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 const pluginRuntimeStoreRegistryKey = Symbol.for("openclaw.plugin-sdk.runtime-store-registry");
@@ -48,19 +49,26 @@ function resolvePluginRuntimeStoreOptions(
   return options;
 }
 
-/** Create a tiny mutable runtime slot with strict access when the runtime has not been initialized. */
+/**
+ * Create a process-local runtime slot that throws when accessed before initialization.
+ *
+ * String keys create isolated module-local stores; option objects create global
+ * named slots so duplicate SDK module instances share the same plugin runtime.
+ */
 export function createPluginRuntimeStore<T>(errorMessage: string): {
   setRuntime: (next: T) => void;
   clearRuntime: () => void;
   tryGetRuntime: () => T | null;
   getRuntime: () => T;
 };
+/** Create a globally shared runtime slot keyed by plugin id or explicit registry key. */
 export function createPluginRuntimeStore<T>(options: PluginRuntimeStoreOptions): {
   setRuntime: (next: T) => void;
   clearRuntime: () => void;
   tryGetRuntime: () => T | null;
   getRuntime: () => T;
 };
+/** Implementation overload accepting either legacy error-message strings or structured options. */
 export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStoreOptions): {
   setRuntime: (next: T) => void;
   clearRuntime: () => void;

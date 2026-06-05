@@ -1,3 +1,4 @@
+// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 

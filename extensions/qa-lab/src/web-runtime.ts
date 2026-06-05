@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements web runtime behavior.
 import { randomUUID } from "node:crypto";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";

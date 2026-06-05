@@ -1,3 +1,4 @@
+// Fixture HTTP server for browser CDP snapshot E2E scenarios.
 import http from "node:http";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 

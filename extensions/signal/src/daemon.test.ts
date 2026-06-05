@@ -1,3 +1,4 @@
+// Signal tests cover daemon plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

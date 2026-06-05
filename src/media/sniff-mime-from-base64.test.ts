@@ -1,3 +1,4 @@
+// Base64 mime sniffing tests cover type inference from encoded media payloads.
 import { describe, expect, it } from "vitest";
 import { sniffMimeFromBase64 } from "./sniff-mime-from-base64.js";
 

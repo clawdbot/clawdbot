@@ -1,3 +1,4 @@
+// Allow-from tests cover channel sender allowlist parsing and matching.
 import { describe, expect, it } from "vitest";
 import {
   firstDefined,

@@ -1,9 +1,14 @@
+/**
+ * Shared Codex app-server test helpers for model fixtures and in-memory client
+ * transports.
+ */
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 
+/** Builds a representative Codex-capable model fixture for app-server tests. */
 export function createCodexTestModel(provider = "openai", input = ["text"]): Model {
   return {
     id: "gpt-5.4-codex",
@@ -18,6 +23,7 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+/** Creates an in-memory Codex app-server client harness with writable stdout frames. */
 export function createClientHarness() {
   const stdout = new PassThrough();
   const writes: string[] = [];

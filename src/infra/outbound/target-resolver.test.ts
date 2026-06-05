@@ -1,3 +1,5 @@
+// Covers outbound target resolver id heuristics, directory cache/live fallback,
+// ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";

@@ -1,3 +1,4 @@
+// Channel session tests cover session persistence, lookup, and lifecycle helpers.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 

@@ -1,3 +1,4 @@
+// Sms plugin module implements twilio behavior.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";

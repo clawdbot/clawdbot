@@ -1,3 +1,8 @@
+/**
+ * Shared bash-tool helper tests.
+ * Covers strict env parsing and sandbox workdir mapping between container and
+ * host workspace paths.
+ */
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

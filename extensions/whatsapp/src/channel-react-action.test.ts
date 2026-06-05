@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel react action plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleWhatsAppReactAction } from "./channel-react-action.js";
 import type { OpenClawConfig } from "./runtime-api.js";

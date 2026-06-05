@@ -1,3 +1,4 @@
+// Delivered status tests cover persistence of cron delivery outcomes.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

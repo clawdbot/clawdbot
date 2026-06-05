@@ -1,3 +1,4 @@
+// Slack tests cover monitor.media plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./thread.js";
 

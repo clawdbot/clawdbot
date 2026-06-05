@@ -1,3 +1,4 @@
+// Anthropic-family cache wrapper preserves cache-control semantics in tool payloads.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

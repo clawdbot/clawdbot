@@ -1,3 +1,4 @@
+// Google tests cover google plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

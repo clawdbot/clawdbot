@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Builds dependency change reports from lockfile and manifest diffs.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -41,6 +42,9 @@ function versionsFor(payload, packageName) {
   return new Set(payload[packageName] ?? []);
 }
 
+/**
+ * Creates a structured dependency diff report from base/head payloads.
+ */
 export function createDependencyChangesReport({
   basePayload,
   headPayload,
@@ -184,10 +188,16 @@ function readGitFile(ref, filePath, cwd) {
   });
 }
 
+/**
+ * Reports whether a path is a dependency-related file.
+ */
 export function isDependencyFile(filePath) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
+/**
+ * Returns git pathspecs used for dependency diff collection.
+ */
 export function dependencyDiffPathspecs() {
   return [...DEPENDENCY_DIFF_PATHS];
 }
@@ -276,6 +286,9 @@ async function writeArtifact(filePath, content) {
   await writeFile(filePath, content, "utf8");
 }
 
+/**
+ * Generates and writes dependency change report artifacts.
+ */
 export async function runDependencyChangesReport(options) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText = options.baseRef
@@ -293,6 +306,9 @@ export async function runDependencyChangesReport(options) {
   });
 }
 
+/**
+ * Runs the dependency changes report CLI.
+ */
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const report = await runDependencyChangesReport(options);

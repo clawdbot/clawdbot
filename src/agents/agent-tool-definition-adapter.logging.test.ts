@@ -1,3 +1,8 @@
+/**
+ * Logging tests for tool adapter failures.
+ * Verifies retryable parameter errors expose useful context while intentional
+ * hook blocks and exec secrets stay out of raw logs.
+ */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

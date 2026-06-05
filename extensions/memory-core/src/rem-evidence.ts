@@ -1,3 +1,4 @@
+// Memory Core plugin module implements rem evidence behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";

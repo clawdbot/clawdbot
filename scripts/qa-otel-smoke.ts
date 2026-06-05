@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Qa Otel Smoke script supports OpenClaw repository automation.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";

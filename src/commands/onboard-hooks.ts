@@ -1,3 +1,4 @@
+/** Interactive onboarding step for enabling workspace hooks. */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Prompts for loadable internal hooks and writes selected hook entries. */
 export async function setupInternalHooks(
   cfg: OpenClawConfig,
   _runtime: RuntimeEnv,
@@ -21,7 +23,8 @@ export async function setupInternalHooks(
     t("wizard.hooks.introTitle"),
   );
 
-  // Discover available hooks using the hook discovery system
+  // Discover hooks through the same status path used by hook commands so setup
+  // only offers entries that would be loadable after onboarding finishes.
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
@@ -50,7 +53,7 @@ export async function setupInternalHooks(
     return cfg;
   }
 
-  // Enable selected hooks using the new entries config format
+  // Use entries format so per-hook enablement survives future global defaults.
   const entries = { ...cfg.hooks?.internal?.entries };
   for (const name of selected) {
     entries[name] = { enabled: true };

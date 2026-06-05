@@ -1,3 +1,4 @@
+// Minimax tests cover speech provider plugin behavior.
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

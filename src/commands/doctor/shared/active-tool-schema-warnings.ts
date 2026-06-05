@@ -1,3 +1,4 @@
+// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import {
   listAgentIds,
@@ -114,6 +115,7 @@ function readPluginId(tool: AnyAgentTool | undefined): string | undefined {
   }
 }
 
+/** Collect per-agent warnings for active plugin tools rejected by runtime schema projection. */
 export function collectActiveToolSchemaProjectionWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

@@ -1,3 +1,4 @@
+// Control UI chat module implements chat welcome behavior.
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import {

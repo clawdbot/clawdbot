@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

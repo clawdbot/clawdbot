@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements runtime behavior.
 import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

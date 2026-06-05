@@ -1,3 +1,7 @@
+/**
+ * Runtime contract coverage for deprecated GPT-5 prompt overlays.
+ * Keeps provider-owned overlay compatibility aligned with SDK fixture inputs.
+ */
 import {
   GPT5_CONTRACT_MODEL_ID,
   GPT5_PREFIXED_CONTRACT_MODEL_ID,

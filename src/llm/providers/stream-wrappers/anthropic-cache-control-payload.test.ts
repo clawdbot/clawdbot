@@ -1,3 +1,4 @@
+// Anthropic cache-control payload tests cover cache metadata preservation.
 import { describe, expect, it } from "vitest";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 

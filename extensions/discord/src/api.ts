@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {

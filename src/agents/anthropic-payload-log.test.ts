@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic payload diagnostics redaction.
+ * Ensures request payloads, usage records, errors, and digests are safe before
+ * JSONL logging.
+ */
 import crypto from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Setup wizard types describe onboarding choices and derived config.
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
 import type { SecretInput } from "../config/types.secrets.js";
 

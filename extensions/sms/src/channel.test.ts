@@ -1,3 +1,4 @@
+// Sms tests cover channel plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ChannelModule = typeof import("./channel.js");

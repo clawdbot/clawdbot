@@ -1,3 +1,8 @@
+/**
+ * sessions_send helper logic.
+ *
+ * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
+ */
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,

@@ -1,3 +1,4 @@
+// Qqbot tests cover manifest schema plugin behavior.
 import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";

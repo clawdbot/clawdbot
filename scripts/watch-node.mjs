@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Watches dev source paths and restarts scripts/run-node.mjs when relevant
+// files change.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -101,6 +103,7 @@ const sleep = (ms) =>
 const createWatchLockKey = (cwd, args) =>
   createHash("sha256").update(cwd).update("\0").update(args.join("\0")).digest("hex").slice(0, 12);
 
+/** Resolves the lock path that prevents duplicate watch-node loops. */
 export const resolveWatchLockPath = (cwd, args = []) =>
   path.join(cwd, WATCH_LOCK_DIR, `${createWatchLockKey(cwd, args)}.json`);
 
@@ -257,6 +260,9 @@ const releaseWatchLock = (lockHandle) => {
  *   ) => { on: (event: string, cb: (...args: unknown[]) => void) => void; close?: () => Promise<void> };
  *   watchPaths?: string[];
  * }} [params]
+ */
+/**
+ * Runs the watch loop and restarts the child process on relevant changes.
  */
 export async function runWatchMain(params = {}) {
   const deps = {

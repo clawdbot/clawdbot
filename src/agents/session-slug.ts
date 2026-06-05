@@ -1,3 +1,8 @@
+/**
+ * Human-readable session slug generator.
+ * Produces short adjective/noun IDs with numbered and random fallbacks when
+ * collisions are reported by the session store.
+ */
 import { generateSecureInt } from "../infra/secure-random.js";
 
 const SLUG_ADJECTIVES = [

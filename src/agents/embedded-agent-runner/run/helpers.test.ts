@@ -1,3 +1,5 @@
+// Embedded run helper tests cover final assistant text extraction and error
+// metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createUsageAccumulator } from "../usage-accumulator.js";
@@ -11,6 +13,8 @@ function makeAssistantMessage(
   content: AssistantMessage["content"],
   phase?: string,
 ): AssistantMessage {
+  // Minimal assistant fixture with usage fields required by the SDK type; the
+  // tested helpers only care about content, phase, and final metadata.
   return {
     api: "responses",
     provider: "openai",
@@ -33,6 +37,8 @@ function makeAssistantMessage(
 
 describe("resolveFinalAssistantVisibleText", () => {
   it("prefers final_answer text over commentary blocks", () => {
+    // Commentary can be streamed before the final answer; user-visible result
+    // extraction must choose the signed final phase when present.
     const lastAssistant = makeAssistantMessage([
       {
         type: "text",
@@ -81,6 +87,8 @@ describe("resolveFinalAssistantVisibleText", () => {
 
 describe("buildErrorAgentMeta", () => {
   it("preserves active session file for error exits after transcript rotation", () => {
+    // Error metadata follows the active session after transcript rotation so
+    // diagnostics and resume links point at the file that contains the failure.
     expect(
       buildErrorAgentMeta({
         sessionId: "session-rotated",

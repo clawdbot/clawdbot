@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound send context behavior.
 import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,

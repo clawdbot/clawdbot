@@ -1,3 +1,5 @@
+// Startup WebSocket race tests ensure upgrade handlers are attached before the
+// gateway reports its listen step as ready.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";

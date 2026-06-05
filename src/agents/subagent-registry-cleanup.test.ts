@@ -1,3 +1,5 @@
+// Subagent registry cleanup tests cover deferred cleanup decisions while
+// completion delivery, descendants, and retry windows are still unresolved.
 import { describe, expect, it } from "vitest";
 import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -28,6 +30,8 @@ describe("resolveDeferredCleanupDecision", () => {
         Pick<Parameters<typeof resolveDeferredCleanupDecision>[0], "resolveAnnounceRetryDelayMs">
       >,
   ) {
+    // Fixed timing keeps expiry and backoff decisions independent from wall
+    // clock drift while still exercising production thresholds.
     return resolveDeferredCleanupDecision({
       now,
       announceExpiryMs: 5 * 60_000,

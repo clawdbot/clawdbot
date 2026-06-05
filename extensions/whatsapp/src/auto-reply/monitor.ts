@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor behavior.
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
@@ -32,13 +33,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import {
-  formatError,
-  getStatusCode,
-  getWebAuthAgeMs,
-  logoutWeb,
-  readWebSelfId,
-} from "../session.js";
+import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -407,45 +402,73 @@ export async function monitorWebChannel(
           },
         });
       } catch (error) {
-        if (getStatusCode(error) === 428) {
-          const retryDecision = controller.consumeReconnectAttempt();
-          statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+        const setupDecision = controller.resolveSetupErrorDecision(error);
+        if (setupDecision === "aborted") {
+          await controller.shutdown();
+          break;
+        }
+        if (setupDecision) {
+          statusController.noteReconnectAttempts(setupDecision.reconnectAttempts);
           statusController.noteClose({
-            statusCode: 428,
+            statusCode: setupDecision.normalized.statusCode,
             error: formatError(error),
-            reconnectAttempts: retryDecision.reconnectAttempts,
-            healthState: retryDecision.healthState,
+            reconnectAttempts: setupDecision.reconnectAttempts,
+            healthState: setupDecision.healthState,
           });
-          if (retryDecision.action === "stop") {
+          if (setupDecision.action === "stop") {
             reconnectLogger.warn(
               {
                 connectionId,
-                status: 428,
-                reconnectAttempts: retryDecision.reconnectAttempts,
+                status: setupDecision.normalized.statusLabel,
+                reconnectAttempts: setupDecision.reconnectAttempts,
                 maxAttempts: reconnectPolicy.maxAttempts,
               },
-              "web reconnect: 428 during opening; max attempts reached",
+              "web reconnect: setup status error; max attempts reached",
             );
-            runtime.error(
-              `WhatsApp Web connection closed during setup (status 428) after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
-            );
+            if (setupDecision.healthState === "logged-out") {
+              await clearTerminalWebAuthState({
+                account,
+                runtime,
+                statusLabel: setupDecision.normalized.statusLabel,
+                healthState: setupDecision.healthState,
+                log: reconnectLogger,
+              });
+              runtime.error(
+                `WhatsApp session logged out during setup. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
+              );
+            } else if (setupDecision.healthState === "conflict") {
+              await clearTerminalWebAuthState({
+                account,
+                runtime,
+                statusLabel: setupDecision.normalized.statusLabel,
+                healthState: setupDecision.healthState,
+                log: reconnectLogger,
+              });
+              runtime.error(
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+              );
+            } else {
+              runtime.error(
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}) after ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
+              );
+            }
             await controller.shutdown();
             break;
           }
           reconnectLogger.info(
             {
               connectionId,
-              status: 428,
-              reconnectAttempts: retryDecision.reconnectAttempts,
-              delayMs: retryDecision.delayMs,
+              status: setupDecision.normalized.statusLabel,
+              reconnectAttempts: setupDecision.reconnectAttempts,
+              delayMs: setupDecision.delayMs,
             },
-            "web reconnect: 428 during opening; retrying",
+            "web reconnect: setup status error; retrying",
           );
           runtime.error(
-            `WhatsApp Web connection closed during setup (status 428). Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+            `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}). Retry ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(setupDecision.delayMs ?? 0)}.`,
           );
           try {
-            await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+            await controller.waitBeforeRetry(setupDecision.delayMs ?? 0);
           } catch {
             break;
           }

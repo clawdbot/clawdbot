@@ -1,3 +1,9 @@
+/**
+ * Session trajectory tail command.
+ *
+ * It selects active or requested sessions, renders recent trajectory events,
+ * and can follow append-only trajectory files across rotation/truncation.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -64,6 +70,7 @@ const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
 let followIntervalMsForTests: number | undefined;
 
+/** Overrides the follow polling interval for tests. */
 export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
   followIntervalMsForTests = intervalMs;
 }
@@ -146,6 +153,8 @@ function compareCursors(left: TrajectoryCursor, right: TrajectoryCursor): number
   if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
     return left.seq - right.seq;
   }
+  // Some trajectory events lack sequence numbers; timestamp fallback keeps
+  // follow mode from replaying already-rendered events after file rewrites.
   const byTimestamp = left.tsMs - right.tsMs;
   if (byTimestamp !== 0) {
     return byTimestamp;
@@ -241,6 +250,8 @@ function safePreview(event: TrajectoryEvent): string {
       return `prompt skipped${reason ? `: ${reason}` : ""}`;
     }
     case "tool.call":
+      // Tool arguments may contain secrets or user text; tail output shows only
+      // the tool name and a redacted placeholder.
       return `${toolName(data)} {...redacted...}`;
     case "tool.timeout":
       return `${toolName(data)} timeout`;
@@ -372,6 +383,8 @@ function selectSessionsToTail(selections: TailSelection[], sessionKey?: string):
 
   const running = selections.filter((selection) => isRunningSession(selection));
   if (running.length > 0) {
+    // Without an explicit key, prefer all running sessions so follow mode shows
+    // concurrent active work instead of only the newest store entry.
     return running.toSorted(compareSelectionsByUpdatedAt);
   }
 
@@ -405,6 +418,8 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
     fileState.size === state.offset && state.fileState?.mtimeMs !== fileState.mtimeMs;
 
   if (replaced || truncated || possiblyRewrittenSameSize) {
+    // Log rotation, truncation, and same-size rewrites all require a full
+    // rescan; cursor filtering prevents duplicate event output.
     const snapshot = readTrajectorySnapshot(state.selection.trajectoryPath);
     state.fileState = snapshot.fileState;
     state.offset = snapshot.offset;
@@ -424,6 +439,8 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
     state.offset = fileState.size;
     state.fileState = fileState;
     const combined = `${state.pending}${buffer.toString("utf8")}`;
+    // Keep an incomplete trailing JSON line until the next poll, matching
+    // append-only writers that flush in chunks.
     const lines = combined.split(/\r?\n/u);
     state.pending = lines.pop() ?? "";
     return parseTrajectoryEventLines(lines);
@@ -492,6 +509,7 @@ function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
 }
 
+/** Tails recent trajectory events for the selected session(s). */
 export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,

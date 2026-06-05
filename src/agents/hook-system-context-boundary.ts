@@ -1,3 +1,6 @@
+/**
+ * Wraps plugin-provided system context in stable prompt-cache boundaries.
+ */
 import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
 
 // Labels plugin-provided system context so harness prompt compaction and user-facing

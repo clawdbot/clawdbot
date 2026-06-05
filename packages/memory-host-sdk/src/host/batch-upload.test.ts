@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch upload behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { withRemoteHttpResponse } from "./remote-http.js";

@@ -1,3 +1,4 @@
+// Read-only command default tests cover command defaulting for read-only channel plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());

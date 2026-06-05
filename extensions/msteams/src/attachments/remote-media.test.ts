@@ -1,3 +1,4 @@
+// Msteams tests cover remote media plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the runtime so we can assert whether the strict-dispatcher path

@@ -1,3 +1,8 @@
+/**
+ * Tool binary manager for agent-side helper commands.
+ *
+ * Locates or downloads pinned helper binaries such as fd and ripgrep.
+ */
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {

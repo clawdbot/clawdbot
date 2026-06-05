@@ -1,3 +1,4 @@
+// Control UI module implements navigation behavior.
 import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";

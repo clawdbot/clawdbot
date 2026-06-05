@@ -1,3 +1,4 @@
+// Discord plugin module implements proxy fetch behavior.
 import { isIP } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";

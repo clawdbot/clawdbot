@@ -1,3 +1,4 @@
+// Telegram tests cover conversation route.base session key plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   testing as conversationBindingTesting,

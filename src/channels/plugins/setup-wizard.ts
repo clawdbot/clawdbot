@@ -1,3 +1,8 @@
+/**
+ * Channel setup wizard adapter.
+ *
+ * Adapts declarative wizard definitions into imperative setup adapters used by onboarding.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
@@ -19,8 +24,6 @@ import type {
 } from "./setup-wizard-types.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
-// Adapts declarative channel setup wizard definitions into the imperative
-// setup adapter used by onboarding and channel configuration flows.
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFrom,

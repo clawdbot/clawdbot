@@ -1,3 +1,5 @@
+// Outbound channel bootstrap lazily loads runtime plugins for selected channels
+// when only setup-shell metadata is active.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,6 +44,8 @@ export function bootstrapOutboundChannelPlugin(params: {
   if (bootstrapAttempts.has(attemptKey)) {
     return;
   }
+  // Retry once per registry version/channel; failed loads clear the guard below
+  // so config fixes in the same process can try again.
   bootstrapAttempts.add(attemptKey);
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });

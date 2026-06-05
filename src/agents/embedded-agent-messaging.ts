@@ -1,3 +1,6 @@
+/**
+ * Identifies messaging tools and send actions during embedded-agent runs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 
@@ -10,12 +13,14 @@ const MESSAGE_TOOL_SEND_ACTIONS = new Set([
   "upload-file",
 ]);
 
+/** Return true when a message action sends or uploads user-visible content. */
 export function isMessageToolSendActionName(action: unknown): boolean {
   const normalized = normalizeOptionalString(action) ?? "";
   return MESSAGE_TOOL_SEND_ACTIONS.has(normalized);
 }
 
 // Provider docking: any plugin with `actions` opts into messaging tool handling.
+/** Return true for core or channel-plugin messaging tool names. */
 export function isMessagingTool(toolName: string): boolean {
   if (CORE_MESSAGING_TOOLS.has(toolName)) {
     return true;
@@ -24,6 +29,7 @@ export function isMessagingTool(toolName: string): boolean {
   return Boolean(providerId && getChannelPlugin(providerId)?.actions);
 }
 
+/** Return true when the specific tool invocation is an outbound send. */
 export function isMessagingToolSendAction(
   toolName: string,
   args: Record<string, unknown>,

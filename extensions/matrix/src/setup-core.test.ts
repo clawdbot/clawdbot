@@ -1,3 +1,4 @@
+// Matrix tests cover setup core plugin behavior.
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";

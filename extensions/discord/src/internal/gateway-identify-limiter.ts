@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway identify limiter behavior.
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 
 const IDENTIFY_WINDOW_MS = 5_000;

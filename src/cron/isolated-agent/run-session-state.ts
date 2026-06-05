@@ -1,3 +1,4 @@
+/** Mutates and persists isolated cron session state around one run. */
 import fs from "node:fs";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -66,6 +67,8 @@ export function createPersistCronSessionEntry(params: {
       !cronTranscriptExists(params.cronSession.sessionEntry)
         ? toNonResumableCronSessionEntry(params.cronSession.sessionEntry)
         : params.cronSession.sessionEntry;
+    // Update both the in-memory store and persisted JSON so later operations in
+    // this process observe the same session entry that hit disk.
     params.cronSession.store[params.agentSessionKey] = persistedEntry;
     await params.updateSessionStore(params.cronSession.storePath, (store) => {
       store[params.agentSessionKey] = persistedEntry;

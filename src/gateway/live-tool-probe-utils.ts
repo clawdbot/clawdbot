@@ -1,8 +1,7 @@
+// Gateway live tool probe utilities.
+// Classifies nonce probe replies and retry conditions for live provider checks.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-// Live tool probes check whether providers actually read requested files/tools.
-// The retry heuristics distinguish expected nonce output from refusals,
-// malformed tool output, and provider-specific partial nonce echoes.
 /** Returns true when both expected tool-read nonces are present. */
 export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
   return text.includes(nonceA) && text.includes(nonceB);

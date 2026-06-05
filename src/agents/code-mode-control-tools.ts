@@ -1,15 +1,23 @@
+/**
+ * Tags Code Mode exec/wait control tools and normalizes hook params for the
+ * exec-compatible before-tool-call surface.
+ */
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-// Code-mode control tool helpers. They mark exec/wait tools that belong to the
-// isolated code-mode runtime and keep before-tool-call params in code/command sync.
+/** Model-visible Code Mode exec tool name. */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
+/** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
+/** Hook metadata kind for Code Mode exec tools. */
 export const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
+/** Hook metadata kind type for Code Mode exec tools. */
 export type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
+/** Source language accepted by the Code Mode exec tool. */
 export type CodeModeExecToolInputKind = "javascript" | "typescript";
+/** Metadata attached to before-tool-call events for Code Mode exec. */
 export type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
   toolInputKind?: CodeModeExecToolInputKind;

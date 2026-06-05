@@ -1,3 +1,7 @@
+/**
+ * MCP tool registration plus redaction helpers for Codex Supervisor sessions
+ * and endpoint metadata.
+ */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { CodexSupervisor } from "./supervisor.js";
@@ -7,9 +11,12 @@ import type {
   CodexSupervisorSessionListResult,
 } from "./types.js";
 
+/** Env gate for exposing transcript-derived fields through standalone MCP. */
 export const RAW_TRANSCRIPTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
+/** Env gate for mutating/steering Codex sessions through standalone MCP. */
 export const WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
+/** Optional policy callbacks for standalone MCP tool exposure. */
 export type CodexSupervisorMcpToolOptions = {
   rawTranscriptReadsAllowed?: () => boolean;
   writeControlsAllowed?: () => boolean;
@@ -36,6 +43,10 @@ function redactString(value: string): string {
     .replace(/\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g, "Bearer [redacted]");
 }
 
+/**
+ * Redacts common secret-bearing fields and token-like substrings before tool
+ * results leave the supervisor.
+ */
 export function redactCodexSupervisorValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     if (/authorization|password|secret|token|api[-_]?key/i.test(key)) {
@@ -74,6 +85,7 @@ function redactEndpointUrl(value: string): string {
   }
 }
 
+/** Returns endpoint metadata safe for tool results. */
 export function redactCodexSupervisorEndpoint(
   endpoint: CodexSupervisorEndpoint,
 ): Record<string, unknown> {
@@ -115,6 +127,10 @@ function sanitizeSessionForMcp(
   return sanitized;
 }
 
+/**
+ * Sanitizes session-list output, optionally including transcript-derived
+ * preview/name fields only when the caller has opted in.
+ */
 export function sanitizeCodexSupervisorSessionListResult(
   result: CodexSupervisorSessionListResult,
   includeTranscriptDerivedFields = rawTranscriptReadsAllowed(),
@@ -129,6 +145,10 @@ export function sanitizeCodexSupervisorSessionListResult(
   };
 }
 
+/**
+ * Registers MCP tools for endpoint probing, session listing, reads, sends, and
+ * interrupts.
+ */
 export function registerCodexSupervisorMcpTools(
   server: McpServer,
   supervisor: CodexSupervisor,

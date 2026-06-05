@@ -1,3 +1,4 @@
+// Message capability tests cover channel message feature detection and compatibility.
 import { describe, expect, it } from "vitest";
 import { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
 

@@ -1,3 +1,4 @@
+/** Parses daemon runtime command output into normalized key-value maps. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Parses command output key-value lines using a caller-supplied separator. */

@@ -1,3 +1,4 @@
+/** CLI commands for listing, inspecting, and cancelling TaskFlow records. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -147,6 +148,7 @@ function summarizeFlowState(flow: TaskFlowRecord): string | null {
   return null;
 }
 
+/** Lists TaskFlows with optional status filtering and JSON output. */
 export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
@@ -189,6 +191,7 @@ export async function flowsListCommand(
   }
 }
 
+/** Shows one TaskFlow and its linked task summary. */
 export async function flowsShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -243,6 +246,7 @@ export async function flowsShowCommand(
   }
 }
 
+/** Requests cancellation for one TaskFlow selected by id or lookup token. */
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {

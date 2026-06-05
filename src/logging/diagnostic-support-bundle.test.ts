@@ -1,3 +1,4 @@
+// Diagnostic support bundle tests cover collected files and redaction in bundles.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Implements identity metadata updates for configured agents.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -61,6 +62,7 @@ function resolveAgentIdByWorkspace(
   );
 }
 
+/** Update an agent identity from flags or workspace identity markdown. */
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,

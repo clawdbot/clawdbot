@@ -1,3 +1,8 @@
+/**
+ * Shell execution helpers.
+ *
+ * Resolves platform shell commands, sanitizes binary output, and exposes process-tree cleanup.
+ */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

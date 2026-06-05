@@ -1,3 +1,5 @@
+// Gateway HTTP/WebSocket runtime state factory.
+// Builds one server runtime with pinned plugin registries and lazy route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";

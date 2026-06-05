@@ -1,3 +1,4 @@
+// Slack tests cover group policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 

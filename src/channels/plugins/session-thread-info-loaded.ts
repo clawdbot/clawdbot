@@ -1,3 +1,8 @@
+/**
+ * Loaded-plugin session thread info resolver.
+ *
+ * Uses only already loaded channel hooks to resolve thread suffix metadata on hot paths.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseRawSessionConversationRef,
@@ -5,10 +10,6 @@ import {
   type ParsedThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
-
-/**
- * Hot-path thread info resolver that consults only already loaded channel plugins.
- */
 
 type SessionConversationHookResult = {
   id: string;

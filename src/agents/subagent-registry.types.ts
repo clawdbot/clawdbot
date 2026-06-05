@@ -1,3 +1,8 @@
+/**
+ * Subagent registry record types.
+ *
+ * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
+ */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";

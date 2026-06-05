@@ -1,3 +1,5 @@
+// Gateway node event types.
+// Defines the narrowed context and event envelope for node-originated handlers.
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -5,8 +7,6 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
 
-// Node event handlers receive a narrowed context instead of the full gateway
-// request context so node-originated events can mutate only the state they own.
 /** Runtime context available to node event handlers. */
 export type NodeEventContext = {
   deps: CliDeps;

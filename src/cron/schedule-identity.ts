@@ -1,3 +1,4 @@
+/** Builds stable identities for cron scheduling inputs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
@@ -34,6 +35,8 @@ function schedulePayloadFromRecord(
   const tz = readString(schedule, "tz");
   const staggerMs = readStaggerMs(schedule);
   const kind =
+    // Infer legacy shorthand schedule shapes when kind is missing so timer
+    // identity remains stable across old persisted jobs and normalized jobs.
     rawKind === "at" || rawKind === "every" || rawKind === "cron"
       ? rawKind
       : at

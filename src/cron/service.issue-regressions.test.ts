@@ -1,3 +1,4 @@
+// Cron service issue regression tests cover historical scheduler failures.
 import { describe, expect, it, vi } from "vitest";
 import {
   setupCronIssueRegressionFixtures,

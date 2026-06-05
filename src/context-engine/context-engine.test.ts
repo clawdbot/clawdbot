@@ -1,3 +1,4 @@
+// Context engine tests cover context extraction and prompt context assembly.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";

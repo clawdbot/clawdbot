@@ -1,3 +1,4 @@
+// Copilot tests cover harness plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientPool } from "./harness.js";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";

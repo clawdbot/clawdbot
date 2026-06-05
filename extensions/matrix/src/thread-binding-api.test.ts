@@ -1,3 +1,4 @@
+// Matrix tests cover thread binding api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   defaultTopLevelPlacement,

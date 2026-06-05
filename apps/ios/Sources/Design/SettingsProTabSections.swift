@@ -37,6 +37,8 @@ extension SettingsProTab {
                     NavigationLink(value: SettingsRoute.gateway) {
                         self.gatewayConnectionRow
                             .padding(14)
+                            .frame(maxWidth: .infinity, minHeight: SettingsLayout.rowHeight, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     Divider()
@@ -201,9 +203,13 @@ extension SettingsProTab {
                         self.aboutDestination
                     }
                 }
-                .padding(.vertical, 18)
+                .padding(.top, 18)
+                .padding(.bottom, SettingsLayout.bottomContentPadding)
             }
-            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+            .contentMargins(.bottom, self.bottomScrollMargin, for: .scrollContent)
+            SettingsBottomOverlayInsetReader(inset: self.$bottomOverlayInset)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
         }
         .navigationTitle(self.title(for: route))
         .navigationBarTitleDisplayMode(.inline)
@@ -239,11 +245,11 @@ extension SettingsProTab {
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 
+            self.manualGatewayCard
             self.deviceIdentityCard
             self.agentSelectionCard
             self.gatewaySetupCard
             self.discoveredGatewaysCard
-            self.manualGatewayCard
             self.gatewayAdvancedCard
         }
     }
@@ -292,18 +298,6 @@ extension SettingsProTab {
                 value: self.diagnosticsHealthValue,
                 color: self.gatewayConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
 
-            self.diagnosticChecksCard
-
-            self.detailListCard {
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                Divider()
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                Divider()
-                self.detailRow("App", value: DeviceInfoHelper.openClawVersionString())
-                Divider()
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
-            }
-
             ProCard(radius: SettingsLayout.cardRadius) {
                 self.gatewayActionButton(
                     title: "Run Diagnostics",
@@ -315,6 +309,18 @@ extension SettingsProTab {
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
+
+            self.diagnosticChecksCard
+
+            self.detailListCard {
+                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                Divider()
+                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
+                Divider()
+                self.detailRow("App", value: DeviceInfoHelper.openClawVersionString())
+                Divider()
+                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+            }
 
             self.diagnosticsAdvancedCard
         }

@@ -1,3 +1,8 @@
+/**
+ * image built-in tool.
+ *
+ * Describes local, staged, web, and generated media through configured media-understanding providers.
+ */
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

@@ -1,3 +1,4 @@
+// Task domain types define plugin task-flow payloads shared by runtime adapters.
 import type { JsonValue } from "../../tasks/task-flow-registry.types.js";
 import type {
   TaskDeliveryStatus,

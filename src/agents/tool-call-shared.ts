@@ -1,7 +1,10 @@
+/**
+ * Shared tool-call name validation helpers.
+ * Keeps model-supplied tool names compact, normalized, and policy-checked
+ * before routing them to any tool execution surface.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-// Shared validation for model-supplied tool call names. Names are kept compact
-// and ASCII-ish before comparing against any allowed-tool set.
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 

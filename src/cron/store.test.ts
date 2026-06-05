@@ -1,3 +1,4 @@
+// Cron store tests cover persisted scheduled job state and run metadata.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

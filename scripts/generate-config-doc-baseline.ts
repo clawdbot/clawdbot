@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Generate Config Doc Baseline script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeConfigDocBaselineArtifacts } from "../src/config/doc-baseline.js";

@@ -1,3 +1,4 @@
+// Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

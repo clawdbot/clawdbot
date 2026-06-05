@@ -1,3 +1,4 @@
+// Sessions tail tests cover transcript tailing, filtering, and session-store setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

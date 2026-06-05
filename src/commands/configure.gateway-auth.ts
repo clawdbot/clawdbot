@@ -1,3 +1,4 @@
+// Configure wizard model/auth selection and gateway auth config helpers.
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -156,6 +157,7 @@ function resolveConfiguredProviderFromAuthChange(params: {
   );
 }
 
+/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
@@ -196,6 +198,7 @@ export function buildGatewayAuthConfig(params: {
   return base;
 }
 
+/** Prompt for model provider credentials and default model allowlist settings. */
 export async function promptAuthConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,

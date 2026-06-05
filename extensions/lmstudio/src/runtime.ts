@@ -1,3 +1,4 @@
+// Lmstudio plugin module implements runtime behavior.
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,

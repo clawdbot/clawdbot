@@ -1,3 +1,4 @@
+// Matrix plugin module implements approval native behavior.
 import {
   createChannelApprovalCapability,
   createApproverRestrictedNativeApprovalCapability,

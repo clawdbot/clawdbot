@@ -1,3 +1,4 @@
+// Control UI i18n module implements lit controller behavior.
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { i18n } from "./translate.ts";
 

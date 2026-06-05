@@ -1,3 +1,4 @@
+// Verifies plugin text transforms rewrite prompts and streamed assistant output.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -20,6 +21,7 @@ const model = {
 } as Model<"openai-responses">;
 
 function makeAssistantMessage(text: string): AssistantMessage {
+  // Output transform tests need a complete assistant message with visible text.
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -106,6 +108,7 @@ describe("plugin text transforms", () => {
   });
 
   it("wraps stream functions with inbound and outbound replacements", async () => {
+    // The wrapper mutates text-only blocks while preserving non-text content.
     let capturedContext: Context | undefined;
     const baseStreamFn: StreamFn = (_model, context) => {
       capturedContext = context;

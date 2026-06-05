@@ -1,3 +1,5 @@
+// Gateway MCP loopback JSON-RPC handlers.
+// Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,9 +17,6 @@ import {
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
 
-// JSON-RPC handler for the in-process MCP loopback server. It intentionally
-// supports the small method set needed by MCP clients: initialize, tools/list,
-// tools/call, and notifications that do not need responses.
 type McpTextContent = {
   type: "text";
   text: string;

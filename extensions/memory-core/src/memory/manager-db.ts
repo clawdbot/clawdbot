@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager db behavior.
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {

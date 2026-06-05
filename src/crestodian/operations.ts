@@ -1,3 +1,4 @@
+// Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
@@ -227,6 +228,7 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
     return { kind: "status" };
   }
   if (lower.includes("agent")) {
+    // Creation is checked before "talk to agent" because setup phrasing can contain both words.
     const createMatch = trimmed.match(CREATE_AGENT_RE);
     if (createMatch?.groups?.agent) {
       const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
@@ -641,6 +643,7 @@ export async function executeCrestodianOperation(
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {
+        // Mutate via the config helper so file locking, formatting, and validation stay centralized.
         let next = cfg;
         if (setupModel.model && applyDefaultModelPrimaryUpdate) {
           next = applyDefaultModelPrimaryUpdate({

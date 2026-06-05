@@ -1,3 +1,6 @@
+/**
+ * Resolves command session ids, keys, stores, and persisted thinking state.
+ */
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -32,6 +35,7 @@ import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolu
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 
+/** Resolved command session identity plus backing store metadata. */
 export type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
@@ -55,6 +59,7 @@ type SessionIdMatchSet = {
   storeByKey: Map<string, SessionKeyResolution>;
 };
 
+/** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
@@ -207,6 +212,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
+/** Resolves the session key/store targeted by one command request. */
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -301,6 +307,7 @@ export function resolveSessionKeyForRequest(opts: {
   return { sessionKey, sessionStore, storePath };
 }
 
+/** Resolves or creates the session used by one agent command request. */
 export function resolveSession(opts: {
   cfg: OpenClawConfig;
   to?: string;

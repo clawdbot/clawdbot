@@ -1,3 +1,4 @@
+// Sms plugin module implements status behavior.
 import {
   listTwilioIncomingPhoneNumbers,
   listTwilioMessages,

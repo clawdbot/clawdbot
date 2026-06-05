@@ -1,15 +1,14 @@
+/**
+ * Session visibility and access helpers for session tools.
+ *
+ * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSandboxSessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-resolution.js";
 
-/**
- * Session visibility/access helpers shared by session tools.
- *
- * Re-exports the SDK visibility contracts and adds OpenClaw session-key alias
- * normalization for sandboxed tool callers.
- */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,

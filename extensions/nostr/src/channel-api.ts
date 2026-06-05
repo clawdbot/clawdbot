@@ -1,3 +1,4 @@
+// Nostr API module exposes the plugin public contract.
 export {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,

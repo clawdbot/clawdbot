@@ -1,3 +1,5 @@
+// Node pairing rate-limit tests protect repeated pairing attempts, pending
+// request cleanup, and protocol error details for node clients.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";

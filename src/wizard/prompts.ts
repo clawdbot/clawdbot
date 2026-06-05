@@ -1,3 +1,4 @@
+// Wizard prompt types abstract selectable, confirm, and text prompts.
 export type WizardSelectOption<T = string> = {
   value: T;
   label: string;

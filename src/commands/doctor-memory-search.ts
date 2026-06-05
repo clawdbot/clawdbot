@@ -1,3 +1,4 @@
+/** Doctor diagnostics and repairs for memory search config, providers, and recall artifacts. */
 import fsSync from "node:fs";
 import {
   findNormalizedProviderValue,
@@ -248,6 +249,7 @@ function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): s
   ].join("\n");
 }
 
+/** Emits memory recall and dreaming artifact warnings for the active memory backend. */
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
   try {
     const context = await resolveRuntimeMemoryAuditContext(cfg);
@@ -279,6 +281,7 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
   }
 }
 
+/** Repairs fixable recall/dreaming artifacts after runtime repair confirmation. */
 export async function maybeRepairMemoryRecallHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -390,10 +393,10 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
 }
 
 /**
- * Check whether memory search has a usable embedding provider.
- * Runs as part of `openclaw doctor` — config-only checks where possible;
- * may spawn a short-lived probe process when `memory.backend=qmd` to verify
- * the configured `qmd` binary is available.
+ * Checks whether memory search has a usable backend and embedding provider.
+ *
+ * Config-only checks are preferred, but QMD backends may spawn a short-lived probe process to
+ * verify the configured binary from the agent workspace.
  */
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,

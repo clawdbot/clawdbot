@@ -1,3 +1,4 @@
+// OC Path tests cover emit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";

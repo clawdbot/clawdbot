@@ -42,6 +42,7 @@ export function resolveRuntimeEnv(params: {
   logger: LoggerLike;
   exitError?: (code: number) => Error;
 }): RuntimeEnv;
+/** @deprecated Import from `openclaw/plugin-sdk/runtime` instead. */
 export function resolveRuntimeEnv(params: {
   runtime?: undefined;
   logger: LoggerLike;
@@ -61,6 +62,7 @@ export function resolveRuntimeEnvWithUnavailableExit(params: {
   logger: LoggerLike;
   unavailableMessage?: string;
 }): RuntimeEnv;
+/** @deprecated Import from `openclaw/plugin-sdk/runtime` instead. */
 export function resolveRuntimeEnvWithUnavailableExit(params: {
   runtime?: undefined;
   logger: LoggerLike;

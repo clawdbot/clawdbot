@@ -1,3 +1,4 @@
+// Cron service state tests cover in-memory scheduler state transitions.
 import { describe, expect, it, vi } from "vitest";
 import { createCronServiceState } from "./state.js";
 

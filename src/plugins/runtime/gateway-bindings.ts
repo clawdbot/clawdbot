@@ -1,3 +1,4 @@
+// Gateway binding helpers expose plugin runtime bindings through gateway-safe singletons.
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginRuntime } from "./types.js";
 

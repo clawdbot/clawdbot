@@ -1,5 +1,7 @@
+// Provider selection runtime helpers resolve plugin/provider choices from config and CLI input.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
+/** Provider descriptor fields needed for explicit or automatic selection. */
 export type AutoSelectableProvider = {
   /** Provider id used for explicit config lookup and selected result metadata. */
   id: string;
@@ -7,6 +9,7 @@ export type AutoSelectableProvider = {
   autoSelectOrder?: number;
 };
 
+/** Provider selection result before capability-specific configuration checks run. */
 export type ProviderSelection<TProvider> = {
   /** Normalized explicit provider id, when the caller supplied one. */
   configuredProviderId?: string;
@@ -16,6 +19,7 @@ export type ProviderSelection<TProvider> = {
   provider: TProvider | undefined;
 };
 
+/** Final provider resolution result including capability-specific config. */
 export type ResolvedConfiguredProvider<TProvider, TConfig> =
   | {
       /** Provider exists and passed the capability-specific configuration check. */
@@ -38,6 +42,7 @@ export type ResolvedConfiguredProvider<TProvider, TConfig> =
       provider?: TProvider;
     };
 
+/** Select an explicit provider when configured, otherwise the lowest-order auto provider. */
 export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableProvider>(params: {
   /** Optional explicit provider id from config or user input. */
   configuredProviderId?: string;
@@ -66,6 +71,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
   };
 }
 
+/** Merge canonical provider config with selected-provider override config. */
 export function resolveProviderRawConfig(params: {
   /** Canonical provider id whose default config should be read first. */
   providerId: string;
@@ -86,6 +92,7 @@ export function resolveProviderRawConfig(params: {
   };
 }
 
+/** Resolve a configured or auto-selected provider that passes capability config checks. */
 export function resolveConfiguredCapabilityProvider<
   TConfig,
   TFullConfig,

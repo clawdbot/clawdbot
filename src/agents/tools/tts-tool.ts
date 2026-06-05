@@ -1,3 +1,8 @@
+/**
+ * tts built-in tool.
+ *
+ * Converts explicit speech requests into generated audio and safe transcript content.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

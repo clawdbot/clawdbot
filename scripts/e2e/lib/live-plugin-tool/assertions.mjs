@@ -1,3 +1,4 @@
+// Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";

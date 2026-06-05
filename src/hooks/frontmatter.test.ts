@@ -1,3 +1,4 @@
+// Hook frontmatter tests cover hook metadata parsing from hook files.
 import { describe, expect, it } from "vitest";
 import {
   parseFrontmatter,

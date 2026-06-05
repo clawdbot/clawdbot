@@ -1,3 +1,4 @@
+// Embedded run entry integration tests cover persisted runtime skill entries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

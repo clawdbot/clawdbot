@@ -1,3 +1,4 @@
+// Codex plugin module implements command account behavior.
 import {
   ensureAuthProfileStore,
   findNormalizedProviderValue,

@@ -9,6 +9,7 @@ import {
 } from "./facade-runtime.js";
 import type { MemorySearchManager } from "./memory-core-host-engine-storage.js";
 
+/** Doctor metadata for a built-in memory embedding provider. */
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
   authProviderId: string;
@@ -17,6 +18,7 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
+/** One issue found while auditing dreaming/session-corpus artifacts. */
 export type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
   code:
@@ -28,6 +30,7 @@ export type DreamingArtifactsAuditIssue = {
   fixable: boolean;
 };
 
+/** Summary of dreaming diary and session-corpus artifact health. */
 export type DreamingArtifactsAuditSummary = {
   dreamsPath?: string;
   sessionCorpusDir: string;
@@ -39,6 +42,7 @@ export type DreamingArtifactsAuditSummary = {
   issues: DreamingArtifactsAuditIssue[];
 };
 
+/** Result from archiving or repairing problematic dreaming artifacts. */
 export type RepairDreamingArtifactsResult = {
   changed: boolean;
   archiveDir?: string;
@@ -49,6 +53,7 @@ export type RepairDreamingArtifactsResult = {
   warnings: string[];
 };
 
+/** One issue found while auditing short-term promotion artifacts. */
 export type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
@@ -65,6 +70,7 @@ export type ShortTermAuditIssue = {
   fixable: boolean;
 };
 
+/** Summary of recall-store and qmd state used by short-term promotion. */
 export type ShortTermAuditSummary = {
   storePath: string;
   lockPath: string;
@@ -86,6 +92,7 @@ export type ShortTermAuditSummary = {
     | undefined;
 };
 
+/** Result from repairing invalid recall-store entries or stale short-term locks. */
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
@@ -142,34 +149,42 @@ function loadFacadeModule(): FacadeModule {
     artifactBasename: "runtime-api.js",
   });
 }
+/** Audit short-term promotion artifacts in an agent workspace. */
 export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((
   ...args
 ) =>
   loadFacadeModule()["auditShortTermPromotionArtifacts"](
     ...args,
   )) as FacadeModule["auditShortTermPromotionArtifacts"];
+/** Audit dreaming diary and session-corpus artifacts in an agent workspace. */
 export const auditDreamingArtifacts: FacadeModule["auditDreamingArtifacts"] = ((...args) =>
   loadFacadeModule()["auditDreamingArtifacts"](...args)) as FacadeModule["auditDreamingArtifacts"];
+/** Resolve doctor metadata for one built-in memory embedding provider. */
 export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"] =
   ((...args) =>
     loadFacadeModule()["getBuiltinMemoryEmbeddingProviderDoctorMetadata"](
       ...args,
     )) as FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"];
+/** Resolve the active memory search manager and any runtime availability error. */
 export const getMemorySearchManager: FacadeModule["getMemorySearchManager"] = ((...args) =>
   loadFacadeModule()["getMemorySearchManager"](...args)) as FacadeModule["getMemorySearchManager"];
+/** List built-in memory embedding providers eligible for automatic selection. */
 export const listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: FacadeModule["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"] =
   ((...args) =>
     loadFacadeModule()["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"](
       ...args,
     )) as FacadeModule["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"];
+/** Lazy memory index manager facade used by status and runtime callers. */
 export const MemoryIndexManager: FacadeModule["MemoryIndexManager"] = createLazyFacadeObjectValue(
   () => loadFacadeModule()["MemoryIndexManager"] as object,
 ) as FacadeModule["MemoryIndexManager"];
+/** Repair invalid recall-store entries and stale short-term promotion locks. */
 export const repairShortTermPromotionArtifacts: FacadeModule["repairShortTermPromotionArtifacts"] =
   ((...args) =>
     loadFacadeModule()["repairShortTermPromotionArtifacts"](
       ...args,
     )) as FacadeModule["repairShortTermPromotionArtifacts"];
+/** Repair or archive problematic dreaming artifacts. */
 export const repairDreamingArtifacts: FacadeModule["repairDreamingArtifacts"] = ((...args) =>
   loadFacadeModule()["repairDreamingArtifacts"](
     ...args,

@@ -1,3 +1,8 @@
+/**
+ * Workspace template directory discovery.
+ * Resolves source, docs, package, and fallback template locations with a small
+ * cache so setup flows can find templates in dev and packaged installs.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";

@@ -1,3 +1,4 @@
+// Mistral tests cover mistral plugin behavior.
 import {
   normalizeTranscriptForMatch,
   runRealtimeSttLiveTest,

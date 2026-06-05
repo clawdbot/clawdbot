@@ -1,3 +1,4 @@
+// Mcp Channels Harness tests cover mcp channels harness script behavior.
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

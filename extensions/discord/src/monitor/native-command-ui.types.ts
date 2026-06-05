@@ -1,3 +1,4 @@
+// Discord type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 

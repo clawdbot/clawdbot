@@ -1,3 +1,4 @@
+// Discord plugin module implements rest errors behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "../retry-after.js";
 

@@ -1,3 +1,4 @@
+// Mcp Websocket Open script supports OpenClaw repository automation.
 type WebSocketOpenHandle = {
   close?: () => void;
   off?: (event: "open" | "error" | "close", listener: (...args: unknown[]) => void) => void;

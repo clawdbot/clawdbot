@@ -1,3 +1,4 @@
+// Coverage for embedded attempt tool construction and runtime allowlists.
 import { describe, expect, it } from "vitest";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -21,6 +22,8 @@ function expectConstructionPlan(
     coding?: Partial<EmbeddedAttemptToolConstructionPlan["codingToolConstructionPlan"]>;
   },
 ) {
+  // Plans are intentionally wide; tests assert only the decision bits relevant
+  // to the scenario under review.
   if ("constructTools" in expected) {
     expect(plan.constructTools).toBe(expected.constructTools);
   }
@@ -47,6 +50,8 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   });
 
   it("keeps forced message tool through explicit runtime allowlists", () => {
+    // Forced delivery tools must remain available even when callers narrow the
+    // runtime allowlist to a plugin-specific tool.
     const tools = [{ name: "music_generate" }, { name: "message" }];
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(["music_generate"], {
       forceMessageTool: true,
@@ -131,6 +136,8 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   });
 
   it("filters bundled runtime tools by explicit tool name and bundled plugin id", () => {
+    // Bundled MCP/LSP tools are plugin-owned tools, so allowlists can target
+    // either exact tool names or bundled plugin ids.
     const tools = [
       { name: "strict__strict_probe" },
       { name: "loose__extra_probe" },

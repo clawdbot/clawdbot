@@ -1,3 +1,4 @@
+// Shared assertions and templates for model forward-compatibility tests.
 import { expect } from "vitest";
 
 export function buildForwardCompatTemplate(params: {
@@ -12,6 +13,8 @@ export function buildForwardCompatTemplate(params: {
   contextWindow?: number;
   maxTokens?: number;
 }) {
+  // Template shape mirrors discovered catalog rows so fallback tests exercise
+  // metadata cloning rather than hand-built partial models.
   return {
     id: params.id,
     name: params.name,
@@ -45,6 +48,8 @@ export function expectResolvedForwardCompatFallbackWithRegistryResult(params: {
 }
 
 function expectModelFields(actual: unknown, expected: Record<string, unknown>) {
+  // Forward-compatible fallbacks only assert fields that define the contract;
+  // unrelated catalog metadata can vary by source.
   const actualModel = actual as Record<string, unknown> | undefined;
   expect(actualModel).toBeDefined();
   for (const [key, value] of Object.entries(expected)) {

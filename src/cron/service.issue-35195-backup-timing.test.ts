@@ -1,3 +1,4 @@
+// Backup timing regression tests cover scheduled backup run timing.
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";

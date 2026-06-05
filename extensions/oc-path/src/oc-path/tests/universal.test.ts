@@ -1,3 +1,4 @@
+// OC Path tests cover universal plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../emit.js";
 import { emitJsonc } from "../jsonc/emit.js";

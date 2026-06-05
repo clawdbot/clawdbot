@@ -1,3 +1,4 @@
+// Classifies acceptable live-provider drift for optional validation lanes.
 import { describe, expect, it } from "vitest";
 import {
   isLiveAuthDrift,
@@ -50,6 +51,8 @@ describe("live test provider drift", () => {
   });
 
   it("returns explicit skip labels only for enabled drift classes", () => {
+    // Drift classification is opt-in per lane; matching an auth error should
+    // not skip the test unless that lane explicitly allows auth drift.
     expect(
       shouldSkipLiveProviderDrift({
         error: '401 {"error":{"message":"The API key you provided is invalid."}}',

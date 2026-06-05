@@ -1,3 +1,4 @@
+// Anthropic tests cover index plugin behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,

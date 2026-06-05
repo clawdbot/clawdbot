@@ -1,3 +1,4 @@
+// Hook status helpers summarize configured, installed, and plugin-provided hooks.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";

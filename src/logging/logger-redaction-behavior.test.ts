@@ -1,3 +1,4 @@
+// Logger redaction behavior tests cover secret scrubbing before log writes.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
+import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { testApi as loggerTest } from "./logger.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
@@ -16,9 +18,6 @@ const secret = "sk-testsecret1234567890abcd";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-redaction-");
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-const originalHome = process.env.HOME;
-const originalTestFileLog = process.env.OPENCLAW_TEST_FILE_LOG;
 
 beforeAll(async () => {
   await logPathTracker.setup();
@@ -29,21 +28,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
-  if (originalHome === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = originalHome;
-  }
-  if (originalTestFileLog === undefined) {
-    delete process.env.OPENCLAW_TEST_FILE_LOG;
-  } else {
-    process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
-  }
   resetDiagnosticEventsForTest();
   resetDiagnosticTraceContextForTest();
   resetLogger();
@@ -113,14 +97,15 @@ describe("file log redaction", () => {
         },
       }),
     );
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    setLoggerOverride({ level: "info", file: logPath });
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info({
-      token: "token-value-1234567890",
-      access: "ya29.fake-access-token-with-enough-length",
-      password: "abcd-efgh-ijkl-mnop",
-      message: `Authorization: Bearer ${secret}`,
+      getLogger().info({
+        token: "token-value-1234567890",
+        access: "ya29.fake-access-token-with-enough-length",
+        password: "abcd-efgh-ijkl-mnop",
+        message: `Authorization: Bearer ${secret}`,
+      });
     });
 
     const content = fs.readFileSync(logPath, "utf8");
@@ -142,10 +127,9 @@ describe("file log redaction", () => {
         },
       }),
     );
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    process.env.OPENCLAW_TEST_FILE_LOG = "1";
-
-    getLogger().info({ message: "configured log path works" });
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FILE_LOG: "1" }, () => {
+      getLogger().info({ message: "configured log path works" });
+    });
 
     const content = fs.readFileSync(logPath, "utf8");
     expect(content).toContain("configured log path works");
@@ -153,11 +137,12 @@ describe("file log redaction", () => {
 
   it("expands leading tilde in logging.file", () => {
     const home = path.join(path.dirname(logPathTracker.nextPath()), "home");
-    process.env.HOME = home;
 
-    expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
-      path.join(home, "custom-openclaw.log"),
-    );
+    withEnv({ HOME: home }, () => {
+      expect(loggerTest.resolveActiveLogFile("~/custom-openclaw.log")).toBe(
+        path.join(home, "custom-openclaw.log"),
+      );
+    });
   });
 
   it("writes trace context as top-level JSONL fields", () => {

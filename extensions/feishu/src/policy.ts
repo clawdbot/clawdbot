@@ -1,3 +1,4 @@
+// Feishu plugin module implements policy behavior.
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,

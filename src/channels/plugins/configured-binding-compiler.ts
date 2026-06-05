@@ -1,3 +1,8 @@
+/**
+ * Configured binding compiler.
+ *
+ * Compiles config rules into channel/provider-specific binding registry entries.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,9 +18,6 @@ import type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
-
-// Configured bindings are channel-owned rules compiled from config, separate
-// from runtime plugin-owned conversation bindings.
 
 export type CompiledConfiguredBindingRegistry = {
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;

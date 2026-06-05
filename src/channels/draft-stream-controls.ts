@@ -1,3 +1,8 @@
+/**
+ * Finalizable draft stream controls.
+ *
+ * Coordinates preview updates, final flushes, clears, and deletion callbacks for channel drafts.
+ */
 import { formatErrorMessage } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 

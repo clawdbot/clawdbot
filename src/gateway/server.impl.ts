@@ -1,3 +1,5 @@
+// Gateway server implementation builds runtime state, method registries, HTTP
+// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";

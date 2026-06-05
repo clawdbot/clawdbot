@@ -1,3 +1,5 @@
+// Final-tag enforcement tests cover suppression of leaked reasoning and safe
+// extraction of <final> content across streamed code/fence boundaries.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +15,8 @@ type ReplyMock = ReturnType<typeof vi.fn>;
 type ReplyPayload = { text?: string };
 
 function requireFirstReplyPayload(mock: ReplyMock): ReplyPayload {
+  // Enforcement cases emit at most one visible reply before assertions inspect
+  // whether the hidden prefix stayed suppressed.
   const call = mock.mock.calls[0];
   if (!call) {
     throw new Error("expected first reply call");
@@ -96,6 +100,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("keeps final tag literals inside streamed fenced code while enforcement is on", () => {
+    // Literal <final> tags inside code fences remain hidden until a real final
+    // tag appears outside the fence.
     const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();

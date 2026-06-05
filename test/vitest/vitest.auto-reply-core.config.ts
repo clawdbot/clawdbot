@@ -1,3 +1,4 @@
+// Vitest auto reply core config wires the auto reply core test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { autoReplyCoreTestExclude, autoReplyCoreTestInclude } from "./vitest.test-shards.mjs";
 

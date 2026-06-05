@@ -1,3 +1,4 @@
+// Covers embedded runner extension factories and tool-result middleware bridge.
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -14,6 +15,8 @@ afterEach(() => {
 
 describe("buildEmbeddedExtensionFactories", () => {
   it("bridges middleware mutations with unique fallback tool call ids", async () => {
+    // Middleware invoked from app-server style tool_result events may not have a
+    // call id; synthesize stable unique ids for downstream audit/mutation hooks.
     const seenToolCallIds: string[] = [];
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
@@ -114,6 +117,8 @@ describe("buildEmbeddedExtensionFactories", () => {
   });
 
   it("preserves model-visible failures when middleware rewrites details", async () => {
+    // Once a tool result is classified as model-visible failure, middleware
+    // redaction must not accidentally clear the error signal.
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
       pluginId: "redactor",

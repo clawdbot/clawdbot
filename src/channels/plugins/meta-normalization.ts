@@ -1,8 +1,11 @@
+/**
+ * Channel metadata normalizer.
+ *
+ * Recomputes required metadata fields while preserving optional manifest/registry fields.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMeta } from "./types.public.js";
 
-// Normalizes partially declared channel metadata while preserving optional
-// extension-owned fields from an existing manifest or registry entry.
 function stripRequiredChannelMeta(meta?: Partial<ChannelMeta> | null) {
   const {
     id: _ignoredId,

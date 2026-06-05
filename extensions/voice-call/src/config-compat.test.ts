@@ -1,3 +1,4 @@
+// Voice Call tests cover config compat plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION,

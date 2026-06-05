@@ -1,3 +1,4 @@
+// Verbose tar install helpers parse archive extraction output for diagnostics.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 const TAR_VERBOSE_MONTHS = new Set([

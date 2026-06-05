@@ -1,3 +1,4 @@
+// Browser tests cover agent.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {

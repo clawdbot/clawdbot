@@ -1,3 +1,4 @@
+// Skills CLI tests cover skill listing, install, and command output behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";

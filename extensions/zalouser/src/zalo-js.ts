@@ -1,3 +1,4 @@
+// Zalouser plugin module implements zalo js behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

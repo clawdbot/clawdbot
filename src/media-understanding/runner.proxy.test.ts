@@ -1,5 +1,8 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Media runner proxy tests cover environment proxy fetch selection for audio
+// and video providers.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
 
@@ -111,77 +114,77 @@ describe("runCapability proxy fetch passthrough", () => {
     vi.clearAllMocks();
     clearMediaUnderstandingBinaryCacheForTests();
   });
-  afterEach(() => vi.unstubAllEnvs());
 
   it("passes fetchFn to audio provider when HTTPS_PROXY is set", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-    const seenFetchFn = await runAudioCapabilityWithFetchCapture({
-      fixturePrefix: "openclaw-audio-proxy",
-      outputText: "transcribed",
-    });
-    expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
-  });
-
-  it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-
-    await withVideoFixture("openclaw-video-proxy", async ({ ctx, media, cache }) => {
-      let seenFetchFn: typeof fetch | undefined;
-
-      const result = await runCapability({
-        capability: "video",
-        cfg: {
-          models: {
-            providers: {
-              moonshot: {
-                apiKey: "test-key", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-          tools: {
-            media: {
-              video: {
-                enabled: true,
-                models: [{ provider: "moonshot", model: "kimi-k2.5" }],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry: new Map([
-          [
-            "moonshot",
-            {
-              id: "moonshot",
-              capabilities: ["video"],
-              describeVideo: async (req: VideoDescriptionRequest) => {
-                seenFetchFn = req.fetchFn;
-                return { text: "video ok", model: req.model };
-              },
-            },
-          ],
-        ]),
+    await withEnvAsync({ HTTPS_PROXY: "http://proxy.test:8080" }, async () => {
+      const seenFetchFn = await runAudioCapabilityWithFetchCapture({
+        fixturePrefix: "openclaw-audio-proxy",
+        outputText: "transcribed",
       });
-
-      expectSingleOutputText(result, "video ok");
       expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
     });
   });
 
-  it("does not pass fetchFn when no proxy env vars are set", async () => {
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "");
+  it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {
+    await withEnvAsync({ HTTPS_PROXY: "http://proxy.test:8080" }, async () => {
+      await withVideoFixture("openclaw-video-proxy", async ({ ctx, media, cache }) => {
+        let seenFetchFn: typeof fetch | undefined;
 
-    const seenFetchFn = await runAudioCapabilityWithFetchCapture({
-      fixturePrefix: "openclaw-audio-no-proxy",
-      outputText: "ok",
+        const result = await runCapability({
+          capability: "video",
+          cfg: {
+            models: {
+              providers: {
+                moonshot: {
+                  apiKey: "test-key", // pragma: allowlist secret
+                  models: [],
+                },
+              },
+            },
+            tools: {
+              media: {
+                video: {
+                  enabled: true,
+                  models: [{ provider: "moonshot", model: "kimi-k2.5" }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry: new Map([
+            [
+              "moonshot",
+              {
+                id: "moonshot",
+                capabilities: ["video"],
+                describeVideo: async (req: VideoDescriptionRequest) => {
+                  seenFetchFn = req.fetchFn;
+                  return { text: "video ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expectSingleOutputText(result, "video ok");
+        expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
+      });
     });
-    expect(seenFetchFn).toBeUndefined();
+  });
+
+  it("does not pass fetchFn when no proxy env vars are set", async () => {
+    await withEnvAsync(
+      { HTTPS_PROXY: "", HTTP_PROXY: "", https_proxy: "", http_proxy: "" },
+      async () => {
+        const seenFetchFn = await runAudioCapabilityWithFetchCapture({
+          fixturePrefix: "openclaw-audio-no-proxy",
+          outputText: "ok",
+        });
+        expect(seenFetchFn).toBeUndefined();
+      },
+    );
   });
 
   it("passes allowPrivateNetwork to audio provider when set in providerConfig.request", async () => {

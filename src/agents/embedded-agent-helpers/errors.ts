@@ -1,3 +1,6 @@
+/**
+ * Classifies provider/runtime failures and formats assistant-facing error text.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -75,6 +78,7 @@ export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 
+/** Detect provider errors that require reasoning to stay enabled. */
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
@@ -93,6 +97,7 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+/** Detect explicit context-window overflow without confusing TPM rate limits. */
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;

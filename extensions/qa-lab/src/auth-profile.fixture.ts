@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements auth profile.fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 

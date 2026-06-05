@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot info cache behavior.
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";

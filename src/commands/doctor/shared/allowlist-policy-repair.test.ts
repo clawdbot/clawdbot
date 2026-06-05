@@ -1,3 +1,4 @@
+// Allowlist policy repair tests cover doctor repair of unsafe or stale allowlist policy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./allowlist-policy-repair.js";
 

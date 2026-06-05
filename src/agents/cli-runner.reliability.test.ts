@@ -1,3 +1,4 @@
+/** Tests CLI runner reliability paths for hooks, transcripts, failover, and reply ops. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,7 @@ type HookRunnerGlobalStateForTest = {
 };
 
 function setHookRunnerForTest(hookRunner: unknown): void {
+  // Keep the module-level hook runner singleton aligned with the mocked getter.
   mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const state = (globalStore[hookRunnerGlobalStateKey] as
@@ -60,6 +62,8 @@ function setHookRunnerForTest(hookRunner: unknown): void {
 }
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
+  // Session files use the real JSONL shape so transcript/history readers stay
+  // covered without spinning up a full CLI process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
@@ -134,6 +138,7 @@ function buildPreparedContext(params?: {
   model?: string;
   allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
+  // Common prepared context fixture for runPreparedCliAgent reliability branches.
   const provider = params?.provider ?? "codex-cli";
   const model = params?.model ?? "gpt-5.4";
   const backend = {

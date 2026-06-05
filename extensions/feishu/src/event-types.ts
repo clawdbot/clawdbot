@@ -1,3 +1,4 @@
+// Feishu plugin module implements event types behavior.
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {

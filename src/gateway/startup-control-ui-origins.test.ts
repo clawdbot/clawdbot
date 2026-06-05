@@ -1,3 +1,5 @@
+// Startup control-UI origin tests cover runtime-only origin seeding for LAN
+// gateway binds without mutating persisted config.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";

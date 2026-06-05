@@ -1,3 +1,4 @@
+// Restart health probes for gateway service restarts and port listener recovery.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -70,6 +71,7 @@ type GatewayRestartProbeAuth = {
 };
 
 function hasListenerAttributionGap(portUsage: PortUsage): boolean {
+  // lsof/netstat may report a busy port without a PID; keep that distinct from a free port.
   if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
     return false;
   }

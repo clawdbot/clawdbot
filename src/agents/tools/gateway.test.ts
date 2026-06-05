@@ -1,3 +1,5 @@
+// Gateway call helper tests pin URL override, token, and RPC scope behavior for
+// agent tools that route through the local gateway client.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayScopedOptions } from "../../gateway/call.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -118,6 +120,8 @@ describe("gateway tool defaults", () => {
   });
 
   it("does not leak local env/config tokens to remote overrides", () => {
+    // Remote gateway overrides must use their own configured token; the local
+    // daemon token is scoped to loopback-style endpoints only.
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
     mocks.configState.value = {
       gateway: {
@@ -188,6 +192,8 @@ describe("gateway tool defaults", () => {
   });
 
   it("derives plugin session action scopes from call params", async () => {
+    // Session actions can define narrower scopes than the generic plugin RPC;
+    // preserve that least-privilege contract when the registry is available.
     const registry = createEmptyPluginRegistry();
     registry.sessionActions = [
       {
@@ -302,6 +308,8 @@ describe("gateway tool defaults", () => {
   });
 
   it("does not send the local approval runtime token to gatewayUrl overrides", async () => {
+    // Approval runtime tokens are local IPC credentials, not bearer tokens for
+    // user-supplied gateway URLs.
     mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
 
     await callGatewayTool(

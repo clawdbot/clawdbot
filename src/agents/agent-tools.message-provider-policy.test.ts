@@ -1,3 +1,8 @@
+/**
+ * Tests message-provider tool filtering.
+ * Voice-like transports should not expose text-to-speech when that surface is
+ * unsafe or redundant for the active channel.
+ */
 import { describe, expect, it } from "vitest";
 import { filterToolNamesByMessageProvider } from "./agent-tools.message-provider-policy.js";
 

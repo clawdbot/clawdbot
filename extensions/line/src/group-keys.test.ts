@@ -1,3 +1,4 @@
+// Line tests cover group keys plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveExactLineGroupConfigKey,

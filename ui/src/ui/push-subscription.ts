@@ -1,3 +1,4 @@
+// Control UI module implements push subscription behavior.
 import type { GatewayBrowserClient } from "./gateway.ts";
 
 export type WebPushState = {

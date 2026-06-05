@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements events behavior.
 export type MatrixQaRoomEvent = {
   content?: Record<string, unknown>;
   event_id?: string;

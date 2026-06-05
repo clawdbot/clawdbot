@@ -1,3 +1,4 @@
+// Codex tests cover attempt client cleanup plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   interruptCodexTurnBestEffort,

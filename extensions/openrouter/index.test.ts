@@ -1,3 +1,4 @@
+// Openrouter tests cover index plugin behavior.
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,

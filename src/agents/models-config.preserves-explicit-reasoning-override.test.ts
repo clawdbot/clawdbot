@@ -1,3 +1,4 @@
+// Verifies explicit model reasoning overrides survive provider catalog merges.
 import { describe, expect, it } from "vitest";
 import { mergeProviderModels, mergeProviders } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -40,6 +41,8 @@ function createMinimaxModelWithoutReasoning(): NonNullable<ProviderConfig["model
 function mergedMinimaxModel(
   explicitModel: NonNullable<ProviderConfig["models"]>[number],
 ): NonNullable<ProviderConfig["models"]>[number] | undefined {
+  // Built-in MiniMax metadata currently advertises reasoning, while user
+  // config may intentionally disable or omit it.
   return mergeProviderModels(
     createMinimaxProvider(createMinimaxModel({ reasoning: true })),
     createMinimaxProvider(explicitModel),

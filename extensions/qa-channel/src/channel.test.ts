@@ -1,3 +1,4 @@
+// Qa Channel tests cover channel plugin behavior.
 import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {

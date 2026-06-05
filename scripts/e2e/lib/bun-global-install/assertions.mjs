@@ -1,3 +1,4 @@
+// Assertions for Bun global install E2E validation.
 import { spawn } from "node:child_process";
 
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 30_000;

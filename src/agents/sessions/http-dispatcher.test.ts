@@ -1,3 +1,5 @@
+// HTTP dispatcher tests cover idle-timeout parsing for session network
+// transports.
 import { describe, expect, it } from "vitest";
 import { parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
 
@@ -9,6 +11,8 @@ describe("parseHttpIdleTimeoutMs", () => {
   });
 
   it("rejects non-decimal idle timeout strings", () => {
+    // Keep env/config parsing decimal-only so values like 1e3 or 0x10 do not
+    // silently mean different delays across parsers.
     expect(parseHttpIdleTimeoutMs("1e3")).toBeUndefined();
     expect(parseHttpIdleTimeoutMs("0x10")).toBeUndefined();
   });

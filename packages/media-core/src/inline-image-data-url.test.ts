@@ -1,3 +1,4 @@
+// Media Core tests cover inline image data url behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeInlineImageDataUrl, sniffInlineImageMime } from "./inline-image-data-url.js";
 

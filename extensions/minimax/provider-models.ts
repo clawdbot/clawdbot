@@ -1,3 +1,4 @@
+// Minimax provider module implements model/runtime integration.
 import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M3";

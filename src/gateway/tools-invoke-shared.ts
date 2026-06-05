@@ -1,3 +1,5 @@
+// Gateway tool invocation engine.
+// Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,9 +18,6 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-/**
- * Shared gateway tool invocation engine used by HTTP and RPC adapters.
- */
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 /** Protocol input shape accepted by gateway tool invocation surfaces. */

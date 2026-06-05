@@ -1,3 +1,8 @@
+/**
+ * Configured binding consumer registry.
+ *
+ * Stores target-family consumers that compile and materialize configured binding rules.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CompiledConfiguredBinding,

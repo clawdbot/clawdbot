@@ -1,3 +1,4 @@
+// Runtime web-channel plugin tests cover web channel plugin activation and runtime behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
@@ -59,5 +60,25 @@ describe("runtime web channel plugin", () => {
     expect(() => resolveWebChannelAuthDir()).toThrow(
       "web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'",
     );
+  });
+
+  it("forwards the explicit connection wait policy to the heavy runtime", async () => {
+    const waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const sock = { id: "socket" };
+
+    vi.doMock("./runtime-plugin-boundary.js", () => ({
+      loadPluginBoundaryModule: () => ({ waitForWaConnection }),
+      resolvePluginRuntimeModulePath: () => "/tmp/runtime-api.js",
+      resolvePluginRuntimeRecordByEntryBaseNames: () => ({
+        origin: "bundled",
+        source: "test",
+      }),
+    }));
+
+    const { waitForWebChannelConnection } = await import("./runtime-web-channel-plugin.js");
+
+    await waitForWebChannelConnection(sock, { timeoutMs: 12_345 });
+
+    expect(waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 12_345 });
   });
 });

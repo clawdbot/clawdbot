@@ -1,3 +1,4 @@
+// Empty allowlist policy tests cover doctor policy behavior when allowlists are empty.
 import { describe, expect, it, vi } from "vitest";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 

@@ -1,3 +1,4 @@
+// Matrix tests cover allowlist plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
 

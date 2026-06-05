@@ -1,3 +1,4 @@
+// Arcee tests cover index plugin behavior.
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,

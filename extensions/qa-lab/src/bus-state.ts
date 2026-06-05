@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements bus state behavior.
 import { randomUUID } from "node:crypto";
 import { sanitizeQaBusToolCalls } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {

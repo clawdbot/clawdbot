@@ -1,3 +1,4 @@
+// Plugin install config tests cover install specs and generated plugin config.
 import { bundledPluginRootAt, repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

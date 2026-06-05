@@ -1,3 +1,4 @@
+// Vitest contract shared helpers build contract test project configuration.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";

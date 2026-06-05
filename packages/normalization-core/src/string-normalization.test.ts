@@ -1,3 +1,4 @@
+// Normalization Core tests cover string normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
   normalizeAtHashSlug,

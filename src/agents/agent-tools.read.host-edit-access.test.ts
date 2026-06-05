@@ -1,3 +1,8 @@
+/**
+ * Tests host edit access behavior for workspace escapes.
+ * Ensures OpenClaw lets the real guarded read path report escape errors
+ * instead of upstream access checks masking them as missing files.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

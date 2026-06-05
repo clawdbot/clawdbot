@@ -1,3 +1,5 @@
+// Managed-service update handoff starts a detached process that can finish an
+// update after the gateway exits under launchd/systemd-style supervisors.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Legacy audio config migrations for retired transcription command settings.
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -32,6 +33,7 @@ function applyLegacyAudioTranscriptionModel(params: {
   params.changes.push(params.alreadySetMessage);
 }
 
+/** Legacy config migration specs for audio/tool media config. */
 export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "audio.transcription-v2",

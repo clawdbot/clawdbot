@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover qmd process behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Coverage for handing Codex server_error turns to model fallback.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
@@ -27,6 +28,8 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
   });
 
   it("throws FailoverError for Codex server_error when model fallbacks are configured", async () => {
+    // Codex server_error is a provider failure, not a normal assistant reply;
+    // configured fallbacks should receive it through the failover path.
     const rawCodexError =
       'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 

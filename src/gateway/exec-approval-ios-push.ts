@@ -1,3 +1,5 @@
+// Gateway iOS exec-approval push delivery.
+// Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -149,6 +151,8 @@ async function resolveDeliveryPlan(params: {
   isTargetVisible?: (target: ApprovalPushTarget) => boolean;
   log: GatewayLikeLogger;
 }): Promise<DeliveryPlan> {
+  // Request delivery requires current approval scope; resolution delivery may
+  // target prior node ids so existing notification badges can be cleared.
   const targets = params.explicitNodeIds?.length
     ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
     : await resolvePairedTargets({

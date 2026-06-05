@@ -18,6 +18,7 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   installRecords?: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
+  invalidateRuntimeCache?: boolean;
   policyPluginIds?: readonly string[];
   traceCommand?: string;
   logger?: PluginRegistryRefreshLogger;
@@ -46,7 +47,9 @@ export async function refreshPluginRegistryAfterConfigMutation(params: {
   } catch (error) {
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
   }
-  await invalidatePluginRuntimeDiscoveryAfterConfigMutation(params);
+  if (params.invalidateRuntimeCache !== false) {
+    await invalidatePluginRuntimeDiscoveryAfterConfigMutation(params);
+  }
 }
 
 async function invalidatePluginRuntimeDiscoveryAfterConfigMutation(params: {

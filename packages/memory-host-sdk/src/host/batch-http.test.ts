@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch http behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./post-json.js", () => ({

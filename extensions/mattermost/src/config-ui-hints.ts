@@ -1,3 +1,4 @@
+// Mattermost helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const mattermostChannelConfigUiHints = {

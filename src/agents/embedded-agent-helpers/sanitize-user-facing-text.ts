@@ -1,3 +1,6 @@
+/**
+ * Converts raw provider/transport errors into concise user-facing copy.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -31,6 +34,7 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
+/** Format the billing failure copy with optional provider/model context. */
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();

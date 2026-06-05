@@ -1,3 +1,4 @@
+// Discord tests cover interactions plugin behavior.
 import {
   ComponentType,
   type GuildMemberFlags,

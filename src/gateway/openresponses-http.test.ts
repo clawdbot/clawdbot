@@ -1,3 +1,5 @@
+// OpenAI Responses HTTP tests cover response creation, streaming, tool calls,
+// response-session lookup, limits, auth scopes, and provider error mapping.
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";

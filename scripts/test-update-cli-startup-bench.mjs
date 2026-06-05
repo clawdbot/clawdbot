@@ -1,3 +1,4 @@
+// Refreshes the checked-in CLI startup benchmark fixture.
 import { spawnSync } from "node:child_process";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 

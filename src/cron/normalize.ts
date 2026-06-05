@@ -1,3 +1,4 @@
+/** Normalizes cron create/patch payloads before validation and persistence. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -238,6 +239,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     delete next.accountId;
   }
   if ("failureDestination" in next) {
+    // Null is an explicit clear signal in patches; invalid objects are dropped.
     if (next.failureDestination === null) {
       next.failureDestination = null;
     } else if (isRecord(next.failureDestination)) {
@@ -247,6 +249,8 @@ function coerceDelivery(delivery: UnknownRecord) {
     }
   }
   if ("completionDestination" in next) {
+    // Completion destinations are currently webhook-only, so other shapes are
+    // discarded before they can persist as ambiguous config.
     if (next.completionDestination === null) {
       next.completionDestination = null;
     } else {
@@ -449,6 +453,8 @@ export function normalizeCronJobInput(
   }
 
   if (options.applyDefaults) {
+    // Defaults apply only on create; patch normalization must preserve omitted
+    // fields so partial updates do not rewrite unrelated cron settings.
     if (!next.wakeMode) {
       next.wakeMode = "now";
     }

@@ -1,3 +1,4 @@
+// Googlechat plugin module implements setup surface behavior.
 import {
   addWildcardAllowFrom,
   applySetupAccountConfigPatch,

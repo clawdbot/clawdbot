@@ -1,3 +1,7 @@
+/**
+ * HTTP handler for the Admin RPC endpoint. It validates JSON requests, enforces
+ * the method allowlist, dispatches gateway methods, and maps errors to HTTP.
+ */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
@@ -184,6 +188,7 @@ async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
   }
 }
 
+/** Handle one gateway-authenticated Admin HTTP RPC request. */
 export async function handleAdminHttpRpcRequest(
   req: IncomingMessage,
   res: ServerResponse,

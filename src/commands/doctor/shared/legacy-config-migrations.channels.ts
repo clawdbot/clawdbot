@@ -1,3 +1,4 @@
+// Legacy channel config migrations for routing, streaming, groups, and account aliases.
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -479,6 +480,7 @@ function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, change
   changes.push("Removed retired channels.webchat config.");
 }
 
+/** Legacy config migration specs for channel-owned compatibility keys. */
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "channels.webchat-remove",

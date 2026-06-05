@@ -1,3 +1,5 @@
+// Gateway connection authorization.
+// Authorizes HTTP/websocket gateway requests across shared-secret, Tailscale, and proxy modes.
 import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -151,6 +153,7 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
 }
 
 /** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
+/** Return true when forwarded headers make loopback direct-local auth unsafe. */
 export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
   if (!req) {
     return false;

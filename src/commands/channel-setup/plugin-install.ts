@@ -1,3 +1,4 @@
+// Channel setup plugin install/reload helpers used by onboarding and channel commands.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -39,6 +40,7 @@ function toOnboardingPluginInstallEntry(
   };
 }
 
+/** Install or reuse the plugin package required by a trusted channel catalog entry. */
 export async function ensureChannelSetupPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
@@ -67,6 +69,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   };
 }
 
+/** Reload configured channel setup plugins after config or install-record changes. */
 export function reloadChannelSetupPluginRegistry(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -143,6 +146,7 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** Reload only the plugin that can contribute setup support for one channel id. */
 export function reloadChannelSetupPluginRegistryForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -162,6 +166,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   });
 }
 
+/** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
 export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;

@@ -1,3 +1,4 @@
+// Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 

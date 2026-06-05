@@ -1,3 +1,4 @@
+// Lobster plugin module implements lobster tool behavior.
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,

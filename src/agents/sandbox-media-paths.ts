@@ -1,3 +1,8 @@
+/**
+ * Sandbox media path resolution helpers.
+ *
+ * Bridges media references through sandbox filesystems while enforcing workspace-only boundaries when required.
+ */
 import path from "node:path";
 import { resolveMediaReferenceSandboxPath } from "../media/media-reference.js";
 import { assertSandboxPath } from "./sandbox-paths.js";

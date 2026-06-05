@@ -1,3 +1,4 @@
+// Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -48,6 +49,8 @@ function resolveIncompleteTurnPayloadText(
     externalAbort?: boolean;
   },
 ): string | null {
+  // Most helper tests exercise internal abort behavior; external aborts opt in
+  // explicitly through params.
   return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
 }
 
@@ -74,6 +77,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   }
 
   function runAttemptCall(index: number): { prompt?: string } {
+    // Continuation prompt assertions read the exact prompt passed to the runner
+    // attempt rather than derived result metadata.
     const call = mockedRunEmbeddedAttempt.mock.calls[index];
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
@@ -108,6 +113,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("warns before retrying when an incomplete turn already sent a message", async () => {
+    // Delivery evidence means retrying could duplicate user-visible output, so
+    // the runner must surface a verify-before-retry payload instead.
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -170,6 +177,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
+    // Cron no-reply can be represented by a tool result rather than assistant
+    // text, but only when it belongs to the current attempt.
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,
       payloadCount: 0,

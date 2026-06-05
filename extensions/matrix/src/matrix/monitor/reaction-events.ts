@@ -1,3 +1,4 @@
+// Matrix plugin module implements reaction events behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   resolveMatrixApprovalReactionTargetWithPersistence,

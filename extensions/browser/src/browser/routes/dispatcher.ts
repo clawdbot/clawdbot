@@ -1,3 +1,9 @@
+/**
+ * Browser route dispatcher.
+ *
+ * Provides an in-process request/response adapter so Gateway nodes can invoke
+ * the same route handlers without opening an HTTP socket.
+ */
 import { escapeRegExp } from "../../utils.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
@@ -59,6 +65,7 @@ function normalizePath(path: string) {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
+/** Create an in-process dispatcher for registered browser routes. */
 export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   const registry = createRegistry();
   registerBrowserRoutes(registry.router, ctx);

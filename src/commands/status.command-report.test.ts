@@ -1,3 +1,4 @@
+// Status command report tests cover terminal report line rendering from report sections.
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 

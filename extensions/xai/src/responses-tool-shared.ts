@@ -1,3 +1,4 @@
+// Xai plugin module implements responses tool shared behavior.
 import {
   normalizeOptionalString as trimString,
   uniqueStrings,

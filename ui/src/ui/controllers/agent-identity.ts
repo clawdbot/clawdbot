@@ -1,3 +1,4 @@
+// Control UI controller manages agent identity gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { AgentIdentityResult } from "../types.ts";
 

@@ -1,3 +1,4 @@
+// Qwen plugin module implements models behavior.
 import {
   applyProviderNativeStreamingUsageCompat,
   supportsNativeStreamingUsageCompat,

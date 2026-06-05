@@ -1,3 +1,4 @@
+// Cloud secret install docs tests validate documented cloud secret setup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

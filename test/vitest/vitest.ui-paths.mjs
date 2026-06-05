@@ -1,3 +1,4 @@
+// Test routing globs and predicates for UI unit tests.
 export const unitUiIncludePatterns = [
   "ui/src/ui/app-chat.test.ts",
   "ui/src/ui/chat/**/*.test.ts",

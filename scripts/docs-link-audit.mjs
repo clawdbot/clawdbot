@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Audits docs links, routes, redirects, and Mintlify anchors.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +49,11 @@ function normalizeSlashes(p) {
   return p.replace(/\\/g, "/");
 }
 
-/** @param {string} p */
+/**
+ * Normalizes a docs route by stripping query, hash, and edge slashes.
+ *
+ * @param {string} p
+ */
 export function normalizeRoute(p) {
   const [withoutFragment] = p.split("#");
   const [withoutQuery] = withoutFragment.split("?");
@@ -276,6 +281,8 @@ export function sanitizeDocsConfigForEnglishOnly(value) {
 }
 
 /**
+ * Prepares a docs directory, mirroring ClawHub docs when available.
+ *
  * @param {string} [sourceDir]
  * @param {{
  *   resolveClawHubRepoPathImpl?: typeof resolveClawHubRepoPath;
@@ -310,6 +317,9 @@ export function prepareMirroredDocsDir(sourceDir = DOCS_DIR, options = {}) {
   }
 }
 
+/**
+ * Creates an English-only temporary docs tree for Mintlify anchor checks.
+ */
 export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-anchor-audit-"));
   try {
@@ -406,6 +416,9 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
   return createMintlifyPnpmRunnerSpawnSpec(params);
 }
 
+/**
+ * Audits local docs links against route, file, and redirect indexes.
+ */
 export function auditDocsLinks(options = {}) {
   const docsDir = options.docsDir ?? DOCS_DIR;
   const index = buildAuditIndex(docsDir, {
@@ -537,6 +550,8 @@ export function auditDocsLinks(options = {}) {
 }
 
 /**
+ * Runs the docs link audit CLI.
+ *
  * @param {{
  *   args?: string[];
  *   comSpec?: string;

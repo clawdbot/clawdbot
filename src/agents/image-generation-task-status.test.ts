@@ -1,3 +1,4 @@
+// Verifies image-generation task lookup, duplicate guards, and prompt status text.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
@@ -32,6 +33,7 @@ vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 function expectActiveImageGenerationTask(
   task: ReturnType<typeof findActiveImageGenerationTaskForSession>,
 ): NonNullable<ReturnType<typeof findActiveImageGenerationTaskForSession>> {
+  // Narrows optional lookups in tests that need provider/status helper calls.
   if (task == null) {
     throw new Error("Expected active image generation task");
   }
@@ -180,6 +182,8 @@ describe("image generation task status", () => {
   });
 
   it("uses a matching recent-start request key as a succeeded duplicate guard", () => {
+    // The request key ties a tool call to its persisted completion so the
+    // model gets status guidance instead of starting the same image twice.
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",
@@ -228,6 +232,8 @@ describe("image generation task status", () => {
   });
 
   it("does not use a delivery-blocked image task as a succeeded duplicate guard", () => {
+    // If completion delivery failed, suppressing a retry would strand the
+    // requester without an image even though the provider task succeeded.
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",
@@ -312,6 +318,8 @@ describe("image generation task status", () => {
   });
 
   it("preserves earlier recent request keys when another image request starts", () => {
+    // Multiple image requests can be active/recent in the same session; a new
+    // request must not erase an older request key that can still match status.
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",

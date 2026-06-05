@@ -1,3 +1,4 @@
+// Allowlist resolve utility tests cover channel allowlist lookup and config matching helpers.
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 import {

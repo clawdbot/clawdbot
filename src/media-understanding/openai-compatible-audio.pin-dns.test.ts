@@ -1,3 +1,5 @@
+// OpenAI-compatible audio pin-DNS tests keep multipart transcription requests
+// on the explicit non-pinned path.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { postTranscriptionRequestMock } = vi.hoisted(() => ({

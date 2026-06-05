@@ -1,3 +1,4 @@
+// Daemon install helper tests cover install plan construction, tokens, and platform-specific service setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1143,6 +1144,79 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "OPENROUTER_API_KEY,TAVILY_API_KEY",
     );
+  });
+
+  it("retains .env values for macOS LaunchAgent env SecretRefs", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
+  });
+
+  it("retains .env values when config env has an unresolved self reference", async () => {
+    await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            MINIMAX_API_KEY: "${MINIMAX_API_KEY}",
+          },
+        },
+        models: {
+          providers: {
+            "minimax-openai": {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.MINIMAX_API_KEY).toBe("minimax-dotenv-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
   });
 
   it("does not retain config env values for macOS LaunchAgent env files", async () => {

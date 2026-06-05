@@ -1,3 +1,4 @@
+// Device pairing access helpers evaluate pairing scopes and role permissions.
 import { normalizeDeviceAuthScopes } from "./device-auth.js";
 
 export type DevicePairingAccessSummary = {

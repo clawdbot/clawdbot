@@ -1,3 +1,4 @@
+// Memory Core tests cover manager vector warning plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 

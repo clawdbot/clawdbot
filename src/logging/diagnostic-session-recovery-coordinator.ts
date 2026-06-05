@@ -1,3 +1,4 @@
+// Session recovery coordinator helpers orchestrate stuck-session diagnostics.
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   getInternalDiagnosticEventSequence,

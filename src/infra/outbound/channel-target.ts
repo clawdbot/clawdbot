@@ -1,3 +1,5 @@
+// Message-action target helpers bridge canonical `target` params into legacy
+// per-action fields while rejecting mixed destination arguments.
 import {
   hasNonEmptyString as sharedHasNonEmptyString,
   normalizeOptionalString,

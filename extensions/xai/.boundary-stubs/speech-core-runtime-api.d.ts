@@ -1,3 +1,4 @@
+// Xai type declarations define plugin contracts.
 export type ResolvedTtsConfig = unknown;
 export type ResolvedTtsModelOverrides = unknown;
 export type TtsDirectiveOverrides = unknown;

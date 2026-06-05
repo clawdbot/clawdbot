@@ -1,3 +1,5 @@
+// Gateway import-boundary tests keep startup-critical modules lazy and prevent
+// heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

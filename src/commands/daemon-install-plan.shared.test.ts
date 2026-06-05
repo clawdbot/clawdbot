@@ -1,3 +1,4 @@
+// Daemon install plan tests cover shared install plan validation and platform warning helpers.
 import { describe, expect, it } from "vitest";
 import {
   resolveDaemonInstallRuntimeInputs,

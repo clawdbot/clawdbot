@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Ensures webhook handlers authenticate before reading request bodies.
 import path from "node:path";
 import ts from "typescript";
 import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
@@ -29,6 +30,9 @@ function getCalleeName(expression) {
   return null;
 }
 
+/**
+ * Finds request body reads that occur before webhook auth validation.
+ */
 export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const lines = [];
@@ -45,6 +49,9 @@ export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts")
   return lines;
 }
 
+/**
+ * Runs the webhook auth/body-order guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

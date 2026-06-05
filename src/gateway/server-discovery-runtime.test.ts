@@ -1,3 +1,5 @@
+// Gateway discovery runtime tests cover plugin discovery advertisements,
+// wide-area DNS records, Bonjour naming, and shutdown cleanup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 

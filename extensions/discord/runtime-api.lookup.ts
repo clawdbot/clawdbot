@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime api.lookup behavior.
 export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./src/audit.js";
 export {
   listDiscordDirectoryGroupsLive,

@@ -1,3 +1,4 @@
+/** Doctor gateway daemon repair flow for service install, bootstrap, restart, and port hints. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -147,6 +148,12 @@ async function maybeReportEstablishedGatewayClients(params: {
   }
 }
 
+/**
+ * Repairs or diagnoses the local gateway service after the health check fails.
+ *
+ * Remote gateway mode is only diagnosed; local mode may bootstrap launchd, install missing
+ * services, report port conflicts, or restart unhealthy supervision when policy allows.
+ */
 export async function maybeRepairGatewayDaemon(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;

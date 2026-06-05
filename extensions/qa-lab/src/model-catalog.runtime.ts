@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements model catalog behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";

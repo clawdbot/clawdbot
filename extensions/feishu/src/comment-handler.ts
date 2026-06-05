@@ -1,3 +1,4 @@
+// Feishu plugin module implements comment handler behavior.
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";

@@ -1,3 +1,4 @@
+// Slack plugin module implements truncate behavior.
 export function truncateSlackText(value: string, max: number): string {
   const trimmed = value.trim();
   if (trimmed.length <= max) {

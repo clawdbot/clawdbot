@@ -1,3 +1,4 @@
+// Model Catalog Core module implements provider id behavior.
 export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }

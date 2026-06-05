@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Lists source docs pages and routes for docs-aware tooling.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 

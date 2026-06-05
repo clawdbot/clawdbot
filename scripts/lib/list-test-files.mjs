@@ -1,7 +1,9 @@
+// Lists tracked test files with a filesystem fallback for non-git contexts.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+/** List git-tracked test files below a root, falling back to recursive filesystem discovery. */
 export function listTrackedTestFiles(rootDir, suffix = ".test.ts") {
   const result = spawnSync("git", ["ls-files", "--", rootDir], {
     encoding: "utf8",

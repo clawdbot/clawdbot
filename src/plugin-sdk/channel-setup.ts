@@ -1,3 +1,4 @@
+// Channel setup contracts expose setup wizard hooks and account config writes to plugins.
 import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 import {

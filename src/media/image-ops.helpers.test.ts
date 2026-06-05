@@ -1,3 +1,4 @@
+// Image operation helper tests cover dimension and format utility behavior.
 import { describe, expect, it } from "vitest";
 import { buildImageResizeSideGrid, IMAGE_REDUCE_QUALITY_STEPS } from "./image-ops.js";
 

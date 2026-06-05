@@ -1,3 +1,4 @@
+// Text file tail helpers for E2E assertions.
 import fs from "node:fs";
 
 export function tailText(text, maxBytes) {

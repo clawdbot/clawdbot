@@ -1,3 +1,4 @@
+// Channel MCP bridge tests cover request bridging between MCP and channel APIs.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 

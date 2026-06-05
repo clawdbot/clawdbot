@@ -1,3 +1,4 @@
+// BTW inline message tests cover compact inline status message rendering.
 import { describe, expect, it } from "vitest";
 import { BtwInlineMessage } from "./btw-inline-message.js";
 

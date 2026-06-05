@@ -1,3 +1,4 @@
+// Openai Image Auth Docker Client script supports OpenClaw repository automation.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";

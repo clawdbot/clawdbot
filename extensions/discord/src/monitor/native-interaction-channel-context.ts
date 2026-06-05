@@ -1,3 +1,4 @@
+// Discord plugin module implements native interaction channel context behavior.
 import { ChannelType } from "../internal/discord.js";
 import type { DiscordChannelInfoClient } from "./message-utils.js";
 import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Prevents Telegram runtime imports from grammy type-only modules.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements import insights behavior.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";

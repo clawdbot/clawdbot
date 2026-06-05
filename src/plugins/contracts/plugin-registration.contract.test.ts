@@ -1,3 +1,4 @@
+// Plugin registration contract tests cover manifest registration cases exposed through the SDK.
 import { pluginRegistrationContractCases } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 

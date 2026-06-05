@@ -1,3 +1,5 @@
+// SSRF pinning tests cover DNS pinning behavior, blocked DNS results, hostname
+// allowlists, and IPv4/IPv6 address ordering.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPinnedLookup,

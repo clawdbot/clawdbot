@@ -1,3 +1,4 @@
+// Control UI tests cover channels behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppStatus } from "../types.ts";

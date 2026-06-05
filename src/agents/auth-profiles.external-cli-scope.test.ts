@@ -1,3 +1,8 @@
+/**
+ * External CLI auth scope tests.
+ * Verifies config/model signals narrow external credential discovery to the
+ * providers and profile ids relevant for the current agent.
+ */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";

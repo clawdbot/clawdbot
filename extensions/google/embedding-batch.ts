@@ -1,3 +1,4 @@
+// Google plugin module implements embedding batch behavior.
 import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,

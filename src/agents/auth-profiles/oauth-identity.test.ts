@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth identity and mirroring gates.
+ * Includes direct and fuzz coverage for account/email comparison so refreshed
+ * credentials cannot poison another auth store.
+ */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,11 +14,6 @@ import {
 } from "./oauth-identity.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
-
-// Direct unit + fuzz tests for the cross-agent credential-mirroring identity
-// gate introduced for #26322 (CWE-284). These helpers are on the hot-path of
-// `mirrorRefreshedCredentialIntoMainStore` and must be strictly correct: a
-// false positive means a sub-agent could poison the main-agent auth store.
 
 describe("normalizeAuthIdentityToken", () => {
   it("returns trimmed value when non-empty", () => {

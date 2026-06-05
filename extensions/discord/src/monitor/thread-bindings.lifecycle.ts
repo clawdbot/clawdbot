@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.lifecycle behavior.
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

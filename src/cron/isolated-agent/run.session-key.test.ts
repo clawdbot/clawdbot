@@ -1,3 +1,4 @@
+// Session key tests cover deterministic keys for isolated cron run sessions.
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 

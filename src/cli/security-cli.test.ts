@@ -1,3 +1,4 @@
+// Security CLI tests cover security command registration and diagnostics output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecurityCli } from "./security-cli.js";

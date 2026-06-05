@@ -1,3 +1,5 @@
+// Gateway server integration tests cover startup, auth, device pairing, session
+// routing, OpenAI-compatible paths, and environment isolation for local servers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Plugin Clawhub Owner Preflight script supports OpenClaw repository automation.
 
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";

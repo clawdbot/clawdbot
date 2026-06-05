@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Validates docs i18n glossary terms against configured usage rules.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

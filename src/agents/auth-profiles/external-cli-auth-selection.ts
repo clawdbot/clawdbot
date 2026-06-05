@@ -1,3 +1,8 @@
+/**
+ * External CLI auth selection scoping.
+ * Narrows CLI discovery to the provider/profile selected by model auth routing
+ * so runtime auth setup avoids broad CLI probing.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -8,9 +13,6 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
-// Resolves which external CLI auth overlays are relevant for the currently
-// selected provider/model/profile. This keeps runtime discovery scoped to the
-// selected auth path instead of scanning every CLI profile.
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
 /** Resolve external CLI overlay scope from the user's auth/model selection. */

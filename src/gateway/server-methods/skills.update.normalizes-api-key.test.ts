@@ -1,3 +1,5 @@
+// Skill update tests protect API-key normalization so redacted config sentinels
+// do not overwrite existing secret values.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";

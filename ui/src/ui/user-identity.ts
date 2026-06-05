@@ -1,3 +1,4 @@
+// Control UI module implements user identity behavior.
 import { coerceIdentityValue } from "../../../src/shared/assistant-identity-values.js";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import {

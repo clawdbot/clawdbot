@@ -1,3 +1,8 @@
+/**
+ * Integration-style tests for before_tool_call behavior.
+ * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * around wrapped tool execution.
+ */
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

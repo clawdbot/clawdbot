@@ -1,3 +1,5 @@
+// Subagent announce format e2e tests exercise the full announce flow with
+// channel fixtures, session stores, hooks, and gateway calls wired together.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -80,6 +82,8 @@ function expectInputProvenance(
   params: Record<string, unknown> | undefined,
   sourceSessionKey: string,
 ) {
+  // Announce handoffs are inter-session messages; provenance lets the receiver
+  // distinguish child-output delivery from ordinary user input.
   const inputProvenance = params?.inputProvenance;
   if (!inputProvenance || typeof inputProvenance !== "object") {
     throw new Error("Expected input provenance");
@@ -218,6 +222,8 @@ const defaultOutcomeAnnounce = {
 };
 
 const announceFormatChannelPlugins = [
+  // Channel fixtures intentionally mix plain channels with Slack-style thread
+  // target resolution so formatting covers direct and threaded destinations.
   {
     pluginId: "discord",
     plugin: createChannelTestPluginBase({ id: "discord", label: "Discord" }),

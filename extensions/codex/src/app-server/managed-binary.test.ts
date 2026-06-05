@@ -1,3 +1,4 @@
+// Codex tests cover managed binary plugin behavior.
 import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

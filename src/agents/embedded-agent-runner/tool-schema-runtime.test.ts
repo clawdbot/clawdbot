@@ -1,6 +1,10 @@
+// Tool schema runtime tests cover provider plugin schema normalization and
+// compact diagnostics for invalid provider-facing tool schemas.
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  // Hoisted mocks let the module under test import logger/provider runtime once
+  // while each case controls plugin diagnostics.
   inspectProviderToolSchemasWithPlugin: vi.fn(),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
   log: {

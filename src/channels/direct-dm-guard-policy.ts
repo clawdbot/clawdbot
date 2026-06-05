@@ -1,3 +1,8 @@
+/**
+ * Direct-DM pre-crypto guard policy.
+ *
+ * Defines conservative shape, size, timestamp, and rate limits before decryption work starts.
+ */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
 /** Runtime limits applied before direct-DM encrypted payloads are decrypted. */

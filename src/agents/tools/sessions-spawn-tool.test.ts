@@ -1,3 +1,5 @@
+// sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
+// dispatch, and result details for spawned child sessions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
@@ -108,6 +110,8 @@ describe("sessions_spawn tool", () => {
   }
 
   it("hides ACP runtime affordances when no ACP backend is loaded", () => {
+    // The tool schema is generated from live runtime availability; stale ACP
+    // fields should not be advertised when no backend can handle them.
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
       properties?: {

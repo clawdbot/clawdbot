@@ -1,3 +1,4 @@
+// Litellm tests cover image generation provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 

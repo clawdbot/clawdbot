@@ -1,3 +1,4 @@
+// Commander option-source helpers for explicit flags and bounded parent inheritance.
 import type { Command } from "commander";
 
 export function hasExplicitOptions(command: Command, names: readonly string[]): boolean {

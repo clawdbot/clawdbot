@@ -1,3 +1,4 @@
+// Capability CLI commands for local/gateway model, media, memory, search, and generation calls.
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";

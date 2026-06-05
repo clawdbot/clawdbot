@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor mocks behavior.
 import { vi } from "vitest";
 
 export function createFeishuClientMockModule(): {

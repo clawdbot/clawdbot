@@ -1,3 +1,4 @@
+// Discord tests cover resolve allowlist common plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildDiscordUnresolvedResults,

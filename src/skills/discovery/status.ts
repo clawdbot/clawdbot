@@ -1,3 +1,4 @@
+// Skill discovery status helpers summarize installed, workspace, and bundled skills.
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";

@@ -1,3 +1,5 @@
+// Session history HTTP tests cover transcript-backed history responses,
+// operator read auth, exact assistant messages, and transcript update delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

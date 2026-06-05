@@ -1,3 +1,4 @@
+// Cron session reaper tests cover cleanup of sessions created by scheduled runs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

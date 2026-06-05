@@ -1,3 +1,5 @@
+// Gateway post-attach startup sidecars.
+// Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

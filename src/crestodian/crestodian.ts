@@ -1,3 +1,4 @@
+// Crestodian CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -78,6 +79,7 @@ export async function runCrestodian(
   }
 
   if (opts.message?.trim()) {
+    // One-shot mode always shows the overview first so planned changes have local context.
     const overview = await withProgress(
       {
         label: "Loading Crestodian overview…",

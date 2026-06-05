@@ -1,3 +1,4 @@
+// Control UI test helper supports modal dialog setup.
 import { expect } from "vitest";
 import type { OpenClawModalDialog } from "../ui/components/modal-dialog.ts";
 

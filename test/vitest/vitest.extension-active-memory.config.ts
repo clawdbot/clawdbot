@@ -1,3 +1,4 @@
+// Vitest extension active memory config wires the extension active memory test shard.
 import { activeMemoryExtensionTestRoots } from "./vitest.extension-active-memory-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

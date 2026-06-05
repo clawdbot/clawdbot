@@ -1,3 +1,4 @@
+// Verifies plugin extension points that are exposed to the Codex app server.
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -34,6 +35,8 @@ function createTempDir(): string {
 }
 
 function createBundledTempDir(): string {
+  // Bundled-only extension points are tested from the dist-runtime shape because
+  // production rejects equivalent registrations from arbitrary plugin paths.
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   return createTempPluginDir(tempDirs, "openclaw-codex-ext-", {
     parentDir: path.join(process.cwd(), "dist-runtime", "extensions"),
@@ -90,6 +93,8 @@ describe("agent tool result middleware", () => {
     resetActivePluginRegistryForTest();
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
 
+    // The second load proves manifest-backed discovery can restore middleware
+    // after the active in-memory registry has been reset.
     loadOpenClawPlugins(options);
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
     const result = await runner.applyToolResultMiddleware({
@@ -161,6 +166,8 @@ describe("agent tool result middleware", () => {
 } };`,
     });
 
+    // Contract declaration is necessary but not sufficient; Codex middleware is
+    // limited to bundled plugins so external plugins cannot reshape tool output.
     const registry = loadOpenClawPlugins({
       workspaceDir: tmp,
       onlyPluginIds: ["tool-result-middleware"],
@@ -254,6 +261,8 @@ export default { id: "tool-result-middleware", register(api) {
 
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
 
+    // Startup activation stays false here; the runner must load the owner only
+    // when Codex asks for the middleware runtime.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
     const result = await runner.applyToolResultMiddleware({
       threadId: "thread-1",
@@ -311,6 +320,8 @@ describe("Codex app-server extension factories", () => {
     resetActivePluginRegistryForTest();
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
 
+    // Factories are cached like middleware so app-server startup can recover
+    // them after registry resets without reinterpreting arbitrary paths.
     loadOpenClawPlugins(options);
     const runner = createCodexAppServerToolResultExtensionRunner({});
     const result = await runner.applyToolResultExtensions({
@@ -342,6 +353,8 @@ describe("Codex app-server extension factories", () => {
 } };`,
     });
 
+    // Embedded app-server hooks are core-facing: external plugin paths cannot
+    // install factories even with a matching manifest contract.
     const registry = loadOpenClawPlugins({
       workspaceDir: tmp,
       onlyPluginIds: ["codex-ext"],
@@ -464,6 +477,8 @@ describe("Codex app-server extension factories", () => {
       },
     ]);
 
+    // Awaiting each factory in order keeps later handlers from observing a
+    // partially initialized earlier extension.
     releaseFirstFactory();
     await runner.applyToolResultExtensions({
       threadId: "thread-1",

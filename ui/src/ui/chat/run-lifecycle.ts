@@ -1,3 +1,4 @@
+// Control UI chat module implements run lifecycle behavior.
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
 import { uiSessionRowMatchesSelectedChat } from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";

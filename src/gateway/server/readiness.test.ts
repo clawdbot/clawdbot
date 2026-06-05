@@ -1,3 +1,4 @@
+// Readiness checker tests cover startup grace, channel health, and stale socket decisions.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";

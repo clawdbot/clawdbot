@@ -1,3 +1,4 @@
+// Channel lifecycle core contracts define account lifecycle snapshots and sync hooks.
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";

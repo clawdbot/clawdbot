@@ -1,3 +1,4 @@
+// Heartbeat config honor inventory lists heartbeat config ownership rows.
 import type { ConfigHonorInventoryRow } from "./config-honor-audit.js";
 
 // Inventory of heartbeat config keys and the proof paths that should honor them.

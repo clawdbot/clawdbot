@@ -1,3 +1,4 @@
+// Check File Utils helper supports OpenClaw script workflows.
 import fs from "node:fs";
 import path from "node:path";
 

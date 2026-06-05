@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime gateway plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getGatewayRetryAfterMs,

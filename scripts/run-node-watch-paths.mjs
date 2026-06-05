@@ -1,3 +1,4 @@
+// Defines source/config paths that pnpm dev watches for rebuilds and restarts.
 import path from "node:path";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
@@ -21,13 +22,17 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/net-policy/src",
 ];
 
+/** Source roots whose changes require the root dev build pipeline. */
 export const runNodeSourceRoots = [
   "src",
   ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
+/** Root config files whose changes invalidate the dev build. */
 export const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
+/** Combined watch list used by the run-node wrapper. */
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+/** Plugin metadata files that require a runtime restart even without source edits. */
 export const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
 const ignoredRunNodeRepoPathPatterns = [
@@ -36,6 +41,7 @@ const ignoredRunNodeRepoPathPatterns = [
 ];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
+/** Normalizes watch paths to repository-style POSIX separators. */
 export const normalizeRunNodePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
 
 const isIgnoredSourcePath = (relativePath) => {
@@ -82,8 +88,10 @@ const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   return false;
 };
 
+/** Returns true when a repo path should trigger a dev rebuild. */
 export const isBuildRelevantRunNodePath = (repoPath) =>
   isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
 
+/** Returns true when a repo path should restart the running dev process. */
 export const isRestartRelevantRunNodePath = (repoPath) =>
   isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);

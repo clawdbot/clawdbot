@@ -1,3 +1,4 @@
+// Matrix plugin module implements summary behavior.
 import { isMatrixNotFoundError } from "../errors.js";
 import { resolveMatrixMessageAttachment, resolveMatrixMessageBody } from "../media-text.js";
 import { fetchMatrixPollMessageSummary } from "../poll-summary.js";

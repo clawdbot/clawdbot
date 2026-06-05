@@ -1,3 +1,4 @@
+// Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveFastModeState } from "./fast-mode.js";
@@ -76,6 +77,8 @@ describe("resolveFastModeState", () => {
   });
 
   it("uses canonical provider/model config for slash-containing model ids", () => {
+    // OpenRouter-style models can contain slashes, so matching must build the
+    // canonical provider/model key instead of splitting on the first slash.
     const cfg = {
       agents: {
         defaults: {
@@ -97,6 +100,8 @@ describe("resolveFastModeState", () => {
   });
 
   it("does not use another provider's slash-containing model config", () => {
+    // Provider qualification prevents a model-id substring from borrowing
+    // another provider's fast-mode setting.
     const cfg = {
       agents: {
         defaults: {

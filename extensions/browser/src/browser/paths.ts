@@ -1,3 +1,9 @@
+/**
+ * Browser filesystem path helpers.
+ *
+ * Defines browser output roots and resolves upload/media references while
+ * enforcing root-scoped path access for Browser tool file inputs.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -35,9 +41,13 @@ function canUseNodeFs(): boolean {
 const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
   ? resolvePreferredOpenClawTmpDir()
   : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
+/** Default root directory for browser trace files. */
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
+/** Default root directory for browser downloads. */
 export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
+/** Default root directory for browser upload inputs. */
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
+/** Default root directory for managed inbound media references. */
 export const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
 type ExistingPathsResult = Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>;
@@ -190,6 +200,7 @@ async function resolveDirectInboundMediaPath(params: {
   return inboundPathsResult;
 }
 
+/** Resolve upload paths and managed media references into existing file paths. */
 export async function resolveExistingUploadPaths({
   requestedPaths,
   uploadDir = DEFAULT_UPLOAD_DIR,
@@ -234,6 +245,7 @@ export async function resolveExistingUploadPaths({
   return { ok: true, paths };
 }
 
+/** Strictly resolve upload paths under the upload root only. */
 export async function resolveStrictExistingUploadPaths({
   requestedPaths,
   uploadDir = DEFAULT_UPLOAD_DIR,

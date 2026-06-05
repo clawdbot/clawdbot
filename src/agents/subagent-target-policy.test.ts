@@ -1,3 +1,5 @@
+// Subagent target policy tests cover requester defaults, explicit allowlists,
+// wildcard target sets, and stale configured-agent filtering.
 import { describe, expect, it } from "vitest";
 import {
   resolveSubagentAllowedTargetIds,

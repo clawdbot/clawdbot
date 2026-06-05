@@ -1,3 +1,4 @@
+// Ollama plugin module implements visible content behavior.
 import {
   createKimiInlineReasoningSanitizer,
   isOllamaCloudKimiModelRef,

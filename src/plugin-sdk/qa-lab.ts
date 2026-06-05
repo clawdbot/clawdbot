@@ -23,9 +23,11 @@ function isMissingQaLabFacadeError(err: unknown): boolean {
   );
 }
 
+/** Register QA Lab CLI commands when the bundled QA Lab facade is present. */
 export const registerQaLabCli: FacadeModule["registerQaLabCli"] = ((...args) =>
   loadFacadeModule().registerQaLabCli(...args)) as FacadeModule["registerQaLabCli"];
 
+/** Returns whether the QA Lab CLI facade can be loaded in this package build. */
 export const isQaLabCliAvailable: FacadeModule["isQaLabCliAvailable"] = (() => {
   try {
     return loadFacadeModule().isQaLabCliAvailable();

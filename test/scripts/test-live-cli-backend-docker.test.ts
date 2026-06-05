@@ -1,3 +1,4 @@
+// Test Live Cli Backend Docker tests cover test live cli backend docker script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

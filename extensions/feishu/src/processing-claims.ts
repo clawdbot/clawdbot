@@ -1,3 +1,4 @@
+// Feishu plugin module implements processing claims behavior.
 const EVENT_DEDUP_TTL_MS = 5 * 60 * 1000;
 const EVENT_MEMORY_MAX_SIZE = 2_000;
 

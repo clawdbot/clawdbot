@@ -1,3 +1,6 @@
+/**
+ * Sanitizes, extracts, and classifies embedded-agent tool execution results.
+ */
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,

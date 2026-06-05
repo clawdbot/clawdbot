@@ -1,3 +1,8 @@
+/**
+ * Bundled channel runtime artifact resolver.
+ *
+ * Resolves generated contract artifacts through runtime records with local workspace fallback.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,8 +12,6 @@ import {
   resolvePluginRuntimeRecord,
 } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
 
-// Resolves generated bundled channel artifacts for contract tests. Prefer the
-// runtime record, with workspace source fallback for local unbuilt checkouts.
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
 function resolveBundledChannelWorkspaceArtifactPath(

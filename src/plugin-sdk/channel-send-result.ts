@@ -1,3 +1,4 @@
+// Channel send result contracts normalize outbound delivery outcomes from channel plugins.
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import type { ChannelPollResult } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";

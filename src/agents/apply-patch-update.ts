@@ -1,9 +1,11 @@
+/**
+ * Update-hunk application for the apply_patch parser.
+ * Locates expected old lines with tolerant matching, applies chunks in order,
+ * and returns normalized file contents with a trailing newline.
+ */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
 
-// Update-hunk application for the apply_patch parser. It locates expected old
-// lines with tolerant matching, applies chunks in order, and returns normalized
-// file contents with a trailing newline.
 type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];

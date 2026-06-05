@@ -1,3 +1,4 @@
+// Venice plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   applyModelCompatPatch,

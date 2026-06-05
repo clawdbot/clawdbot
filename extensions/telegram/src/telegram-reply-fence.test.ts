@@ -1,3 +1,4 @@
+// Telegram tests cover telegram reply fence plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   beginTelegramReplyFence,

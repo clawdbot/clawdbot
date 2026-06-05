@@ -1,3 +1,4 @@
+// Model auth login profile tests cover login profile selection for provider auth.
 import { describe, expect, it } from "vitest";
 import { resolveLoginProfiles } from "./auth.js";
 

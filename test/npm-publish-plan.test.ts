@@ -1,3 +1,4 @@
+// npm publish plan tests validate package publish planning rules.
 import { describe, expect, it } from "vitest";
 import {
   resolveNpmDistTagMirrorAuth,

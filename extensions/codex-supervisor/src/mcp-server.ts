@@ -1,3 +1,7 @@
+/**
+ * Standalone MCP stdio server for exposing Codex Supervisor tools to trusted
+ * MCP clients.
+ */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadCodexSupervisorEndpoints } from "./config.js";
@@ -18,11 +22,15 @@ function routeLogsToStderr(): void {
   }
 }
 
+/** Options for creating or serving a Codex Supervisor MCP server. */
 export type CodexSupervisorMcpServeOptions = {
   supervisor?: CodexSupervisor;
   toolOptions?: CodexSupervisorMcpToolOptions;
 };
 
+/**
+ * Creates an MCP server and owns the supervisor instance unless one is supplied.
+ */
 export function createCodexSupervisorMcpServer(opts: CodexSupervisorMcpServeOptions = {}): {
   server: McpServer;
   supervisor: CodexSupervisor;
@@ -41,6 +49,10 @@ export function createCodexSupervisorMcpServer(opts: CodexSupervisorMcpServeOpti
   };
 }
 
+/**
+ * Serves Codex Supervisor tools over MCP stdio until transport or process
+ * shutdown.
+ */
 export async function serveCodexSupervisorMcp(
   opts: CodexSupervisorMcpServeOptions = {},
 ): Promise<void> {
@@ -63,6 +75,8 @@ export async function serveCodexSupervisorMcp(
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
+    // The SDK exposes this callback slot but not a stable setter; clear it so
+    // close() cannot recursively re-enter shutdown.
     transport["onclose"] = undefined;
     close().then(resolveClosed, resolveClosed);
   };

@@ -1,3 +1,4 @@
+// Whatsapp tests cover outbound adapter.sendpayload plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { whatsappOutbound } from "./outbound-adapter.js";
 

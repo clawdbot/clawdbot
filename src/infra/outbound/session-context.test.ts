@@ -1,3 +1,5 @@
+// Covers outbound session context construction for canonical keys, policy keys,
+// conversation type inference, requester metadata, and agent derivation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());

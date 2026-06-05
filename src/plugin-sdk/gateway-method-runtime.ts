@@ -1,6 +1,8 @@
+// Gateway method runtime helpers dispatch plugin calls through the in-process gateway.
 import { dispatchGatewayMethodInProcessRaw } from "../gateway/server-plugins.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 
+/** Error envelope returned by in-process Gateway method dispatch. */
 export type GatewayMethodDispatchError = {
   /** Stable machine-readable error code returned by the Gateway method. */
   code: string;
@@ -14,6 +16,7 @@ export type GatewayMethodDispatchError = {
   retryAfterMs?: number;
 };
 
+/** Response envelope returned to plugins after dispatching a Gateway method. */
 export type GatewayMethodDispatchResponse = {
   /** True when the Gateway method completed and `payload` contains its result. */
   ok: boolean;
@@ -25,6 +28,7 @@ export type GatewayMethodDispatchResponse = {
   meta?: Record<string, unknown>;
 };
 
+/** Dispatch controls for plugin-initiated Gateway method calls. */
 export type GatewayMethodDispatchOptions = {
   /** Wait for the Gateway's final response instead of returning the first response frame. */
   expectFinal?: boolean;

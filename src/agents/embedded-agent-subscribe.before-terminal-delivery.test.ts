@@ -1,3 +1,5 @@
+// Before-terminal-delivery tests cover the async gate that can suppress or
+// release deferred assistant events and block replies at run completion.
 import { describe, expect, it, vi } from "vitest";
 import {
   emitAssistantTextDeltaAndEnd,
@@ -6,6 +8,8 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
 function hasAssistantEvent(calls: Array<unknown[]>): boolean {
+  // The gate buffers assistant stream events; tests use this helper to assert
+  // nothing leaks before the terminal decision resolves.
   return calls.some((call) => {
     const event = call[0] as { stream?: string } | undefined;
     return event?.stream === "assistant";
@@ -68,6 +72,8 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
   });
 
   it("waits for async terminal gate decisions before draining", async () => {
+    // waitForPendingEvents must include the gate promise or callers can observe
+    // a drained subscription before terminal delivery has been decided.
     const onBlockReply = vi.fn();
     let resolveGate: ((value: { suppressTerminalDelivery: true }) => void) | undefined;
     const onBeforeTerminalDelivery = vi.fn(

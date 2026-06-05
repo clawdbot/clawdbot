@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Guards pnpm package patches against unapproved additions.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -110,6 +111,9 @@ function collectPatchFileViolations(cwd, violations) {
   }
 }
 
+/**
+ * Collects disallowed package patch declarations and patch files.
+ */
 export function collectPackagePatchViolations(cwd = process.cwd()) {
   const violations = [];
   collectWorkspacePatchViolations(cwd, violations);
@@ -119,6 +123,9 @@ export function collectPackagePatchViolations(cwd = process.cwd()) {
   return violations;
 }
 
+/**
+ * Runs the package patch guard.
+ */
 export async function main() {
   const violations = collectPackagePatchViolations();
   if (violations.length === 0) {

@@ -1,3 +1,4 @@
+// Telegram plugin module implements polling status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   createConnectedChannelStatusPatch,

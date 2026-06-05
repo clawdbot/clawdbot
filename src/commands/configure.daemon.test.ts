@@ -1,3 +1,4 @@
+// Configure daemon tests cover daemon install prompts, progress labels, and runtime install calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 

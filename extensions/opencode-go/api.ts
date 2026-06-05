@@ -1,3 +1,4 @@
+// Opencode Go API module exposes the plugin public contract.
 import {
   applyAgentDefaultModelPrimary,
   resolveAgentModelPrimaryValue,

@@ -1,3 +1,6 @@
+/**
+ * Top-level embedded-agent run orchestration entrypoint.
+ */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

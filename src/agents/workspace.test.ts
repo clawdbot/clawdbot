@@ -1,3 +1,5 @@
+// Workspace tests cover bootstrap seeding, attestation safety, bootstrap file
+// filtering, and setup-completion state for agent workspaces.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -90,6 +92,8 @@ async function expectWorkspaceVanished(
   action: Promise<unknown>,
   expected?: { attestationPath?: string },
 ): Promise<void> {
+  // Recently attested generated workspaces must not be silently recreated after
+  // deletion or wipe; that could hide user data loss.
   await expect(action).rejects.toMatchObject({
     code: WORKSPACE_VANISHED_ERROR_CODE,
     name: "WorkspaceVanishedError",
@@ -221,6 +225,8 @@ describe("ensureAgentWorkspace", () => {
   });
 
   it("accepts a recently attested workspace when customized AGENTS.md survives", async () => {
+    // Custom instructions prove the directory is user-managed, so reseeding is
+    // skipped and the workspace is accepted.
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "custom instructions\n");

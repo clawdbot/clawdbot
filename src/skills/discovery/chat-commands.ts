@@ -1,3 +1,4 @@
+// Skill chat command discovery loads chat commands contributed by active skills.
 import fs from "node:fs";
 import {
   normalizeLowercaseStringOrEmpty,

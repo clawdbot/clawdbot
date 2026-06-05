@@ -1,3 +1,5 @@
+// Gateway memory startup helper.
+// Starts qmd memory boot sync for eligible agents without loading every agent.
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

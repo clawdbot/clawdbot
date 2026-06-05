@@ -1,3 +1,4 @@
+/** Tests ACP translator replay ledger recording and load-session replay behavior. */
 import type {
   LoadSessionRequest,
   NewSessionRequest,

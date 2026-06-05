@@ -1,3 +1,4 @@
+// Kilocode tests cover implicit provider plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildKilocodeProvider } from "./provider-catalog.js";
 

@@ -1,3 +1,4 @@
+// Doctor state integrity tests cover state directory checks, migration, and repair diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

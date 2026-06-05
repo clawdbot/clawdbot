@@ -1,3 +1,4 @@
+// Legacy model metadata tests cover doctor migration that adds model metadata.
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";

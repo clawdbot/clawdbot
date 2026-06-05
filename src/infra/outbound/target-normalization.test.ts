@@ -1,3 +1,5 @@
+// Covers target input normalization, provider plugin normalizers, resolver
+// caching, and id-like lookup heuristics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 

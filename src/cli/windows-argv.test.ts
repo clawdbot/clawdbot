@@ -1,3 +1,4 @@
+// Windows argv tests cover Windows-specific command-line argument normalization.
 import { describe, expect, it } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";

@@ -1,3 +1,4 @@
+// Terminal Core module implements prompt select styled behavior.
 import { select } from "@clack/prompts";
 import { styleSelectParams } from "./prompt-select-styled-params.js";
 

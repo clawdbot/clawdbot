@@ -1,3 +1,4 @@
+// Simple LLM stream mock helper builds deterministic streamed responses.
 import { vi } from "vitest";
 
 type LlmMockModule = Record<string, unknown>;

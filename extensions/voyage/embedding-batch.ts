@@ -1,3 +1,4 @@
+// Voyage plugin module implements embedding batch behavior.
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import {

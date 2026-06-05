@@ -1,3 +1,4 @@
+// Control UI controller manages control ui bootstrap gateway state.
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,

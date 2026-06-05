@@ -1,3 +1,6 @@
+// Builds the data model for the standard `openclaw status` text report.
+// It converts scan/runtime state into table rows and section lines before rendering.
+
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
@@ -29,6 +32,7 @@ import {
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { SessionStatus, StatusSummary } from "./status.types.js";
 
+/** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(
   params: {
     opts: {
@@ -124,6 +128,7 @@ export async function buildStatusCommandReportData(
     { key: "Model", header: "Model", minWidth: 14 },
     { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
+    // Verbose mode exposes prompt-cache details because it can widen rows substantially.
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
   const securityAuditLines = params.securityAudit
@@ -140,6 +145,7 @@ export async function buildStatusCommandReportData(
         params.theme.muted(`Deep probe: ${params.formatCliCommand("openclaw status --deep")}`),
       ];
   const retainedLost = params.summary.taskAuditRetainedLost;
+  // Lost task retention is operational noise unless the user requested deep/verbose status.
   const retainedLostLine =
     (params.opts.deep || params.opts.verbose) && retainedLost && retainedLost.count > 0
       ? params.theme.muted(

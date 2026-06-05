@@ -1,3 +1,5 @@
+// End-to-end subscription tests cover usage, lifecycle, tool logging,
+// messaging/media side effects, and replay-state behavior for embedded runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +24,8 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
+    // Block replies can schedule nested microtasks; drain twice before checking
+    // delivery state in broad subscription tests.
     await Promise.resolve();
     await Promise.resolve();
   }
@@ -54,6 +58,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   function createSubscribedHarness(
     options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session">,
   ) {
+    // Default trusted media tools to built-ins so tests that opt into custom
+    // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
     subscribeEmbeddedAgentSession({
       session,
@@ -135,6 +141,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   }
 
   async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    // Use a temporary file-backed logger so subsystem attribution is verified
+    // against real serialized log lines.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
     const logFile = path.join(tempDir, "openclaw.log");
     try {

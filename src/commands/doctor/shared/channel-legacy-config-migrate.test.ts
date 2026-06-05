@@ -1,3 +1,4 @@
+// Channel legacy config migration tests cover doctor repair of old channel config shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(

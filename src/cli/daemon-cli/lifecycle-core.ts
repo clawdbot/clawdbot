@@ -1,3 +1,4 @@
+// Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import type { Writable } from "node:stream";
 import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
@@ -121,6 +122,7 @@ async function resolveServiceLoadedOrFail(params: {
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
 }): Promise<boolean | null> {
+  // Returning null keeps failure emission centralized in the caller's action context.
   try {
     return await params.service.isLoaded({ env: process.env });
   } catch (err) {

@@ -1,3 +1,4 @@
+// Discord tests cover channel access plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveDiscordChannelInfoSafe,

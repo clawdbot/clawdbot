@@ -1,3 +1,4 @@
+// Skill upload store persists uploaded skill archives before installation.
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";

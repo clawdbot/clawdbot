@@ -1,3 +1,5 @@
+// Gateway live chat projector.
+// Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import {
   SILENT_REPLY_TOKEN,
@@ -11,8 +13,6 @@ import {
   isSuppressedControlReplyText,
 } from "./control-reply-text.js";
 
-// Live chat projection converts streaming assistant runtime events into display
-// text while suppressing commentary/control replies and silent-token prefixes.
 export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 function capLiveAssistantBuffer(text: string): string {

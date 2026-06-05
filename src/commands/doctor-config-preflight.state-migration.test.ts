@@ -1,3 +1,4 @@
+// Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { describe, expect, it, vi } from "vitest";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>

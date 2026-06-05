@@ -1,3 +1,4 @@
+// Install Cli tests cover install cli script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

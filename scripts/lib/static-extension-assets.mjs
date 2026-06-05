@@ -1,3 +1,4 @@
+// Discovers and copies static assets declared by bundled extension packages.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -96,6 +97,9 @@ function readPackageStaticAssetEntries(packageJson) {
   return Array.isArray(entries) ? entries : [];
 }
 
+/**
+ * Discovers static asset copy specs from extension package metadata.
+ */
 export function discoverStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -151,6 +155,9 @@ function discoverStaticExtensionRuntimeOverlayAssets(params = {}) {
   return [...assetsByDest.values()].toSorted((left, right) => left.dest.localeCompare(right.dest));
 }
 
+/**
+ * Lists generated dist output paths for declared static extension assets.
+ */
 export function listStaticExtensionAssetOutputs(params = {}) {
   const assets = params.assets ?? discoverStaticExtensionAssets(params);
   return assets
@@ -158,6 +165,9 @@ export function listStaticExtensionAssetOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists source file paths for declared static extension assets.
+ */
 export function listStaticExtensionAssetSources(params = {}) {
   const assets = params.assets ?? discoverStaticExtensionAssets(params);
   return assets
@@ -165,6 +175,9 @@ export function listStaticExtensionAssetSources(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Copies declared static extension assets from source packages into root dist.
+ */
 export function copyStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -182,6 +195,9 @@ export function copyStaticExtensionAssets(params = {}) {
   }
 }
 
+/**
+ * Copies static assets into the dist-runtime overlay from source or root dist.
+ */
 export function copyStaticExtensionAssetsToRuntimeOverlay(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -209,6 +225,9 @@ export function copyStaticExtensionAssetsToRuntimeOverlay(params = {}) {
   }
 }
 
+/**
+ * Copies declared static assets for one package runtime build.
+ */
 export function copyStaticExtensionAssetsForPackage(params) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;

@@ -1,3 +1,4 @@
+// Runtime gateway RPC helper shared by CLI commands that call the Gateway.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -24,6 +25,7 @@ export async function callGatewayFromCliRuntime(
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
+  // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;
   return await withProgress(
     {

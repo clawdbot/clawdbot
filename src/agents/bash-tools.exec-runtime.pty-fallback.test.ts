@@ -1,3 +1,8 @@
+/**
+ * PTY fallback runtime tests.
+ * Verifies PTY-requested exec sessions can fall back through the supervisor
+ * path while still emitting diagnostics and registry state.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,

@@ -1,3 +1,4 @@
+// Openrouter plugin module implements video http behavior.
 import { fetchWithTimeoutGuarded } from "openclaw/plugin-sdk/provider-http";
 
 type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithTimeoutGuarded>>;

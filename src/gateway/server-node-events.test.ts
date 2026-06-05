@@ -1,3 +1,5 @@
+// Gateway node event tests protect how node clients surface inbound commands,
+// delivery metadata, pairing state, and outbound payload lifecycle events.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";

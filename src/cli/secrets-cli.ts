@@ -1,3 +1,4 @@
+// Secrets CLI for reload, audit, configure, and apply workflows.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -46,6 +47,7 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
 );
 
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
+  // Apply consumes a generated plan shape, not arbitrary JSON.
   const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
     fsModuleLoader.load(),
     import("../secrets/plan.js"),

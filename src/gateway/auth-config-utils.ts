@@ -1,3 +1,5 @@
+// Gateway auth config utilities materialize token/password SecretRefs only for
+// the auth mode that can actually consume them.
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -168,6 +170,8 @@ async function resolveGatewayAuthSecretRef(params: {
   if (!value) {
     return params.cfg;
   }
+  // Mutate a clone so startup validation can materialize secrets without
+  // altering the caller's raw config object.
   const nextConfig = structuredClone(params.cfg);
   nextConfig.gateway ??= {};
   nextConfig.gateway.auth ??= {};

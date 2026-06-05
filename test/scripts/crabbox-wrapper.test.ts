@@ -1,3 +1,4 @@
+// Crabbox Wrapper tests cover crabbox wrapper script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

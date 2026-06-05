@@ -1,3 +1,5 @@
+// find tool tests cover custom search operation wiring and result-limit
+// normalization for session file discovery.
 import { describe, expect, it } from "vitest";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
 
@@ -17,6 +19,8 @@ function textContent(
 
 describe("find tool", () => {
   it("clamps non-positive limits before delegating to custom search operations", async () => {
+    // Clamp before delegation so custom backends never receive a zero/negative
+    // limit that could make real matches disappear.
     const tool = createFindToolDefinition("/workspace", {
       operations: operations(["/workspace/a.ts", "/workspace/b.ts"]),
     });

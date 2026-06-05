@@ -1,3 +1,4 @@
+// Device Pair plugin module implements pair command auth behavior.
 type PairingCommandAuthParams = {
   channel: string;
   gatewayClientScopes?: readonly string[] | null;

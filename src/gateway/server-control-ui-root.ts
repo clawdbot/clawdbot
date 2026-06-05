@@ -1,3 +1,5 @@
+// Gateway Control UI root resolver.
+// Finds configured, bundled, or source-built UI assets during startup.
 import path from "node:path";
 import {
   ensureControlUiAssetsBuilt,
@@ -8,9 +10,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
-// Control UI root resolution prefers explicit config, then bundled/proven
-// assets. Missing bundled assets trigger an async build attempt without blocking
-// gateway startup.
 function startControlUiAssetsBuild(params: {
   gatewayRuntime: RuntimeEnv;
   log: { warn: (message: string) => void };

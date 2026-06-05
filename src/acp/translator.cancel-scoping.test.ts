@@ -1,3 +1,4 @@
+/** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
 import type { CancelNotification, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";

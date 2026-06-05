@@ -1,3 +1,4 @@
+// Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,6 +20,8 @@ function bedrockAssistant(
   stopReason: "error" | "stop" | "toolUse" | "length" = "error",
   usageOverrides: Record<string, number> = {},
 ): AgentMessage {
+  // Bedrock fixtures cover providers that can return empty or legacy-shaped
+  // assistant content during streamed turns.
   return {
     role: "assistant",
     content,
@@ -65,6 +68,8 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 
 describe("normalizeAssistantReplayContent", () => {
   it("converts mid-turn assistant content: [] to a non-empty sentinel text block when stopReason is error", () => {
+    // Mid-turn failure sentinels preserve request turn ordering without
+    // pretending the failed assistant generated useful content.
     const messages = [userMessage("hello"), bedrockAssistant([], "error"), userMessage("retry")];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
@@ -229,6 +234,8 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {
+    // Gateway mirror entries are transcript artifacts, not model-authored
+    // assistant turns, so they must not be sent back to providers.
     const messages = [
       userMessage("hello"),
       openclawTranscriptAssistant("delivery-mirror"),

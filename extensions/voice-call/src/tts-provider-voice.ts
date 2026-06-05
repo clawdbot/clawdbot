@@ -1,3 +1,4 @@
+// Voice Call provider module implements model/runtime integration.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallTtsConfig } from "./config.js";
 

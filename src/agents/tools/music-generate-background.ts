@@ -1,3 +1,8 @@
+/**
+ * Music generation background task facade.
+ *
+ * Binds shared detached media-task lifecycle behavior to music_generate labels and completion messages.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
@@ -6,9 +11,6 @@ import {
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
 
-/**
- * Music-generation task lifecycle adapters over the shared media background runner.
- */
 export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
 
 /** Shared lifecycle configured with music-specific status text and event metadata. */

@@ -1,3 +1,4 @@
+// Verifies OpenClaw gateway tool schema, restart signaling, and config mutations.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,7 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 function requireGatewayTool(agentSessionKey?: string) {
+  // Tests run with restart enabled so schema and execution paths are visible.
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
     config: { commands: { restart: true } },
@@ -26,6 +28,7 @@ function requireGatewayTool(agentSessionKey?: string) {
 }
 
 function collectActionValues(schema: unknown, values: Set<string>): void {
+  // Tool schemas can expose actions through const, enum, or anyOf variants.
   if (!schema || typeof schema !== "object") {
     return;
   }
@@ -109,6 +112,7 @@ function expectConfigMutationCall(params: {
   raw: string;
   sessionKey: string;
 }) {
+  // Config writes must include the base hash from a preceding config.get read.
   expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
   const call = params.callGatewayTool.mock.calls.find(([method]) => method === params.action);
   if (!call) {

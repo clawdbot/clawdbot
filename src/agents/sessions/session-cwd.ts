@@ -1,10 +1,10 @@
+/**
+ * Missing session cwd detection.
+ *
+ * Helps resume flows decide whether to stop, prompt, or continue in the current process cwd.
+ */
 import { existsSync } from "node:fs";
 
-/**
- * Detects when a resumed session points at a working directory that no longer exists.
- *
- * Callers use this to decide whether to stop, prompt, or continue in the current process cwd.
- */
 export interface SessionCwdIssue {
   sessionFile?: string;
   sessionCwd: string;

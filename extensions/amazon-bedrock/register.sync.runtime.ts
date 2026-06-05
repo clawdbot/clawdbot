@@ -1,3 +1,7 @@
+/**
+ * Synchronous Amazon Bedrock provider registration. It wires Bedrock streaming,
+ * model discovery, thinking policy, guardrails, and embedding integration.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
@@ -215,10 +219,12 @@ type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControl
 
 let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
 
+/** Reset app-profile prompt-cache eligibility state for tests. */
 export function resetBedrockAppProfileCacheEligibilityForTest(): void {
   appProfileTraitsCache.clear();
 }
 
+/** Override Bedrock app-profile control-plane checks for tests. */
 export function setBedrockAppProfileControlPlaneForTest(
   controlPlane: BedrockControlPlaneFactory | undefined,
 ): void {
@@ -337,6 +343,7 @@ function patchOpus47MaxThinkingEffort(payload: Record<string, unknown>): void {
   payload.additionalModelRequestFields = fields;
 }
 
+/** Register Amazon Bedrock provider, discovery catalog, stream wrappers, and embeddings. */
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.

@@ -1,3 +1,4 @@
+// Channels add tests cover guided setup, plugin install paths, and channel account config writes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";

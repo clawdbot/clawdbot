@@ -1,3 +1,4 @@
+// Qa Otel Smoke tests cover qa otel smoke script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";

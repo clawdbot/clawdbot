@@ -1,3 +1,4 @@
+// SQLite schema test support reads schema files for shape assertions.
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 

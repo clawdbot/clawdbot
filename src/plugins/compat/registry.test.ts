@@ -1,3 +1,4 @@
+// Plugin compatibility registry tests cover compatibility metadata loading and validation.
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";

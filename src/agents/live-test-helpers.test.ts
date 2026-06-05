@@ -1,3 +1,4 @@
+// Covers shared live-test gates and credential precedence rules.
 import { describe, expect, it } from "vitest";
 import {
   isLiveProfileKeyModeEnabled,
@@ -29,6 +30,8 @@ describe("isLiveProfileKeyModeEnabled", () => {
 
 describe("live credential precedence", () => {
   it("uses profile-first auth for OpenAI even when the global live mode is env-first", () => {
+    // OpenAI live tests exercise profile auth by default so registry/provider
+    // routing matches normal agent execution instead of raw env-only calls.
     expect(resolveLiveCredentialPrecedence("openai", false)).toBe("profile-first");
     expect(requiresLiveProfileCredential("openai", false)).toBe(true);
   });

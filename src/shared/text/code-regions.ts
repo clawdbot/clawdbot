@@ -1,3 +1,4 @@
+// Code region helpers find fenced and inline code spans in Markdown text.
 export interface CodeRegion {
   start: number;
   end: number;

@@ -1,3 +1,4 @@
+// Crestodian tests cover main rescue and audit command behavior.
 import { describe, expect, it } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";

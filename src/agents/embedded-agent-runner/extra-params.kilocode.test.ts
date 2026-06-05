@@ -1,3 +1,4 @@
+// Coverage for Kilocode proxy wrapper headers and reasoning payloads.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -17,6 +18,8 @@ function applyAndCapture(params: {
   modelId: string;
   callerHeaders?: Record<string, string>;
 }) {
+  // Capture headers after wrapper composition so caller-provided headers and
+  // environment defaults can be compared against the final transport options.
   const captured: ExtraParamsCapture<Record<string, unknown>> = { payload: {} };
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
@@ -49,6 +52,8 @@ function applyAndCaptureReasoning(params: {
   initialPayload?: Record<string, unknown>;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
 }) {
+  // Reasoning is injected by the proxy wrapper before payload dispatch, so tests
+  // inspect the captured request body rather than mock provider responses.
   const captured: ExtraParamsCapture<Record<string, unknown>> = {
     payload: { ...params.initialPayload },
   };
@@ -144,7 +149,8 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
       initialPayload: { reasoning_effort: "high" },
     });
 
-    // kilo/auto should not have reasoning injected
+    // kilo/auto chooses its own downstream model, so reasoning effort would be
+    // unsafe to inject.
     expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
@@ -173,7 +179,8 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
       thinkingLevel: "high",
     });
 
-    // x-ai models reject reasoning.effort — should be skipped
+    // x-ai models reject reasoning.effort, so strip both normalized and legacy
+    // aliases before the request leaves the wrapper.
     expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });

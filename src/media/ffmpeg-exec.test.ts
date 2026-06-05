@@ -1,3 +1,4 @@
+// FFmpeg exec tests cover command execution wrappers and error mapping.
 import type { ChildProcess, ExecFileOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";

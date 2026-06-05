@@ -1,3 +1,4 @@
+// Telegram plugin module implements target writeback behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readConfigFileSnapshotForWrite,

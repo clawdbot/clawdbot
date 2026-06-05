@@ -1,3 +1,4 @@
+// Control UI module implements model auth helpers behavior.
 import type { ModelAuthStatusProvider } from "./types.ts";
 
 /**

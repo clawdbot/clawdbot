@@ -1,3 +1,6 @@
+/**
+ * Canvas setup entrypoint that exposes config migrations.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { migrateLegacyCanvasHostConfig } from "./src/config-migration.js";
 

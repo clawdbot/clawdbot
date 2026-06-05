@@ -1,3 +1,5 @@
+// Browser auth hardening tests cover origin, trusted-proxy, signed-device,
+// bootstrap-token, and scope checks for control UI WebSocket clients.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";

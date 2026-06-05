@@ -1,3 +1,6 @@
+/**
+ * Public native agent harness contracts and capability shapes.
+ */
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;

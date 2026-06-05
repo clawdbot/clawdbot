@@ -1,3 +1,8 @@
+/**
+ * Durable channel ingress queue.
+ *
+ * Stores, claims, completes, and tombstones inbound channel events in OpenClaw state.
+ */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";

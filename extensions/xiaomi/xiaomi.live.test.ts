@@ -1,3 +1,4 @@
+// Xiaomi tests cover xiaomi plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

@@ -1,3 +1,4 @@
+// Diagnostics Otel plugin module implements service behavior.
 import {
   context as otelContextApi,
   metrics,

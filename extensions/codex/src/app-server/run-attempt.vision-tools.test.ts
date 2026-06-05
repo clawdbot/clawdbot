@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.vision tools plugin behavior.
 import { describe, expect, it } from "vitest";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 

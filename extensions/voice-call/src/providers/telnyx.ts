@@ -1,3 +1,4 @@
+// Voice Call plugin module implements telnyx behavior.
 import crypto from "node:crypto";
 import type { TelnyxConfig } from "../config.js";
 import type {

@@ -1,3 +1,4 @@
+// Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage, Model } from "../types.js";

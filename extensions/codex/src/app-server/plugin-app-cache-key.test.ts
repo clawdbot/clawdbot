@@ -1,3 +1,4 @@
+// Codex tests cover plugin app cache key plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCodexPluginAppCacheEndpoint } from "./plugin-app-cache-key.js";
 

@@ -1,3 +1,5 @@
+// Gateway net tests cover bind-host selection, loopback/private host detection,
+// trusted proxy IP resolution, container defaults, and interface matching.
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";

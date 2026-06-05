@@ -1,3 +1,4 @@
+// OC Path tests cover yaml kind plugin behavior.
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { parseOcPath } from "../../oc-path.js";

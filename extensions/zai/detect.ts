@@ -1,3 +1,4 @@
+// Zai plugin module implements detect behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   ZAI_CN_BASE_URL,

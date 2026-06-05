@@ -1,3 +1,4 @@
+/** Public cron run-log API with serialized writes and paged reads. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -306,6 +307,8 @@ export async function readCronRunLogEntriesPage(
   const offset = Math.max(0, Math.floor(opts.offset ?? 0));
 
   if (!query) {
+    // Without a text query SQLite can page directly; query mode filters in JS
+    // because diagnostics and derived job names are not all indexed columns.
     const total = countCronRunLogRows({
       db,
       storeKey,

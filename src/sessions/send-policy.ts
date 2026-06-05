@@ -1,3 +1,4 @@
+// Session send policy helpers decide when session output can be sent to targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

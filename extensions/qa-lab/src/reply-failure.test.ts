@@ -1,3 +1,4 @@
+// Qa Lab tests cover reply failure plugin behavior.
 import { describe, expect, it } from "vitest";
 import { extractQaFailureReplyText, extractQaVisibleReplyLeakText } from "./reply-failure.js";
 

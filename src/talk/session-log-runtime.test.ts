@@ -1,3 +1,4 @@
+// Talk session log runtime tests cover persisted voice session log records.
 import { describe, expect, it } from "vitest";
 import {
   extendRealtimeVoiceOutputEchoSuppression,

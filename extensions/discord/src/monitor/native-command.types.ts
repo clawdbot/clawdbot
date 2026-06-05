@@ -1,3 +1,4 @@
+// Discord type declarations define plugin contracts.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { CommandArgValues } from "openclaw/plugin-sdk/native-command-registry";
 

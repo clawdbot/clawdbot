@@ -1,3 +1,4 @@
+// Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";

@@ -1,3 +1,4 @@
+// Lazy promise tests cover single-flight loading and error reuse behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createLazyImportLoader, createLazyPromiseLoader } from "./lazy-promise.js";
 

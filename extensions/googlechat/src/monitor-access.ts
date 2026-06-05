@@ -1,3 +1,4 @@
+// Googlechat plugin module implements monitor access behavior.
 import {
   channelIngressRoutes,
   createChannelIngressResolver,

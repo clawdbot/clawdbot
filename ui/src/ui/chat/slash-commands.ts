@@ -1,3 +1,4 @@
+// Control UI chat module implements slash commands behavior.
 import type {
   CommandEntry,
   CommandsListResult,

@@ -1,3 +1,5 @@
+// Gateway method authorization scope resolver.
+// Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
@@ -107,6 +109,8 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
     return undefined;
   }
   const requiredScopes = registration.action.requiredScopes;
+  // Registered session actions default to write scope when they omit a custom
+  // requirement; this preserves the historical mutation boundary.
   return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
 }
 

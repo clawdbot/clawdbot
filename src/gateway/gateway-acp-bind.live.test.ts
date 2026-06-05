@@ -1,3 +1,4 @@
+// ACP bind live gateway tests exercise real ACP runtime sessions, cron visibility, and image probe routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -580,9 +581,21 @@ async function pollCronJobVisibleViaCli(params: {
   env: NodeJS.ProcessEnv;
   expectedName: string;
   expectedMessage: string;
-}): Promise<{ job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>; pollsUsed: number }> {
+}): Promise<{
+  error?: string;
+  job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>;
+  pollsUsed: number;
+}> {
   for (let verifyAttempt = 0; verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS; verifyAttempt += 1) {
-    const job = await assertCronJobVisibleViaCli(params);
+    let job: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>;
+    try {
+      job = await assertCronJobVisibleViaCli(params);
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        pollsUsed: verifyAttempt + 1,
+      };
+    }
     if (job) {
       return { job, pollsUsed: verifyAttempt + 1 };
     }
@@ -1063,6 +1076,14 @@ describeLive("gateway live (ACP bind)", () => {
             expectedMessage: cronProbe.message,
           });
           const createdJob = verifyResult.job;
+          if (verifyResult.error) {
+            lastCronMismatch = verifyResult.error;
+            logLiveStep(
+              `cron cli verification failed after attempt ${String(
+                attempt + 1,
+              )}; polls=${String(verifyResult.pollsUsed)}; error=${lastCronMismatch}`,
+            );
+          }
           if (createdJob) {
             try {
               assertCronJobMatches({

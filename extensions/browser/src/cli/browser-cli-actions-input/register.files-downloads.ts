@@ -1,3 +1,6 @@
+/**
+ * Browser CLI file upload, dialog, and download commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -55,6 +58,7 @@ async function runBrowserPostAction<T>(params: {
   }
 }
 
+/** Registers Browser file chooser, dialog, and download commands. */
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

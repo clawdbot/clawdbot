@@ -1,3 +1,4 @@
+// Client script for minimal OpenAI web-search E2E scenarios.
 import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 

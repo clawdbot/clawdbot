@@ -1,3 +1,4 @@
+// Discord tests cover gateway metadata plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordGatewayInfo,

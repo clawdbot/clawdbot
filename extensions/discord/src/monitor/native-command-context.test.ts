@@ -1,3 +1,4 @@
+// Discord tests cover native command context plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 

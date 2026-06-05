@@ -1,3 +1,5 @@
+// Deepgram runner tests cover provider options, headers, baseUrl overrides, and
+// request transport merging.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";

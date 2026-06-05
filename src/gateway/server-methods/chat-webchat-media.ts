@@ -1,3 +1,5 @@
+// Webchat media helpers translate reply payload media into assistant content
+// blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isAudioFileName } from "@openclaw/media-core/mime";

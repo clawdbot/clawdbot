@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel outbound plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({

@@ -1,3 +1,4 @@
+// Model Catalog Core helper module supports model catalog normalize behavior.
 import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,

@@ -1,3 +1,5 @@
+// Plugin approval tests cover requested/resolved plugin approval events,
+// requester visibility, broadcast behavior, and approval manager integration.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";

@@ -1,3 +1,4 @@
+// Memory Host SDK type module defines shared TypeScript contracts.
 import type { OpenClawConfig, SecretInput } from "../engine-foundation.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 

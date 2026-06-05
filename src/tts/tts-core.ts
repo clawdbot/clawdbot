@@ -1,3 +1,4 @@
+// TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";

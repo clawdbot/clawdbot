@@ -1,3 +1,4 @@
+// Openai tests cover openai tts plugin behavior.
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";

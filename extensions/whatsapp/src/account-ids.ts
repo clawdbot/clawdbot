@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements account ids behavior.
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-core";
 
 const {

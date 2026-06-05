@@ -1,3 +1,4 @@
+// Chat log tests cover message rendering order and layout behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ChatLog } from "./chat-log.js";

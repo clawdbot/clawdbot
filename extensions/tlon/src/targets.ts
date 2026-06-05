@@ -1,3 +1,4 @@
+// Tlon plugin module implements targets behavior.
 type TlonTarget =
   | { kind: "dm"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };

@@ -1,3 +1,6 @@
+/**
+ * Waits for completion-required async tasks before finalizing an attempt.
+ */
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements timer timeouts behavior.
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,

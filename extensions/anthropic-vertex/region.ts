@@ -1,3 +1,7 @@
+/**
+ * Anthropic Vertex region, project, and ADC auth detection helpers. They keep
+ * credential probing local to the provider plugin.
+ */
 import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
@@ -21,6 +25,7 @@ function normalizeOptionalSecretInput(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+/** Resolve the configured Vertex region, defaulting to global. */
 export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.env): string {
   const region =
     normalizeOptionalSecretInput(env.GOOGLE_CLOUD_LOCATION) ||
@@ -31,6 +36,7 @@ export function resolveAnthropicVertexRegion(env: NodeJS.ProcessEnv = process.en
     : ANTHROPIC_VERTEX_DEFAULT_REGION;
 }
 
+/** Resolve the Vertex project id from explicit env or ADC files. */
 export function resolveAnthropicVertexProjectId(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -42,11 +48,13 @@ export function resolveAnthropicVertexProjectId(
   );
 }
 
+/** Extract a Vertex region from a provider base URL when possible. */
 export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
   const endpoint = resolveProviderEndpoint(baseUrl);
   return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
 }
 
+/** Resolve the client region from model base URL first, then env fallback. */
 export function resolveAnthropicVertexClientRegion(params?: {
   baseUrl?: string;
   env?: NodeJS.ProcessEnv;
@@ -130,14 +138,17 @@ function resolveAnthropicVertexProjectIdFromAdc(
   }
 }
 
+/** Return whether ADC credentials or metadata-server auth are available. */
 export function hasAnthropicVertexCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasAnthropicVertexMetadataServerAdc(env) || canReadAnthropicVertexAdc(env);
 }
 
+/** Return whether Anthropic Vertex has usable auth for implicit registration. */
 export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasAnthropicVertexCredentials(env);
 }
 
+/** Resolve the synthetic config API key marker for Anthropic Vertex auth. */
 export function resolveAnthropicVertexConfigApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

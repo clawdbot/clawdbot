@@ -1,3 +1,4 @@
+// Google Meet tests cover voice call gateway plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
 import {

@@ -1,3 +1,4 @@
+/** Resolves and validates session-target keys used by cron jobs and delivery. */
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
 /** Returns whether an error came from cron session target id validation. */

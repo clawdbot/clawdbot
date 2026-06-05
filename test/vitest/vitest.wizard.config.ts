@@ -1,3 +1,4 @@
+// Vitest wizard config wires the wizard test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createWizardVitestConfig(env?: Record<string, string | undefined>) {

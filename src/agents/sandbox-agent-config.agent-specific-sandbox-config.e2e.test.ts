@@ -1,3 +1,4 @@
+// Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -14,6 +15,7 @@ const spawnCalls: SpawnCall[] = [];
 
 vi.mock("node:child_process", () => ({
   execFile: (...args: unknown[]) => {
+    // Docker availability probes should succeed without invoking real Docker.
     const callback = args.findLast(
       (arg): arg is (error: null, stdout: string, stderr: string) => void =>
         typeof arg === "function",
@@ -55,6 +57,7 @@ let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSa
 let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
+  // Convenience wrapper keeps session-key specific sandbox context assertions compact.
   return resolveSandboxContext({
     config,
     sessionKey,
@@ -63,6 +66,7 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
 }
 
 function expectDockerSetupCommand(command: string) {
+  // Setup commands are executed through docker exec in the resolved container.
   expect(
     spawnCalls.some(
       (call) =>

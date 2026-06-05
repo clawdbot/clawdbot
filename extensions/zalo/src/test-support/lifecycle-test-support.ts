@@ -1,3 +1,4 @@
+// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
 import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";

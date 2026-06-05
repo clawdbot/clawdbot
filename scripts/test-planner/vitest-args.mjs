@@ -1,3 +1,5 @@
+// Parses Vitest passthrough args for test-planner entry filter accounting.
+/** Vitest options that consume the following CLI token as a value. */
 export const OPTION_TAKES_VALUE = new Set([
   "-t",
   "-c",
@@ -37,8 +39,12 @@ export const OPTION_TAKES_VALUE = new Set([
   "--experimental",
 ]);
 
+/** Flags that only make sense for a single generated test run. */
 export const SINGLE_RUN_ONLY_FLAGS = new Set(["--coverage", "--outputFile", "--mergeReports"]);
 
+/**
+ * Splits Vitest passthrough args into file filters and option args.
+ */
 export const parsePassthroughArgs = (args = []) => {
   const fileFilters = [];
   const optionArgs = [];

@@ -1,3 +1,4 @@
+// Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadValidConfigOrThrow, updateConfig } from "./shared.js";

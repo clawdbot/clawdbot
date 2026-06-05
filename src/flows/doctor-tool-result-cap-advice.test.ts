@@ -1,3 +1,4 @@
+// Tool result cap advice tests cover doctor guidance for capped tool output.
 import { describe, expect, it } from "vitest";
 import { buildToolResultCapDoctorAdvice } from "./doctor-tool-result-cap-advice.js";
 

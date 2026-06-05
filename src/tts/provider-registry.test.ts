@@ -1,3 +1,4 @@
+// TTS provider registry tests cover registration and provider resolution.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";

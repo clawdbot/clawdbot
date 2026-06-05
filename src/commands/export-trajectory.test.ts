@@ -1,3 +1,4 @@
+// Export trajectory tests cover trajectory export command output and file selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";

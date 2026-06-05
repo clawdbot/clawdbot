@@ -1,3 +1,4 @@
+// Verifies agent cleanup steps time out with bounded diagnostic logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_CLEANUP_STEP_TIMEOUT_MS,
@@ -67,6 +68,7 @@ describe("agent cleanup timeout", () => {
   });
 
   it("includes cleanup timeout details when the cleanup step exposes them", async () => {
+    // Cleanup steps can expose current queue state for timeout diagnostics.
     const cleanup = vi.fn(async () => new Promise<never>(() => {}));
 
     const result = runAgentCleanupStep({
@@ -139,6 +141,7 @@ describe("agent cleanup timeout", () => {
   });
 
   it("bounds cleanup timeout detail errors before logging", async () => {
+    // Diagnostic failures must not produce unbounded logs or fail cleanup.
     const cleanup = vi.fn(async () => new Promise<never>(() => {}));
 
     const result = runAgentCleanupStep({

@@ -1,3 +1,4 @@
+// Bundled directory helpers locate bundled skill roots across package layouts.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

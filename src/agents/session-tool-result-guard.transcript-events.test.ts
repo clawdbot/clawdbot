@@ -1,3 +1,4 @@
+// Verifies guarded session managers emit transcript update events with stable sequence ids.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 const listeners: Array<() => void> = [];
 
 afterEach(() => {
+  // Remove all transcript listeners between tests to avoid duplicate broadcasts.
   while (listeners.length > 0) {
     listeners.pop()?.();
   }
@@ -124,6 +126,7 @@ describe("guardSessionManager transcript updates", () => {
   });
 
   it("caches real tool result sequence before final assistant messages", () => {
+    // Tool results are persisted but not broadcast, so later visible messages must skip their seq.
     const updates: SessionTranscriptUpdate[] = [];
     listeners.push(onSessionTranscriptUpdate((update) => updates.push(update)));
 

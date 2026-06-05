@@ -1,3 +1,4 @@
+// Container target tests cover CLI container target parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
   maybeRunCliInContainer,

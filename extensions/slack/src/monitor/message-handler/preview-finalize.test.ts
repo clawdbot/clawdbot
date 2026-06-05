@@ -1,3 +1,4 @@
+// Slack tests cover preview finalize plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

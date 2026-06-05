@@ -1,3 +1,4 @@
+// Gateway Smoke tests cover gateway smoke script behavior.
 import { describe, expect, it } from "vitest";
 import { runGatewaySmoke } from "../../scripts/dev/gateway-smoke.js";
 

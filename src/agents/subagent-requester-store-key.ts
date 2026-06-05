@@ -1,11 +1,14 @@
+/**
+ * Subagent requester store-key normalization.
+ *
+ * Converts raw requester session keys into the canonical registry key shape.
+ */
 import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 
-// Normalizes requester session keys to the store key shape used by subagent
-// registry records.
 type RequesterStoreKeyConfig = {
   session?: { mainKey?: string };
   agents?: { list?: Array<{ id?: string; default?: boolean }> };

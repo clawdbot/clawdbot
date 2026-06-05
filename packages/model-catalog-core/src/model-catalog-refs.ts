@@ -1,3 +1,4 @@
+// Model Catalog Core module implements model catalog refs behavior.
 import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 
 // Stable model catalog ref and merge-key builders.

@@ -1,3 +1,4 @@
+// E2E Websocket Open tests cover e2e websocket open script behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForWebSocketOpen } from "../../scripts/e2e/lib/websocket-open.mjs";

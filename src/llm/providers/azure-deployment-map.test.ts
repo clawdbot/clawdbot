@@ -1,3 +1,4 @@
+// Azure deployment map tests cover model-to-deployment resolution.
 import { describe, expect, it } from "vitest";
 import {
   parseAzureDeploymentNameMap,

@@ -1,3 +1,8 @@
+/**
+ * Tests credential eligibility and expiry classification.
+ * Protects missing, expired, near-expiry, and SecretRef credential handling for
+ * auth profile selection.
+ */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,

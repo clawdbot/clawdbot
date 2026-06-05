@@ -1,3 +1,8 @@
+/**
+ * Tests cron-triggered tool assembly.
+ * Ensures cron runs scope cron tool behavior to self-removal of the current
+ * job only.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 

@@ -1,3 +1,4 @@
+// OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";

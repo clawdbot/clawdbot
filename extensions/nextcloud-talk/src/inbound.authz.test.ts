@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover inbound.authz plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";

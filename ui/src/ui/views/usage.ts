@@ -1,3 +1,4 @@
+// Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";

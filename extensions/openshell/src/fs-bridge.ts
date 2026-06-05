@@ -1,3 +1,4 @@
+// Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";

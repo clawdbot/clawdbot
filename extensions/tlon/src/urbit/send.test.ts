@@ -1,3 +1,4 @@
+// Tlon tests cover send plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@urbit/aura", () => ({

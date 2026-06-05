@@ -1,3 +1,4 @@
+// Qwen provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";

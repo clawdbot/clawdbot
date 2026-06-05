@@ -1,3 +1,4 @@
+// Verifies realtime voice bootstrap context only injects approved profile files.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ async function makeWorkspace(): Promise<string> {
 }
 
 function makeConfig(workspaceDir: string): OpenClawConfig {
+  // Bootstrap context resolves files through the configured default agent workspace.
   return {
     agents: {
       defaults: { workspace: workspaceDir },
@@ -54,6 +56,7 @@ describe("resolveRealtimeBootstrapContextInstructions", () => {
   });
 
   it("ignores unsupported file requests from unchecked callers", async () => {
+    // Runtime callers may pass unchecked file arrays; unsupported files must be filtered.
     const workspaceDir = await makeWorkspace();
     const warnings: string[] = [];
     const uncheckedFiles = ["IDENTITY.md", "AGENTS.md"] as unknown as NonNullable<

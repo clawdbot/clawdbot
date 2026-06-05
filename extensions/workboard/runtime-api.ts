@@ -1,3 +1,4 @@
+// Workboard API module exposes the plugin public contract.
 export { registerWorkboardGatewayMethods } from "./src/gateway.js";
 export type {
   WorkboardCard,

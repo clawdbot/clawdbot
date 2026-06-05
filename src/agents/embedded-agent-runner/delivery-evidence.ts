@@ -1,3 +1,6 @@
+/**
+ * Extracts visible delivery evidence from embedded-agent run results.
+ */
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
 /**

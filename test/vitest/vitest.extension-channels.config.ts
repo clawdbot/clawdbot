@@ -1,3 +1,4 @@
+// Vitest extension channels config wires the extension channels test shard.
 import {
   extensionChannelOverrideExcludeGlobs,
   extensionChannelTestInclude,

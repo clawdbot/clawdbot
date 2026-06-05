@@ -1,3 +1,4 @@
+// Nextcloud Talk helper module supports config schema behavior.
 import {
   DmPolicySchema,
   GroupPolicySchema,

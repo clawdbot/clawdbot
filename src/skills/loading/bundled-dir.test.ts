@@ -1,3 +1,4 @@
+// Bundled directory tests cover bundled skill directory discovery and fallback behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

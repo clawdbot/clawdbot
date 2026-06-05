@@ -1,3 +1,4 @@
+// Sms tests cover webhook plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";

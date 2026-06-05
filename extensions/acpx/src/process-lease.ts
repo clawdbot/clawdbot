@@ -1,15 +1,25 @@
+/**
+ * Persistent lease store for ACPX wrapper processes. Leases let OpenClaw attach
+ * gateway/session identity to spawned ACP processes and clean them up later.
+ */
 import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
+/** Environment variable carrying the ACPX process lease id. */
 export const OPENCLAW_ACPX_LEASE_ID_ENV = "OPENCLAW_ACPX_LEASE_ID";
+/** Environment variable carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
+/** CLI argument carrying the ACPX process lease id for platforms without env wrapping. */
 export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
+/** CLI argument carrying the owning gateway instance id. */
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
 
+/** Lifecycle state for a tracked ACPX wrapper process. */
 export type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
 
+/** Persisted identity and command metadata for one ACPX wrapper process. */
 export type AcpxProcessLease = {
   leaseId: string;
   gatewayInstanceId: string;
@@ -23,6 +33,7 @@ export type AcpxProcessLease = {
   state: AcpxProcessLeaseState;
 };
 
+/** Async lease store used by runtime sessions and cleanup routines. */
 export type AcpxProcessLeaseStore = {
   load(leaseId: string): Promise<AcpxProcessLease | undefined>;
   listOpen(gatewayInstanceId?: string): Promise<AcpxProcessLease[]>;
@@ -84,6 +95,7 @@ function writeLeaseFile(filePath: string, value: LeaseFile): Promise<void> {
   return writeJsonFileAtomically(filePath, value);
 }
 
+/** Create a serialized JSON-backed ACPX process lease store. */
 export function createAcpxProcessLeaseStore(params: { stateDir: string }): AcpxProcessLeaseStore {
   const filePath = path.join(params.stateDir, LEASE_FILE);
   let updateQueue: Promise<void> = Promise.resolve();
@@ -135,10 +147,12 @@ export function createAcpxProcessLeaseStore(params: { stateDir: string }): AcpxP
   };
 }
 
+/** Create a unique lease id for one ACPX wrapper process. */
 export function createAcpxProcessLeaseId(): string {
   return randomUUID();
 }
 
+/** Hash a wrapper command so process leases can detect command drift. */
 export function hashAcpxProcessCommand(command: string): string {
   return createHash("sha256").update(command).digest("hex");
 }
@@ -161,6 +175,7 @@ function appendAcpxLeaseArgs(params: {
   ].join(" ");
 }
 
+/** Add ACPX lease identity to a command through env vars and portable args. */
 export function withAcpxLeaseEnvironment(params: {
   command: string;
   leaseId: string;

@@ -1,3 +1,4 @@
+// Openai tests cover openai chatgpt oauth flow plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({

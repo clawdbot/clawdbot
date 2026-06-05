@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements image preview behavior.
 import type { AnyMessageContent } from "baileys";
 import { getImageMetadata, resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 

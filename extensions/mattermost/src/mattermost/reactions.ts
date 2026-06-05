@@ -1,3 +1,4 @@
+// Mattermost plugin module implements reactions behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

@@ -1,3 +1,4 @@
+// OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type {
   Tool as OpenAITool,

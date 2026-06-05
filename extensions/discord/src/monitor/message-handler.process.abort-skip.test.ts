@@ -1,3 +1,4 @@
+// Discord tests cover message handler.process.abort skip plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatDiscordReplySkip } from "./message-handler.process.js";
 

@@ -1,3 +1,4 @@
+// CLI-facing plugin registry loader re-export.
 export {
   testing,
   ensurePluginRegistryLoaded,

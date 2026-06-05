@@ -1,3 +1,4 @@
+// Codex tests cover approval bridge plugin behavior.
 import {
   callGatewayTool,
   hasNativeHookRelayInvocation,

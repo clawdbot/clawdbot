@@ -1,3 +1,4 @@
+// Text normalization helper strips terminal control sequences from test output.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 
 // Snapshot text normalization for terminal output tests.

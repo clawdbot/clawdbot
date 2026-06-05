@@ -1,3 +1,4 @@
+// Azure Speech tests cover speech provider plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({

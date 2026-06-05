@@ -1,3 +1,4 @@
+// Raster image adapter tests cover image operation integration with RasterMill.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("image ops Rastermill adapter", () => {

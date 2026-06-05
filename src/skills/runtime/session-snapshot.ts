@@ -1,3 +1,4 @@
+// Session snapshot helpers capture and restore runtime skill state for sessions.
 import crypto from "node:crypto";
 import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";

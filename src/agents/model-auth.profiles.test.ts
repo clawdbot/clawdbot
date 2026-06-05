@@ -1,3 +1,4 @@
+// Covers model auth resolution across env, profiles, CLI, and provider aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,8 @@ async function expectVertexAdcEnvApiKey(params: {
   env?: NodeJS.ProcessEnv;
   tempPrefix?: string;
 }) {
+  // Vertex ADC credentials are file evidence, not a raw API key. Tests create
+  // a temporary credentials file and expect the non-secret marker to win.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix ?? "openclaw-adc-"));
   const credentialsPath = path.join(tempDir, "adc.json");
   await fs.writeFile(credentialsPath, params.credentialsJson, "utf8");
@@ -111,6 +114,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./model-auth-env-vars.js", () => {
+  // Workspace-provided auth evidence is only trusted when the plugin is in the
+  // effective allowlist, mirroring runtime plugin scoping.
   const hasAllowedPlugin = (config: unknown, pluginId: string): boolean => {
     if (!config || typeof config !== "object") {
       return false;

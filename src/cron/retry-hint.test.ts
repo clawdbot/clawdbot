@@ -1,3 +1,4 @@
+// Retry hint tests cover user-facing guidance for failed cron retry timing.
 import { describe, expect, it } from "vitest";
 import { resolveCronExecutionRetryHint } from "./retry-hint.js";
 

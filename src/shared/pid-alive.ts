@@ -1,3 +1,4 @@
+// PID liveness helpers check whether process ids still refer to active processes.
 import fsSync from "node:fs";
 
 function isValidPid(pid: number): boolean {

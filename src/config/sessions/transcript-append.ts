@@ -1,3 +1,4 @@
+// Transcript append utilities create headers, migrate linear JSONL, and append parent-linked turns.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -97,6 +98,7 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
           hasParentLinkedEntries = true;
         }
       }
+      // Large transcripts are scanned cooperatively so appends do not monopolize the event loop.
       await yieldTranscriptAppendScan();
     }
     const tail = carry + decoder.end();
@@ -162,6 +164,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     existingIds.add(id);
     record.id = id;
     if (!Object.hasOwn(record, "parentId")) {
+      // Legacy linear transcripts become a linked list while preserving existing ids when present.
       record.parentId = previousId;
     }
     previousId = id;
@@ -214,6 +217,8 @@ async function withTranscriptAppendQueue<T>(
     releaseCurrent = resolve;
   });
   const tail = previous.catch(() => undefined).then(() => current);
+  // Per-file queue is in-process only; the external session write lock still owns cross-process
+  // ordering.
   transcriptAppendQueues.set(queueKey, tail);
   await previous.catch(() => undefined);
   try {

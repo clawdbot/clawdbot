@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Rejects wildcard plugin SDK re-exports in extension API barrels.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +35,9 @@ async function listExtensionApiFiles(rootDir = extensionsRoot) {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Finds wildcard plugin SDK re-export lines in an extension API barrel.
+ */
 export function findPluginSdkWildcardReexports(source) {
   return source
     .split(/\r?\n/u)
@@ -41,6 +45,9 @@ export function findPluginSdkWildcardReexports(source) {
     .filter(({ text }) => WILDCARD_PLUGIN_SDK_REEXPORT_PATTERN.test(text));
 }
 
+/**
+ * Collects extension API barrels that wildcard re-export plugin SDK subpaths.
+ */
 export async function collectPluginSdkWildcardReexports(rootDir = repoRoot) {
   const files = await listExtensionApiFiles(path.join(rootDir, "extensions"));
   const violations = [];
@@ -57,6 +64,9 @@ export async function collectPluginSdkWildcardReexports(rootDir = repoRoot) {
   return violations;
 }
 
+/**
+ * Runs the plugin SDK wildcard re-export guard.
+ */
 export async function main(argv = process.argv.slice(2), io = process) {
   const json = argv.includes("--json");
   const violations = await collectPluginSdkWildcardReexports();

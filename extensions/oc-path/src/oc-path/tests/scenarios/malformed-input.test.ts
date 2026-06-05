@@ -1,3 +1,4 @@
+// OC Path tests cover malformed input plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";
 

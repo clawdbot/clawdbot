@@ -1,3 +1,4 @@
+// Doctor default-account tests cover warnings for missing explicit default channel accounts.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectMissingExplicitDefaultAccountWarnings } from "./doctor/shared/default-account-warnings.js";

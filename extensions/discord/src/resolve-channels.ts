@@ -1,3 +1,4 @@
+// Discord plugin module implements resolve channels behavior.
 import { DiscordApiError, fetchDiscord } from "./api.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";

@@ -1,3 +1,6 @@
+/**
+ * Resolves embedded-agent provider/model selections from config, registry, and catalogs.
+ */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

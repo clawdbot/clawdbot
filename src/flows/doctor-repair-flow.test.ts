@@ -1,3 +1,4 @@
+// Doctor repair flow tests cover repair plan output and repair execution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";

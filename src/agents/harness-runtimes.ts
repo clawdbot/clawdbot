@@ -1,3 +1,6 @@
+/**
+ * Collects configured native harness runtime ids from model provider config.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";

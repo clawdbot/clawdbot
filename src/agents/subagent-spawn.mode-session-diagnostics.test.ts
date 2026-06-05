@@ -1,3 +1,5 @@
+// Subagent spawn session-mode diagnostic tests cover actionable errors when a
+// persistent child session cannot bind to a channel thread.
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

@@ -1,3 +1,4 @@
+// Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 /**
  * Feishu app registration via OAuth device-code flow.

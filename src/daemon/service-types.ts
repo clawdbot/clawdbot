@@ -1,3 +1,4 @@
+/** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
@@ -35,6 +36,7 @@ export type GatewayServiceEnvArgs = {
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
 
+/** Parsed command and env metadata from an installed platform service. */
 export type GatewayServiceCommandConfig = {
   programArguments: string[];
   workingDirectory?: string;

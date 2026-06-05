@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Telegram User Credential script supports OpenClaw repository automation.
 
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";

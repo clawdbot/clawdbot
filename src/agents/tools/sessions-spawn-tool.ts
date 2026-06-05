@@ -1,3 +1,8 @@
+/**
+ * sessions_spawn built-in tool.
+ *
+ * Starts subagent or ACP-backed sessions with inherited tool policy and delivery context.
+ */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {

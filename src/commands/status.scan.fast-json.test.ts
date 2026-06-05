@@ -1,3 +1,4 @@
+// Status scan fast-json tests cover scan defaults, memory config, and JSON-safe status payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,

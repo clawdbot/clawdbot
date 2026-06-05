@@ -1,3 +1,4 @@
+// Slack tests cover home plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let buildSlackHomeView: typeof import("./home.js").buildSlackHomeView;

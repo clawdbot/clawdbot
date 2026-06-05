@@ -1,3 +1,4 @@
+// Discord plugin module implements audit core behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type {
   DiscordGuildChannelConfig,

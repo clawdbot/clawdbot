@@ -1,3 +1,4 @@
+// Cloudflare provider metadata describes Cloudflare-hosted model capabilities.
 import type { Model } from "../types.js";
 
 /** Workers AI direct endpoint. */

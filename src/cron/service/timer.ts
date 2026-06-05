@@ -1,3 +1,4 @@
+/** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -312,6 +313,8 @@ function resolveDeliveryState(params: {
   failureNotification: CronFailureNotificationDelivery;
 } {
   const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  // Failure destinations can receive alerts even when the primary delivery
+  // path was disabled or failed before direct delivery produced an ack.
   const alternateFailureNotificationRequested =
     params.runStatus === "error" &&
     params.job.delivery?.bestEffort !== true &&
@@ -662,6 +665,8 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
     if (result.status === "ok") {
+      // A manual/queued run may finish after the job was removed. Preserve the
+      // successful run log state without resurrecting the job in the store.
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
@@ -1396,6 +1401,8 @@ async function executeMainSessionCronJob(
     typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
   const cronRunSessionKey = resolveMainSessionCronRunSessionKey(job, cronStartedAt);
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
+  // Main-session jobs enqueue text into a per-run child session so each cron
+  // execution has its own transcript and task drill-down target.
   state.deps.enqueueSystemEvent(text, {
     agentId: job.agentId,
     sessionKey: cronRunSessionKey,

@@ -1,3 +1,4 @@
+// Timestamp validation tests cover cron timestamp parsing and stale value rejection.
 import { describe, expect, it, vi } from "vitest";
 import { validateScheduleTimestamp } from "./validate-timestamp.js";
 

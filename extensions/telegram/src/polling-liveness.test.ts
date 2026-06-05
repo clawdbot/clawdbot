@@ -1,3 +1,4 @@
+// Telegram tests cover polling liveness plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 

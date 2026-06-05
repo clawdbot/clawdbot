@@ -1,3 +1,4 @@
+// Control UI view renders gateway url confirmation screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";

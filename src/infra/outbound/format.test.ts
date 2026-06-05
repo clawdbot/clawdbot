@@ -1,3 +1,5 @@
+// Covers direct/gateway outbound summary formatting and JSON delivery payload
+// projections.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOutboundDeliveryJson,

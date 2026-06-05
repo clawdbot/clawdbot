@@ -1,3 +1,4 @@
+// Discord tests cover speaker context plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";

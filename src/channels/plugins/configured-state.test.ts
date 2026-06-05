@@ -1,3 +1,4 @@
+// Configured state tests cover channel plugin configured-state detection and summaries.
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import {

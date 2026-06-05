@@ -1,3 +1,4 @@
+// Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
 import { createCipheriv } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

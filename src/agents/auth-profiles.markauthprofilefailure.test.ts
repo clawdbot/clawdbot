@@ -1,3 +1,8 @@
+/**
+ * Auth-profile failure persistence tests.
+ * Exercises lock-based usage updates, provider bypasses, and cooldown hook
+ * behavior against temporary SQLite-backed stores.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

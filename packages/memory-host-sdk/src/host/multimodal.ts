@@ -1,3 +1,4 @@
+// Memory Host SDK module implements multimodal behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 // Multimodal memory settings and file classification helpers.

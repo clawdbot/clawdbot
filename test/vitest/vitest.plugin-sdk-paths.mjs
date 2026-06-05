@@ -1,3 +1,4 @@
+// Test routing map for lightweight plugin SDK tests and source triggers.
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const pluginSdkLightEntries = [

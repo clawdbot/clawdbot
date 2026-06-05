@@ -1,3 +1,4 @@
+// Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";

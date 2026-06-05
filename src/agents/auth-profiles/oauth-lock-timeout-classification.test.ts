@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth refresh lock timeout classification.
+ * Verifies only the global refresh lock becomes refresh_contention and that the
+ * original file-lock cause is preserved.
+ */
 import { describe, expect, it } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
 import {

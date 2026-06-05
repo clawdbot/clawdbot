@@ -1,8 +1,10 @@
+/** Chooses which source family should back a model-list invocation. */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
+/** Source family selected for a model-list run. */
 export type ModelListSourcePlanKind =
   | "registry"
   | "manifest"
@@ -10,6 +12,7 @@ export type ModelListSourcePlanKind =
   | "provider-runtime-static"
   | "provider-runtime-scoped";
 
+/** Concrete source plan plus preloaded catalog rows and fallback flags. */
 export type ModelListSourcePlan = {
   kind: ModelListSourcePlanKind;
   manifestCatalogRows: readonly NormalizedModelCatalogRow[];
@@ -43,6 +46,7 @@ function createSourcePlan(params: {
   };
 }
 
+/** Creates the baseline plan that loads the runtime model registry. */
 export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   return createSourcePlan({
     kind: "registry",
@@ -50,6 +54,7 @@ export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   });
 }
 
+/** Plans source precedence for all/provider-filtered model-list output. */
 export async function planAllModelListSources(params: {
   all?: boolean;
   enableCascade?: boolean;
@@ -95,6 +100,8 @@ export async function planAllModelListSources(params: {
 
   if (manifestCatalogRows.length > 0) {
     if (staticManifestCatalogRows.length === 0) {
+      // Supplemental manifest rows still need the registry for runtime-backed
+      // availability and suppression decisions.
       return createSourcePlan({
         kind: "registry",
         manifestCatalogRows,

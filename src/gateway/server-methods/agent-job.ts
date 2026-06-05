@@ -1,3 +1,5 @@
+// Agent job tracking caches terminal run snapshots so `agent.wait` can observe
+// recent run outcomes even after the live event stream has moved on.
 import {
   buildAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,

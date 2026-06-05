@@ -1,3 +1,4 @@
+// Browser tests cover tabs.attach only plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../test-support.js";
 import "../server-context.chrome-test-harness.js";

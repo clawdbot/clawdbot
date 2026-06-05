@@ -1,8 +1,10 @@
+/**
+ * Fast embedded-runner E2E mocks.
+ *
+ * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
+ */
 import { vi } from "vitest";
 
-/**
- * Fast mocks for embedded-runner E2E tests that do not need live plugin/runtime boot.
- */
 type EmbeddedRunnerFastRunMockOptions = {
   runEmbeddedAttempt: (params: unknown) => unknown;
   prepareProviderRuntimeAuth?: (params: {

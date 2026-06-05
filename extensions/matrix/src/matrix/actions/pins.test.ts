@@ -1,3 +1,4 @@
+// Matrix tests cover pins plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";

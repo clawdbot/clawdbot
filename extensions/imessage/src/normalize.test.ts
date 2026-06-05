@@ -1,3 +1,4 @@
+// Imessage tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./normalize.js";
 

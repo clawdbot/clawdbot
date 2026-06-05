@@ -1,3 +1,4 @@
+// Supervisor registry tests cover run registration, lookup, and pruning behavior.
 import { describe, expect, it } from "vitest";
 import { createRunRegistry } from "./registry.js";
 

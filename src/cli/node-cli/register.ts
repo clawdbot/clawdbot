@@ -1,3 +1,4 @@
+// Commander registration for foreground node host and node service lifecycle commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -18,6 +19,7 @@ import {
 } from "./daemon.js";
 
 function parsePortOption(value: unknown, fallback: number): number | null {
+  // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
   if (value === undefined) {
     return fallback;
   }

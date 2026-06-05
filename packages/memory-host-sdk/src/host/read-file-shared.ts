@@ -1,3 +1,4 @@
+// Memory Host SDK module implements read file shared behavior.
 import type { MemoryReadResult } from "./types.js";
 
 // Shared memory-file read result shaping and truncation notices.

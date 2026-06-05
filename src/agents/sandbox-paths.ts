@@ -1,3 +1,8 @@
+/**
+ * Sandbox input path normalization and boundary checks.
+ *
+ * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
+ */
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";

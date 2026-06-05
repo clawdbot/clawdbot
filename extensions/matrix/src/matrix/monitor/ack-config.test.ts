@@ -1,3 +1,4 @@
+// Matrix tests cover ack config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 

@@ -1,3 +1,5 @@
+// SecretRef-aware Gateway config string resolver.
+// Resolves configured secret inputs and fallback values without leaking values.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -142,6 +144,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   if (!resolved.refConfigured) {
     const fallback = params.readFallback?.();
     if (fallback) {
+      // Fallbacks are only returned after direct config is absent, preserving
+      // explicit config precedence while still allowing credential stores.
       return {
         value: fallback,
         source: "fallback",
@@ -161,6 +165,8 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
 
   const fallback = params.readFallback?.();
   if (fallback) {
+    // An unresolved SecretRef does not block fallback credentials. Callers get
+    // both the source and secretRefConfigured flag for warning policy.
     return {
       value: fallback,
       source: "fallback",

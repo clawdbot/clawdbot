@@ -1,11 +1,10 @@
+/**
+ * sessions_yield transcript detectors.
+ *
+ * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
+ */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
-/**
- * Detects sessions_yield calls and yielded tool results in provider transcript shapes.
- *
- * Providers encode tool calls/results differently, so this module accepts the
- * common OpenAI/Anthropic/function-call variants used by transcript repair.
- */
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);
   if (!record) {

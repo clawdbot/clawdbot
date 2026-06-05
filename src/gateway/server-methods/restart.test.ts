@@ -1,3 +1,5 @@
+// Restart method tests cover safe restart scheduling, deferral flags, and
+// response payloads returned by gateway.restart.request.
 import { describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 

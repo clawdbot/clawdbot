@@ -1,3 +1,4 @@
+/** Tests Gateway tool streaming to ACP tool-call update mapping. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";

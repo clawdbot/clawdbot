@@ -1,3 +1,4 @@
+// Workshop service orchestrates skill draft creation, validation, and persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

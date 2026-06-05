@@ -1,3 +1,4 @@
+// Filesystem script supports OpenClaw repository automation.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";

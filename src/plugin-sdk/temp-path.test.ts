@@ -1,3 +1,4 @@
+// Temp path tests cover plugin SDK temp directory creation and cleanup helpers.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

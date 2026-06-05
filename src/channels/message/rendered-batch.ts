@@ -1,3 +1,8 @@
+/**
+ * Rendered channel message batch planner.
+ *
+ * Summarizes reply payloads so delivery can pick adapter paths and recovery metadata.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   RenderedMessageBatch,

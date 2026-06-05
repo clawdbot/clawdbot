@@ -1,8 +1,12 @@
+// Tool summary metadata tests cover canvas actions and shouldEmitToolResult
+// overrides in subscribed embedded sessions.
 import { describe, expect, it, vi } from "vitest";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   it("includes canvas action metadata in tool summaries", async () => {
+    // Canvas actions need their JSONL path in summaries so users can inspect the
+    // generated artifact without verbose tool output.
     const onToolResult = vi.fn();
 
     const toolHarness = createSubscribedSessionHarness({

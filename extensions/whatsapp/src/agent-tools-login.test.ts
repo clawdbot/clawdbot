@@ -1,3 +1,4 @@
+// Whatsapp tests cover agent tools login plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";

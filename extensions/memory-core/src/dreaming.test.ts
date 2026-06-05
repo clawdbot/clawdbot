@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

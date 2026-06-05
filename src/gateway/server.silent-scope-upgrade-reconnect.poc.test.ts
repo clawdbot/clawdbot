@@ -1,3 +1,5 @@
+// Silent scope-upgrade reconnect tests document pairing-request notifications,
+// approval flow details, and operator reconnect behavior after scope expansion.
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {

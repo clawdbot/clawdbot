@@ -1,3 +1,4 @@
+// Channel plugin catalog tests cover plugin catalog entries and metadata normalization.
 import { describe, expect, it } from "vitest";
 import { getChannelPluginCatalogEntry } from "./catalog.js";
 

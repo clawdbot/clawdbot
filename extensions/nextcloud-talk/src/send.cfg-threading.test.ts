@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover send.cfg threading plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createSendCfgThreadingRuntime,

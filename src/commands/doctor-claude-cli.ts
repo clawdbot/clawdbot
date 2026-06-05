@@ -1,3 +1,4 @@
+/** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
 import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
@@ -191,6 +192,12 @@ function resolveClaudeCliWorkspaceTargets(params: {
     });
 }
 
+/**
+ * Emits Claude CLI health diagnostics for every agent currently routed through the CLI backend.
+ *
+ * The optional deps let tests inject auth stores, PATH resolution, and workspace roots without
+ * touching the user's real Claude credentials or filesystem.
+ */
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {

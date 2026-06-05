@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Prevents direct pairing-store group auth reads outside resolver helpers.
 import ts from "typescript";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {

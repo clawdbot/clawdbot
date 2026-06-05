@@ -1,3 +1,4 @@
+// Control UI module implements app render usage tab behavior.
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";

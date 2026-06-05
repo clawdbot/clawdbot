@@ -1,3 +1,4 @@
+// Verifies implicit provider secret wiring for NVIDIA, MiniMax portal, and vLLM.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
@@ -20,6 +21,7 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./model-auth-env-vars.js", () => {
+  // Fixed candidate map keeps provider-secret resolution deterministic.
   const candidates = {
     minimax: ["MINIMAX_API_KEY"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
@@ -43,6 +45,7 @@ const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
 function createTestModel(id: string): ModelDefinitionConfig {
+  // Minimal catalog row; these tests care about auth wiring, not model metadata.
   return {
     id,
     name: id,
@@ -55,6 +58,7 @@ function createTestModel(id: string): ModelDefinitionConfig {
 }
 
 function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  // MiniMax custom hosts still speak the Anthropic-compatible path.
   const rawHost = env.MINIMAX_API_HOST?.trim();
   if (!rawHost) {
     return MINIMAX_BASE_URL;
@@ -79,6 +83,7 @@ function buildMinimaxPortalCatalog(params: {
   explicitBaseUrl?: string;
   hasProfiles?: boolean;
 }): ModelProviderConfig | null {
+  // Portal catalog is only available when OAuth/env/profile auth exists.
   const apiKey =
     params.envApiKey ??
     params.explicitApiKey ??

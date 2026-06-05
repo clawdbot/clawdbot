@@ -1,3 +1,8 @@
+/**
+ * Outbound payload channel contract testkit.
+ *
+ * Installs reusable tests for text chunking and media payload delivery behavior.
+ */
 import { beforeEach, expect, it, type Mock } from "vitest";
 import type { ReplyPayload } from "../../../plugin-sdk/reply-payload.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";

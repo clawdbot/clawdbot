@@ -1,3 +1,4 @@
+// Memory Host SDK helper module supports retry utils behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 
 /** Retry timing configuration with optional jitter. */

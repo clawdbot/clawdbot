@@ -1,3 +1,4 @@
+// Control UI module implements app defaults behavior.
 import type { LogLevel } from "./types.ts";
 import type { CronFormState } from "./ui-types.ts";
 

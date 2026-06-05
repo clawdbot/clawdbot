@@ -1,9 +1,9 @@
+// Gateway hook test fixtures.
+// Builds resolved hook config and IncomingMessage-like requests for tests.
 import type { IncomingMessage } from "node:http";
 import type { HooksConfigResolved } from "./hooks.js";
 
-/**
- * Hook endpoint fixtures shared by gateway hook tests.
- */
+/** Creates the default resolved hook config used by gateway hook tests. */
 export function createHooksConfig(): HooksConfigResolved {
   return {
     basePath: "/hooks",

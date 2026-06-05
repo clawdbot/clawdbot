@@ -1,3 +1,4 @@
+// Slack tests cover external arg menu store plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createSlackExternalArgMenuStore,

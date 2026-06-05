@@ -1,3 +1,4 @@
+// Telegram tests cover group migration plugin behavior.
 import { describe, expect, it } from "vitest";
 import { migrateTelegramGroupConfig, migrateTelegramGroupsInPlace } from "./group-migration.js";
 

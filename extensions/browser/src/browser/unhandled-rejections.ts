@@ -1,3 +1,7 @@
+/**
+ * Browser-specific unhandled rejection filter for benign Playwright dialog
+ * races.
+ */
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 
@@ -27,6 +31,7 @@ function readPlaywrightMethod(err: unknown): string | undefined {
   return typeof method === "string" ? method : undefined;
 }
 
+/** Detects Playwright "no dialog is showing" races that can escape as rejections. */
 export function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
   for (const candidate of collectErrorGraphCandidates(reason, (current) => [
     current.cause,
@@ -56,6 +61,7 @@ export function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boole
   return false;
 }
 
+/** Installs the Browser unhandled-rejection filter and returns its disposer. */
 export function registerBrowserUnhandledRejectionHandler(): () => void {
   return registerUnhandledRejectionHandler(isPlaywrightDialogRaceUnhandledRejection);
 }

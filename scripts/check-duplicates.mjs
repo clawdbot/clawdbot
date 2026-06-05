@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs duplicate-code detection with repo-specific excludes.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

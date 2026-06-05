@@ -1,3 +1,4 @@
+// Xai plugin module implements model compat behavior.
 import {
   applyModelCompatPatch,
   type ModelCompatConfig,

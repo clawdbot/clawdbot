@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Temporarily narrows CHANGELOG.md to packaged release notes for npm tarballs.
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,9 @@ const RELEASE_VERSION_PATTERN =
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 
+/**
+ * Resolves acceptable changelog headings for a package version.
+ */
 export function resolvePackageChangelogVersions(packageVersion) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
@@ -54,6 +58,9 @@ function extractPreamble(lines, firstHeadingIndex) {
   return lines.slice(0, firstHeadingIndex).join("\n").trimEnd();
 }
 
+/**
+ * Extracts the current release changelog section for package publishing.
+ */
 export function extractCurrentPackageChangelog(content, packageVersion) {
   const targetVersions = resolvePackageChangelogVersions(packageVersion);
   const lines = splitLines(content);
@@ -99,6 +106,9 @@ async function readPackageVersion(cwd) {
   return packageJson.version;
 }
 
+/**
+ * Restores the source changelog from a package-changelog backup.
+ */
 export async function restorePackageChangelog(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   if (!existsSync(backupPath)) {
@@ -132,6 +142,9 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
   return true;
 }
 
+/**
+ * Writes packaged changelog content while preserving a restorable backup.
+ */
 export async function preparePackageChangelog(cwd = process.cwd()) {
   await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);

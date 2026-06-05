@@ -1,3 +1,4 @@
+// Irc tests cover runtime api plugin behavior.
 import { runDirectImportSmoke } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 

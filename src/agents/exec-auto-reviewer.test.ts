@@ -1,3 +1,5 @@
+// Exec auto-reviewer tests cover model response parsing, low-risk allow gates,
+// reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +9,8 @@ import {
 } from "./exec-auto-reviewer.js";
 
 const input = {
+  // Baseline approval request is read-only; individual cases override command
+  // text or analysis fields to exercise escalation behavior.
   command: "git status",
   argv: ["git", "status"],
   cwd: "/repo",
@@ -54,6 +58,8 @@ describe("parseExecAutoReviewResponse", () => {
   });
 
   it("normalizes unsupported or malformed decisions to human review", () => {
+    // Reviewer output is untrusted model text; only a bare JSON object matching
+    // the allow/ask schema can affect approval flow.
     expect(parseExecAutoReviewResponse("sure, run it")).toMatchObject({
       decision: "ask",
     });
@@ -178,6 +184,8 @@ describe("createModelExecAutoReviewer", () => {
   });
 
   it("defers to human approval when command text tries to instruct the reviewer", async () => {
+    // Command content is adversarial input to the reviewer. Prompt-injection
+    // attempts force human review even if the model returns a low-risk allow.
     const prepare = vi.fn(async () => ({
       selection: {
         provider: "openrouter",

@@ -1,3 +1,4 @@
+/** Applies ACP session-key metadata overrides to agent runtime classification. */
 import { isAcpSessionKey } from "../routing/session-key.js";
 
 /**

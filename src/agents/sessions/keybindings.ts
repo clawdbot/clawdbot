@@ -1,3 +1,8 @@
+/**
+ * Application keybinding definitions and user-config migration helpers.
+ *
+ * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -10,12 +15,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../config.js";
 
-/**
- * Application keybinding definitions and user-config migration helpers.
- *
- * The exported manager wraps pi-tui keybindings with OpenClaw-specific actions
- * and loads optional per-agent keybindings.json overrides.
- */
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
 export interface AppKeybindings {
   "app.interrupt": true;

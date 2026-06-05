@@ -1,3 +1,4 @@
+// Zalo plugin module implements setup core behavior.
 import {
   addWildcardAllowFrom,
   createDelegatedSetupWizardProxy,

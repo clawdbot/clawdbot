@@ -1,3 +1,5 @@
+// Subagent spawn depth-limit tests cover max depth, per-parent child limits,
+// inherited tool policy, and preflight failures before gateway dispatch.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -120,6 +122,8 @@ describe("subagent spawn depth + child limits", () => {
     const accepted = expectAccepted(result, "run-1");
     expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
 
+    // Child capability flags are stored on the session entry so later control
+    // tools can enforce leaf behavior without recalculating spawn depth.
     const childSession = persistedStore?.[accepted.childSessionKey];
     if (!childSession) {
       throw new Error("Expected persisted child session");

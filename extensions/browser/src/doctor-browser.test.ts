@@ -1,3 +1,4 @@
+// Browser tests cover doctor browser plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   maybeArchiveLegacyClawdBrowserProfileResidue,

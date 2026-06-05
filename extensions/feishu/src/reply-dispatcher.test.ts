@@ -1,3 +1,4 @@
+// Feishu tests cover reply dispatcher plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {

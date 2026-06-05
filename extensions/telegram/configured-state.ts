@@ -1,3 +1,4 @@
+// Telegram helper module supports configured state behavior.
 export function hasTelegramConfiguredState(params: { env?: NodeJS.ProcessEnv }): boolean {
   return (
     typeof params.env?.TELEGRAM_BOT_TOKEN === "string" &&

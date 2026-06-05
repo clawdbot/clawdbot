@@ -1,3 +1,5 @@
+// Outbound identity helpers project configured agent identity/avatar metadata
+// into channel-safe send payload fields.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";

@@ -1,3 +1,4 @@
+// Crestodian overview tests cover summary output for rescue diagnostics.
 import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {

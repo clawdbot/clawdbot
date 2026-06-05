@@ -1,3 +1,4 @@
+// Doctor preview warning aggregation for config that can surprise users before repair.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -305,6 +306,7 @@ function formatTargets(targets: string[]): string {
   return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
 }
 
+/** Warn when visible-reply policy selects message_tool but message is unavailable. */
 export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
@@ -345,6 +347,7 @@ function formatChannelList(channels: string[]): string {
     .join(", ")}, and ${channels.length - 2} more`;
 }
 
+/** Warn when routed channel agents lack the message tool required for channel actions. */
 export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
@@ -686,6 +689,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   });
 }
 
+/** Warn when configured tool sections no longer widen restrictive tool profiles. */
 export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
@@ -754,10 +758,13 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
 }
 
 export type DoctorPreviewNotes = {
+  /** Non-warning doctor notes shown during preview. */
   infoNotes: string[];
+  /** Warning notes shown during preview. */
   warningNotes: string[];
 };
 
+/** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -959,6 +966,7 @@ export async function collectDoctorPreviewNotes(params: {
   return { infoNotes, warningNotes: warnings };
 }
 
+/** Collect warning notes only for callers that do not display info notes. */
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;

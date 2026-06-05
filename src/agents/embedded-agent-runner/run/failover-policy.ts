@@ -1,3 +1,6 @@
+/**
+ * Resolves retry, fallback, and terminal failover decisions for a run.
+ */
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
 /** Failover action selected for one embedded run failure decision point. */

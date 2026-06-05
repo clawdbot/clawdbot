@@ -1,3 +1,4 @@
+// Network Policy module implements ipv4 behavior.
 import { isCanonicalDottedDecimalIPv4 } from "./ip.js";
 
 /** Validates the custom-bind IPv4 input and returns the user-facing error text. */

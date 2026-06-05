@@ -1,3 +1,8 @@
+/**
+ * Persisted session JSONL repair helpers.
+ * Drops malformed transcript entries, rewrites unreplayable blank/error turns,
+ * and inserts missing code-mode tool results before replay.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,8 +12,11 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
-/** Placeholder for blank user messages — preserves the user turn so strict
- * providers that require at least one user message don't reject the transcript. */
+/**
+ * Placeholder for blank user messages.
+ * Preserves the user turn so strict providers that require at least one user
+ * message do not reject the transcript.
+ */
 export const BLANK_USER_FALLBACK_TEXT = "(continue)";
 
 type RepairReport = {
@@ -21,10 +29,6 @@ type RepairReport = {
   backupPath?: string;
   reason?: string;
 };
-
-// The sentinel text is shared with stream-message-shared.ts and
-// replay-history.ts so a repaired entry is byte-identical to a live
-// stream-error turn, keeping the repair pass idempotent.
 
 type SessionMessageEntry = {
   type: "message";
@@ -291,6 +295,7 @@ function insertMissingCodeModeToolResults(entries: unknown[]): {
   return { entries: insertedToolResults > 0 ? out : entries, insertedToolResults };
 }
 
+/** Repair a persisted session JSONL file in place when replay-breaking corruption is found. */
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
   debug?: (message: string) => void;

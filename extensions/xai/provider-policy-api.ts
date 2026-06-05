@@ -1,3 +1,4 @@
+// Xai API module exposes the plugin public contract.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,

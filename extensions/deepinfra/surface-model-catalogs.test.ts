@@ -1,3 +1,4 @@
+// Deepinfra tests cover surface model catalogs plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDeepInfraModelCacheForTest } from "./provider-models.js";
 import {

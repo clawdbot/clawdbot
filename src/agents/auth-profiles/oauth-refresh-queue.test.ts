@@ -1,3 +1,8 @@
+/**
+ * Tests in-process OAuth refresh queuing.
+ * Ensures concurrent refresh attempts serialize and queue gates release after
+ * both success and failure.
+ */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";

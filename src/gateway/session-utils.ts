@@ -1,3 +1,5 @@
+// Gateway session listing and projection helpers.
+// Normalizes persisted session stores into UI/RPC rows without mutating state.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -173,6 +175,8 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
+    // Avatars can be workspace-relative, but projection must keep the file
+    // read inside the agent workspace and cap bytes before encoding.
     const opened = openRootFileSync({
       absolutePath: resolvedCandidate,
       rootPath: workspaceRoot,
@@ -421,6 +425,8 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   if (entry.status === "running" || isFinitePositiveTimestamp(entry.startedAt)) {
     return true;
   }
+  // Store-only child links lack a live subagent registry entry. Keep recent
+  // unknown-state rows visible briefly so reloads do not hide fresh children.
   return (
     isFinitePositiveTimestamp(entry.updatedAt) &&
     now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS

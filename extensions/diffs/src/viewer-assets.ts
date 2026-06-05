@@ -1,3 +1,4 @@
+// Diffs plugin module implements viewer assets behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";

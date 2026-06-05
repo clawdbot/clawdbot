@@ -1,3 +1,4 @@
+// Shell completion generation, cache writing, and install command registration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command, Option } from "commander";
@@ -76,6 +77,7 @@ function collectFishPathOptionFlags(
 }
 
 function generateFishPathHelper(rootCmd: string): string {
+  // Fish needs a helper to ignore option values while matching nested command paths.
   return `
 function __${rootCmd}_command_path_matches
   set -l expected

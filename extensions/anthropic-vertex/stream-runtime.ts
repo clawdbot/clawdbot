@@ -1,3 +1,7 @@
+/**
+ * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
+ * OpenClaw stream options into Anthropic Messages payload policy.
+ */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -26,6 +30,7 @@ type AnthropicVertexClientOptions = {
   region: string;
 };
 
+/** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
   streamAnthropic: typeof streamDefault;
@@ -222,6 +227,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
   }
 }
 
+/** Create an Anthropic Vertex stream function from model metadata and env. */
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,

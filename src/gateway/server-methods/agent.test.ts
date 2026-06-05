@@ -1,3 +1,5 @@
+// Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
+// approval followups, lifecycle hooks, and emitted gateway events.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";

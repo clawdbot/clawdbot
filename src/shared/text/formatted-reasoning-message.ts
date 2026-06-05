@@ -1,3 +1,4 @@
+// Formatted reasoning message helpers remove reasoning tags before display.
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 /** Strip provider-formatted Reasoning/Thinking preambles from visible text. */

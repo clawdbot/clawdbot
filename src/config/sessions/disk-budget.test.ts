@@ -1,3 +1,4 @@
+// Session disk budget tests cover pruning and storage budget calculations.
 import nodeFs from "node:fs";
 import type { PathLike, StatOptions } from "node:fs";
 import fs from "node:fs/promises";

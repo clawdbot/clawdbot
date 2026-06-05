@@ -1,3 +1,4 @@
+/** Node-based daemon install plan builder for managed gateway services. */
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -27,6 +28,7 @@ function buildNodeInstallEnvironmentValueSources(): Record<
   };
 }
 
+/** Builds launch arguments, environment, and metadata for a Node daemon service install. */
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;

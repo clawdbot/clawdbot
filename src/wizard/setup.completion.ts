@@ -1,3 +1,4 @@
+// Setup completion helpers render completion instructions after onboarding.
 import os from "node:os";
 import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";

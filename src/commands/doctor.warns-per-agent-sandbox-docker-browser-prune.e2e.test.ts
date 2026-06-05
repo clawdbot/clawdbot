@@ -1,3 +1,4 @@
+// Doctor sandbox browser prune e2e tests cover per-agent stale browser artifacts and warning output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

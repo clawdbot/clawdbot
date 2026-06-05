@@ -1,3 +1,4 @@
+// Imessage plugin module implements approval reactions behavior.
 import {
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,

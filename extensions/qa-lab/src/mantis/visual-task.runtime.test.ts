@@ -1,3 +1,4 @@
+// Qa Lab tests cover visual task plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

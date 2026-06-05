@@ -1,3 +1,4 @@
+// Google plugin module implements google genai runtime behavior.
 import { GoogleGenAI } from "@google/genai";
 
 export type GoogleGenAIClient = InstanceType<typeof GoogleGenAI>;

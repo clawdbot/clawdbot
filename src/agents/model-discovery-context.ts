@@ -1,3 +1,8 @@
+/**
+ * Shared context resolvers for model discovery.
+ * Keeps callers from reaching into runtime config or plugin metadata snapshot
+ * plumbing directly.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -5,8 +10,6 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
 
-// Shared context resolvers for model discovery. They keep callers from reaching
-// into runtime config or plugin metadata snapshot plumbing directly.
 /** Resolve the workspace directory model discovery should use for agent scope. */
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,

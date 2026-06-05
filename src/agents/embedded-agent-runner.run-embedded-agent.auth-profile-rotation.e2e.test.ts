@@ -1,3 +1,4 @@
+// End-to-end auth-profile rotation coverage for embedded runner retries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -43,6 +44,8 @@ const installRunEmbeddedMocks = () => {
       };
     },
   });
+  // The model resolver stays deterministic so retry assertions only observe
+  // profile selection, cooldowns, and provider auth preparation.
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => ({
       model: {
@@ -331,6 +334,8 @@ const writeAuthStore = async (
     >;
   },
 ) => {
+  // Store order and usageStats are the persisted inputs the rotation picker
+  // uses to decide which profile should be cooled down or retried.
   saveAuthProfileStore(
     {
       version: 1,
@@ -478,6 +483,8 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // First attempt fails on the auto-pinned profile; the second must use the
+    // next eligible profile without changing the caller-visible run contract.
     mockFailedThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -502,6 +509,8 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // Prompt construction errors still rotate credentials because providers can
+    // surface auth failures before the transport attempt is created.
     mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,

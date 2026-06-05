@@ -1,3 +1,4 @@
+// Plugin config runtime helpers load and normalize plugin-owned configuration at execution time.
 import type { OpenClawConfig } from "../config/types.js";
 
 export { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";

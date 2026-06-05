@@ -1,3 +1,4 @@
+// ACPX tests cover process reaper plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";

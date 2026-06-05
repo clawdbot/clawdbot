@@ -1,3 +1,4 @@
+// Imessage tests cover catchup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {

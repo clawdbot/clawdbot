@@ -1,3 +1,4 @@
+// Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor plugin behavior.
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";

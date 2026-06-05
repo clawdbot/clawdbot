@@ -1,3 +1,4 @@
+// Ios Node E2E script supports OpenClaw repository automation.
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,

@@ -1,3 +1,8 @@
+/**
+ * Applies runtime-plan or provider fallback tool schema policy. The helpers
+ * normalize tool schemas, preserve owner metadata across cloned definitions,
+ * and emit provider diagnostics.
+ */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
@@ -15,8 +20,6 @@ import {
 } from "../tool-schema-projection.js";
 import type { AgentRuntimePlan } from "./types.js";
 
-// Shared by normalization and diagnostics so the same provider/model/runtime
-// context reaches both runtime-plan hooks and provider fallback code.
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
   runtimePlan?: AgentRuntimePlan;
   tools: AgentTool<TSchemaType, TResult>[];

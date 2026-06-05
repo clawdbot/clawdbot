@@ -1,3 +1,4 @@
+// Discord plugin module implements listeners.queue behavior.
 import { createSubsystemLogger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 
 export type DiscordListenerLogger = ReturnType<

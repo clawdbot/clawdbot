@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for compact tool display formatting.
+ * Ensures tool names, actions, and details stay readable and redacted.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { resolveExecDetail } from "./tool-display-exec.js";

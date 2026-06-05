@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Synchronizes GitHub label colors to the OpenClaw taxonomy policy.
 import { execFileSync } from "node:child_process";
 
 const REPO = "openclaw/openclaw";

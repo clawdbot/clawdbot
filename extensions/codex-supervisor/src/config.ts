@@ -1,3 +1,6 @@
+/**
+ * Config parsing for Codex Supervisor endpoints and safety gates.
+ */
 import { Type, type Static } from "typebox";
 import type { CodexSupervisorEndpoint } from "./types.js";
 
@@ -26,6 +29,9 @@ const WebSocketEndpointSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Plugin config schema accepted by the bundled plugin manifest.
+ */
 export const CodexSupervisorPluginConfigSchema = Type.Object(
   {
     endpoints: Type.Optional(
@@ -37,8 +43,10 @@ export const CodexSupervisorPluginConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Raw plugin config shape accepted from OpenClaw config. */
 export type CodexSupervisorPluginConfig = Static<typeof CodexSupervisorPluginConfigSchema>;
 
+/** Normalized config consumed by plugin registration and MCP serving. */
 export type ResolvedCodexSupervisorPluginConfig = {
   endpoints: CodexSupervisorEndpoint[];
   allowRawTranscripts: boolean;
@@ -140,6 +148,10 @@ function endpointFromToken(token: string, index: number): CodexSupervisorEndpoin
   return undefined;
 }
 
+/**
+ * Loads endpoint definitions from environment, defaulting to the local Codex
+ * app-server unix socket.
+ */
 export function loadCodexSupervisorEndpoints(
   env: Pick<NodeJS.ProcessEnv, string> = process.env,
 ): CodexSupervisorEndpoint[] {
@@ -185,6 +197,9 @@ function normalizeConfiguredEndpoints(
   return normalized.length > 0 ? requireUniqueEndpointIds(normalized) : undefined;
 }
 
+/**
+ * Resolves raw plugin config and env endpoints into validated runtime config.
+ */
 export function resolveCodexSupervisorPluginConfig(
   rawConfig: unknown,
   env: Pick<NodeJS.ProcessEnv, string> = process.env,

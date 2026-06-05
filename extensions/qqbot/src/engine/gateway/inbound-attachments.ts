@@ -1,3 +1,4 @@
+// Qqbot plugin module implements inbound attachments behavior.
 import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";

@@ -1,3 +1,9 @@
+/**
+ * Gateway config mutation for local non-interactive onboarding.
+ *
+ * This module owns port/bind/auth validation and token/ref preservation before
+ * the final config write happens.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { formatInvalidPortOption } from "../../../cli/error-format.js";
@@ -8,6 +14,7 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
+/** Applies gateway CLI options to the pending config and returns normalized runtime settings. */
 export function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
@@ -73,6 +80,8 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   if (authMode === "token") {
     if (gatewayTokenRefEnv) {
+      // Env refs must be validated before writing config because the daemon
+      // install plan will later depend on this exact env-var id.
       if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
         runtime.error(
           "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
@@ -81,6 +90,8 @@ export function applyNonInteractiveGatewayConfig(params: {
         return null;
       }
       if (explicitGatewayToken) {
+        // Avoid ambiguous persistence: a plaintext token and a ref target cannot
+        // both represent the same gateway auth field.
         runtime.error(
           "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
         );

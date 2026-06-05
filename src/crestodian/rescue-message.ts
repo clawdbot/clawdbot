@@ -1,3 +1,4 @@
+// Crestodian rescue messages expose approved setup-helper commands over message channels.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -199,6 +200,7 @@ export async function runCrestodianRescueMessage(
     return unsupported;
   }
   if (isPersistentCrestodianOperation(operation)) {
+    // Persistent remote operations are two-step: store the parsed operation, then require approval.
     const now = new Date();
     const nowMs = asDateTimestampMs(now.getTime());
     const expiresAtMs =

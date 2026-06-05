@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks built package dist files for imports outside package boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";

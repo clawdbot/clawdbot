@@ -1,3 +1,8 @@
+/**
+ * Declarative channel setup wizard contract.
+ *
+ * Defines status, credentials, prompts, group access, and finalization types for setup flows.
+ */
 import type { DmPolicy } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -11,9 +16,6 @@ import type {
   ChannelSetupInput,
 } from "./types.core.js";
 
-// Public setup wizard contract shared by bundled channel plugins and setup
-// orchestration. Keep these types declarative; runtime behavior lives in
-// setup-wizard.ts.
 export type ChannelSetupPlugin = {
   id: ChannelId;
   meta: ChannelMeta;

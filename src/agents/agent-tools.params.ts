@@ -1,7 +1,10 @@
+/**
+ * Shared validation for model-supplied tool parameters.
+ * Converts malformed file-tool arguments into retryable errors and fixes the
+ * specific XML suffix corruption seen in path arguments.
+ */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
-// Shared tool parameter validation helpers for file-edit style tools. They turn
-// model-facing malformed arguments into actionable retry guidance.
 export type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
@@ -84,6 +87,7 @@ function hasValidEditReplacements(record: Record<string, unknown>): boolean {
   );
 }
 
+/** Required parameter groups for file-style tools that need retry guidance. */
 export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
@@ -140,6 +144,7 @@ function resolveMalformedXmlArgValuePathKeys(
   return [...keys];
 }
 
+/** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],

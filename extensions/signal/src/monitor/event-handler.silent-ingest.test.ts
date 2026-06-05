@@ -1,3 +1,4 @@
+// Signal tests cover event handler.silent ingest plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createBaseSignalEventHandlerDeps,

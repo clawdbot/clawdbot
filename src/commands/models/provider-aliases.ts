@@ -1,3 +1,4 @@
+/** Provider alias canonicalization for model catalog rows. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -60,6 +61,8 @@ function loadSourcePeerModelCatalog(
     sourcePeerModelCatalogCache.set(cacheKey, null);
     return undefined;
   }
+  // Bundled dist manifests can omit source-only alias metadata during local
+  // development; read the peer source manifest to keep list output canonical.
   const loaded = loadPluginManifest(sourceRoot, false);
   if (!loaded.ok || loaded.manifest.id !== plugin.id) {
     sourcePeerModelCatalogCache.set(cacheKey, null);
@@ -98,6 +101,7 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
   return aliases;
 }
 
+/** Builds provider/ref canonicalizers from manifest model-catalog aliases. */
 export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
   provider: (provider: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
@@ -116,6 +120,7 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
   };
 }
 
+/** Canonicalizes a provider id through manifest model-catalog aliases. */
 export function canonicalizeModelCatalogProviderAlias(
   provider: string,
   params: ProviderAliasSource,
@@ -123,6 +128,7 @@ export function canonicalizeModelCatalogProviderAlias(
   return createModelCatalogProviderAliasCanonicalizer(params).provider(provider);
 }
 
+/** Canonicalizes the provider field on a model reference. */
 export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
   ref: TRef,
   params: ProviderAliasSource,

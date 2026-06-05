@@ -1,3 +1,4 @@
+// Public channel registry facade for channel ids, metadata, and setup copy.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

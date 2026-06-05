@@ -1,3 +1,4 @@
+// JSON parse helpers recover structured values from partial model output.
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);

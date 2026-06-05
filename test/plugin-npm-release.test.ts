@@ -1,3 +1,4 @@
+// Plugin npm release tests validate plugin npm release artifacts.
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";

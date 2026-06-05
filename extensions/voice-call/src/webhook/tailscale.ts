@@ -1,3 +1,4 @@
+// Voice Call plugin module implements tailscale behavior.
 import { spawn } from "node:child_process";
 import type { VoiceCallConfig } from "../config.js";
 

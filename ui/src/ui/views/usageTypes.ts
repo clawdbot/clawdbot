@@ -1,3 +1,4 @@
+// Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
   SessionsUsageEntry,

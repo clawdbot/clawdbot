@@ -1,3 +1,4 @@
+// Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

@@ -1,3 +1,4 @@
+// Bun binary extension loader tests cover virtual SDK modules passed to jiti.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +57,8 @@ afterEach(async () => {
 
 describe("loadExtensions in Bun binary mode", () => {
   it("virtualizes scoped and unscoped SDK module ids", async () => {
+    // Bundled Bun binaries cannot rely on Node resolution for SDK aliases, so
+    // both historical and scoped module ids are registered as virtual modules.
     expect(virtualModulesCase.errors).toEqual([]);
     expect(virtualModulesCase.virtualModuleIds).toEqual(
       expect.arrayContaining([

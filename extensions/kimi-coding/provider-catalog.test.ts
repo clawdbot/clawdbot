@@ -1,3 +1,4 @@
+// Kimi Coding tests cover provider catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 

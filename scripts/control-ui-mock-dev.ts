@@ -1,3 +1,4 @@
+// Control Ui Mock Dev script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Plugin, type ViteDevServer } from "vite";

@@ -1,3 +1,4 @@
+// Qa Lab tests cover discord live plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

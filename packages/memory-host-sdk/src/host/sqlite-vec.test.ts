@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover sqlite vec behavior.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";

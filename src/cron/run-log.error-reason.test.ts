@@ -1,3 +1,4 @@
+// Cron run log error tests cover persisted failure reasons and summaries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

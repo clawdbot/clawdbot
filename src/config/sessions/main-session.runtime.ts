@@ -1,3 +1,4 @@
+// Runtime main-session lookup binds the config-backed helper for callers without config access.
 import { getRuntimeConfig } from "../io.js";
 import { resolveMainSessionKey } from "./main-session.js";
 

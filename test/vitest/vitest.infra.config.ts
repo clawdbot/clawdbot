@@ -1,3 +1,4 @@
+// Vitest infra config wires the infra test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 

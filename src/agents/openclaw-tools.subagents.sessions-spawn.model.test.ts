@@ -1,3 +1,4 @@
+// Verifies sessions_spawn model selection, thinking patching, and timeout defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -19,6 +20,7 @@ function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
 }
 
 function expectOkPlan(plan: SubagentModelPlan): OkSubagentModelPlan {
+  // Narrows the discriminated plan before checking the resolved patch details.
   expect(plan.status).toBe("ok");
   if (plan.status !== "ok") {
     throw new Error(`Expected ok plan, received ${plan.status}`);

@@ -1,3 +1,4 @@
+// TTS prepare text tests cover text cleanup before speech synthesis.
 import { describe, expect, it } from "vitest";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 

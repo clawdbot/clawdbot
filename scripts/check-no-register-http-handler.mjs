@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Blocks deprecated plugin `registerHttpHandler` callsites.
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
@@ -15,6 +16,9 @@ function isDeprecatedRegisterHttpHandlerCall(expression) {
   return ts.isPropertyAccessExpression(callee) && callee.name.text === "registerHttpHandler";
 }
 
+/**
+ * Finds deprecated `registerHttpHandler(...)` call lines.
+ */
 export function findDeprecatedRegisterHttpHandlerLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   return collectCallExpressionLines(ts, sourceFile, (node) =>
@@ -22,6 +26,9 @@ export function findDeprecatedRegisterHttpHandlerLines(content, fileName = "sour
   );
 }
 
+/**
+ * Runs the deprecated HTTP handler API guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

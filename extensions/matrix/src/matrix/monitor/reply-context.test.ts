@@ -1,3 +1,4 @@
+// Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixReplyContextResolver, summarizeMatrixReplyEvent } from "./reply-context.js";
 import { createPollStartEvent } from "./test-events.js";

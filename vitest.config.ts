@@ -1,3 +1,4 @@
+// Root Vitest config wires the repository Vitest project matrix.
 export {
   default,
   resolveDefaultVitestPool,

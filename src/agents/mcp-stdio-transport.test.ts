@@ -1,3 +1,4 @@
+// Exercises MCP stdio process lifecycle, JSON-RPC IO, and close escalation.
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -19,6 +20,8 @@ vi.mock("../process/kill-tree.js", () => ({
 }));
 
 class MockChildProcess extends EventEmitter {
+  // Minimal child-process surface needed by the transport: stdio streams,
+  // pid, and lifecycle events.
   exitCode: number | null = null;
   pid = 4321;
   stdin = new PassThrough();
@@ -35,6 +38,8 @@ describe("OpenClawStdioClientTransport", () => {
   });
 
   it("starts stdio MCP servers in a disposable process group on POSIX", async () => {
+    // Detached POSIX process groups let OpenClaw clean up child tool servers
+    // without relying on shell-specific process trees.
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
 
@@ -106,7 +111,8 @@ describe("OpenClawStdioClientTransport", () => {
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
     expect(signalProcessTreeMock).not.toHaveBeenCalled();
 
-    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs synchronously instead.
+    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs
+    // synchronously instead.
     await vi.advanceTimersByTimeAsync(2000);
     expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL");
 

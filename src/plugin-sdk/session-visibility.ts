@@ -1,3 +1,4 @@
+// Session visibility helpers decide which plugin sessions appear in user-facing lists.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,20 +19,25 @@ export const sessionVisibilityGatewayTesting = {
   },
 };
 
+/** Configured visibility mode for session tools and session-related commands. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
 
+/** Agent-to-agent access policy compiled from `tools.agentToAgent` config. */
 export type AgentToAgentPolicy = {
   enabled: boolean;
   matchesAllow: (agentId: string) => boolean;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
+/** Session operation whose visibility error copy should be rendered. */
 export type SessionAccessAction = "history" | "send" | "list" | "status";
 
+/** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
+/** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
 export type SessionVisibilityRow = {
   key: string;
   agentId?: string;
@@ -40,6 +46,7 @@ export type SessionVisibilityRow = {
   parentSessionKey?: string;
 };
 
+/** List sessions spawned by the requester through the gateway session list method. */
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
@@ -66,6 +73,7 @@ export async function listSpawnedSessionKeys(params: {
   }
 }
 
+/** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
@@ -76,6 +84,7 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
   return "tree";
 }
 
+/** Resolve visibility after applying sandbox clamps for spawned-session-only agents. */
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
   sandboxed: boolean;
@@ -91,6 +100,7 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   return visibility;
 }
 
+/** Resolve sandbox-specific session visibility clamp for agent defaults. */
 export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
@@ -159,6 +169,7 @@ function matchesCompiledWildcard(
   return true;
 }
 
+/** Compile agent-to-agent allow rules into reusable matching predicates. */
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
@@ -255,6 +266,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
 }
 
+/** Create a direct session-key visibility checker for one requester/action pair. */
 export function createSessionVisibilityChecker(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
@@ -289,6 +301,7 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
   );
 }
 
+/** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
@@ -360,6 +373,7 @@ export function createSessionVisibilityRowChecker(params: {
   return { check };
 }
 
+/** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;

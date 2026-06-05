@@ -1,3 +1,4 @@
+// Dependency Changes Report tests cover dependency changes report script behavior.
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,

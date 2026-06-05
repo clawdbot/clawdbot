@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.acp bindings plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());

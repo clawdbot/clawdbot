@@ -1,3 +1,4 @@
+// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";

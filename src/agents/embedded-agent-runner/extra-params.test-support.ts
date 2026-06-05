@@ -1,3 +1,4 @@
+// Shared harness for extra-params wrapper tests.
 import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
@@ -11,6 +12,8 @@ export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
 };
 
 function createMockStream(): ReturnType<StreamFn> {
+  // Minimal async stream surface for wrappers that decorate push/result/iterate
+  // behavior without needing a real model provider.
   return {
     push() {},
     async result() {
@@ -41,6 +44,8 @@ export function runExtraParamsCase<
   TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 >(params: RunExtraParamsCaseParams<TApi, TPayload>): ExtraParamsCapture<TPayload> {
+  // Capture both transport options and payload mutation, which are the two
+  // public effects of applyExtraParamsToAgent.
   const captured: ExtraParamsCapture<TPayload> = {
     payload: params.payload,
   };

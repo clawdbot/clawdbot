@@ -1,3 +1,4 @@
+// Logger browser import tests cover safe import behavior in browser-like runtimes.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements mock auth behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";

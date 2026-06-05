@@ -1,3 +1,4 @@
+// Browser tests cover plugin service plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config/config.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";

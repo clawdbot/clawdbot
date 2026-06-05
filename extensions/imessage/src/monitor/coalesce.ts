@@ -1,3 +1,4 @@
+// Imessage plugin module implements coalesce behavior.
 import type { IMessagePayload } from "./types.js";
 
 // Keep the coalescing contract narrow (caps, ID tracking, reply-context

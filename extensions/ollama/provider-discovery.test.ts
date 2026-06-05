@@ -1,3 +1,4 @@
+// Ollama tests cover provider discovery plugin behavior.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

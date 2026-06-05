@@ -1,3 +1,5 @@
+// Config patch tests cover control-UI config edits, secret-ref writes, auth
+// profile persistence, rate limiting, and session store side effects.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

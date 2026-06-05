@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements tool coverage report behavior.
 import {
   isRecord,
   normalizeOptionalString as readString,

@@ -1,3 +1,4 @@
+// Llm Task plugin module implements llm task tool behavior.
 import path from "node:path";
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import {

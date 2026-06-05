@@ -1,3 +1,6 @@
+/**
+ * Configures HTTP timeout defaults for embedded-agent attempt runtime calls.
+ */
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciDispatcherStreamTimeouts,

@@ -1,3 +1,5 @@
+// Sleep utility tests cover timer-safe delay clamping and abort-listener cleanup
+// for long-running agent waits.
 import { describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { sleep } from "./sleep.js";

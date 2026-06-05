@@ -1,3 +1,5 @@
+// Transcripts tool tests cover manual imports, live provider lifecycle, summary
+// artifacts, and date-qualified session selectors.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -101,6 +103,8 @@ describe("transcripts tool", () => {
   });
 
   it("bounds summary input while retaining the full transcript", async () => {
+    // Summary generation uses a bounded utterance window, but the durable JSONL
+    // transcript must retain every utterance.
     const stateDir = await makeStateDir();
     const { tool } = await createHarness(stateDir, { maxUtterances: 1 });
 
@@ -159,6 +163,8 @@ describe("transcripts tool", () => {
   });
 
   it("stops date-qualified active sessions with the canonical provider session id", async () => {
+    // Date-qualified selectors disambiguate storage paths; providers still own
+    // the original session id.
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => {
       await request.onUtterance({

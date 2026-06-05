@@ -1,3 +1,4 @@
+// Workboard type declarations define plugin contracts.
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",

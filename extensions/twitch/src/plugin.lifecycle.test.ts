@@ -1,3 +1,4 @@
+// Twitch tests cover plugin.lifecycle plugin behavior.
 import {
   createStartAccountContext,
   expectStopPendingUntilAbort,

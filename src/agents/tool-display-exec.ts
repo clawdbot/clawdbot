@@ -1,3 +1,8 @@
+/**
+ * Exec tool display summaries.
+ *
+ * Turns common shell commands into short redacted labels for tool timelines and transcripts.
+ */
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   binaryName,

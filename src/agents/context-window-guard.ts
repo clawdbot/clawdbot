@@ -1,9 +1,13 @@
+/**
+ * Resolves effective model context windows and formats guard warnings/blocks.
+ *
+ * Configured model values can cap provider metadata, and local endpoints get
+ * more actionable remediation text.
+ */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
-// Context-window resolution and guard messages. Configured model values can cap
-// provider metadata, and self-hosted endpoints get more actionable guidance.
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
 const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
@@ -120,6 +124,7 @@ function resolveContextWindowGuardHint(params: {
   };
 }
 
+/** Derive warning/block floors from the resolved model context window. */
 export function resolveContextWindowGuardThresholds(
   contextWindowTokens: number,
 ): ContextWindowGuardThresholds {

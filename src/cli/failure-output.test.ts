@@ -1,3 +1,4 @@
+// Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
 import { formatCliFailureLines } from "./failure-output.js";
 

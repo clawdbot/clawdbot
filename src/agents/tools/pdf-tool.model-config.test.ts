@@ -1,3 +1,5 @@
+// PDF model config tests cover provider precedence and fallback model selection
+// for PDF understanding tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
@@ -119,6 +121,8 @@ describe("resolvePdfModelConfigForTool", () => {
   });
 
   it("uses configured MiniMax chat models for PDF text extraction fallback", () => {
+    // MiniMax VLM models do not provide the text extraction fallback contract;
+    // choose configured chat-capable models instead.
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = {
       ...withDefaultModel("openai/gpt-5.4"),
@@ -149,6 +153,8 @@ describe("resolvePdfModelConfigForTool", () => {
   });
 
   it("preserves generic image provider precedence when the default model is not MiniMax", () => {
+    // MiniMax remains a fallback for PDF text extraction, but should not jump
+    // ahead of an authenticated generic image/PDF provider.
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = {

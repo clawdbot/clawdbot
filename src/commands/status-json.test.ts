@@ -1,3 +1,4 @@
+// Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { statusJsonCommand } from "./status-json.js";

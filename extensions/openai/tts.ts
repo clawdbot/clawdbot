@@ -1,3 +1,4 @@
+// Openai plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
   resolveProviderRequestHeaders,

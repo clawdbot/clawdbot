@@ -1,3 +1,5 @@
+// Tool loop detection tests cover repeated-call hashing, ping-pong detection,
+// unknown-tool thresholds, and circuit-breaker escalation.
 import { describe, expect, it } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
@@ -142,6 +144,8 @@ function recordSuccessfulPingPongCalls(params: {
   count: number;
   textAtIndex: (toolName: "read" | "list", index: number) => string;
 }) {
+  // Alternating successful calls with unchanged output exercise the ping-pong
+  // detector independently from same-tool repetition.
   for (let i = 0; i < params.count; i += 1) {
     if (i % 2 === 0) {
       recordSuccessfulCall(

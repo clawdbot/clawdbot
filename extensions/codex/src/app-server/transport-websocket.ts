@@ -1,9 +1,14 @@
+/**
+ * Adapts a remote Codex app-server WebSocket endpoint to the shared stdio-like
+ * transport interface.
+ */
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import WebSocket, { type RawData } from "ws";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
+/** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
   options: CodexAppServerStartOptions,
 ): CodexAppServerTransport {

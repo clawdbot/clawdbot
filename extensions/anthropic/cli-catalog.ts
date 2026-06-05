@@ -1,3 +1,7 @@
+/**
+ * Claude CLI model catalog entries. Subscription-backed CLI models use picker
+ * metadata and do not require API-key auth rows.
+ */
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
@@ -39,6 +43,7 @@ function extractClaudeCliModelIds(): string[] {
   return ids;
 }
 
+/** Build catalog entries for the default Claude CLI allowlist. */
 export function buildClaudeCliCatalogEntries(): ModelCatalogEntry[] {
   return extractClaudeCliModelIds().map((id) => {
     return {

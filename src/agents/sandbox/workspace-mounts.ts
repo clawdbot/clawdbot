@@ -1,3 +1,8 @@
+/**
+ * Sandbox workspace mount argument builder.
+ *
+ * Creates Docker bind specs for writable workspaces and read-only skill source mounts.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -5,9 +10,6 @@ import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
-/**
- * Builds Docker volume arguments for workspace and read-only skill mounts.
- */
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
 
 /** Read-only skill directory mounted from the agent workspace into the sandbox workspace. */

@@ -1,3 +1,4 @@
+// Discord tests cover gateway logging plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

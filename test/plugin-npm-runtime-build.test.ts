@@ -1,3 +1,4 @@
+// Plugin npm runtime build tests validate plugin runtime package builds.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

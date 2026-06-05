@@ -1,3 +1,4 @@
+// Voice Call tests cover manager.closed loop plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 

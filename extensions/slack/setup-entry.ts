@@ -1,3 +1,4 @@
+// Slack plugin module implements setup entry behavior.
 import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 import { registerSlackPluginHttpRoutes } from "./http-routes-api.js";
 

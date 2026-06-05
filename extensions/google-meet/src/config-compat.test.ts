@@ -1,3 +1,4 @@
+// Google Meet tests cover config compat plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

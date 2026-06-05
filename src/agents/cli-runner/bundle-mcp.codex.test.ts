@@ -1,3 +1,4 @@
+/** Tests Codex CLI bundle-MCP config override generation. */
 import { describe, expect, it } from "vitest";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
@@ -27,6 +28,8 @@ describe("prepareCliBundleMcpConfig codex", () => {
       },
     });
 
+    // Codex consumes MCP config through TOML-like -c overrides instead of a
+    // generated config file.
     expect(prepared.backend.args).toEqual([
       "exec",
       "--json",

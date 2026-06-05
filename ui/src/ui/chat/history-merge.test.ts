@@ -1,3 +1,4 @@
+// Control UI tests cover history merge behavior.
 import { describe, expect, it } from "vitest";
 import { preserveOptimisticTailMessages } from "../controllers/chat.ts";
 

@@ -1,3 +1,8 @@
+/**
+ * Core channel plugin public types.
+ *
+ * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
+ */
 import type { TSchema } from "typebox";
 import type {
   GatewayClientMode,

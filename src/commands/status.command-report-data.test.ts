@@ -1,3 +1,4 @@
+// Status command report data tests cover report data assembly from shared status fixtures.
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { createStatusCommandReportDataParams } from "./status.test-support.ts";

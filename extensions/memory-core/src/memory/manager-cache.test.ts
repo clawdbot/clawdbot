@@ -1,3 +1,4 @@
+// Memory Core tests cover manager cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeManagedCacheEntries,

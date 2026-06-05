@@ -1,3 +1,4 @@
+// Skill tool dispatch routes runtime skill tool calls through the active session context.
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,

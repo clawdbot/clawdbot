@@ -1,3 +1,4 @@
+/** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
 import {
@@ -152,6 +153,7 @@ export function buildAgentRunTerminalOutcome(
 }
 
 /** Builds a terminal outcome from a wait result, ignoring pending/unknown status. */
+/** Builds a terminal outcome from wait paths where status may still be pending/unknown. */
 export function buildAgentRunTerminalOutcomeFromWaitResult(
   wait: AgentRunTerminalWaitInput | undefined,
 ): AgentRunTerminalOutcome | undefined {
@@ -184,6 +186,7 @@ function completedBeforeOrAtTimeout(params: {
 }
 
 /** Merges terminal outcomes while preserving cancellation and hard-timeout ownership. */
+/** Merges later terminal observations without overwriting sticky cancellation/hard-timeout state. */
 export function mergeAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
   incoming: AgentRunTerminalOutcome,

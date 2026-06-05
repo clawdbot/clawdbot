@@ -235,6 +235,20 @@ import UIKit
         #expect(appModel.connectedGatewayID == second.stableID)
     }
 
+    @Test @MainActor func forcedReconnectResetClearsActiveGatewayLoopTasks() async {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+
+        appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig())
+        #expect(appModel._test_hasGatewayLoopTasks().node)
+        #expect(appModel._test_hasGatewayLoopTasks().operator)
+
+        await appModel.resetGatewaySessionsForForcedReconnect()
+
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+        #expect(!appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {

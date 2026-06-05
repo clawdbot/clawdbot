@@ -1,3 +1,4 @@
+// Msteams plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,

@@ -1,9 +1,11 @@
+/**
+ * Runtime matcher for sandbox tool policies. Deny patterns always win, then
+ * an empty allow list means "allow everything not denied".
+ */
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-// Runtime matcher for sandbox tool policies. Deny patterns always win, then an
-// empty allow list means "allow everything not denied".
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),

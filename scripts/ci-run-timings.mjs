@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
@@ -46,6 +47,9 @@ function normalizeRunJob(job) {
   };
 }
 
+/**
+ * Flattens paginated GitHub run job responses.
+ */
 export function collectRunJobsFromPages(pages) {
   return pages.flatMap((page) => (Array.isArray(page.jobs) ? page.jobs.map(normalizeRunJob) : []));
 }
@@ -118,6 +122,9 @@ function collectRunTimingContext(run) {
   return { created, jobs, updated };
 }
 
+/**
+ * Summarizes longest jobs and total timing for a workflow run.
+ */
 export function summarizeRunTimings(run, limit = 15) {
   const { created, jobs, updated } = collectRunTimingContext(run);
   const byDuration = [...jobs]
@@ -142,6 +149,9 @@ export function summarizeRunTimings(run, limit = 15) {
   };
 }
 
+/**
+ * Summarizes pnpm store warmup overlap near run start.
+ */
 export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   const { jobs } = collectRunTimingContext(run);
   const preflight = jobs.find((job) => job.name === "preflight");
@@ -182,6 +192,9 @@ export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
   };
 }
 
+/**
+ * Selects the latest main push CI run, optionally matching a head SHA.
+ */
 export function selectLatestMainPushCiRun(runs, headSha = null) {
   const pushRuns = runs.filter((run) => run.event === "push");
   if (headSha) {
@@ -337,6 +350,9 @@ function printSection(title, jobs, metric) {
   }
 }
 
+/**
+ * Parses CI run timing CLI arguments.
+ */
 export function parseRunTimingArgs(args) {
   let explicitRunId;
   let limit = 15;

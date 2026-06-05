@@ -1,3 +1,5 @@
+// PDF tool helper tests cover page ranges, PDF input normalization, provider
+// capability checks, and assistant text coercion.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -87,6 +89,8 @@ describe("parsePageRange", () => {
 
 describe("providerSupportsNativePdf", () => {
   it("returns true for anthropic", () => {
+    // Native PDF support is derived from plugin metadata, not a hard-coded
+    // provider allowlist in the helper.
     expect(providerSupportsNativePdf("anthropic")).toBe(true);
   });
 
@@ -114,6 +118,8 @@ describe("pdf-tool.helpers", () => {
   });
 
   it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
+    // `pdf` and `pdfs` are both public inputs; normalize them to one ordered
+    // list before any filesystem or provider work begins.
     expect(
       resolvePdfInputs({
         pdf: " /tmp/nonexistent.pdf ",

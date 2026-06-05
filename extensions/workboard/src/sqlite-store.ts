@@ -1,3 +1,4 @@
+// Workboard plugin module implements sqlite store behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";

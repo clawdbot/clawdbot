@@ -1,3 +1,4 @@
+// Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,

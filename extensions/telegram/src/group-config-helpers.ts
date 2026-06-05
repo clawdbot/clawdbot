@@ -1,3 +1,4 @@
+// Telegram helper module supports group config helpers behavior.
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,

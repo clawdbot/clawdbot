@@ -1,3 +1,4 @@
+// Slack tests cover prepare.thread session key plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,

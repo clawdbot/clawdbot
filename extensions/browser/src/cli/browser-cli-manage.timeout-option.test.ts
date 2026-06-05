@@ -1,3 +1,4 @@
+// Browser tests cover browser cli manage.timeout option plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,

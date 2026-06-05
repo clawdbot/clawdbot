@@ -1,3 +1,8 @@
+/**
+ * Exec approval request client.
+ * Registers two-phase approval requests with the gateway, waits for decisions,
+ * and builds host/node payloads with optional command highlighting.
+ */
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -36,6 +41,7 @@ function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpans
   return execApprovalCommandSpansRuntimePromise;
 }
 
+/** Gateway payload fields used to register or wait for an exec approval decision. */
 export type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
@@ -118,12 +124,14 @@ function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
 
+/** Registration result returned before an approval decision is available. */
 export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
   finalDecision?: string | null;
 };
 
+/** Registers a two-phase exec approval request with the gateway. */
 export async function registerExecApprovalRequest(
   params: RequestExecApprovalDecisionParams,
 ): Promise<ExecApprovalRegistration> {
@@ -145,6 +153,7 @@ export async function registerExecApprovalRequest(
   return { id, expiresAtMs };
 }
 
+/** Waits for a registered approval decision, returning null when it expires. */
 export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
@@ -163,6 +172,7 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
   }
 }
 
+/** Uses a pre-resolved decision or waits for the registered approval id. */
 export async function resolveRegisteredExecApprovalDecision(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
@@ -173,6 +183,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   return await waitForExecApprovalDecision(params.approvalId);
 }
 
+/** Registers an approval request and waits unless the gateway returned a final decision. */
 export async function requestExecApprovalDecision(
   params: RequestExecApprovalDecisionParams,
 ): Promise<string | null> {
@@ -213,6 +224,7 @@ type ExecApprovalRequesterContext = {
   sessionKey?: string;
 };
 
+/** Builds requester identity context for an approval payload. */
 export function buildExecApprovalRequesterContext(params: ExecApprovalRequesterContext): {
   agentId?: string;
   sessionKey?: string;
@@ -230,6 +242,7 @@ type ExecApprovalTurnSourceContext = {
   turnSourceThreadId?: string | number;
 };
 
+/** Builds originating channel context for approval delivery/routing. */
 export function buildExecApprovalTurnSourceContext(
   params: ExecApprovalTurnSourceContext,
 ): ExecApprovalTurnSourceContext {
@@ -313,18 +326,21 @@ async function buildHostApprovalDecisionParams(
   };
 }
 
+/** Requests and waits for an approval decision for host/node exec. */
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
   return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
 }
 
+/** Registers a host/node approval request without waiting for a decision. */
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
 }
 
+/** Registers a host/node approval request and wraps failures for exec callers. */
 export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {

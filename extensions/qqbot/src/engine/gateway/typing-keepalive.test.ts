@@ -1,3 +1,4 @@
+// Qqbot tests cover typing keepalive plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypingKeepAlive, TYPING_INPUT_SECOND, TYPING_RENEWAL_LIMIT } from "./typing-keepalive.js";
 

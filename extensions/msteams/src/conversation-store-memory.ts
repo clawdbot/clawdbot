@@ -1,3 +1,4 @@
+// Msteams plugin module implements conversation store memory behavior.
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,

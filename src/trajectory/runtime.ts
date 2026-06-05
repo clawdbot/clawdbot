@@ -1,3 +1,4 @@
+// Trajectory runtime records runtime events into trajectory log files.
 import fs from "node:fs";
 import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";

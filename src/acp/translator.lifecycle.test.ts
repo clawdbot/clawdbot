@@ -1,3 +1,4 @@
+/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
 import type {
   CloseSessionRequest,
   InitializeRequest,

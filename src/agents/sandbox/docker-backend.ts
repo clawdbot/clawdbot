@@ -1,3 +1,8 @@
+/**
+ * Docker sandbox backend implementation.
+ *
+ * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
+ */
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {

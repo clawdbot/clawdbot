@@ -1,3 +1,8 @@
+/**
+ * Effective tool inventory contract types.
+ * Shared by agent/session tool inventory resolvers and UI/API callers that
+ * present enabled tools grouped by source.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 

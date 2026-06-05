@@ -1,3 +1,7 @@
+/**
+ * Result-shaping helpers for Codex app-server attempt terminal text, replay
+ * safety, startup failures, and malformed image errors.
+ */
 import type {
   AgentMessage,
   EmbeddedRunAttemptParams,
@@ -10,16 +14,22 @@ const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 
+/** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
 }
 
+/** Returns whether attempt metadata saw potential side effects. */
 export function hasCodexAppServerPotentialSideEffectEvidence(
   result: EmbeddedRunAttemptResult,
 ): boolean {
   return result.replayMetadata.hadPotentialSideEffects;
 }
 
+/**
+ * Builds the user-facing timeout outcome when Codex stops without a terminal
+ * turn event.
+ */
 export function buildCodexAppServerPromptTimeoutOutcome(params: {
   result: EmbeddedRunAttemptResult;
   turnCompletionIdleTimedOut: boolean;
@@ -49,6 +59,7 @@ export function buildCodexAppServerPromptTimeoutOutcome(params: {
   };
 }
 
+/** Explains why an incomplete app-server turn cannot be safely replayed. */
 export function resolveCodexAppServerReplayBlockedReason(
   result: EmbeddedRunAttemptResult,
 ):
@@ -74,6 +85,7 @@ export function resolveCodexAppServerReplayBlockedReason(
   return undefined;
 }
 
+/** Builds an attempt result for failures before the app-server turn starts. */
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
@@ -113,6 +125,7 @@ export function buildCodexTurnStartFailureResult(params: {
   };
 }
 
+/** Detects app-server errors caused by invalid image payload data. */
 export function isInvalidCodexImagePayloadError(message: unknown): boolean {
   if (typeof message !== "string" || !message.trim()) {
     return false;

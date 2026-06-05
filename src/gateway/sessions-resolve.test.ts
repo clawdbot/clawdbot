@@ -1,3 +1,5 @@
+// Session resolve tests cover canonical/legacy key lookup, store migration,
+// agent scoping, listed-session selection, and protocol error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";

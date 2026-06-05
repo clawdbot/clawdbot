@@ -1,3 +1,4 @@
+// Bench Gateway Startup script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";

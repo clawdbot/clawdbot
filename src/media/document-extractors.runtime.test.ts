@@ -1,3 +1,4 @@
+// Document extractor runtime tests cover lazy document extraction adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePluginDocumentExtractorsMock } = vi.hoisted(() => ({

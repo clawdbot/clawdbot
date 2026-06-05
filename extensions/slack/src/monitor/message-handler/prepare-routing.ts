@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare routing behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,

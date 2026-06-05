@@ -1,8 +1,9 @@
-import type { ChannelPairingAdapter } from "./types.adapters.js";
-
 /**
- * Shared pairing adapter helpers for channel SDK/runtime facades.
+ * Channel pairing adapter helpers.
+ *
+ * Creates prefix-stripping normalizers and logged/text pairing approval notifiers.
  */
+import type { ChannelPairingAdapter } from "./types.adapters.js";
 
 type PairingNotifyParams = Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0];
 

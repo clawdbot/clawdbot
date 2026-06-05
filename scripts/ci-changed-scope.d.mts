@@ -15,7 +15,12 @@ export type InstallSmokeScope = {
 
 export function detectChangedScope(changedPaths: string[]): ChangedScope;
 export function detectInstallSmokeScope(changedPaths: string[]): InstallSmokeScope;
-export function listChangedPaths(base: string, head?: string): string[];
+export function listChangedPaths(
+  base: string,
+  head?: string,
+  cwd?: string,
+  preferMergeHeadFirstParent?: boolean,
+): string[];
 export function writeGitHubOutput(
   scope: ChangedScope,
   outputPath?: string,

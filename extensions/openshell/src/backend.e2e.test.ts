@@ -1,3 +1,4 @@
+// Openshell tests cover backend plugin behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";

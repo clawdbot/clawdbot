@@ -1,3 +1,4 @@
+// Workboard API module exposes the plugin public contract.
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,

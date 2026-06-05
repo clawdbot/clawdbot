@@ -1,3 +1,5 @@
+// Syntax highlight tests cover the lazy highlight.js integration and theme
+// callback rendering used by interactive output.
 import { describe, expect, it } from "vitest";
 import { highlight, supportsLanguage } from "./syntax-highlight.js";
 

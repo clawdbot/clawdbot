@@ -1,3 +1,5 @@
+// Delivery queue storage persists replayable outbound send intents and tracks
+// platform-send recovery state in the shared SQLite queue.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";

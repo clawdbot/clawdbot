@@ -1,3 +1,4 @@
+// Memory Host SDK helper module supports config utils behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -90,6 +91,7 @@ export type MemoryQmdConfig = {
   command?: string;
   mcporter?: MemoryQmdMcporterConfig;
   searchMode?: MemoryQmdSearchMode;
+  rerank?: boolean;
   searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];

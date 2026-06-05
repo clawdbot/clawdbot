@@ -1,3 +1,4 @@
+// Cron list pagination tests cover stable sorting and page boundary guards.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

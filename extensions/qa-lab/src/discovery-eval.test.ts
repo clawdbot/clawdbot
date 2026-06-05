@@ -1,3 +1,4 @@
+// Qa Lab tests cover discovery eval plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasDiscoveryLabels,

@@ -1,3 +1,5 @@
+// Shared target-resolution fixtures cover plugin defaults, allowlists, prefix
+// errors, WebChat rejection, and missing-target hints.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOutboundTarget } from "./targets.js";

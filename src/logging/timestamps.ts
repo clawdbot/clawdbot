@@ -1,3 +1,4 @@
+// Timestamp helpers validate time zones and format log timestamps.
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;

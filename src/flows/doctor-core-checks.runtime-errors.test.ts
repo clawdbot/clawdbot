@@ -1,3 +1,4 @@
+// Doctor runtime error tests cover error handling in core runtime checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { setPluginToolMeta } from "../plugins/tools.js";

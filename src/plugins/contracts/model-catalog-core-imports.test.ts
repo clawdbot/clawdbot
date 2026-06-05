@@ -1,3 +1,4 @@
+// Model catalog core import tests cover allowed model-catalog imports in plugin code.
 import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";

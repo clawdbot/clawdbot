@@ -1,3 +1,4 @@
+// Dependency Guard Script tests cover dependency guard script script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,

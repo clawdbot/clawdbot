@@ -1,3 +1,7 @@
+/**
+ * Builds Codex app-server prompt context, workspace bootstrap injections,
+ * system-prompt reports, and context-engine projection decisions.
+ */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -51,6 +55,7 @@ type CodexBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+/** System prompt accounting report attached to Codex attempt results. */
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
@@ -69,6 +74,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   heartbeatCollaborationInstructions?: string;
 };
 
+/** Reads mirrored Codex session history for harness hooks. */
 export async function readMirroredSessionHistoryMessages(
   sessionFile: string,
 ): Promise<AgentMessage[] | undefined> {
@@ -81,6 +87,7 @@ export async function readMirroredSessionHistoryMessages(
   return messages;
 }
 
+/** Reads a valid thread-bootstrap projection request from context-engine output. */
 export function readContextEngineThreadBootstrapProjection(
   projection: ContextEngineProjection | undefined,
 ): CodexContextEngineThreadBootstrapProjection | undefined {
@@ -102,6 +109,10 @@ export function readContextEngineThreadBootstrapProjection(
   };
 }
 
+/**
+ * Decides whether an existing Codex thread can reuse its context-engine
+ * bootstrap projection or must be reprojected.
+ */
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
@@ -140,6 +151,10 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     : { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
+/**
+ * Loads workspace bootstrap files and partitions them into Codex-native prompt,
+ * developer-instruction, heartbeat, and memory-tool contexts.
+ */
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -156,6 +171,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         agentId: params.params.agentId ?? params.sessionAgentId,
         workspaceDir: params.effectiveWorkspace,
       });
+    // Native Codex turns should read workspace MEMORY.md through tools when
+    // possible; pasting it into every prompt turns durable memory into policy.
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -246,6 +263,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   }
 }
 
+/**
+ * Builds the prompt-size, bootstrap-file, skill, and tool-schema accounting
+ * report for a Codex run.
+ */
 export function buildCodexSystemPromptReport(params: {
   attempt: EmbeddedRunAttemptParams;
   sessionKey: string;
@@ -485,6 +506,9 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+/**
+ * Builds OpenClaw-provided workspace prompt context for the current Codex turn.
+ */
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
   workspacePromptContext?: string;
@@ -516,6 +540,7 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
+/** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
 export function renderCodexSkillsCollaborationInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
@@ -528,6 +553,10 @@ export function renderCodexSkillsCollaborationInstructions(params: {
     : undefined;
 }
 
+/**
+ * Prepends OpenClaw context while preserving leading delivery metadata as
+ * routing guidance instead of user request text.
+ */
 export function prependCodexOpenClawPromptContext(
   prompt: string,
   context: string | undefined,
@@ -566,6 +595,8 @@ function splitLeadingCodexDeliveryHint(prompt: string): {
   if (!matchedHint) {
     return { prompt };
   }
+  // Delivery hints are runtime routing metadata; split them before wrapping the
+  // user prompt so Codex does not treat delivery policy as the request itself.
   const remainder = trimmedStart
     .slice(matchedHint.length)
     .replace(/^\s*\n/, "")
@@ -748,6 +779,10 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
     .toSorted(compareCodexBootstrapFiles);
 }
 
+/**
+ * Renders a memory-file reference that points Codex at memory tools instead of
+ * embedding MEMORY.md contents.
+ */
 export function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
@@ -770,10 +805,12 @@ export function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
+/** Returns whether the current dynamic tool list can serve workspace memory. */
 export function hasCodexWorkspaceMemoryTools(tools: readonly { name: string }[]): boolean {
   return getCodexWorkspaceMemoryToolNames(tools).length > 0;
 }
 
+/** Lists available memory tool names understood by Codex workspace memory routing. */
 export function getCodexWorkspaceMemoryToolNames(tools: readonly { name: string }[]): string[] {
   const availableToolNames = new Set(tools.map((tool) => normalizeCodexDynamicToolName(tool.name)));
   return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
@@ -845,6 +882,10 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
 
+/**
+ * Remaps bootstrap file paths from the resolved workspace to the effective Codex
+ * workspace while preserving platform path separators.
+ */
 export function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;

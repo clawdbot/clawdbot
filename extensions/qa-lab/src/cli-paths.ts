@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements cli paths behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";

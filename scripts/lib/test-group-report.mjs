@@ -1,3 +1,4 @@
+// Builds grouped Vitest timing reports and comparisons for CI/test analysis.
 import path from "node:path";
 import {
   collectVitestAssertionDurations,
@@ -6,6 +7,9 @@ import {
 } from "../test-report-utils.mjs";
 import { formatMs } from "./vitest-report-cli-utils.mjs";
 
+/**
+ * Formats byte counts as megabytes, preserving missing RSS values as `n/a`.
+ */
 export function formatBytesAsMb(valueBytes) {
   return valueBytes === null || valueBytes === undefined
     ? "n/a"
@@ -22,10 +26,16 @@ function formatSignedBytesAsMb(valueBytes) {
     : `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
 }
 
+/**
+ * Shortens a Vitest config path into the label used by timing reports.
+ */
 export function normalizeConfigLabel(config) {
   return config.replace(/^test\/vitest\/vitest\./u, "").replace(/\.config\.ts$/u, "");
 }
 
+/**
+ * Derives a top-level test area from a repo-relative file path.
+ */
 export function resolveTestArea(file) {
   const normalized = normalizeTrackedRepoPath(file);
   const parts = normalized.split("/");
@@ -59,6 +69,9 @@ function resolveTestFolder(file, depth = 2) {
   return dir.split("/").slice(0, Math.max(1, depth)).join("/");
 }
 
+/**
+ * Derives the grouping key for area, folder, or top-level reports.
+ */
 export function resolveGroupKey(file, mode = "area") {
   if (mode === "folder") {
     return resolveTestFolder(file, 3);
@@ -96,6 +109,9 @@ function finalizeCounter(counter) {
   };
 }
 
+/**
+ * Aggregates Vitest report files into grouped timing counters and slow tests.
+ */
 export function buildGroupedTestReport(params) {
   const byGroup = new Map();
   const byConfig = new Map();
@@ -328,6 +344,9 @@ function compareRuns(beforeRuns = [], afterRuns = []) {
     });
 }
 
+/**
+ * Compares baseline and current grouped test reports.
+ */
 export function buildGroupedTestComparison(params) {
   const before = params.before;
   const after = params.after;
@@ -415,6 +434,9 @@ function pushFileChangeRows(lines, entries, options) {
   }
 }
 
+/**
+ * Renders a grouped test comparison as CLI-friendly text.
+ */
 export function renderGroupedTestComparison(comparison, options = {}) {
   const limit = options.limit ?? 25;
   const topFiles = options.topFiles ?? 25;
@@ -471,6 +493,9 @@ export function renderGroupedTestComparison(comparison, options = {}) {
   return lines.join("\n");
 }
 
+/**
+ * Renders a grouped test report as CLI-friendly text.
+ */
 export function renderGroupedTestReport(report, options = {}) {
   const limit = options.limit ?? 25;
   const topFiles = options.topFiles ?? 25;

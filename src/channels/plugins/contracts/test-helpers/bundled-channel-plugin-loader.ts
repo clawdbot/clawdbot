@@ -1,3 +1,8 @@
+/**
+ * Bundled channel plugin contract loader.
+ *
+ * Loads public plugin surfaces and directory contract artifacts without reaching into private sources.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,14 +14,15 @@ import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } fro
 import type { ChannelId } from "../../channel-id.types.js";
 import type { ChannelPlugin } from "../../types.js";
 
-// Loads bundled channel plugin public surfaces for core contract tests without
-// reaching into extension-private source paths.
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;
 
 const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
 const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();
-const channelDirectoryPluginCache = new Map<ChannelId, Pick<ChannelPlugin, "id" | "directory"> | null>();
+const channelDirectoryPluginCache = new Map<
+  ChannelId,
+  Pick<ChannelPlugin, "id" | "directory"> | null
+>();
 const channelDirectoryPluginPromiseCache = new Map<
   ChannelId,
   Promise<Pick<ChannelPlugin, "id" | "directory"> | null>
@@ -172,7 +178,8 @@ async function importBundledChannelDirectoryContractSourceSurface(
 function isMissingBundledDirectoryContractArtifact(error: unknown, id: ChannelId): boolean {
   return (
     error instanceof Error &&
-    error.message === `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
+    error.message ===
+      `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
   );
 }
 

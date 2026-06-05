@@ -1,3 +1,4 @@
+// Qwen plugin module implements model definitions behavior.
 export {
   buildQwenDefaultModelDefinition,
   buildQwenModelDefinition,

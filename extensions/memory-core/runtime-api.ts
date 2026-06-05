@@ -1,3 +1,4 @@
+// Memory Core API module exposes the plugin public contract.
 export { getMemorySearchManager, MemoryIndexManager } from "./src/memory/index.js";
 export { memoryRuntime } from "./src/runtime-provider.js";
 export {

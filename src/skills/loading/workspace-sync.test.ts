@@ -1,3 +1,4 @@
+// Workspace sync tests cover skill synchronization between workspace and runtime state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Plugin Clawhub Release Check script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import {

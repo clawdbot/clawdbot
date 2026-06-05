@@ -1,3 +1,5 @@
+// noVNC auth tests cover observer URL construction, one-time tokens, and
+// password generation for sandbox browser viewing.
 import { describe, expect, it } from "vitest";
 import {
   buildNoVncDirectUrl,
@@ -24,6 +26,8 @@ describe("noVNC auth helpers", () => {
   });
 
   it("issues one-time short-lived observer tokens", () => {
+    // Observer tokens are bearer access to a browser session, so consumption is
+    // one-shot and bounded by a short TTL.
     resetNoVncObserverTokensForTests();
     const token = issueNoVncObserverToken({
       noVncPort: 50123,

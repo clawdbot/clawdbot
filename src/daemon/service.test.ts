@@ -1,3 +1,4 @@
+// Daemon service tests cover service install, start, stop, and status flows.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

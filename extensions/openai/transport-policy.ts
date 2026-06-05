@@ -1,3 +1,4 @@
+// Openai plugin module implements transport policy behavior.
 import type {
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,

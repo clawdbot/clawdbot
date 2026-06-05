@@ -1,3 +1,4 @@
+// Codex tests cover manifest plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION } from "./app-server/version.js";

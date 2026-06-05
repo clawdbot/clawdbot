@@ -1,3 +1,4 @@
+// Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _teamGroupIdCacheForTest,

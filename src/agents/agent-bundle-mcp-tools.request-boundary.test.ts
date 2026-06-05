@@ -1,3 +1,4 @@
+/** Tests configured MCP tools survive policy/splitting to the outbound request boundary. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

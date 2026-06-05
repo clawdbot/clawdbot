@@ -1,3 +1,4 @@
+// Fal provider module implements model/runtime integration.
 import {
   downloadGeneratedMusicAsset,
   extractGeneratedMusicFileCandidates,

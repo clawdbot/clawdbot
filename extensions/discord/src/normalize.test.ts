@@ -1,3 +1,4 @@
+// Discord tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   looksLikeDiscordTargetId,

@@ -1,3 +1,4 @@
+// Whatsapp tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildWhatsAppApprovalReactionHint,

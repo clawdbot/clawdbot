@@ -1,3 +1,4 @@
+// Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
 
 // Guarded Twilio REST API client helpers.

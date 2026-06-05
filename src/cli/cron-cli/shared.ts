@@ -1,3 +1,4 @@
+// Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -101,6 +102,7 @@ export function handleCronCliError(err: unknown) {
 }
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
+  // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
       enabled?: boolean;

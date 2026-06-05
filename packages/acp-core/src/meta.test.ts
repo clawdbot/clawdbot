@@ -1,3 +1,4 @@
+// ACP Core tests cover meta behavior.
 import { describe, expect, it } from "vitest";
 import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 

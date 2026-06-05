@@ -1,3 +1,4 @@
+// Check Deadcode Unused Files tests cover check deadcode unused files script behavior.
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";

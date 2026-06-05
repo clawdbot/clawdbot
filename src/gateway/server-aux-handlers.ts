@@ -1,3 +1,5 @@
+// Gateway auxiliary method handlers.
+// Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
@@ -59,6 +61,7 @@ function createLazyHandler(
   };
 }
 
+/** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
   activateRuntimeSecrets: ActivateRuntimeSecrets;

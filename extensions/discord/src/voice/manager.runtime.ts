@@ -1,3 +1,4 @@
+// Discord plugin module implements manager behavior.
 import {
   DiscordVoiceManager as DiscordVoiceManagerImpl,
   DiscordVoiceReadyListener as DiscordVoiceReadyListenerImpl,

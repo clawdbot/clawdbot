@@ -1,3 +1,5 @@
+// Resolves Docker upgrade-survivor baseline specs from requested tokens and
+// live release history JSON captured by release workflows.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
@@ -101,6 +103,9 @@ function readStableReleases(file, publishedVersions) {
     .toSorted((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
 }
 
+/**
+ * Expands the release-history token into recent stable plus pinned historical baselines.
+ */
 export function resolveReleaseHistory(args) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -128,6 +133,9 @@ export function resolveReleaseHistory(args) {
   return dedupeSpecs(versions);
 }
 
+/**
+ * Resolves the last N stable release versions from release metadata.
+ */
 export function resolveLastStable(args, count) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -141,6 +149,9 @@ export function resolveLastStable(args, count) {
   return dedupeSpecs(releases.slice(0, count).map((release) => release.version));
 }
 
+/**
+ * Resolves all stable release versions at or after the requested minimum.
+ */
 export function resolveAllSince(args, minimumVersion) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -155,6 +166,9 @@ export function resolveAllSince(args, minimumVersion) {
   );
 }
 
+/**
+ * Expands requested baseline tokens into normalized package/version specs.
+ */
 export function resolveBaselines(args) {
   const requested = args.get("requested") ?? "";
   const fallback = args.get("fallback") ?? "openclaw@latest";

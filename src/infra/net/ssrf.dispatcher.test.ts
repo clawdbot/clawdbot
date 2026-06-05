@@ -1,3 +1,5 @@
+// Pinned dispatcher tests cover undici family policy, pinned lookup injection,
+// timeout propagation, and proxy dispatcher construction.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 

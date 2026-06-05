@@ -1,3 +1,4 @@
+// Doctor state migration tests cover legacy state moves, archive markers, and repair behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

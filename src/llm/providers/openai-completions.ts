@@ -1,3 +1,4 @@
+// OpenAI completions provider adapts chat completions to the agent runtime.
 import OpenAI from "openai";
 import type {
   ChatCompletionAssistantMessageParam,

@@ -1,3 +1,4 @@
+// Matrix helper module supports test helpers behavior.
 import fs from "node:fs";
 import path from "node:path";
 

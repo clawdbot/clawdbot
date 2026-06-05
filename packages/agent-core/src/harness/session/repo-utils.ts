@@ -1,3 +1,4 @@
+// Agent Core helper module supports repo utils behavior.
 import {
   type FileError,
   type Result,

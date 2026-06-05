@@ -1,3 +1,5 @@
+// CLI backend live probe helpers run cron/MCP/image probes through the gateway
+// CLI backend and poll for externally visible live results.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";

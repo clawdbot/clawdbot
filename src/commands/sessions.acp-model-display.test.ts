@@ -1,3 +1,4 @@
+// Sessions ACP model display tests cover model metadata rendering for ACP-backed sessions.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

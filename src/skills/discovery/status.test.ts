@@ -1,3 +1,4 @@
+// Skill status tests cover discovery summaries for installed and workspace skills.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

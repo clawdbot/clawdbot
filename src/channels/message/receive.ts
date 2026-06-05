@@ -1,3 +1,8 @@
+/**
+ * Channel message receive acknowledgement context.
+ *
+ * Models ack/nack policy and idempotent receive state transitions for inbound events.
+ */
 import type { ChannelMessageReceiveAckPolicy } from "./types.js";
 
 /** Public alias for channel receive acknowledgement policy names. */

@@ -1,3 +1,4 @@
+// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
@@ -14,10 +15,12 @@ import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
+/** Optional provider stream decorator factory used by shared provider wrappers. */
 export type ProviderStreamWrapperFactory =
   /** Wrapper factory that can decorate, replace, or omit a provider stream function. */
   ((streamFn: StreamFn | undefined) => StreamFn | undefined) | null | undefined | false;
 
+/** Compose stream wrapper factories from left to right around a base stream function. */
 export function composeProviderStreamWrappers(
   /** Base provider stream function to pass through the wrapper chain. */
   baseStreamFn: StreamFn | undefined,
@@ -234,6 +237,7 @@ export function defaultToolStreamExtraParams(
   };
 }
 
+/** Wrap a provider stream so callers can patch the outbound provider payload once. */
 export function createPayloadPatchStreamWrapper(
   /** Provider stream function whose outbound payload should be patched. */
   baseStreamFn: StreamFn | undefined,

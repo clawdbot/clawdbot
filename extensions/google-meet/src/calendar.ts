@@ -1,3 +1,4 @@
+// Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 

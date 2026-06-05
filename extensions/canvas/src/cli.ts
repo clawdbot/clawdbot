@@ -1,3 +1,6 @@
+/**
+ * Canvas node CLI command registration and runtime dependency wiring.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
@@ -21,6 +24,7 @@ import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
+/** Runtime output surface used by Canvas CLI commands. */
 export type CanvasCliRuntime = {
   log: (message: string) => void;
   error: (message: string) => void;
@@ -28,6 +32,7 @@ export type CanvasCliRuntime = {
   writeJson: (value: unknown) => void;
 };
 
+/** Parent node/gateway options consumed by Canvas CLI commands. */
 export type CanvasNodesRpcOpts = {
   url?: string;
   token?: string;
@@ -48,6 +53,7 @@ export type CanvasNodesRpcOpts = {
   quality?: string;
 };
 
+/** Dependency bundle used to keep Canvas CLI commands testable. */
 export type CanvasCliDependencies = {
   defaultRuntime: CanvasCliRuntime;
   nodesCallOpts: (cmd: Command, defaults?: { timeoutMs?: number }) => Command;
@@ -173,6 +179,7 @@ function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Creates the default Canvas CLI dependency bundle backed by the OpenClaw gateway CLI. */
 export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
   const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     cmd
@@ -252,6 +259,7 @@ async function invokeCanvas(
   );
 }
 
+/** Registers Canvas subcommands under the nodes CLI command group. */
 export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDependencies) {
   const canvas = nodes
     .command("canvas")

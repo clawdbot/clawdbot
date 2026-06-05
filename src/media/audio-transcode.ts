@@ -1,3 +1,4 @@
+// Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";

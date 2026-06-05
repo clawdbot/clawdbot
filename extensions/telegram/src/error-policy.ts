@@ -1,3 +1,4 @@
+// Telegram plugin module implements error policy behavior.
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,

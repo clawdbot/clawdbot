@@ -1,3 +1,4 @@
+// Markdown Core tests cover tables behavior.
 import { describe, expect, it } from "vitest";
 import { convertMarkdownTables } from "./tables.js";
 

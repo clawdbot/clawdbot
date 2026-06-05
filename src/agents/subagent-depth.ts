@@ -1,3 +1,8 @@
+/**
+ * Subagent spawn-depth lookup helpers.
+ *
+ * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
+ */
 import fs from "node:fs";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

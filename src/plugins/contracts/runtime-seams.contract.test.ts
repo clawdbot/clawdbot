@@ -1,3 +1,4 @@
+// Runtime seam contract tests cover allowed plugin runtime entrypoints and import boundaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

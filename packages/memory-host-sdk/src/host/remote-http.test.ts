@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover remote http behavior.
 import { describe, expect, it } from "vitest";
 import { MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE, withRemoteHttpResponse } from "./remote-http.js";
 

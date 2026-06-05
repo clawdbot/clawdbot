@@ -1,3 +1,5 @@
+// Gateway agent integration tests cover channel routing, session context,
+// WebSocket requests, agent event delivery, and provider/runtime error handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

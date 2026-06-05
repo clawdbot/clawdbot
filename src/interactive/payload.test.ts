@@ -1,3 +1,4 @@
+// Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
 import {
   hasReplyChannelData,

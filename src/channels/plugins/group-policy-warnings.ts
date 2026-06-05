@@ -1,3 +1,8 @@
+/**
+ * Channel group-policy warning collectors.
+ *
+ * Composes warning helpers for default, allowlist, and open-provider group policy states.
+ */
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,

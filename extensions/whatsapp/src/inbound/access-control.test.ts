@@ -1,3 +1,4 @@
+// Whatsapp tests cover access control plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   readAllowFromStoreMock,

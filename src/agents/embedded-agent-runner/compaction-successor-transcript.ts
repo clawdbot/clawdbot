@@ -1,3 +1,6 @@
+/**
+ * Rotates compacted sessions into successor transcript files when configured.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
@@ -5,6 +8,7 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
+import { stripThinkingSignaturesFromMessage } from "./thinking.js";
 import {
   readTranscriptFileState,
   TranscriptFileState,
@@ -113,15 +117,21 @@ function buildSuccessorEntries(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
 
   const summarizedBranchIds = new Set<string>();
+  const preCompactionKeptBranchIds = new Set<string>();
+  let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = branch[index];
     if (!entry) {
       continue;
     }
     if (compaction.firstKeptEntryId && entry.id === compaction.firstKeptEntryId) {
-      break;
+      foundFirstKept = true;
     }
-    summarizedBranchIds.add(entry.id);
+    if (foundFirstKept) {
+      preCompactionKeptBranchIds.add(entry.id);
+    } else {
+      summarizedBranchIds.add(entry.id);
+    }
   }
 
   const latestStateEntryIds = collectLatestStateEntryIds(branch.slice(0, latestCompactionIndex));
@@ -171,9 +181,17 @@ function buildSuccessorEntries(params: {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }
 
-    keptEntries.push(
-      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry),
-    );
+    const reparented =
+      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    // Strip thinking signatures only from pre-compaction kept entries. Pre-compaction
+    // signatures are bound to the original context prefix; the successor file has a different
+    // prefix so those signatures would cause Anthropic "Invalid signature in thinking block".
+    // Post-compaction entries were generated in the new context and have valid signatures.
+    const transformed =
+      reparented.type === "message" && preCompactionKeptBranchIds.has(reparented.id)
+        ? { ...reparented, message: stripThinkingSignaturesFromMessage(reparented.message) }
+        : reparented;
+    keptEntries.push(transformed);
   }
 
   return orderSuccessorEntries({

@@ -1,3 +1,4 @@
+// Migrate Hermes tests cover files and skills plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";

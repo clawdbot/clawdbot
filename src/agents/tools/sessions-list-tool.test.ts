@@ -1,3 +1,5 @@
+// sessions_list tool tests cover session metadata projection, visibility
+// helpers, and numeric argument validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 
@@ -69,6 +71,8 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps deliveryContext.threadId in sessions_list results", async () => {
+    // Thread/topic ids are required for channel-specific follow-up routing, so
+    // list results must preserve both string and numeric variants.
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -200,6 +204,8 @@ describe("sessions-list-tool", () => {
     [{ messageLimit: 1.5 }, "messageLimit must be a non-negative integer"],
     [{ messageLimit: -1 }, "messageLimit must be a non-negative integer"],
   ])("rejects invalid numeric parameter %o", async (params, message) => {
+    // Reject before gateway dispatch so malformed limits cannot reach session
+    // store queries.
     const tool = createSessionsListTool({ config: {} as never });
 
     await expect(tool.execute("call-4", params)).rejects.toThrow(message);

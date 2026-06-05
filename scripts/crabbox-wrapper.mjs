@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Resolves and delegates to the repo-local or PATH crabbox binary.
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,

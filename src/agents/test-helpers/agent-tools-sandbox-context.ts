@@ -1,9 +1,11 @@
+/**
+ * Sandbox context fixture builder for agent-tool tests.
+ *
+ * Produces Docker-shaped contexts with safe defaults and caller-controlled filesystem bridges.
+ */
 import type { SandboxContext, SandboxToolPolicy, SandboxWorkspaceAccess } from "../sandbox.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 
-/**
- * Sandbox context fixture builder for agent-tool tests.
- */
 type AgentToolsSandboxContextParams = {
   workspaceDir: string;
   agentWorkspaceDir?: string;

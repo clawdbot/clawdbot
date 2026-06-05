@@ -1,3 +1,4 @@
+// Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";

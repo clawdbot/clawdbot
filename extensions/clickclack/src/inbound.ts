@@ -1,3 +1,7 @@
+/**
+ * Converts authorized ClickClack messages into OpenClaw agent/model replies and
+ * routes resulting outbound text back to ClickClack.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { sendClickClackText } from "./outbound.js";
@@ -77,6 +81,10 @@ async function dispatchModelReply(params: {
   });
 }
 
+/**
+ * Dispatches one already-fetched ClickClack message through the configured
+ * reply mode for its account.
+ */
 export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
@@ -124,6 +132,8 @@ export async function handleClickClackInbound(params: {
     }),
     sessionKey: route.sessionKey,
   });
+  // Preserve both normalized channel fields and ClickClack-native ids so reply
+  // routing, session recovery, and command authorization see the same message.
   const body = runtime.channel.reply.formatAgentEnvelope({
     channel: "ClickClack",
     from: senderName,

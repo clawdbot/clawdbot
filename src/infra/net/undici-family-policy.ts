@@ -1,3 +1,5 @@
+// Undici address-family policy helpers centralize IPv4/IPv6 defaults for
+// global dispatchers, with WSL2 forced off Node's auto-selection path.
 import * as net from "node:net";
 import { isWSL2Sync } from "../wsl.js";
 

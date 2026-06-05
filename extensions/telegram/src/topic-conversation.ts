@@ -1,3 +1,4 @@
+// Telegram plugin module implements topic conversation behavior.
 export type ParsedTelegramTopicConversation = {
   chatId: string;
   topicId: string;

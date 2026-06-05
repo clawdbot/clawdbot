@@ -1,3 +1,4 @@
+// Google Meet plugin module implements oauth behavior.
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveDateTimestampMs,

@@ -1,3 +1,4 @@
+/** Doctor migration for legacy plugin manifest capability keys into contracts.* fields. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -90,6 +91,7 @@ function buildLegacyManifestContractMigration(params: {
   };
 }
 
+/** Collects manifest rewrites needed to move legacy top-level capability keys under contracts. */
 export function collectLegacyPluginManifestContractMigrations(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -150,6 +152,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
 }
 
+/** Prompts and rewrites legacy plugin manifest contract fields when doctor repair is enabled. */
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

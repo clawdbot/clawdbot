@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.vector dedupe plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";

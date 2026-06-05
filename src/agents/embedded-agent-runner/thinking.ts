@@ -1,3 +1,6 @@
+/**
+ * Sanitizes reasoning/thinking blocks for replay and recovery.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
@@ -81,6 +84,133 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
 function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
   // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
   return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
+}
+
+function parseTimestampMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function stripSignatureFieldsFromThinkingBlock(
+  block: AssistantContentBlock,
+): AssistantContentBlock {
+  const record = block as unknown as Record<string, unknown>;
+  const stripped: Record<string, unknown> = {};
+  for (const key of Object.keys(record)) {
+    if (key === "thinkingSignature" || key === "signature" || key === "thought_signature") {
+      continue;
+    }
+    // data is the signature payload for redacted_thinking blocks
+    if (key === "data" && record.type === "redacted_thinking") {
+      continue;
+    }
+    stripped[key] = record[key];
+  }
+  return stripped as unknown as AssistantContentBlock;
+}
+
+/**
+ * Strip all thinking signature fields from a single assistant message.
+ *
+ * Removes thinkingSignature / signature / thought_signature from thinking blocks and
+ * data from redacted_thinking blocks. Thinking text is preserved. If the message
+ * becomes thinking-only with no signatures, the downstream stripInvalidThinkingSignatures
+ * will convert those unsigned blocks to placeholder text.
+ *
+ * Returns the original reference when nothing was stripped.
+ */
+export function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
+  if (!isAssistantMessageWithContent(message)) {
+    return message;
+  }
+  let changed = false;
+  const newContent: AssistantContentBlock[] = [];
+  for (const block of message.content) {
+    if (!isThinkingBlock(block)) {
+      newContent.push(block);
+      continue;
+    }
+    const record = block as unknown as Record<string, unknown>;
+    const hasSignature =
+      record.thinkingSignature != null ||
+      record.signature != null ||
+      record.thought_signature != null ||
+      (record.type === "redacted_thinking" && record.data != null);
+    if (!hasSignature) {
+      newContent.push(block);
+      continue;
+    }
+    newContent.push(stripSignatureFieldsFromThinkingBlock(block));
+    changed = true;
+  }
+  if (!changed) {
+    return message;
+  }
+  return { ...message, content: newContent };
+}
+
+/**
+ * Strip thinking signatures from assistant messages that predate the latest compaction.
+ *
+ * Pre-compaction thinking signatures are cryptographically bound to the original context
+ * prefix. After compaction the prefix changes (summarized content is replaced by the
+ * compaction summary) so those signatures are stale and Anthropic rejects them with
+ * "Invalid signature in thinking block". The existing stripInvalidThinkingSignatures only
+ * catches absent/blank signatures; this function catches contextually stale ones identified
+ * by timestamp comparison with the latest compaction summary.
+ *
+ * Only strips from assistant messages whose timestamp is strictly before the latest
+ * compaction summary timestamp. Messages at or after that timestamp may have been generated
+ * in the new context and retain their signatures. Messages with no parseable timestamp are
+ * left unchanged.
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function stripStaleThinkingSignaturesForCompactionReplay(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  let latestCompactionTimestamp: number | null = null;
+  for (const message of messages) {
+    if ((message as { role?: unknown }).role !== "compactionSummary") {
+      continue;
+    }
+    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
+    if (ts !== null) {
+      latestCompactionTimestamp =
+        latestCompactionTimestamp === null ? ts : Math.max(latestCompactionTimestamp, ts);
+    }
+  }
+  if (latestCompactionTimestamp === null) {
+    return messages;
+  }
+
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
+    if (ts === null || ts >= latestCompactionTimestamp) {
+      out.push(message);
+      continue;
+    }
+    const stripped = stripThinkingSignaturesFromMessage(message);
+    if (stripped !== message) {
+      touched = true;
+    }
+    out.push(stripped);
+  }
+  return touched ? out : messages;
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {

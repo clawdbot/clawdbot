@@ -1,3 +1,4 @@
+// Control UI tests cover chat behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerChatAttachmentPayload,

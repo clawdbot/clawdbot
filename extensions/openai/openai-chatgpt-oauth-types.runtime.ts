@@ -1,3 +1,4 @@
+// Openai plugin module implements openai chatgpt oauth types behavior.
 export type {
   OAuthAuthInfo,
   OAuthCredentials,

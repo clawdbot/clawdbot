@@ -1,3 +1,4 @@
+// Media Core tests cover mime behavior.
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { mediaKindFromMime } from "./constants.js";

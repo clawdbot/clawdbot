@@ -1,3 +1,4 @@
+// String sample tests cover compact string sampling and truncation behavior.
 import { describe, expect, it } from "vitest";
 import { summarizeStringEntries } from "./string-sample.js";
 

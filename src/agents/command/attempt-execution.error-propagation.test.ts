@@ -1,3 +1,4 @@
+// Covers ACP diagnostic event propagation and sanitized error formatting.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import {
@@ -18,6 +19,8 @@ let unsubscribe: (() => void) | undefined;
 beforeEach(() => {
   resetAgentEventsForTest();
   captured = [];
+  // Subscribe to the process-level event bus so tests observe exactly what
+  // parent relay diagnostics would receive.
   unsubscribe = onAgentEvent((evt) => {
     captured.push(evt);
   });
@@ -95,6 +98,8 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
   });
 
   it("flattens the cause chain into the error string so the underlying RequestError is not lost", () => {
+    // ACP callers historically surface a single string; flattening preserves
+    // the useful nested RequestError without exposing structured internals.
     const rootCause = new Error('RequestError: "Method not found": nes/close (-32601)');
     const wrapped = new Error("Agent does not support session/close (oneshot:abc)", {
       cause: rootCause,

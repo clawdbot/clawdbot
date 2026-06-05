@@ -1,3 +1,4 @@
+// Telegram tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
 

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite summary behavior.
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 

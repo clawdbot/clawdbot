@@ -1,3 +1,4 @@
+// Google plugin module implements thinking behavior.
 export {
   createGoogleThinkingPayloadWrapper,
   createGoogleThinkingStreamWrapper,

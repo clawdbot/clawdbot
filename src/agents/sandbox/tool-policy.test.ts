@@ -1,3 +1,5 @@
+// Sandbox tool policy tests cover effective allow/deny merging and blocked-tool
+// guidance for sandboxed agent sessions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -69,6 +71,8 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
+    // An empty allowlist means allow all except denies; alsoAllow should only
+    // remove matching default denies, not turn allow-all into allow-some.
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -268,6 +272,8 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("keeps blocked-tool guidance glob-aware and shell-safe", () => {
+    // The guidance embeds a copy-paste command; quote the real session key while
+    // keeping the displayed session line compact and terminal-safe.
     const sessionKey = "agent:main:weird session;rm -rf /";
     const cfg: OpenClawConfig = {
       agents: {

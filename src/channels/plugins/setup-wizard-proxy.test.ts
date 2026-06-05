@@ -1,3 +1,4 @@
+// Setup wizard proxy tests cover proxying setup wizard calls through channel plugin facades.
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,

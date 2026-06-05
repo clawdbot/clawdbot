@@ -1,3 +1,7 @@
+/**
+ * Anthropic provider runtime registration. It owns API-key/setup-token/Claude
+ * CLI auth, dynamic model normalization, usage auth, media, and stream wrappers.
+ */
 import { formatCliCommand, parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
@@ -695,6 +699,7 @@ async function resolveAnthropicUsageAuth(
   return { handled: true };
 }
 
+/** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
@@ -833,6 +838,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
   };
 }
 
+/** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());

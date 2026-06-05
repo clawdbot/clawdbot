@@ -1,3 +1,4 @@
+// Qqbot plugin module implements channel behavior.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import {
   createMessageReceiptFromOutboundResults,
@@ -7,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
@@ -253,6 +255,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     chunker: (text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 5000,
+    sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
     shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
       shouldSuppressLocalQQBotApprovalPrompt({
         cfg,

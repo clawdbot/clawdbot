@@ -1,3 +1,4 @@
+// Google Meet tests cover index.create plugin behavior.
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";

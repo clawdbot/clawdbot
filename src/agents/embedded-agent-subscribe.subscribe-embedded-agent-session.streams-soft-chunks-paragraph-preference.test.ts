@@ -1,3 +1,5 @@
+// Soft chunking tests cover paragraph-preferred block reply splits and fenced
+// code preservation during streamed assistant output.
 import { describe, expect, it, vi } from "vitest";
 import {
   createParagraphChunkedBlockReplyHarness,
@@ -5,6 +7,7 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
 function blockReplyTexts(onBlockReply: ReturnType<typeof vi.fn>): string[] {
+  // Helper extracts just user-visible text from emitted block reply payloads.
   return onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string }).text ?? "");
 }
 

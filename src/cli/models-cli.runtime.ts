@@ -1,3 +1,4 @@
+// Runtime helpers for model CLI commands and shared agent option handling.
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
@@ -23,6 +24,7 @@ export function rejectAgentScopedModelWrite(
   command: Command,
   commandName: "set" | "set-image",
 ): void {
+  // Write commands update global defaults; accepting --agent here would imply per-agent mutation.
   const agent = resolveOptionFromCommand<string>(command, "agent");
   if (!agent) {
     return;

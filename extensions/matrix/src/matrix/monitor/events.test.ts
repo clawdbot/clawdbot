@@ -1,3 +1,4 @@
+// Matrix tests cover events plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";

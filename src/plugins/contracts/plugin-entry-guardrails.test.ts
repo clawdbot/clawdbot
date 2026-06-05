@@ -1,3 +1,4 @@
+// Plugin entry guardrail tests cover allowed plugin entrypoint imports and exports.
 import { existsSync, readFileSync } from "node:fs";
 import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

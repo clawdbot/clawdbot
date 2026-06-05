@@ -1,3 +1,4 @@
+// Update-phase helpers that gate doctor repairs during package swaps and convergence.
 import { isTruthyEnvValue } from "../../../infra/env.js";
 
 export const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";

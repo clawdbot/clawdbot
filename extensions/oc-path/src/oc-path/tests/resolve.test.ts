@@ -1,3 +1,4 @@
+// OC Path tests cover resolve plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../resolve.js";

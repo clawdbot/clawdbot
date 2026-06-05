@@ -1,3 +1,4 @@
+// Hook install runtime helpers resolve archive install behavior behind runtime imports.
 import { resolveArchiveKind } from "../infra/archive.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";

@@ -1,3 +1,4 @@
+// Twitch helper module supports config behavior.
 import {
   listCombinedAccountIds,
   normalizeAccountId,

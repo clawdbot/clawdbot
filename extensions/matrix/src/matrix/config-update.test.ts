@@ -1,3 +1,4 @@
+// Matrix tests cover config update plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./config-update.js";

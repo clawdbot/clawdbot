@@ -1,3 +1,4 @@
+// File Transfer tests cover index plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import pluginEntry from "./index.js";
 

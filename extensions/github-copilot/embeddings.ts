@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements embeddings behavior.
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,

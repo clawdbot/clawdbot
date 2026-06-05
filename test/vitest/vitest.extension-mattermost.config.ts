@@ -1,3 +1,4 @@
+// Vitest extension mattermost config wires the extension mattermost test shard.
 import { mattermostExtensionTestRoots } from "./vitest.extension-mattermost-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

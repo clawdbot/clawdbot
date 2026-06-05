@@ -1,3 +1,5 @@
+// AssistantTexts final-answer tests ensure reasoning-mode subscriptions keep
+// stored assistant text aligned to the final answer when block replies are off.
 import { describe, expect, it, vi } from "vitest";
 import {
   createReasoningFinalAnswerMessage,
@@ -29,6 +31,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
   it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
+    // With reasoning enabled, streamed draft text stays private until the final
+    // message_end answer is available.
     const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();

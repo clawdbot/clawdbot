@@ -1,3 +1,4 @@
+// Bench Gateway Restart tests cover bench gateway restart script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";

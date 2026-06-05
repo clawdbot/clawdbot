@@ -1,3 +1,5 @@
+// Covers command-analysis summary formatting for parsed shell explanations and
+// policy-only argv/shell segment analysis.
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "../command-explainer/index.js";
 import {

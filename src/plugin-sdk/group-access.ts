@@ -9,34 +9,40 @@ import type { GroupPolicy } from "../config/types.base.js";
 export { resolveOpenProviderRuntimeGroupPolicy };
 export type { GroupPolicy };
 
+/** Reason code returned when evaluating a sender against group policy. */
 export type SenderGroupAccessReason =
   | "allowed"
   | "disabled"
   | "empty_allowlist"
   | "sender_not_allowlisted";
+/** Sender-level group access decision plus the effective group policy. */
 export type SenderGroupAccessDecision = {
   allowed: boolean;
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied: boolean;
   reason: SenderGroupAccessReason;
 };
+/** Reason code returned when evaluating a configured group route. */
 export type GroupRouteAccessReason =
   | "allowed"
   | "disabled"
   | "empty_allowlist"
   | "route_not_allowlisted"
   | "route_disabled";
+/** Route-level group access decision plus the effective group policy. */
 export type GroupRouteAccessDecision = {
   allowed: boolean;
   groupPolicy: GroupPolicy;
   reason: GroupRouteAccessReason;
 };
+/** Reason code returned when evaluating a precomputed allowlist match. */
 export type MatchedGroupAccessReason =
   | "allowed"
   | "disabled"
   | "missing_match_input"
   | "empty_allowlist"
   | "not_allowlisted";
+/** Matched-input group access decision plus the effective group policy. */
 export type MatchedGroupAccessDecision = {
   allowed: boolean;
   groupPolicy: GroupPolicy;

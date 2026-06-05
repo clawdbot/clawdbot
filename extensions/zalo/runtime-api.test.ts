@@ -1,3 +1,4 @@
+// Zalo tests cover runtime api plugin behavior.
 import { describe, expect, it } from "vitest";
 import * as runtime from "./runtime-api.js";
 

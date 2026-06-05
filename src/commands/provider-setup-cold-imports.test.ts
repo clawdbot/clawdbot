@@ -1,3 +1,4 @@
+// Provider setup cold-import tests guard provider setup paths against runtime-heavy imports.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

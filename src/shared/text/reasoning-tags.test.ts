@@ -1,3 +1,4 @@
+// Reasoning tag tests cover parsing and stripping reasoning tag blocks.
 import { describe, expect, it } from "vitest";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 

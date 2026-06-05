@@ -1,3 +1,6 @@
+/**
+ * Zod-backed config schema for ClickClack channel accounts.
+ */
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -27,4 +30,8 @@ const ClickClackConfigSchema = ClickClackAccountConfigSchema.extend({
   defaultAccount: z.string().optional(),
 }).strict();
 
+/**
+ * Config schema exported to core so `openclaw doctor` and config validation
+ * understand both default and named ClickClack accounts.
+ */
 export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);

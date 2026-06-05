@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for live-test provider API-key discovery.
+ * Verifies env precedence, manifest fallback, and non-secret error classifiers.
+ */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.unmock("../secrets/provider-env-vars.js");

@@ -1,3 +1,8 @@
+/**
+ * Agent image resize helpers.
+ *
+ * Downscales base64 image content for provider payload limits using the configured image processor.
+ */
 import type { ImageContent } from "../../llm/types.js";
 import {
   createImageProcessor,

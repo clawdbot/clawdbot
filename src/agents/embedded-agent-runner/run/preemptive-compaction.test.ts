@@ -1,3 +1,5 @@
+// Preemptive compaction tests cover token-pressure estimates before prompt
+// submission and the route chosen to compact, truncate, or proceed.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
@@ -12,6 +14,8 @@ let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").form
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
 beforeAll(async () => {
+  // Import after the session-token mock is installed so token estimates match
+  // the runtime environment these helpers protect.
   vi.resetModules();
   ({
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
@@ -46,6 +50,8 @@ function makeToolResultMessage(...texts: string[]): AgentMessage {
 }
 
 function makeJsonToolResultMessage(payload: unknown): AgentMessage {
+  // JSON tool results reach providers through rendered boundary payloads; this
+  // fixture proves estimates count object payloads, not just text blocks.
   return {
     role: "toolResult",
     toolCallId: `call_${timestamp}`,
@@ -222,6 +228,8 @@ describe("preemptive-compaction", () => {
   });
 
   it("uses rendered LLM-boundary pressure when the runtime owns the final payload shape", () => {
+    // Runtime renderers can add large provider-facing payloads after transcript
+    // assembly, so the precheck must prefer that boundary estimate when present.
     const renderedPrompt = "x".repeat(60_000);
     const estimatedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
       systemPrompt: "sys",
@@ -355,6 +363,8 @@ describe("preemptive-compaction", () => {
   });
 
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
+    // If reducible recent tool output covers the overflow, truncation is enough
+    // and a full transcript compaction would waste time/context.
     const medium = "alpha beta gamma delta epsilon ".repeat(2200);
     const messages: AgentMessage[] = [
       makeAssistantHistory("short history"),

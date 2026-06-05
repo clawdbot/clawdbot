@@ -1,3 +1,4 @@
+// Feishu plugin module implements docx behavior.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";

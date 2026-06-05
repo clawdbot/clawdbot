@@ -1,3 +1,4 @@
+// Signal plugin module implements setup core behavior.
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,

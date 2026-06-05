@@ -1,3 +1,4 @@
+// Covers sanitized provider-error observation fields for embedded-agent runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
@@ -16,6 +17,8 @@ afterEach(() => {
 
 describe("buildApiErrorObservationFields", () => {
   it("redacts request ids and exposes stable hashes instead of raw payloads", () => {
+    // Raw request ids are sensitive trace handles; diagnostics use hashes so
+    // equivalent failures can still be correlated safely.
     const observed = buildApiErrorObservationFields(
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
     );
@@ -87,6 +90,8 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("keeps fingerprints stable across request ids for equivalent errors", () => {
+    // Fingerprints intentionally ignore request ids, while raw hashes keep the
+    // exact sanitized payload distinct.
     const first = buildApiErrorObservationFields(
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_001"}',
     );
@@ -112,6 +117,8 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("caps oversized raw inputs before hashing and fingerprinting", () => {
+    // Hashing a bounded prefix keeps diagnostic work predictable for huge
+    // provider payloads.
     const oversized = "X".repeat(70_000);
     const bounded = "X".repeat(64_000);
 
@@ -143,6 +150,8 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("fails closed when observation sanitization throws", () => {
+    // Observation helpers run on error paths; sanitization failures should drop
+    // metadata rather than leak raw provider text.
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockImplementation(() => {
       throw new Error("boom");
     });

@@ -1,3 +1,4 @@
+// Test Live Media tests cover test live media script behavior.
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/test-live-media.ts";
 

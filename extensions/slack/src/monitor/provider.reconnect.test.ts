@@ -1,3 +1,4 @@
+// Slack tests cover provider.reconnect plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,

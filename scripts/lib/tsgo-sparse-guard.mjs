@@ -1,3 +1,4 @@
+// Detects sparse-checkout gaps before tsgo runs core TypeScript projects.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -50,11 +51,17 @@ const CORE_TEST_REQUIRED_PATHS = [
   "ui/src/ui/gateway.ts",
 ];
 
+/**
+ * Reports whether the caller explicitly opted out of sparse tsgo guard errors.
+ */
 export function shouldSkipSparseTsgoGuardError(env = process.env) {
   const value = env[TSGO_SPARSE_SKIP_ENV_KEY]?.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 
+/**
+ * Creates an environment that suppresses recursive sparse tsgo guard checks.
+ */
 export function createSparseTsgoSkipEnv(baseEnv = process.env) {
   return {
     ...baseEnv,
@@ -62,6 +69,9 @@ export function createSparseTsgoSkipEnv(baseEnv = process.env) {
   };
 }
 
+/**
+ * Builds the sparse-checkout diagnostic for core tsgo projects, when needed.
+ */
 export function getSparseTsgoGuardError(
   args,
   {

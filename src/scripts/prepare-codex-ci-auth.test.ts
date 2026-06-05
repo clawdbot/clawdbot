@@ -1,3 +1,4 @@
+// Codex CI auth script tests cover generated auth fixture files.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

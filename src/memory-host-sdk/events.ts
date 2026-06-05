@@ -1,3 +1,4 @@
+// Memory host event helpers append and read memory host event logs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "../infra/fs-safe.js";

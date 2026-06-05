@@ -1,3 +1,4 @@
+// Description summary tests cover compact skill description extraction for prompts.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// OC Path tests cover slug plugin behavior.
 import { describe, expect, it } from "vitest";
 import { slugify } from "../slug.js";
 

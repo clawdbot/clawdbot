@@ -1,3 +1,4 @@
+// Provider OAuth runtime tests cover PKCE redirects, callback parsing, and token exchange helpers.
 import { describe, expect, it } from "vitest";
 import {
   parseOAuthAuthorizationInput,

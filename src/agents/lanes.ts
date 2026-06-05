@@ -1,3 +1,6 @@
+/**
+ * Resolves command queue lane names for nested, cron, and subagent work.
+ */
 import { CommandLane } from "../process/lanes.js";
 
 /** Default lane for nested agent work. */

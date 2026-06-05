@@ -1,3 +1,4 @@
+// E2E Temp State Dir tests cover e2e temp state dir script behavior.
 import { spawn } from "node:child_process";
 import {
   chmodSync,

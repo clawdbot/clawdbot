@@ -1,3 +1,4 @@
+// Discord tests cover capture state plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   beginVoiceCapture,

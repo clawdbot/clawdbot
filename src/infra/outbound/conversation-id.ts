@@ -1,3 +1,5 @@
+// Conversation id helpers derive stable outbound conversation keys from
+// explicit thread ids or safe channel/group target shapes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

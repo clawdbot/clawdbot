@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Issues and writes npm Telegram RTT credential fixtures.
 import fs from "node:fs/promises";
 import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 

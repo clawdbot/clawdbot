@@ -1,3 +1,4 @@
+// Browser tests cover pw session.page cdp plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_REF_MARKER_ATTRIBUTE,

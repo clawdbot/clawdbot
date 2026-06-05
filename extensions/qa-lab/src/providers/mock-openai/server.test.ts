@@ -1,3 +1,4 @@
+// Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
 

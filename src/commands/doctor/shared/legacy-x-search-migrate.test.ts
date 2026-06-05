@@ -1,3 +1,4 @@
+// Legacy X search migration tests cover doctor repair of old X search config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {

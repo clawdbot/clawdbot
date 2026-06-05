@@ -1,3 +1,4 @@
+// Doctor workspace tests cover workspace path checks, repairs, and user-facing notes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,5 @@
+// Fenced block reopen tests cover safe Markdown chunking when code fences are
+// too long to fit in one block reply.
 import { describe, expect, it, vi } from "vitest";
 import {
   createParagraphChunkedBlockReplyHarness,
@@ -7,6 +9,8 @@ import {
 
 describe("subscribeEmbeddedAgentSession", () => {
   it("reopens fenced blocks when splitting inside them", () => {
+    // Oversized code blocks are split with reopened fences so every emitted
+    // chunk remains valid Markdown.
     const onBlockReply = vi.fn();
     const { emit } = createParagraphChunkedBlockReplyHarness({
       onBlockReply,

@@ -1,3 +1,4 @@
+// Telegram tests cover button types plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramInteractiveButtons,

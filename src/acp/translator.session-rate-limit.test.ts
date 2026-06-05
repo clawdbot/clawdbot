@@ -1,3 +1,4 @@
+/** Tests ACP translator session creation rate limiting. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import {

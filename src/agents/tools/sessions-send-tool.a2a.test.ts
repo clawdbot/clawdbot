@@ -1,3 +1,5 @@
+// sessions_send A2A tests cover announce delivery, same-session replies, delayed
+// reply baselines, and channel target/account routing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -196,6 +198,8 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("does not direct-deliver a delayed same-session reply without a baseline", async () => {
+    // Without a baseline fingerprint, a delayed assistant reply may be stale;
+    // avoid direct delivery unless freshness is provable.
     vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
       text: "Maybe stale channel reply",
       fingerprint: "maybe-stale-channel-reply",

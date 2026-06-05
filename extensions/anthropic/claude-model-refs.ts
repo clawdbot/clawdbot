@@ -1,3 +1,7 @@
+/**
+ * Claude CLI model-ref normalization. It maps family aliases and retired model
+ * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
+ */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
 
@@ -7,6 +11,7 @@ const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
   haiku: "claude-haiku-4-5",
 };
 
+/** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
 export type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
@@ -182,6 +187,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   return null;
 }
 
+/** Resolve a Claude CLI model ref into selected and Anthropic-compatible runtime refs. */
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
@@ -214,6 +220,7 @@ export function resolveClaudeCliAnthropicModelRefs(
   };
 }
 
+/** Resolve a known Anthropic/Claude CLI model ref to its current Anthropic model ref. */
 export function resolveKnownAnthropicModelRef(raw?: string): string | null {
   if (!raw) {
     return null;

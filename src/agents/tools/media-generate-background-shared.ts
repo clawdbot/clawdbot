@@ -1,3 +1,8 @@
+/**
+ * Shared detached-task lifecycle for media generation tools.
+ *
+ * Image, video, and music generation use this to track tasks, wake sessions, and deliver generated media.
+ */
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -27,13 +32,6 @@ import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 
-/**
- * Shared detached-task lifecycle for media generation tools.
- *
- * Image, video, and music generation all use this module to create task ledger
- * rows, keep them alive, wake the requester session, and fall back to direct
- * delivery when agent wake delivery cannot attach generated media.
- */
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([

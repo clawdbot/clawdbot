@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,

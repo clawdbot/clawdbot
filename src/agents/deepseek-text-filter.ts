@@ -1,8 +1,11 @@
+/**
+ * DeepSeek DSML streaming text filter.
+ * Removes provider-emitted DSML tool markup while buffering split tag prefixes
+ * across streamed chunks.
+ */
 const DSML_KINDS = ["tool_use_error", "tool_calls", "tool_call", "function_calls"] as const;
 const DSML_BARS = ["|", "｜"] as const;
 
-// Streaming filter for DeepSeek DSML tool markup. It removes complete markup
-// blocks while holding enough trailing bytes to recognize split open/close tags.
 const DSML_OPEN_TOKENS = DSML_BARS.flatMap((bar) =>
   DSML_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
 );

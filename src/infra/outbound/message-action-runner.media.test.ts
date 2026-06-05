@@ -1,3 +1,5 @@
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Assertions for Codex on-demand plugin E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -90,9 +91,9 @@ function readAuthProfileStoreText(agentDir) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db.prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?").get(
-      "primary",
-    );
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
     return typeof row?.store_json === "string" ? row.store_json : "";
   } finally {
     db?.close();

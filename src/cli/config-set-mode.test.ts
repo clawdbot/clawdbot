@@ -1,3 +1,4 @@
+// Config set mode tests cover config set input modes and value parsing.
 import { describe, expect, it } from "vitest";
 import { resolveConfigSetMode } from "./config-set-parser.js";
 

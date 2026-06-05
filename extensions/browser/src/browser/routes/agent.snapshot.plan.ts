@@ -1,3 +1,9 @@
+/**
+ * Snapshot planning for browser route handlers.
+ *
+ * Resolves requested snapshot mode, format, limits, refs, labels, and driver
+ * choice before the route talks to Playwright or Chrome MCP.
+ */
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -34,6 +40,7 @@ type BrowserSnapshotPlan = {
   wantsRoleSnapshot: boolean;
 };
 
+/** Resolve a normalized snapshot plan from query parameters and profile caps. */
 export function resolveSnapshotPlan(params: {
   profile: ResolvedBrowserProfile;
   query: Record<string, unknown>;

@@ -1,3 +1,4 @@
+// Sandbox command tests cover browser/container status formatting and sandbox diagnostics.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 

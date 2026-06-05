@@ -1,3 +1,4 @@
+// Feishu tests cover dedup plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +13,7 @@ import {
   hasProcessedFeishuMessage,
   testingHooks,
   tryRecordMessagePersistent,
-  warmupDedupFromDisk,
+  warmupDedupFromPluginState,
 } from "./dedup.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -59,7 +60,7 @@ describe("Feishu persistent dedupe", () => {
     await expect(tryRecordMessagePersistent("msg-2", "account-a")).resolves.toBe(true);
     testingHooks.resetFeishuDedupMemoryForTests();
 
-    await expect(warmupDedupFromDisk("account-a")).resolves.toBe(1);
+    await expect(warmupDedupFromPluginState("account-a")).resolves.toBe(1);
     await expect(tryRecordMessagePersistent("msg-2", "account-a")).resolves.toBe(false);
   });
 
@@ -73,7 +74,7 @@ describe("Feishu persistent dedupe", () => {
     await expect(hasProcessedFeishuMessage("msg-3", "account-a")).resolves.toBe(false);
   });
 
-  it("imports legacy JSON dedupe entries before checking plugin state", async () => {
+  it("ignores legacy JSON dedupe files at runtime", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
     const legacyPath = path.join(tempDir as string, "feishu", "dedup", "account-a.json");
@@ -87,8 +88,8 @@ describe("Feishu persistent dedupe", () => {
       "utf8",
     );
 
-    await expect(hasProcessedFeishuMessage("msg-legacy", "account-a")).resolves.toBe(true);
-    await expect(tryRecordMessagePersistent("msg-legacy", "account-a")).resolves.toBe(false);
+    await expect(hasProcessedFeishuMessage("msg-legacy", "account-a")).resolves.toBe(false);
+    await expect(tryRecordMessagePersistent("msg-legacy", "account-a")).resolves.toBe(true);
     await expect(hasProcessedFeishuMessage("msg-expired", "account-a")).resolves.toBe(false);
   });
 });

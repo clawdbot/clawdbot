@@ -1,3 +1,4 @@
+// Matrix plugin module implements direct behavior.
 import { promoteMatrixDirectRoomCandidate } from "../direct-management.js";
 import {
   hasDirectMatrixMemberFlag,

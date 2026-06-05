@@ -1,3 +1,8 @@
+/**
+ * Legacy direct-DM access resolver.
+ *
+ * Bridges old DM allowlist/pairing behavior to channel ingress access decisions.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   expandAllowFromWithAccessGroups,

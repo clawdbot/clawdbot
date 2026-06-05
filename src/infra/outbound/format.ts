@@ -1,3 +1,5 @@
+// Outbound delivery formatting produces human CLI summaries and JSON payloads
+// for direct and gateway send results.
 import { getChatChannelMeta } from "../../channels/chat-meta.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";

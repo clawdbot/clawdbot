@@ -1,3 +1,5 @@
+// Session tool limit tests cover shared numeric normalization and byte-bounded
+// output tails for command-style tools.
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedTextTail,
@@ -34,6 +36,7 @@ describe("session tool limits", () => {
   });
 
   it("does not exceed the byte cap when clipping multibyte text", () => {
+    // Never return a partial UTF-8 character just to fill the final byte.
     const output = appendBoundedTextTail("ignored", "é", 1);
 
     expect(output).toBe("");

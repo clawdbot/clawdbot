@@ -1,3 +1,8 @@
+/**
+ * Locked auth profile upsert helper.
+ * Normalizes literal secrets before persistence and routes all writes through
+ * the shared SQLite lock to avoid racing concurrent auth updates.
+ */
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";

@@ -1,3 +1,7 @@
+/**
+ * Canvas plugin entrypoint for node canvas control, hosted A2UI routes, and
+ * node CLI registration.
+ */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

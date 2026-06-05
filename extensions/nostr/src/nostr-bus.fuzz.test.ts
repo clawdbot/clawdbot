@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createMetrics, type MetricName } from "./metrics.js";
 import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-key-utils.js";

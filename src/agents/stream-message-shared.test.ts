@@ -1,3 +1,5 @@
+// Stream message tests lock down the sanitized assistant message emitted when a
+// provider stream fails mid-response.
 import { describe, expect, it } from "vitest";
 import {
   STREAM_ERROR_FALLBACK_TEXT,

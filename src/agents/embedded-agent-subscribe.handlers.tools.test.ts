@@ -1,3 +1,5 @@
+// Tool handler tests cover tool lifecycle events, read-path diagnostics,
+// messaging tool capture, approvals, and emitted summaries.
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +29,8 @@ function createTestContext(): {
   trace: ReturnType<typeof vi.fn>;
   isEnabled: ReturnType<typeof vi.fn>;
 } {
+  // Shared tool-handler fixture exposes the callbacks and state maps mutated by
+  // start/update/end handlers without booting a full subscription.
   const onBlockReplyFlush = vi.fn<() => Promise<void>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
@@ -95,6 +99,8 @@ function requireEvent(
   predicate: (event: CapturedAgentEvent) => boolean,
   label: string,
 ): CapturedAgentEvent {
+  // Tool lifecycle tests emit multiple event streams; this helper makes the
+  // expected event kind explicit before field assertions.
   const event = events.find(predicate);
   if (!event) {
     throw new Error(`expected ${label} event`);

@@ -1,3 +1,4 @@
+// Codesign Mac App tests cover codesign mac app script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

@@ -1,3 +1,6 @@
+/**
+ * Process-local state for warmed provider auth snapshots.
+ */
 export type PreparedProviderAuthState = {
   agentId: string;
   configFingerprint: string;

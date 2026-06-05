@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth adoption identity safety.
+ * Ensures sub-agent/main-agent credential adoption only happens when identity
+ * evidence allows the copy.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

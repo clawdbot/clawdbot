@@ -1,3 +1,4 @@
+// Memory Wiki API module exposes the plugin public contract.
 export {
   buildPluginConfigSchema,
   definePluginEntry,

@@ -1,3 +1,4 @@
+// Slack tests cover resolve allowlist common plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   collectSlackCursorItems,

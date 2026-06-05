@@ -1,3 +1,4 @@
+// Telegram helper module supports setup surface.helpers behavior.
 import {
   addWildcardAllowFrom,
   applySetupAccountConfigPatch,

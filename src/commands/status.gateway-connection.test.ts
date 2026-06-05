@@ -1,3 +1,4 @@
+// Status gateway connection tests cover connection detail resolution and terminal logging.
 import { describe, expect, it, vi } from "vitest";
 import {
   logGatewayConnectionDetails,

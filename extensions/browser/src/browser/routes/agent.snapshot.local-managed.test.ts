@@ -1,3 +1,4 @@
+// Browser tests cover agent.snapshot.local managed plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";

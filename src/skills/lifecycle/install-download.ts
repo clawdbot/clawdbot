@@ -1,3 +1,4 @@
+// Install download helpers fetch remote skill artifacts into temporary storage.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Secrets CLI tests cover secret command registration, reads, writes, and redaction.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Mattermost tests cover slash commands plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {

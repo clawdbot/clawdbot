@@ -1,3 +1,4 @@
+// Video Generation Core API module exposes the plugin public contract.
 export type { AuthProfileStore } from "openclaw/plugin-sdk/video-generation-core";
 export {
   buildNoCapabilityModelConfiguredMessage,

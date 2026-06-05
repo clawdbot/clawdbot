@@ -1,3 +1,5 @@
+// Preauth bootstrap token rate-limit tests protect forged bootstrap attempts
+// before normal gateway auth has completed.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Skill plugin fixtures create plugin-backed skill layouts for tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 

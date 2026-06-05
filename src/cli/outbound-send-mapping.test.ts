@@ -1,3 +1,4 @@
+// Outbound send mapping tests cover CLI-to-channel outbound payload mapping.
 import { describe, expect, it, vi } from "vitest";
 import {
   CLI_OUTBOUND_SEND_FACTORY,

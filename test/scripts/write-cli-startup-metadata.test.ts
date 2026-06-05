@@ -1,3 +1,4 @@
+// Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

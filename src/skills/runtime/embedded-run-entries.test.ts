@@ -1,3 +1,4 @@
+// Embedded run entry tests cover runtime skill entries serialized into agent runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,

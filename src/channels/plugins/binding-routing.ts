@@ -1,3 +1,8 @@
+/**
+ * Channel binding route resolver.
+ *
+ * Applies configured and runtime conversation bindings to agent route resolution.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {

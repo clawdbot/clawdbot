@@ -1,3 +1,4 @@
+// Qa Matrix tests cover harness plugin behavior.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

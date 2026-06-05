@@ -1,3 +1,4 @@
+// OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import type OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,

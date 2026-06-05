@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process poll timeout and retry hints.
+ * Poll waits, aborts, and diagnostic retry suggestions must stay bounded.
+ */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {

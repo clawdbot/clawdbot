@@ -1,3 +1,4 @@
+// Imessage plugin module implements reaction context behavior.
 import type { IMessagePayload } from "./types.js";
 
 export type IMessageReactionContext = {

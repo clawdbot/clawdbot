@@ -1,3 +1,4 @@
+// Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

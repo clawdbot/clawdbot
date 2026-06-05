@@ -1,3 +1,4 @@
+// Signal API module exposes the plugin public contract.
 export { signalPlugin } from "./src/channel.js";
 export { signalSetupPlugin } from "./src/channel.setup.js";
 export {

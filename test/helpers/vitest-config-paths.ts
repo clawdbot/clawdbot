@@ -1,3 +1,4 @@
+// Vitest config path helpers resolve test config fixture paths.
 import path from "node:path";
 
 // Path normalization helpers for Vitest config snapshot assertions.

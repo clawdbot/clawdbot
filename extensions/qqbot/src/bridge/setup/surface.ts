@@ -1,3 +1,4 @@
+// Qqbot plugin module implements surface behavior.
 import {
   createStandardChannelSetupStatus,
   setSetupChannelEnabled,

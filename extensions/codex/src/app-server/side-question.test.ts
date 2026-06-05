@@ -1,3 +1,4 @@
+// Codex tests cover side question plugin behavior.
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,

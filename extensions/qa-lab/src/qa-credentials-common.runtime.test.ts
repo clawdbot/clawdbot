@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa credentials common plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 

@@ -1,3 +1,4 @@
+// Control UI view renders chat screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";

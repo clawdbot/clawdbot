@@ -1,3 +1,4 @@
+// Qqbot helper module supports log helpers behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";

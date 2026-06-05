@@ -1,3 +1,4 @@
+// Matrix tests cover event helpers plugin behavior.
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { describe, expect, it } from "vitest";
 import { buildHttpError, matrixEventToRaw, parseMxc } from "./event-helpers.js";

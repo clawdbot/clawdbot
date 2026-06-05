@@ -1,3 +1,4 @@
+// Discord tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { DiscordConfigSchema } from "../config-api.js";
 

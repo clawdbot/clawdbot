@@ -1,3 +1,5 @@
+// Gateway CLI backend connect tests exercise the minimal WebSocket handshake,
+// device identity payload, auth token forwarding, and backend request framing.
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

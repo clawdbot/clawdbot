@@ -1,3 +1,4 @@
+// Control UI controller manages chat gateway state.
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,

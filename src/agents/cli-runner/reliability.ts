@@ -1,3 +1,6 @@
+/**
+ * Watchdog and supervisor key helpers for CLI runner reliability.
+ */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -62,6 +65,7 @@ function pickWatchdogProfile(
   };
 }
 
+/** Resolves the no-output watchdog timeout for a fresh or resumed CLI run. */
 export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
@@ -79,6 +83,7 @@ export function resolveCliNoOutputTimeoutMs(params: {
   return Math.min(bounded, cap);
 }
 
+/** Builds a supervisor scope key for session-owned CLI processes. */
 export function buildCliSupervisorScopeKey(params: {
   backend: CliBackendConfig;
   backendId: string;

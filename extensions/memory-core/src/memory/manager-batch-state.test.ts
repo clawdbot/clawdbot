@@ -1,3 +1,4 @@
+// Memory Core tests cover manager batch state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,

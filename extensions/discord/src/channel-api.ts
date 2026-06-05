@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   buildTokenChannelStatusSummary,

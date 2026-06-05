@@ -1,3 +1,4 @@
+// Gateway Frame Payload tests cover gateway frame payload script behavior.
 import { describe, expect, it } from "vitest";
 import { resolveGatewaySuccessPayload } from "../../scripts/e2e/lib/gateway-frame-payload.mjs";
 

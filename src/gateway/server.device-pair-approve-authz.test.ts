@@ -1,3 +1,5 @@
+// Device pairing approval tests cover operator pairing scopes, trusted-proxy
+// admin flows, pending pairing state, and approval authorization.
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {

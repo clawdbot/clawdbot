@@ -1,3 +1,4 @@
+// Slack plugin module implements reply blocks behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {

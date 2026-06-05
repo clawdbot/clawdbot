@@ -1,3 +1,4 @@
+// Matrix plugin module implements session route behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelOutboundSessionRoute,

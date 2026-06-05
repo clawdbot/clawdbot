@@ -1,3 +1,4 @@
+// Skill scanner tests cover unsafe pattern detection and scanner reporting.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

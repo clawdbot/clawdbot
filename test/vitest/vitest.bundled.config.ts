@@ -1,3 +1,4 @@
+// Vitest bundled config wires the bundled test shard.
 import path from "node:path";
 import {
   bundledPluginDependentUnitTestFiles,

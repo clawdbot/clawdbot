@@ -1,3 +1,4 @@
+// Browser tests cover agent.act.existing session navigation guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createExistingSessionAgentSharedModule,

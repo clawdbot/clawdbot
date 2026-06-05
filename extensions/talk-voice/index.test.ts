@@ -1,3 +1,4 @@
+// Talk Voice tests cover index plugin behavior.
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";

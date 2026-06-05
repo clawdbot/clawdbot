@@ -1,3 +1,8 @@
+/**
+ * Runtime access-group resolution for channel ingress.
+ *
+ * Preserves symbolic access-group entries until dynamic membership facts are available.
+ */
 import {
   normalizeStringEntries,
   uniqueStrings,

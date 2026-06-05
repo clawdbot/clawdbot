@@ -1,3 +1,4 @@
+// Qqbot tests cover attachment tags plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatAttachmentTags,

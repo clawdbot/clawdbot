@@ -1,3 +1,5 @@
+// Plugin node capability auth tests cover scoped canvas/A2UI HTTP and WebSocket
+// routes, preauth budgets, capability paths, and unauthorized upgrade handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";

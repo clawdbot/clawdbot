@@ -1,3 +1,4 @@
+// Google tests cover manifest plugin behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

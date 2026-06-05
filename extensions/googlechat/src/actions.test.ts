@@ -1,3 +1,4 @@
+// Googlechat tests cover actions plugin behavior.
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

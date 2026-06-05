@@ -1,3 +1,4 @@
+// Canvas tests cover host url plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCanvasHostUrl } from "./host-url.js";
 

@@ -1,3 +1,4 @@
+// Matrix tests cover device health plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isOpenClawManagedMatrixDevice, summarizeMatrixDeviceHealth } from "./device-health.js";
 

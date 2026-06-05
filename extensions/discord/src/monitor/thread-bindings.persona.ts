@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.persona behavior.
 import { SYSTEM_MARK } from "openclaw/plugin-sdk/text-chunking";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 

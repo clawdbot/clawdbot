@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime media behavior.
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import {

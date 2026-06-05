@@ -1,3 +1,4 @@
+// Verifies fallback cooldown probe decisions and diagnostic records.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,8 @@ import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagno
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
-// Mock auth-profile submodules — must be before importing model-fallback
+// Mock auth-profile submodules before importing model-fallback so the module
+// captures probe-specific auth behavior instead of real profile stores.
 vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(),
@@ -190,6 +192,8 @@ async function expectProbeFailureFallsBack({
   reason: "rate_limit" | "overloaded";
   probeError: Error & { status: number };
 }) {
+  // Shared expectation for transient primary probe failures: probe the primary
+  // once, then move to the first fallback with transient probing still allowed.
   const cfg = makeCfg({
     agents: {
       defaults: {

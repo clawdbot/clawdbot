@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.sync errors do not crash plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runDetachedMemorySync } from "./manager-sync-ops.js";
 

@@ -1,3 +1,4 @@
+// Qa Lab helper module supports vite behavior.
 import path from "node:path";
 import { defineConfig } from "vite";
 

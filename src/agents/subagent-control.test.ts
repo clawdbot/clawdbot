@@ -1,3 +1,5 @@
+// Subagent control tests cover sending, steering, killing, and admin cleanup of
+// child runs recorded in the subagent registry and session store.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +32,8 @@ vi.mock("./run-wait.js", () => {
     limit?: number;
     callGateway?: (request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>;
   }) => {
+    // The real helper snapshots assistant fingerprints so a steer command only
+    // reports new replies, not the baseline text that existed before steering.
     const history = await params.callGateway?.({
       method: "chat.history",
       params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
@@ -111,6 +115,8 @@ vi.mock("./run-wait.js", () => {
 function setSubagentControlDepsForTest(
   overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
+  // Tests use real JSON store mutation to catch persisted cleanup/kill state,
+  // while swapping process-owned queues and embedded-run aborts for fakes.
   testing.setDepsForTest({
     abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),

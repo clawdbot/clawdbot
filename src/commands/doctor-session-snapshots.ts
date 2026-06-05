@@ -1,3 +1,4 @@
+/** Doctor repair for stale runtime snapshot paths cached in session stores. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -201,6 +202,7 @@ function resolveExpectedBundledSkillPath(params: {
   return params.pathExists(expectedPath) ? expectedPath : undefined;
 }
 
+/** Finds cached bundled-skill paths that point at old runtime/temp package roots. */
 export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
@@ -284,10 +286,7 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   return store;
 }
 
-/**
- * Replace stale paths in raw text content (blob files or inline prompts).
- * Handles raw, JSON-escaped, and XML-escaped forms.
- */
+/** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */
 function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPathFinding): string {
   const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
   const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
@@ -317,6 +316,7 @@ function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPath
   return result;
 }
 
+/** Reports and optionally repairs stale bundled skill paths in session snapshot metadata. */
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
@@ -366,7 +366,6 @@ export async function noteSessionSnapshotHealth(params?: {
     ),
   );
 
-  // Auto-repair stale paths when shouldRepair is enabled
   if (params?.shouldRepair) {
     let repairedStores = 0;
     let totalReplacements = 0;

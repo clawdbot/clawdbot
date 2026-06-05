@@ -1,3 +1,4 @@
+// Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
 
@@ -47,6 +48,8 @@ function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
 }): FakeWrappedStream {
+  // Minimal stream compatible with wrappers that decorate result and iteration
+  // without needing a real provider stream.
   return {
     async result() {
       return params.resultMessage;
@@ -67,6 +70,7 @@ async function invokeWrappedTestStream(
   ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
   baseFn: (...args: never[]) => unknown,
 ): Promise<FakeWrappedStream> {
+  // Helper keeps wrapper tests focused on mutated stream behavior.
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
@@ -101,6 +105,7 @@ function expectSingleToolCallContent(content: unknown[], name: string) {
 }
 
 function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown[] } {
+  // Wrapper tests assert the context passed to the underlying stream function.
   const call = baseFn.mock.calls.at(0);
   if (!call) {
     throw new Error("expected base stream call");
@@ -178,6 +183,8 @@ describe("resolvePromptBuildHookResult", () => {
   });
 
   it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
+    // Prompt-build hook context comes before before_agent_start context so plugin
+    // injections are replayed in stable order.
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({

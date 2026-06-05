@@ -1,3 +1,5 @@
+// Verifies outbound text/media send-unit planning, chunking, captions, and
+// single-use implicit reply consumption.
 import { describe, expect, it } from "vitest";
 import { planOutboundMediaMessageUnits, planOutboundTextMessageUnits } from "./message-plan.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";

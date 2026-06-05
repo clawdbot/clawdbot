@@ -1,3 +1,4 @@
+// Telegram tests cover allowed updates plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 let DEFAULT_TELEGRAM_UPDATE_TYPES: typeof import("./allowed-updates.js").DEFAULT_TELEGRAM_UPDATE_TYPES;
 let resolveTelegramAllowedUpdates: typeof import("./allowed-updates.js").resolveTelegramAllowedUpdates;

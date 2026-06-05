@@ -1,3 +1,4 @@
+// Opencode Go tests cover reasoning sanitizer plugin behavior.
 import { describe, expect, it } from "vitest";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 

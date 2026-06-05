@@ -1,3 +1,4 @@
+// One-shot main job tests cover disabling cron jobs after a single run.
 import { describe, expect, it, vi } from "vitest";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,

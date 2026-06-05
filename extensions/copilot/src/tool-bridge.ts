@@ -1,3 +1,4 @@
+// Copilot plugin module implements tool bridge behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type {
   AnyAgentTool,

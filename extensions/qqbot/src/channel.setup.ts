@@ -1,3 +1,4 @@
+// Qqbot plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import "./bridge/bootstrap.js";
 import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";

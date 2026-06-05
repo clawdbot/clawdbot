@@ -1,3 +1,4 @@
+// Host Server script supports OpenClaw repository automation.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";

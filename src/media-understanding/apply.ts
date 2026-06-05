@@ -1,3 +1,5 @@
+// Applies media-understanding outputs to inbound message context, including
+// attachment normalization, provider execution, file text extraction, and echoing.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -126,6 +128,8 @@ function wrapUntrustedAttachmentContent(content: string): string {
 }
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
+  // Some chat attachments arrive as UTF-16 without a reliable MIME charset; the
+  // BOM and zero-byte distribution are enough to select a safe decoder.
   if (!buffer || buffer.length < 2) {
     return undefined;
   }

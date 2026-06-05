@@ -1,3 +1,4 @@
+// Cron job patch tests cover applying partial updates to scheduled jobs.
 import { describe, expect, it } from "vitest";
 import { resolveFailureDestination } from "../delivery-plan.js";
 import type { CronJob } from "../types.js";

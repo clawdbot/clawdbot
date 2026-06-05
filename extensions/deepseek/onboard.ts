@@ -1,3 +1,4 @@
+// Deepseek setup module handles plugin onboarding behavior.
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,

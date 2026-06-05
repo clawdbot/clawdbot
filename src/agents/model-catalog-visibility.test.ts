@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for model catalog visibility filtering.
+ * Keeps provider/model allow and hide rules aligned with catalog row metadata.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";

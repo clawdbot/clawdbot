@@ -1,11 +1,18 @@
+/**
+ * OAuth identity comparison and mirroring decisions.
+ * Guards cross-agent credential copy/adoption so refreshed credentials cannot
+ * overwrite a different account's local auth state.
+ */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
+/** Normalize account-id style identity tokens for exact comparison. */
 export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
 
+/** Normalize email identity tokens for case-insensitive comparison. */
 export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
   return normalizeAuthIdentityToken(value)?.toLowerCase();
 }
@@ -89,6 +96,7 @@ export type OAuthMirrorDecision =
       reason: Exclude<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
     };
 
+/** Decide whether a refreshed OAuth credential should mirror into another store. */
 export function shouldMirrorRefreshedOAuthCredential(params: {
   existing: AuthProfileCredential | undefined;
   refreshed: OAuthCredential;

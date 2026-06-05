@@ -1,3 +1,4 @@
+// Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 

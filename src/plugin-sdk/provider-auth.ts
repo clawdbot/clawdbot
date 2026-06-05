@@ -1,3 +1,4 @@
+// Provider auth helpers define auth methods, credential resolution, and setup status contracts.
 import path from "node:path";
 import {
   asDateTimestampMs,

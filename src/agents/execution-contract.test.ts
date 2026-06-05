@@ -1,3 +1,4 @@
+// Covers provider/model gates for strict agentic execution-contract activation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -122,6 +123,8 @@ describe("resolveEffectiveExecutionContract", () => {
     });
 
     it("collapses to default on unsupported providers even with gpt-5 model ids", () => {
+      // Model naming alone is insufficient; unsupported providers must not
+      // inherit OpenAI-specific strict-agentic handling by accident.
       expect(
         resolveEffectiveExecutionContract({
           config: emptyConfig,

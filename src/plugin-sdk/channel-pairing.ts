@@ -1,3 +1,4 @@
+// Channel pairing contracts describe account/device pairing state shared by channel plugins.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 export {
   createLoggedPairingApprovalNotifier,

@@ -1,3 +1,4 @@
+// Verifies provider policy hooks without loading real provider plugins.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -6,6 +7,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { providerConfig?: { baseUrl?: string } };
   }) => {
+    // Google URL normalization is representative of plugin-owned policy hooks.
     if (params.provider !== "google") {
       return undefined;
     }
@@ -25,6 +27,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { env: NodeJS.ProcessEnv };
   }) => {
+    // API key markers can come from provider-specific non-key auth state.
     if (params.provider === "amazon-bedrock") {
       return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
     }
@@ -81,6 +84,7 @@ describe("models-config.providers.policy", () => {
   });
 
   it("does not treat generic transport APIs as provider plugin ids", () => {
+    // Transport ids like openai-completions are not provider-policy namespaces.
     const provider = {
       api: "openai-completions" as const,
       baseUrl: "https://example.invalid/v1",

@@ -1,3 +1,4 @@
+// Openai tests cover openclaw.plugin plugin behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";

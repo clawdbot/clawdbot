@@ -1,3 +1,4 @@
+// Bundled OpenClaw provider index advertises pre-install provider metadata for model picker discovery.
 import type { OpenClawProviderIndex } from "./types.js";
 
 // OpenClaw-owned preview metadata for providers whose plugins may not be

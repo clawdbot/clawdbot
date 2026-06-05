@@ -1,3 +1,8 @@
+/**
+ * Runtime channel plugin registry facade.
+ *
+ * Lists, resolves, and normalizes active channel plugins with bundled fallback.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
@@ -8,10 +13,6 @@ import {
 } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Runtime channel plugin registry facade used by core command/gateway paths.
- */
 
 /**
  * Lists currently loaded channel plugins in registry order.

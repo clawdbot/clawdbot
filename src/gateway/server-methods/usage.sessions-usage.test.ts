@@ -1,3 +1,5 @@
+// Session usage tests cover aggregate cost/token usage across configured and
+// discovered agent session logs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

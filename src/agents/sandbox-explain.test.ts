@@ -1,3 +1,4 @@
+// Verifies sandbox tool-policy resolution and blocked-tool explanation text.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -10,6 +11,7 @@ const { toolPolicyAuditInfo } = vi.hoisted(() => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    // Audit logging is asserted without touching the real subsystem logger.
     info: toolPolicyAuditInfo,
   }),
 }));

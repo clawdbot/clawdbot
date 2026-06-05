@@ -1,3 +1,4 @@
+// Discord plugin module implements payload behavior.
 import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
 import { Embed } from "./embeds.js";
 

@@ -1,3 +1,4 @@
+// Zalouser tests cover zalo js.credentials plugin behavior.
 import {
   lstat,
   mkdir,

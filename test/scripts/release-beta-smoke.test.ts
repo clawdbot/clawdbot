@@ -1,3 +1,4 @@
+// Release Beta Smoke tests cover release beta smoke script behavior.
 import { describe, expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,

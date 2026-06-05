@@ -1,3 +1,4 @@
+// Legacy auth-choice tests cover deprecated choice detection and replacement messages.
 import { describe, expect, it, vi } from "vitest";
 
 const manifestAuthChoices = vi.hoisted(() => [

@@ -1,3 +1,4 @@
+// Matrix plugin module implements startup maintenance behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   autoMigrateLegacyMatrixState,

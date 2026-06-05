@@ -1,3 +1,4 @@
+// Log assertions for config reload E2E scenarios.
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import { createConfigReloadLogScanner } from "./log-scanner.mjs";
 

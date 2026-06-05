@@ -1,3 +1,4 @@
+// Browser tests cover agent.storage plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseCookieSetOptions,

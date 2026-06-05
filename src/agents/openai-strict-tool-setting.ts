@@ -1,3 +1,8 @@
+/**
+ * Strict tool-schema default resolution for native OpenAI-compatible routes.
+ *
+ * Compatible providers can support strict schemas without inheriting OpenAI's required default.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 

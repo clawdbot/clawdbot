@@ -1,3 +1,4 @@
+// Command bootstrap tests cover CLI command bootstrap sequencing and side effects.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager embedding policy plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,

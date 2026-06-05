@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements ack reaction behavior.
 import {
   createAckReactionHandle,
   shouldAckReactionForWhatsApp,

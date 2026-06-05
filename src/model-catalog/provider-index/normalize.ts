@@ -1,3 +1,4 @@
+// Provider-index normalization validates generated discovery metadata and rejects unsafe provider entries.
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";

@@ -1,3 +1,8 @@
+/**
+ * Shared built-in tool contracts and helpers.
+ *
+ * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
+ */
 import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,

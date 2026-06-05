@@ -1,3 +1,4 @@
+// Qqbot plugin module implements exec approvals behavior.
 import {
   markImplicitSameChatApprovalAuthorization,
   resolveApprovalApprovers,

@@ -1,3 +1,4 @@
+// Gateway install token tests cover token resolution from config, env, and command options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";

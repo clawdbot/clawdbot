@@ -1,3 +1,4 @@
+// Verbose tar install tests cover archive extraction diagnostics formatting.
 import { describe, expect, it } from "vitest";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 

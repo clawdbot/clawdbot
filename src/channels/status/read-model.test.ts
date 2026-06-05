@@ -1,3 +1,4 @@
+// Status read-model tests cover channel status projection from runtime state.
 import { describe, expect, it } from "vitest";
 import {
   findRuntimeChannelAccount,

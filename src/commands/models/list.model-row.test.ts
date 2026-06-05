@@ -1,3 +1,4 @@
+// Model row tests cover per-model row normalization and capability labels.
 import { describe, expect, it } from "vitest";
 import { toModelRow } from "./list.model-row.js";
 

@@ -1,3 +1,4 @@
+// Thread binding API tests cover channel plugin thread binding contracts and helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({

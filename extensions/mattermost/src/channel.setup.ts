@@ -1,3 +1,4 @@
+// Mattermost plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "./channel-api.js";
 import {
   describeMattermostAccount,

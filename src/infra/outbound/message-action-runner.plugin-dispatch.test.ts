@@ -1,3 +1,5 @@
+// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
+// and plugin tool-result extraction.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";

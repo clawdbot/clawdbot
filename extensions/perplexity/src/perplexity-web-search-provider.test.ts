@@ -1,3 +1,4 @@
+// Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";

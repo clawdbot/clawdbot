@@ -1,3 +1,4 @@
+// Control UI config module wires vitest behavior.
 import { defineConfig } from "vitest/config";
 import { resolveDefaultVitestPool } from "../test/vitest/vitest.shared.config.ts";
 

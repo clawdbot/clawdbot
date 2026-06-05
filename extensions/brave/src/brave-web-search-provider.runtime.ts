@@ -1,3 +1,7 @@
+/**
+ * Brave Search HTTP runtime. It resolves credentials, enforces endpoint safety,
+ * applies caching, and maps Brave web/LLM-context API responses.
+ */
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -334,6 +338,7 @@ async function runBraveWebSearch(params: {
   });
 }
 
+/** Execute one Brave Search request using web or LLM-context mode. */
 export async function executeBraveSearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,

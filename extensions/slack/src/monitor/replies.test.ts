@@ -1,3 +1,4 @@
+// Slack tests cover replies plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();

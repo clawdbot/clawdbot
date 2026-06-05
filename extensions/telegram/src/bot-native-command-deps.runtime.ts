@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native command deps behavior.
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";

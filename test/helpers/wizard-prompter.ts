@@ -1,3 +1,4 @@
+// Wizard prompter test helper provides mocked wizard prompt responses.
 import { vi } from "vitest";
 import type { WizardPrompter } from "../../src/wizard/prompts.js";
 

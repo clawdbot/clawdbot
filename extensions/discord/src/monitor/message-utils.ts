@@ -1,3 +1,4 @@
+// Discord helper module supports message utils behavior.
 export {
   resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,

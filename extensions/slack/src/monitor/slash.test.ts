@@ -1,3 +1,4 @@
+// Slack tests cover slash plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 

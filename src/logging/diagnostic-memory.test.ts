@@ -1,3 +1,4 @@
+// Diagnostic memory tests cover memory snapshot capture and diagnostic log output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

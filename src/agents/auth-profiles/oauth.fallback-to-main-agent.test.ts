@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth fallback to main-agent credentials.
+ * Ensures agent-local auth can recover from refresh failure by adopting a fresh
+ * main-store credential when identity checks allow it.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

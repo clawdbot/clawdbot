@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.credentials behavior.
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { delimiter, dirname, join } from "node:path";

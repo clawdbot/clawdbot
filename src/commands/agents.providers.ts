@@ -1,3 +1,4 @@
+// Provider/account summary helpers for `openclaw agents list`.
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -29,6 +30,7 @@ function providerAccountKey(provider: ChannelId, accountId?: string) {
   return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
 }
 
+/** Build stable provider labels/default accounts without resolving live account state. */
 export function buildProviderSummaryMetadataIndex(
   cfg: OpenClawConfig,
 ): Map<ChannelId, ProviderSummaryMetadata> {
@@ -90,6 +92,7 @@ async function resolveReadOnlyAccount(params: {
   return params.plugin.config.resolveAccount(params.cfg, params.accountId);
 }
 
+/** Inspect configured provider accounts and classify their display state. */
 export async function buildProviderStatusIndex(
   cfg: OpenClawConfig,
 ): Promise<Map<string, ProviderAccountStatus>> {
@@ -192,6 +195,7 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
+/** Render the provider/account routes implied by an agent's route bindings. */
 export function summarizeBindings(
   cfg: OpenClawConfig,
   bindings: AgentBinding[],
@@ -221,6 +225,7 @@ export function summarizeBindings(
   return [...seen.values()];
 }
 
+/** Render provider status lines relevant to a specific agent summary. */
 export function listProvidersForAgent(params: {
   summaryIsDefault: boolean;
   cfg: OpenClawConfig;

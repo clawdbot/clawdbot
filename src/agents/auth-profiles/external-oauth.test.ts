@@ -1,3 +1,8 @@
+/**
+ * Tests runtime external OAuth overlays.
+ * Covers provider plugin profiles, external CLI scoped discovery, persistence
+ * rules, and compatibility aliases.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import {

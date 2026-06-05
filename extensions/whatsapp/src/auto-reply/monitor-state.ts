@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor state behavior.
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,

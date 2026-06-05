@@ -1,3 +1,4 @@
+// Install download test utilities provide fake download responses and paths.
 import path from "node:path";
 
 /** Points OpenClaw state at a workspace-local temp dir for install tests. */

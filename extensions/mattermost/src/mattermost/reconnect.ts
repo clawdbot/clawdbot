@@ -1,3 +1,4 @@
+// Mattermost plugin module implements reconnect behavior.
 type ReconnectOutcome = "resolved" | "rejected";
 
 type ShouldReconnectParams = {

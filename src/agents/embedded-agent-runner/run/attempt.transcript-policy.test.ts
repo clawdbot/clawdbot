@@ -1,3 +1,4 @@
+// Coverage for resolving transcript replay policy for embedded attempts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
@@ -16,6 +17,8 @@ describe("resolveAttemptTranscriptPolicy", () => {
   });
 
   it("uses RuntimePlan transcript policy when available", () => {
+    // RuntimePlan owns provider/plugin transcript policy; legacy fallbacks only
+    // run when a plan is unavailable.
     const plannedPolicy = {
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
@@ -65,6 +68,8 @@ describe("resolveAttemptTranscriptPolicy", () => {
   });
 
   it("keeps the legacy provider transcript fallback when no RuntimePlan is available", () => {
+    // Legacy fallback remains for older runner paths and tests provider runtime
+    // plugin discovery with the same workspace/env context.
     const env = { OPENCLAW_TEST_TRANSCRIPT_POLICY: "1" } as NodeJS.ProcessEnv;
     const policy = resolveAttemptTranscriptPolicy({
       runtimePlanModelContext: {

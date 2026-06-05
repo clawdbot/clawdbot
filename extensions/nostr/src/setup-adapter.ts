@@ -1,3 +1,4 @@
+// Nostr plugin module implements setup adapter behavior.
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";

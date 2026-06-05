@@ -1,3 +1,5 @@
+// Hostname normalization tests cover DNS trailing dots, empty input, and
+// bracketed IPv6 literal handling.
 import { describe, expect, it } from "vitest";
 import { normalizeHostname } from "./hostname.js";
 

@@ -1,3 +1,4 @@
+// Slack plugin module implements channels behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";

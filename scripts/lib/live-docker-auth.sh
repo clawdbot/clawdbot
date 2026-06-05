@@ -30,7 +30,15 @@ openclaw_live_truthy() {
 }
 
 openclaw_live_is_ci() {
-  openclaw_live_truthy "${CI:-}" || openclaw_live_truthy "${GITHUB_ACTIONS:-}"
+  openclaw_live_truthy "${CI:-}" \
+    || openclaw_live_truthy "${GITHUB_ACTIONS:-}" \
+    || openclaw_live_truthy "${OPENCLAW_TESTBOX:-}"
+}
+
+openclaw_live_uses_managed_bind_dirs() {
+  openclaw_live_is_ci \
+    || [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]] \
+    || [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]
 }
 
 openclaw_live_default_profile_file() {
@@ -304,4 +312,46 @@ openclaw_live_stage_auth_into_home() {
 
     shift
   done
+}
+
+openclaw_live_prepare_bind_dir_for_container_user() {
+  local dir="${1:?directory required}"
+
+  mkdir -p "$dir"
+  chmod u+rwx "$dir" || true
+}
+
+openclaw_live_stage_profile_into_home() {
+  local dest_home="${1:?destination home directory required}"
+  local profile_file="${2:?profile file required}"
+
+  [[ -f "$profile_file" && -r "$profile_file" ]] || return 1
+  mkdir -p "$dest_home"
+  cp "$profile_file" "$dest_home/.profile"
+  chmod u+rw "$dest_home/.profile" || true
+}
+
+openclaw_live_chown_bind_dirs_for_container_user() {
+  local image_name="${1:?image name required}"
+  local container_user="${2:?container user required}"
+  shift 2
+
+  local mount_args=()
+  local index=0
+  local dir
+  for dir in "$@"; do
+    [[ -n "$dir" ]] || continue
+    mkdir -p "$dir"
+    mount_args+=(-v "$dir:/openclaw-bind-dir-$index")
+    index=$((index + 1))
+  done
+  ((index > 0)) || return 0
+
+  docker run --rm \
+    -u 0:0 \
+    --entrypoint sh \
+    -e OPENCLAW_BIND_DIR_USER="$container_user" \
+    "${mount_args[@]}" \
+    "$image_name" \
+    -c 'for dir in /openclaw-bind-dir-*; do chown -R "$OPENCLAW_BIND_DIR_USER" "$dir"; done'
 }

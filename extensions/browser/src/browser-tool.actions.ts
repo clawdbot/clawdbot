@@ -1,3 +1,9 @@
+/**
+ * Browser agent tool action executors.
+ *
+ * Converts model-facing parameters into browser control client calls and wraps
+ * browser-originated text as untrusted content before returning it to agents.
+ */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -102,6 +108,8 @@ function withConfiguredActTimeout(
     return request;
   }
   if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
+    // Chrome MCP existing-session actions reject per-call timeouts for these
+    // operations, so default timeout injection must stay disabled there.
     return request;
   }
 
@@ -197,6 +205,8 @@ function wrapBrowserExternalJson(params: {
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
   const extractedText = JSON.stringify(params.payload, null, 2);
+  // Browser tabs, snapshots, and console output are page-controlled data. Keep
+  // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {
     source: "browser",
     includeWarning: params.includeWarning ?? true,
@@ -332,6 +342,7 @@ export async function executeTabsAction(params: {
   return formatTabsToolResult(tabs);
 }
 
+/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -380,6 +391,8 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  // AI snapshots have a compact default cap; ARIA snapshots keep full structure
+  // unless maxChars is explicit, because agents often need complete node refs.
   const snapshotTimeoutMs =
     readPositiveIntegerParam(input, "timeoutMs", {
       message: "timeoutMs must be a positive integer.",
@@ -520,6 +533,7 @@ export async function executeSnapshotAction(params: {
   }
 }
 
+/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -549,6 +563,7 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
+/** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
   baseUrl?: string;

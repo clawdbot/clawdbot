@@ -1,3 +1,5 @@
+// Media generation background test support centralizes task/announcement mocks
+// and assertions shared by image, video, and music generation tests.
 import { expect, vi } from "vitest";
 
 type MockWithReset = {
@@ -204,6 +206,8 @@ export function expectFallbackMediaAnnouncement({
   resultMediaPath,
   mediaUrls,
 }: FallbackAnnouncementExpectation): void {
+  // Fallback announcements are agent-mediated completions: internal events must
+  // carry media URLs and a visible-reply instruction for the completion agent.
   expect(deliverAnnouncementMock).toHaveBeenCalledTimes(1);
   const params = requireMockFirstParam(
     deliverAnnouncementMock,

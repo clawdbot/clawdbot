@@ -1,3 +1,4 @@
+// Control UI i18n report tests cover locale report generation.
 import { describe, expect, it } from "vitest";
 import {
   filterRawCopyEntries,

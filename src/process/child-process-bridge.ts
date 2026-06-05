@@ -1,3 +1,4 @@
+// Child process bridge adapts child process events into typed lifecycle callbacks.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
 

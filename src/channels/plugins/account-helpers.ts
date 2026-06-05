@@ -1,3 +1,8 @@
+/**
+ * Channel plugin account helper factory.
+ *
+ * Lists configured accounts and resolves default-account behavior for plugin configs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

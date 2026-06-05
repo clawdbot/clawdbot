@@ -1,3 +1,8 @@
+/**
+ * Foreground exec failure tests.
+ * Verifies failed process outcomes surface useful text/details for shell
+ * errors, timeouts, signals, and runtime failures.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnInput } from "../process/supervisor/index.js";
 import { captureEnv } from "../test-utils/env.js";

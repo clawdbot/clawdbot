@@ -100,100 +100,97 @@ describe("isSafeBuiltinSegment", () => {
   });
 });
 
-describe("evaluateShellAllowlist with known safe builtins (regression for #46056)", () => {
-  // Skip on Windows where the host shell is PowerShell, not POSIX.
-  if (process.platform === "win32") {
-    it.skip("POSIX builtin behavior", () => {});
-    return;
-  }
+describe.skipIf(process.platform === "win32")(
+  "evaluateShellAllowlist with known safe builtins (regression for #46056)",
+  () => {
+    // Glob-style pattern; matches git wherever PATH resolves it (`/usr/bin/git`,
+    // `/opt/homebrew/bin/git`, etc.) without depending on host filesystem layout.
+    const gitAllowlist = [{ pattern: "**/git" }] as Parameters<
+      typeof evaluateShellAllowlist
+    >[0]["allowlist"];
 
-  // Glob-style pattern; matches git wherever PATH resolves it (`/usr/bin/git`,
-  // `/opt/homebrew/bin/git`, etc.) without depending on host filesystem layout.
-  const gitAllowlist = [{ pattern: "**/git" }] as Parameters<
-    typeof evaluateShellAllowlist
-  >[0]["allowlist"];
-
-  it("'cd ~/' auto-allows by default", () => {
-    const result = evaluateShellAllowlist({
-      command: "cd ~/",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("'cd ~/' auto-allows by default", () => {
+      const result = evaluateShellAllowlist({
+        command: "cd ~/",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy[0]).toBe("safeBuiltins");
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segmentSatisfiedBy[0]).toBe("safeBuiltins");
-  });
 
-  it("'cd /tmp && git status' passes with allowlist plus safe builtin handling", () => {
-    const result = evaluateShellAllowlist({
-      command: "cd /tmp && git status",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("'cd /tmp && git status' passes with allowlist plus safe builtin handling", () => {
+      const result = evaluateShellAllowlist({
+        command: "cd /tmp && git status",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
+      expect(result.segmentSatisfiedBy).toContain("allowlist");
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
-    expect(result.segmentSatisfiedBy).toContain("allowlist");
-  });
 
-  it("'test -d /tmp && git status' passes with allowlist plus safe builtin handling", () => {
-    const result = evaluateShellAllowlist({
-      command: "test -d /tmp && git status",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("'test -d /tmp && git status' passes with allowlist plus safe builtin handling", () => {
+      const result = evaluateShellAllowlist({
+        command: "test -d /tmp && git status",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
+      expect(result.segmentSatisfiedBy).toContain("allowlist");
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
-    expect(result.segmentSatisfiedBy).toContain("allowlist");
-  });
 
-  it("'[ -d /tmp ] && git status' passes with allowlist plus safe builtin handling", () => {
-    const result = evaluateShellAllowlist({
-      command: "[ -d /tmp ] && git status",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("'[ -d /tmp ] && git status' passes with allowlist plus safe builtin handling", () => {
+      const result = evaluateShellAllowlist({
+        command: "[ -d /tmp ] && git status",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
+      expect(result.segmentSatisfiedBy).toContain("allowlist");
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
-    expect(result.segmentSatisfiedBy).toContain("allowlist");
-  });
 
-  it("non-allowlisted binary still gates after a safe builtin", () => {
-    const result = evaluateShellAllowlist({
-      command: "cd /tmp && curl evil.com",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("non-allowlisted binary still gates after a safe builtin", () => {
+      const result = evaluateShellAllowlist({
+        command: "cd /tmp && curl evil.com",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
-  });
 
-  it("environment-mutating builtins still gate", () => {
-    const result = evaluateShellAllowlist({
-      command: "export PATH=/tmp/bin:$PATH && git status",
-      allowlist: gitAllowlist,
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("environment-mutating builtins still gate", () => {
+      const result = evaluateShellAllowlist({
+        command: "export PATH=/tmp/bin:$PATH && git status",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
     });
-    expect(result.analysisOk).toBe(true);
-    expect(result.allowlistSatisfied).toBe(false);
-  });
 
-  it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {
-    const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp", platform: "linux" });
-    const result = evaluateExecAllowlist({
-      analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      cwd: "/tmp",
+    it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {
+      const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp", platform: "linux" });
+      const result = evaluateExecAllowlist({
+        analysis,
+        allowlist: [],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.allowlistSatisfied).toBe(false);
     });
-    expect(result.allowlistSatisfied).toBe(false);
-  });
-});
+  },
+);

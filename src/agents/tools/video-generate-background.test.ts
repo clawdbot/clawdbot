@@ -1,3 +1,5 @@
+// Video generation background tests cover detached task lifecycle, keepalive
+// progress, completion announcement, and direct failure delivery.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentRunContext, resetAgentRunContextForTest } from "../../infra/agent-events.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
@@ -117,6 +119,8 @@ describe("video generate background helpers", () => {
   });
 
   it("keeps long-running media tasks fresh while provider work is pending", async () => {
+    // Provider video generation can outlive normal activity windows; keepalive
+    // progress prevents the detached task from looking stale while it waits.
     vi.useFakeTimers();
     let resolveRun: ((value: string) => void) | undefined;
     const runPromise = new Promise<string>((resolve) => {

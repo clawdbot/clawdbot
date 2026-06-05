@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario packs plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   QA_OBSERVABILITY_SCENARIO_IDS,

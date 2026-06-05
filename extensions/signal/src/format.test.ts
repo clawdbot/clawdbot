@@ -1,3 +1,4 @@
+// Signal tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToSignalText } from "./format.js";
 

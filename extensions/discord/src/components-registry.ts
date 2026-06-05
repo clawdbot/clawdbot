@@ -1,3 +1,4 @@
+// Discord plugin module implements components registry behavior.
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import {
   asDateTimestampMs,

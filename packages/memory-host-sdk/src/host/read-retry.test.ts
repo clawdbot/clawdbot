@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover read retry behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { retryTransientMemoryRead } from "./read-retry.js";
 

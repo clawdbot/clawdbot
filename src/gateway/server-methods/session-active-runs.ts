@@ -1,3 +1,5 @@
+// Session active-run helpers decide whether session operations should treat a
+// session as busy based on Control UI-visible active chat/agent runs.
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 

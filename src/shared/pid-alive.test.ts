@@ -1,3 +1,4 @@
+// PID liveness tests cover process existence checks across platforms.
 import fsSync from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";

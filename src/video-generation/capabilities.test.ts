@@ -1,3 +1,4 @@
+// Video generation capability tests cover model capability resolution.
 import { describe, expect, it } from "vitest";
 import {
   listSupportedVideoGenerationModes,

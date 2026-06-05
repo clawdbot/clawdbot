@@ -1,3 +1,8 @@
+/**
+ * Interactive terminal theme loader.
+ *
+ * Validates theme JSON, resolves color variables, watches custom theme files, and exposes Pi TUI theme adapters.
+ */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {

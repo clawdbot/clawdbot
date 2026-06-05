@@ -1,3 +1,4 @@
+// Whatsapp tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 

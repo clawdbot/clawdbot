@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Drives npm Telegram RTT test messages through the fixture server.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";

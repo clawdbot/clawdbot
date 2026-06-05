@@ -1,3 +1,4 @@
+// Bench Cli Startup script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";

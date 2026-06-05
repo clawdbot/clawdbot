@@ -121,6 +121,51 @@ describe("config env vars", () => {
     });
   });
 
+  it("drops unresolved env references from config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        vars: {
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+          BRAVE_API_KEY: "config-key",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("drops unresolved env references from top-level config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+        BRAVE_API_KEY: "config-key",
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("keeps resolved env references from config env", async () => {
+    const resolvedConfig = resolveConfigEnvVars(
+      {
+        env: {
+          vars: {
+            OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+            BRAVE_API_KEY: "config-key",
+          },
+        },
+      },
+      { OPENROUTER_API_KEY: "resolved-key" },
+    ) as OpenClawConfig;
+
+    const entries = collectConfigRuntimeEnvVars(resolvedConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBe("resolved-key");
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
   it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
     await withTempHome(async (_home) => {
       await withEnvOverride({ BRAVE_API_KEY: undefined }, async () => {

@@ -1,3 +1,5 @@
+// Verifies SQLite-backed outbound queue storage, metadata, failure updates,
+// recovery-state markers, and failed-entry moves.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";

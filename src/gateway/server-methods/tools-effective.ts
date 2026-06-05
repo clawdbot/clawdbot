@@ -1,3 +1,5 @@
+// Effective tools methods resolve the tools available to a session by combining
+// bundled tools, MCP tools, plugin policy, model context, and cache state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,

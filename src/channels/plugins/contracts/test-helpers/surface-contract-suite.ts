@@ -1,8 +1,11 @@
+/**
+ * Channel plugin surface contract assertions.
+ *
+ * Checks the minimum callable shape for optional channel plugin adapter surfaces.
+ */
 import { expect } from "vitest";
 import type { ChannelPlugin } from "../../types.js";
 
-// Shape assertions for optional channel plugin surfaces. These tests validate
-// public adapter contracts without invoking channel-specific runtime behavior.
 /** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {
   plugin: Pick<

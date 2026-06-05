@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for human-readable session slug generation.
+ * Verifies deterministic choices, collision numbering, and fallback suffixes.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionSlug } from "./session-slug.js";
 

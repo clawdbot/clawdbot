@@ -1,3 +1,4 @@
+// Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMistralCatalogModels,

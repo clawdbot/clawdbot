@@ -1,3 +1,4 @@
+// Matrix tests cover profile plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.fn();

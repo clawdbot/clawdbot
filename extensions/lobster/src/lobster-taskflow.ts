@@ -1,3 +1,4 @@
+// Lobster plugin module implements lobster taskflow behavior.
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import type { LobsterEnvelope, LobsterRunner, LobsterRunnerParams } from "./lobster-runner.js";
 

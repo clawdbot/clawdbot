@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Checks pairing config logic for account-scoped allowlist handling.
 import ts from "typescript";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {

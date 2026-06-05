@@ -1,3 +1,4 @@
+// LLM Core tests cover validation behavior.
 import { describe, expect, it } from "vitest";
 import type { Tool } from "./types.js";
 import { validateToolArguments } from "./validation.js";

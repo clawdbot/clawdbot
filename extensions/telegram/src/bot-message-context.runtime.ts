@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context behavior.
 export { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 export { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 export { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";

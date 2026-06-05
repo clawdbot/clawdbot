@@ -1,3 +1,4 @@
+// Openai tests cover openai provider plugin behavior.
 import OpenAI from "openai";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";

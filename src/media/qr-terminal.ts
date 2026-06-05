@@ -1,3 +1,4 @@
+// QR terminal helpers render QR codes for terminal output.
 import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
 
 type QrTerminalModules = {

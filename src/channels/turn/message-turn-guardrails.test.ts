@@ -1,3 +1,4 @@
+// Message turn guardrail tests cover channel turn safety checks and fixture boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

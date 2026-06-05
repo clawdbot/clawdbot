@@ -1,3 +1,4 @@
+// Supervisor log runtime bridges supervisor events into subsystem logging.
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /** Runtime logging boundary for lazy supervisor paths and focused test mocks. */

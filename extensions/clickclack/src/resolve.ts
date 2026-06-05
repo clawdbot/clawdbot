@@ -1,5 +1,11 @@
+/**
+ * ClickClack name/id resolution helpers for workspace and channel config.
+ */
 import type { ClickClackClient } from "./http-client.js";
 
+/**
+ * Resolves a workspace slug/name/id from config to a ClickClack workspace id.
+ */
 export async function resolveWorkspaceId(client: ClickClackClient, workspace: string) {
   if (workspace.startsWith("wsp_")) {
     return workspace;
@@ -15,6 +21,10 @@ export async function resolveWorkspaceId(client: ClickClackClient, workspace: st
   return found.id;
 }
 
+/**
+ * Resolves a channel name/id from config or target input to a ClickClack
+ * channel id.
+ */
 export async function resolveChannelId(
   client: ClickClackClient,
   workspaceId: string,

@@ -1,7 +1,6 @@
 // Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
-  ChannelStreamingProgressConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -23,13 +22,7 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
-  commentary?: boolean;
-};
-export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: DiscordStreamingProgressConfig;
-};
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;

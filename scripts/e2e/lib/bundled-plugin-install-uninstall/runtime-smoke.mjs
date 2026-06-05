@@ -1,3 +1,4 @@
+// Runtime smoke script for bundled plugin install/uninstall E2E validation.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

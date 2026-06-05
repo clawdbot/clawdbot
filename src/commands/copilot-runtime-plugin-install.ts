@@ -1,3 +1,4 @@
+// GitHub Copilot runtime plugin auto-install/repair helpers for model selections.
 import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilot-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -17,6 +18,7 @@ const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR = {
 
 export type CopilotRuntimePluginInstallResult = RuntimePluginInstallResult;
 
+/** Return true when a selected model requires the Copilot runtime plugin to be installed. */
 export function selectedModelShouldEnsureCopilotRuntimePlugin(params: {
   cfg: OpenClawConfig;
   model?: string;

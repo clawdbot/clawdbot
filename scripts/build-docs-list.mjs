@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Writes the `bin/docs-list` wrapper used by package scripts and docs tooling.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

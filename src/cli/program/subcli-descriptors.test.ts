@@ -1,3 +1,4 @@
+// SubCLI descriptor tests cover metadata for registered nested command groups.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function importSubCliDescriptors() {

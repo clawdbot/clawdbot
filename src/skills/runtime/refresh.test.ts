@@ -1,3 +1,4 @@
+// Skill refresh tests cover runtime reload events and refresh-state updates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

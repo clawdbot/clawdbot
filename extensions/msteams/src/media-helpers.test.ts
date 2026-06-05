@@ -1,3 +1,4 @@
+// Msteams tests cover media helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 

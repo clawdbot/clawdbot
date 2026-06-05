@@ -1,3 +1,4 @@
+// Coverage for waiting on completion-required async tool tasks.
 import { describe, expect, it } from "vitest";
 import {
   completeTaskRunByRunId,
@@ -11,6 +12,8 @@ import {
 } from "./attempt.async-tasks.js";
 
 function requireCreatedTask(task: TaskRecord | null): TaskRecord {
+  // Task registry creation returns null for invalid task shapes; tests require
+  // a concrete active record before waiting.
   if (!task) {
     throw new Error("expected test task to be created");
   }
@@ -19,6 +22,8 @@ function requireCreatedTask(task: TaskRecord | null): TaskRecord {
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
   it("waits for async task ids discovered during the attempt", async () => {
+    // Tool metadata is the primary source for async task ids produced during
+    // the current attempt.
     resetTaskRegistryForTests();
     const task = requireCreatedTask(
       createRunningTaskRun({
@@ -93,6 +98,8 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
   });
 
   it("waits for active cron media tasks from the task registry", async () => {
+    // Cron media tools may start tasks before metadata is flushed, so the
+    // registry is also consulted by session key.
     resetTaskRegistryForTests();
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
     createRunningTaskRun({

@@ -1,3 +1,4 @@
+// Copilot plugin module implements compaction bridge behavior.
 import type { SessionConfig } from "@github/copilot-sdk";
 
 // Compaction bridge for the GitHub Copilot agent runtime.

@@ -1,3 +1,4 @@
+// SQLite readers for plugin install indexes produced during E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";

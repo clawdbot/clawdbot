@@ -1,7 +1,10 @@
+/**
+ * Prompt-cache normalization helpers. They keep generated prompt sections
+ * deterministic across platform newlines, trailing whitespace, and input
+ * ordering.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-// Prompt-cache normalization helpers. These keep generated prompt sections
-// deterministic across platform newlines, trailing whitespace, and input order.
 /** Normalize structured prompt text before hashing or snapshot comparison. */
 export function normalizeStructuredPromptSection(text: string): string {
   return text

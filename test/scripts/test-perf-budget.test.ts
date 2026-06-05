@@ -1,3 +1,4 @@
+// Test Perf Budget tests cover test perf budget script behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/test-perf-budget.mjs";
 

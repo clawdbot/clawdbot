@@ -1,3 +1,4 @@
+// Msteams tests cover oauth plugin behavior.
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

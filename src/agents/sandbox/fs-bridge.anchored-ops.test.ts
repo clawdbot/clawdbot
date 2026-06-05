@@ -1,3 +1,5 @@
+// Anchored filesystem bridge tests cover pinned parent/basename operations that
+// avoid path re-resolution inside Docker mutation commands.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -112,6 +114,8 @@ describe("sandbox fs bridge anchored ops", () => {
   ] as const;
 
   it.each(pinnedCases)("$name", async (testCase) => {
+    // Mutations pass mount roots and basenames separately; full target paths
+    // would allow symlink swaps between validation and execution.
     await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
@@ -152,6 +156,8 @@ describe("sandbox fs bridge anchored ops", () => {
   it.runIf(process.platform !== "win32")(
     "write resolves symlink parents to canonical pinned paths",
     async () => {
+      // Parent symlinks are resolved once to a canonical path, then the write is
+      // anchored there so later alias changes cannot redirect the target.
       await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const realDir = path.join(workspaceDir, "real");

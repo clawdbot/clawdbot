@@ -1,3 +1,5 @@
+// Shared PDF tool test helpers provide isolated agent dirs and scrub provider
+// auth variables for deterministic model-resolution tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Line plugin module implements basic cards behavior.
 import { attachFooterText } from "./common.js";
 import type {
   Action,

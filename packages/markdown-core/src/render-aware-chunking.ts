@@ -1,3 +1,4 @@
+// Markdown Core module implements render aware chunking behavior.
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,

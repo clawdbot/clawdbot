@@ -1,3 +1,4 @@
+// Whatsapp tests cover setup entry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import * as legacySessionSurfaceApi from "./legacy-session-surface-api.js";
 import * as legacyStateMigrationsApi from "./legacy-state-migrations-api.js";

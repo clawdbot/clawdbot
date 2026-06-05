@@ -1,3 +1,5 @@
+// ls tool tests cover deterministic directory listings and safe limit
+// normalization for agent-visible file enumeration.
 import { describe, expect, it } from "vitest";
 import { createLsToolDefinition, type LsOperations } from "./ls.js";
 
@@ -20,6 +22,7 @@ function textContent(
 
 describe("ls tool", () => {
   it("clamps non-positive limits instead of reporting a non-empty directory as empty", async () => {
+    // Clamp to one entry so bad numeric input cannot hide directory contents.
     const tool = createLsToolDefinition("/workspace", {
       operations: operations(["beta.txt", "alpha.txt"]),
     });

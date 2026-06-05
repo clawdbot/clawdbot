@@ -1,3 +1,4 @@
+// Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
 import type {
   RuntimeId,

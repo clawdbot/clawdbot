@@ -1,3 +1,4 @@
+// Plugin update selection tests cover CLI plugin update target selection.
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginUpdateSelection } from "./plugins-update-selection.js";

@@ -1,3 +1,4 @@
+// Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import {

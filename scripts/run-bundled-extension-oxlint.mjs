@@ -1,3 +1,4 @@
+// Runs oxlint over bundled plugin source files using the shared extension lint runner.
 import { runExtensionOxlint } from "./lib/run-extension-oxlint.mjs";
 
 runExtensionOxlint({

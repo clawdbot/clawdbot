@@ -1,3 +1,4 @@
+// Matrix plugin module implements test runtime behavior.
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,

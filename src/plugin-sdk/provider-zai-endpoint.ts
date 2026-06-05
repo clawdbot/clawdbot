@@ -6,8 +6,10 @@
 
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
+/** Supported Z.AI endpoint families handled by the deprecated endpoint probe. */
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
+/** Result of probing a Z.AI API key against one endpoint family. */
 export type ZaiDetectedEndpoint = {
   endpoint: ZaiEndpointId;
   baseUrl: string;

@@ -1,3 +1,4 @@
+// Signal tests cover monitor.tool result.pairs uuid only senders uuid allowlist entry plugin behavior.
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {

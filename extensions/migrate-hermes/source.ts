@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements source behavior.
 import path from "node:path";
 import { exists, isDirectory, resolveHomePath } from "./helpers.js";
 

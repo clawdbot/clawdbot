@@ -1,3 +1,4 @@
+// Msteams plugin module implements feedback reflection store behavior.
 import crypto from "node:crypto";
 import { getMSTeamsRuntime } from "./runtime.js";
 

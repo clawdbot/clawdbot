@@ -1,3 +1,4 @@
+// Mattermost tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {

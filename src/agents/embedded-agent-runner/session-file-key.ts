@@ -1,3 +1,6 @@
+/**
+ * Resolves stable keys for embedded session transcript files.
+ */
 import fs from "node:fs";
 import path from "node:path";
 

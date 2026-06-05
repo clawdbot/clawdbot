@@ -1,3 +1,4 @@
+// Skill filter helpers apply config, agent, and source filters to discovered skills.
 import {
   normalizeStringEntries,
   sortUniqueStrings,

@@ -1,3 +1,5 @@
+// Subagent delivery-state tests cover migration of legacy run fields into the
+// nested completion/delivery shape used by current registry records.
 import { describe, expect, it } from "vitest";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { LegacySubagentRunRecord } from "./subagent-delivery-state.js";
@@ -22,6 +24,8 @@ function baseRun(overrides: Partial<LegacySubagentRunRecord> = {}): LegacySubage
 
 describe("normalizeSubagentRunState", () => {
   it("migrates legacy pending delivery fields into nested completion and delivery state", () => {
+    // Restored runs may still carry flat pendingFinalDelivery fields from older
+    // builds; normalization must preserve retry payloads before stripping them.
     const entry = normalizeSubagentRunState(
       baseRun({
         frozenResultText: "child output",

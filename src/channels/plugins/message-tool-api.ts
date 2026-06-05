@@ -1,3 +1,8 @@
+/**
+ * Bundled channel message-tool public artifact loader.
+ *
+ * Resolves lightweight discovery hooks without loading full channel plugins.
+ */
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.public.js";
 

@@ -1,3 +1,4 @@
+// Command tree tests cover CLI command hierarchy construction and lookup.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { removeCommand, removeCommandByName } from "./command-tree.js";

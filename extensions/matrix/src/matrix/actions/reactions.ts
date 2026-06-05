@@ -1,3 +1,4 @@
+// Matrix plugin module implements reactions behavior.
 import {
   buildMatrixReactionRelationsPath,
   selectOwnMatrixReactionEventIds,

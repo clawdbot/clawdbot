@@ -1,3 +1,4 @@
+// Process supervisor barrel exposes the supervised process API.
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ProcessSupervisor } from "./types.js";
 

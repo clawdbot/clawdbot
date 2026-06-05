@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario runtime api plugin behavior.
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";

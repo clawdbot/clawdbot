@@ -1,3 +1,4 @@
+// Control UI module implements icons behavior.
 import { html, type TemplateResult } from "lit";
 
 // Lucide-style SVG icons

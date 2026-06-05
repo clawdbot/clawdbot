@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements deliver reply behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,

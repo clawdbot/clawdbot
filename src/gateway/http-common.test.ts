@@ -1,3 +1,5 @@
+// HTTP common tests cover JSON/text response helpers, auth failures, security
+// headers, SSE headers, body parsing, and disconnect diagnostics.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";

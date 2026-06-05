@@ -1,3 +1,4 @@
+// Hook client-IP config adapts gateway trusted-proxy settings for hook request handling.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookClientIpConfig } from "./hooks-request-handler.js";
 

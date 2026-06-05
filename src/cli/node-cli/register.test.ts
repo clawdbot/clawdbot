@@ -1,3 +1,4 @@
+// Node CLI register tests cover node command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeCli } from "./register.js";

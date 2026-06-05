@@ -1,5 +1,7 @@
-// Stable announce identifiers for child-run completion messages. Keep the
-// version prefix so future key formats can coexist with persisted v1 records.
+/**
+ * Stable announce identifiers for child-run completion messages.
+ * Versioned keys let future formats coexist with persisted v1 delivery records.
+ */
 type AnnounceIdFromChildRunParams = {
   childSessionKey: string;
   childRunId: string;

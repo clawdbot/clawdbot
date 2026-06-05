@@ -1,3 +1,4 @@
+// Control UI module implements custom theme behavior.
 import { z } from "zod";
 import { normalizeOptionalString } from "./string-coerce.ts";
 

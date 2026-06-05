@@ -1,3 +1,4 @@
+// QA channel protocol tests cover synthetic channel payload validation and parsing.
 import { describe, expect, it } from "vitest";
 import { sanitizeQaBusToolCalls } from "./qa-channel-protocol.js";
 

@@ -1,3 +1,8 @@
+/**
+ * OAuth refresh lock error helpers.
+ * Distinguishes global refresh-lock contention from auth-store lock timeouts
+ * and builds the user-facing contention error.
+ */
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../../infra/file-lock.js";
 
 /** Returns true when an error came from the global OAuth refresh lock. */

@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.lifecycle plugin behavior.
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,

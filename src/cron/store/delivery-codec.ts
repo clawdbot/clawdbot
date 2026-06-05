@@ -1,3 +1,4 @@
+/** SQLite column codec for cron delivery configuration. */
 import type { CronDelivery } from "../types.js";
 import { booleanToInteger, integerToBoolean } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";

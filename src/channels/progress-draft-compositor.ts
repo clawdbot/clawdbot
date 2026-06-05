@@ -1,3 +1,5 @@
+// Stateful progress-draft compositor for channel streaming previews.
+// It merges tool, reasoning, and commentary updates until the final reply replaces them.
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";

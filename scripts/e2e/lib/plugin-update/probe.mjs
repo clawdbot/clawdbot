@@ -1,3 +1,4 @@
+// Probe script for plugin update E2E scenarios.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Onboard config test helpers build model/provider config fixtures for plugin tests.
 import type { ModelApi } from "../provider-model-shared.js";
 import type { OpenClawConfig } from "../testing.js";
 

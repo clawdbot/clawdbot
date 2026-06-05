@@ -1,3 +1,8 @@
+/**
+ * Tests workspace-only guards for unsafe mounted sandboxes.
+ * Ensures read/write/edit/apply_patch cannot escape through mounted container
+ * paths unless policy explicitly allows it.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";

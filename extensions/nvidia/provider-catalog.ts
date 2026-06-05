@@ -1,3 +1,4 @@
+// Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
   isFutureDateTimestampMs,
@@ -15,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b";
+export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
 export const NVIDIA_FEATURED_MODELS_URL =
   "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
@@ -31,6 +32,12 @@ const FEATURED_MODEL_COST = {
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+} as const;
+const NVIDIA_ULTRA_DEFAULT_PARAMS = {
+  chat_template_kwargs: {
+    enable_thinking: false,
+    force_nonempty_content: true,
+  },
 } as const;
 
 type NvidiaFeaturedModel = {
@@ -67,12 +74,16 @@ const lookupNvidiaFeaturedModelHostname = (async (
 }) as LookupFn;
 
 export function buildNvidiaProvider(): ModelProviderConfig {
-  return {
+  const provider = {
     ...buildManifestModelProviderConfig({
       providerId: "nvidia",
       catalog: manifest.modelCatalog.providers.nvidia,
     }),
     apiKey: "NVIDIA_API_KEY",
+  };
+  return {
+    ...provider,
+    models: applyNvidiaModelDefaults(provider.models ?? []),
   };
 }
 
@@ -84,7 +95,7 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   }
   return {
     ...provider,
-    models: featuredModels,
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 
@@ -99,7 +110,7 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
   }
   return {
     ...provider,
-    models: featuredModels,
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 
@@ -176,6 +187,29 @@ function parseNvidiaFeaturedModels(payload: unknown): ModelDefinitionConfig[] | 
     .map(parseNvidiaFeaturedModel)
     .filter((model) => model !== null);
   return models.length > 0 ? models : null;
+}
+
+function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  return models.map((model) =>
+    model.id === NVIDIA_DEFAULT_MODEL_ID
+      ? {
+          ...model,
+          params: {
+            ...model.params,
+            chat_template_kwargs: {
+              ...NVIDIA_ULTRA_DEFAULT_PARAMS.chat_template_kwargs,
+              ...(isRecord(model.params?.chat_template_kwargs)
+                ? model.params.chat_template_kwargs
+                : {}),
+            },
+          },
+        }
+      : model,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

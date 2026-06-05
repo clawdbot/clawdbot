@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager session reindex behavior.
 export function shouldSyncSessionsForReindex(params: {
   hasSessionSource: boolean;
   sessionsDirty: boolean;

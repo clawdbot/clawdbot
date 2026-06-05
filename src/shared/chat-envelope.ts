@@ -1,3 +1,4 @@
+// Chat envelope helpers parse and format channel prefixes in chat text.
 const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
 const ENVELOPE_CHANNELS = [
   "WebChat",

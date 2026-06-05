@@ -1,3 +1,8 @@
+/**
+ * pdf built-in tool.
+ *
+ * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

@@ -1,3 +1,4 @@
+/** Migration provider lookup, option shaping, and plan creation helpers. */
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   ensureStandaloneMigrationProviderRegistryLoaded,
@@ -9,6 +10,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
+/** Resolves a migration provider from the loaded plugin migration registry. */
 export function resolveMigrationProvider(
   providerId: string,
   config = getRuntimeConfig(),
@@ -26,6 +28,7 @@ export function resolveMigrationProvider(
   return provider;
 }
 
+/** Builds provider-specific options from shared migrate CLI flags. */
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
   providerId = opts.provider,
@@ -40,6 +43,7 @@ export function buildMigrationProviderOptions(
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
+/** Creates a migration plan after validating provider-specific flag support. */
 export async function createMigrationPlan(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },

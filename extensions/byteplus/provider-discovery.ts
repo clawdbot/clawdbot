@@ -1,3 +1,6 @@
+/**
+ * Static provider discovery entries for BytePlus manifest-backed catalogs.
+ */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
 

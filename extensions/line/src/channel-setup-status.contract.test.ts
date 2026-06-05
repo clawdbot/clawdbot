@@ -1,3 +1,4 @@
+// Line tests cover channel setup status.contract plugin behavior.
 import {
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,

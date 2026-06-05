@@ -1,3 +1,9 @@
+/**
+ * Sandbox explanation command.
+ *
+ * It resolves the effective sandbox/tool/elevated policy for an agent session
+ * and prints either JSON or a human-readable fix-it report.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedEntries,
@@ -47,6 +53,8 @@ function normalizeExplainSessionKey(params: {
     });
   }
   if (raw.includes(":")) {
+    // Fully-qualified session keys are already scoped; only short names need
+    // agent/main-key expansion.
     return raw;
   }
   if (raw === "global") {
@@ -78,6 +86,8 @@ function inferProviderFromSessionKey(params: {
   if (parts[0] === configuredMainKey) {
     return undefined;
   }
+  // Legacy session keys embedded provider/channel in the first segment after
+  // agent id; use that as a fallback when the session store lacks channel data.
   const candidate = normalizeOptionalLowercaseString(parts[0]);
   if (!candidate) {
     return undefined;
@@ -115,6 +125,8 @@ function resolveActiveChannel(params: {
   ).trim();
   const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
   if (!normalizedCandidate) {
+    // Empty session-store channel fields can still be recovered from legacy key
+    // shapes, which keeps explain useful for old persisted sessions.
     return inferProviderFromSessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -133,6 +145,7 @@ function resolveActiveChannel(params: {
   });
 }
 
+/** Prints the effective sandbox policy for a session or agent. */
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
@@ -199,6 +212,8 @@ export async function sandboxExplainCommand(
     (elevatedAgent?.allowFrom ? agentAllowTokens.includes("*") : true);
 
   const elevatedFailures: Array<{ gate: string; key: string }> = [];
+  // Track each failed gate separately so the human report points at concrete
+  // config keys instead of only saying elevated access is disabled.
   if (!elevatedGlobalEnabled) {
     elevatedFailures.push({ gate: "enabled", key: "tools.elevated.enabled" });
   }

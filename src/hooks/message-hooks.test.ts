@@ -1,3 +1,4 @@
+// Message hook tests cover message hook dispatch and failure handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements harness runtime behavior.
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,

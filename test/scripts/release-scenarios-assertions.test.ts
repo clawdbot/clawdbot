@@ -1,3 +1,4 @@
+// Release Scenarios Assertions tests cover release scenarios assertions script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

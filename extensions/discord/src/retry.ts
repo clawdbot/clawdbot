@@ -1,3 +1,4 @@
+// Discord plugin module implements retry behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,

@@ -1,3 +1,4 @@
+// Codex tests cover prompt overlay runtime contract plugin behavior.
 import {
   codexPromptOverlayContext,
   GPT5_CONTRACT_MODEL_ID,

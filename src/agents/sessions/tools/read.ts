@@ -1,3 +1,8 @@
+/**
+ * Built-in read session tool.
+ *
+ * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
+ */
 import { constants } from "node:fs";
 import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";

@@ -1,3 +1,7 @@
+/**
+ * Browser CLI state commands for cookies, storage, viewport, emulation, and
+ * HTTP context settings.
+ */
 import type { Command } from "commander";
 import {
   normalizeOptionalLowercaseString,
@@ -84,6 +88,7 @@ async function runBrowserSetRequest(params: {
   });
 }
 
+/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

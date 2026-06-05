@@ -1,3 +1,4 @@
+// Vitest runtime config config wires the runtime config test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createRuntimeConfigVitestConfig(env?: Record<string, string | undefined>) {

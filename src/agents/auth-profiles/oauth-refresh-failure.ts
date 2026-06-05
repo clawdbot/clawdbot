@@ -1,9 +1,12 @@
+/**
+ * OAuth refresh failure classification and operator hints.
+ * Parses provider/reason codes from refresh failures and formats safe login
+ * commands without trusting raw provider text.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 
-// OAuth refresh failure classifiers for status/help text. Providers and reasons
-// are sanitized before being used in logs or suggested commands.
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
   | "invalid_grant"

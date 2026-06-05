@@ -1,3 +1,4 @@
+// Copilot tests cover doctor probes plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Plugin state runtime tests cover runtime-backed plugin state storage.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginRecord } from "../plugins/registry-types.js";

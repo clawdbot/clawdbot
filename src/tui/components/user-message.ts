@@ -1,3 +1,4 @@
+// User message component renders user-authored chat entries in the TUI log.
 import { theme } from "../theme/theme.js";
 import { MarkdownMessageComponent } from "./markdown-message.js";
 

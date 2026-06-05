@@ -1,3 +1,5 @@
+// Node system.run approval binding matcher.
+// Verifies command approvals against argv, cwd, session, agent, and env keys.
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
@@ -6,8 +8,6 @@ import {
   type SystemRunApprovalMatchResult,
 } from "../infra/system-run-approval-binding.js";
 
-// system.run approvals are bound to argv, cwd, agent/session, and env keys so a
-// node cannot replay one approval for a different command or execution context.
 type SystemRunApprovalBinding = {
   cwd: string | null;
   agentId: string | null;

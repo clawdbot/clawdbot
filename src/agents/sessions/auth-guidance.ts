@@ -1,12 +1,11 @@
-import { join } from "node:path";
-import { getDocsPath } from "../config.js";
-
 /**
  * Shared user-facing auth guidance for session/model selection failures.
  *
- * Messages include docs paths instead of provider-specific instructions so they
- * stay correct across OAuth/API-key providers.
+ * Uses docs paths instead of provider-specific instructions so guidance stays correct across OAuth/API-key providers.
  */
+import { join } from "node:path";
+import { getDocsPath } from "../config.js";
+
 const UNKNOWN_PROVIDER = "unknown";
 
 /** Returns the standard provider login help block. */

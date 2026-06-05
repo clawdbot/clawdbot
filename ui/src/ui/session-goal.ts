@@ -1,3 +1,4 @@
+// Control UI module implements session goal behavior.
 import type { SessionGoal } from "./types.ts";
 
 export function formatGoalTokenCount(value: number): string {

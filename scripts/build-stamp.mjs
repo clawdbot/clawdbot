@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+
+// Writes the local build stamp and re-exports build metadata helpers.
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { writeBuildStamp } from "./lib/local-build-metadata.mjs";

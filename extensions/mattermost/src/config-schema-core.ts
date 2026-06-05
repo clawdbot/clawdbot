@@ -1,3 +1,4 @@
+// Mattermost helper module supports config schema core behavior.
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,

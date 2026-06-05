@@ -1,3 +1,4 @@
+// Status JSON runtime tests cover runtime status payload construction and command dependencies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 

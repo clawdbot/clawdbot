@@ -1,3 +1,4 @@
+// Mattermost tests cover monitor.authz plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {

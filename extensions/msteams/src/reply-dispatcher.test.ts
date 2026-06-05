@@ -1,3 +1,4 @@
+// Msteams tests cover reply dispatcher plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());

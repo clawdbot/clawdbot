@@ -1,3 +1,4 @@
+// Line plugin module implements flex templates behavior.
 export {
   createActionCard,
   createCarousel,

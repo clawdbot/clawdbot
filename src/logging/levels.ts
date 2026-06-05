@@ -1,3 +1,4 @@
+// Log level constants define accepted logger levels and ordering.
 export const ALLOWED_LOG_LEVELS = [
   "silent",
   "fatal",

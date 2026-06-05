@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for model transport debug URL formatting.
+ * Ensures credentials, query strings, and fragments stay out of diagnostics.
+ */
 import { describe, expect, it } from "vitest";
 import {
   formatModelTransportDebugBaseUrl,

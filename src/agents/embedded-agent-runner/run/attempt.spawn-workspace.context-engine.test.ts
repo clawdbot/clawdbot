@@ -1,3 +1,4 @@
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +73,8 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
 }
 
 function sumToolResultTextChars(messages: AgentMessage[]): number {
+  // Context-engine budget tests need deterministic text size accounting for
+  // toolResult blocks.
   return messages.reduce((sum, message) => {
     if (message.role !== "toolResult") {
       return sum;
@@ -131,6 +134,8 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 function trackSessionWriteLocks(): string[] {
+  // Context-engine finalization writes should release and reacquire transcript
+  // locks in a predictable order.
   const events: string[] = [];
   hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
     const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
@@ -172,6 +177,8 @@ async function runBootstrap(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
+  // Shared bootstrap harness keeps session identifiers stable across context
+  // engine implementations.
   await runAttemptContextEngineBootstrap({
     hadSessionFile: true,
     contextEngine,

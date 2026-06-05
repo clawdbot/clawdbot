@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements server runtime behavior.
 import { getQaProvider, type QaMockProviderServer, type QaProviderModeInput } from "./index.js";
 
 type QaProviderServerParams = {

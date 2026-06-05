@@ -1,3 +1,4 @@
+// Print Cli Backend Live Metadata tests cover print cli backend live metadata script behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCliBackendLiveMetadata } from "../../scripts/print-cli-backend-live-metadata.js";
 

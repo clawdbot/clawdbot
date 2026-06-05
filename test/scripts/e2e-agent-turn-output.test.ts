@@ -1,3 +1,4 @@
+// E2E Agent Turn Output tests cover e2e agent turn output script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

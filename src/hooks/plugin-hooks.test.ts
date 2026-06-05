@@ -1,3 +1,4 @@
+// Plugin hook tests cover hook discovery from plugin manifests and packages.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";

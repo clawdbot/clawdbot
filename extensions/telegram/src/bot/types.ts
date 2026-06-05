@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { ChatFullInfo, Message, UserFromGetMe } from "grammy/types";
 
 /** App-specific stream mode for Telegram stream previews. */

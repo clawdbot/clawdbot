@@ -1,3 +1,4 @@
+// Message secret scope tests cover CLI secret scoping for message commands.
 import { describe, expect, it } from "vitest";
 import { resolveMessageSecretScope } from "./message-secret-scope.js";
 

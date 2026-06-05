@@ -1,9 +1,12 @@
+/**
+ * Channel TTS voice capability resolver.
+ *
+ * Reads channel-advertised voice delivery support for prompt and runtime routing.
+ */
 import { normalizeChannelId } from "./registry.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelTtsVoiceDeliveryCapabilities } from "./types.core.js";
 
-// Resolves channel-advertised TTS voice delivery support for prompt/runtime
-// routing without exposing the full plugin object to callers.
 export function resolveChannelTtsVoiceDelivery(
   channel: string | undefined,
 ): ChannelTtsVoiceDeliveryCapabilities | undefined {

@@ -1,3 +1,4 @@
+/** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";

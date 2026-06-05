@@ -1,3 +1,4 @@
+// OC Path tests cover append multi agent plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { JsoncValue } from "../../jsonc/ast.js";
 import { appendJsonlOcPath } from "../../jsonl/edit.js";

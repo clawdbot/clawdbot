@@ -462,11 +462,17 @@ import {
   WizardStepSchema,
 } from "./schema.js";
 
+/** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = {
+  /** Failed schema keyword, when the validator can report one. */
   keyword?: string;
+  /** JSON-pointer path to the failing data location. */
   instancePath?: string;
+  /** JSON-pointer path to the failing schema location. */
   schemaPath?: string;
+  /** Validator-specific keyword parameters for richer diagnostics. */
   params?: Record<string, unknown>;
+  /** Human-readable validation message. */
   message?: string;
 };
 

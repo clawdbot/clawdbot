@@ -1,3 +1,6 @@
+/**
+ * Browser server lifecycle helpers for relay setup and profile shutdown.
+ */
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import {
@@ -6,6 +9,7 @@ import {
   listKnownProfileNames,
 } from "./server-context.js";
 
+/** Ensures extension relay compatibility hooks for configured profiles. */
 export async function ensureExtensionRelayForProfiles(_params: {
   resolved: ResolvedBrowserConfig;
   onWarn: (message: string) => void;
@@ -15,6 +19,7 @@ export async function ensureExtensionRelayForProfiles(_params: {
   // breaking cleanup rather than changing the call graph in a patch release.
 }
 
+/** Stops every known Browser profile during runtime shutdown. */
 export async function stopKnownBrowserProfiles(params: {
   getState: () => BrowserServerState | null;
   onWarn: (message: string) => void;

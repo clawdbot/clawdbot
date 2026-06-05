@@ -1,3 +1,4 @@
+// Discord tests cover provider.startup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client, Plugin } from "../internal/discord.js";
 

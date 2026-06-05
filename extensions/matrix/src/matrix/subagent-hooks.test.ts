@@ -1,3 +1,4 @@
+// Matrix tests cover subagent hooks plugin behavior.
 import type { OpenClawPluginApi as MatrixEntryPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import {
   getRequiredHookHandler,

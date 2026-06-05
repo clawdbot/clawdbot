@@ -1,3 +1,4 @@
+// TTS contract suites provide reusable text-to-speech plugin contract assertions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,

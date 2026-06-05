@@ -1,3 +1,4 @@
+// Openclaw Test State tests cover openclaw test state script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

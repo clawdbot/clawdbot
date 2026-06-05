@@ -1,3 +1,4 @@
+// Verifies runtime plugin loading can reuse a compatible gateway startup registry.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -27,6 +28,7 @@ const [{ ensureRuntimePluginsLoaded }, { clearPluginLoaderCache, testing }] = aw
 ]);
 
 function createRegistryWithPlugin(pluginId: string): PluginRegistry {
+  // Minimal active registry carrying just enough plugin identity for reuse checks.
   const registry = createEmptyPluginRegistry();
   registry.plugins.push({
     id: pluginId,
@@ -47,6 +49,7 @@ afterEach(() => {
 
 describe("ensureRuntimePluginsLoaded registry reuse", () => {
   it("reuses the compatible gateway startup registry on the dispatch caller path", () => {
+    // Matching cache key plus gateway-bindable mode means no second plugin load.
     const config = { plugins: { allow: ["telegram"] } };
     const activeRegistry = createRegistryWithPlugin("telegram");
     activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];

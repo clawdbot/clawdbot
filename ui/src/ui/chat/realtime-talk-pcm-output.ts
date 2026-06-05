@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk pcm output behavior.
 import { base64ToBytes, pcm16ToFloat } from "./realtime-talk-audio.ts";
 
 export class RealtimeTalkPcmOutputQueue {

@@ -1,3 +1,4 @@
+// OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";

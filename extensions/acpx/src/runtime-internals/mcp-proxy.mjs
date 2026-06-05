@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -70,6 +74,7 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
+/** Build spawn options for the proxied MCP target process. */
 export function createTargetSpawnOptions(platform = process.platform) {
   const options = {
     stdio: ["pipe", "pipe", "inherit"],

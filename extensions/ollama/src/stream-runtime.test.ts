@@ -1,3 +1,4 @@
+// Ollama tests cover stream runtime plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

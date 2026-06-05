@@ -1,3 +1,5 @@
+// Shared media runner mock factories provide model-auth and plugin-capability
+// modules for isolated runner tests.
 import { vi } from "vitest";
 
 /** Builds the auth resolver mock module used by media runner tests. */

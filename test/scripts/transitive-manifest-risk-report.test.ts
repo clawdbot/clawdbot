@@ -1,3 +1,4 @@
+// Transitive Manifest Risk Report tests cover transitive manifest risk report script behavior.
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,

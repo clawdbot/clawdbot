@@ -1,3 +1,4 @@
+// Voice Call tests cover guarded json api plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

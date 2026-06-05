@@ -1,3 +1,4 @@
+// Verifies env API-key lookup through plugin provider-auth aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 
@@ -62,6 +63,8 @@ describe("resolveEnvApiKey provider auth aliases", () => {
   });
 
   it("reuses the current scoped metadata snapshot while resolving provider auth aliases", () => {
+    // The active scoped snapshot already reflects workspace/plugin filtering;
+    // reloading metadata here can accidentally see a broader plugin set.
     expect(
       resolveEnvApiKey(
         "cloud-alias",
@@ -89,6 +92,8 @@ describe("resolveEnvApiKey provider auth aliases", () => {
   });
 
   it("passes config and workspace scope to setup-provider fallback", () => {
+    // Setup providers can derive env/config keys from workspace context, so the
+    // fallback must receive the same scope as metadata resolution.
     const config = {};
     const env = {} as NodeJS.ProcessEnv;
     setupRegistryMocks.resolvePluginSetupProvider.mockReturnValue({

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover config utils behavior.
 import { describe, expect, it } from "vitest";
 import { parseDurationMs } from "./config-utils.js";
 

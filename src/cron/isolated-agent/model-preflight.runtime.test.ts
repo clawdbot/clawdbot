@@ -1,3 +1,4 @@
+// Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

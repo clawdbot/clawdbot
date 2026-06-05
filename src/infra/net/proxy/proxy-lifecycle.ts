@@ -1,3 +1,5 @@
+// Managed proxy lifecycle installs Proxyline, injects process proxy env, and
+// restores inherited/direct routing when owner handles stop.
 import {
   installGlobalProxy,
   type ProxylineHandle,

@@ -1,3 +1,4 @@
+// Discord tests cover inbound job plugin behavior.
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";

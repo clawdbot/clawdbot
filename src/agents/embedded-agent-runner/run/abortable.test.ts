@@ -1,8 +1,11 @@
+// Coverage for abort-aware promise wrapping in embedded attempts.
 import { describe, expect, it } from "vitest";
 import { abortable } from "./abortable.js";
 
 describe("abortable", () => {
   it("rejects with AbortError when signal aborts before inner settles", async () => {
+    // The inner promise may never settle during provider/tool cancellation, so
+    // abortable must reject from the signal alone.
     const ac = new AbortController();
     const inner = new Promise<void>(() => {});
     const wrapped = abortable(ac.signal, inner);

@@ -1,3 +1,4 @@
+// Legacy web-search config migration from tools.web.search to plugin-owned configs.
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import {
   cloneRecord,
@@ -148,6 +149,7 @@ function migratePluginWebSearchConfig(params: {
   params.changes.push(`Removed ${params.legacyPath} (${params.targetPath} already set).`);
 }
 
+/** List legacy tools.web.search provider config paths present in raw config. */
 export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   const owners = getBundledLegacyWebSearchOwners();
   const search = resolveLegacySearchConfig(raw);
@@ -170,6 +172,7 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   return paths;
 }
 
+/** Move legacy web-search provider config into provider plugin entries. */
 export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };

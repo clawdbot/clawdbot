@@ -1,3 +1,4 @@
+// Covers context-window guard thresholds and user-facing warning/block text.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -96,6 +97,8 @@ describe("context-window-guard", () => {
   });
 
   it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
+    // contextTokens is the effective usable window; contextWindow can be larger
+    // provider metadata and should not overstate prompt budget.
     const cfg = openRouterModelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
 
     const info = resolveContextWindowInfo({
@@ -169,6 +172,8 @@ describe("context-window-guard", () => {
   });
 
   it("does not read models config context windows across provider id variants", () => {
+    // Provider id variants are not aliases in config lookup; crossing them would
+    // silently apply the wrong operator override.
     const cfg = {
       models: {
         providers: {
@@ -323,6 +328,8 @@ describe("context-window-guard", () => {
   });
 
   it("does not let inflated reference metadata hard-block a valid effective cap", () => {
+    // Reference metadata can be wildly large; hard blocking must be based on the
+    // effective cap so valid operator limits remain usable.
     const guard = evaluateContextWindowGuard({
       info: { tokens: 20_000, referenceTokens: 1_000_000_000, source: "agentContextTokens" },
     });

@@ -1,3 +1,4 @@
+// Process-lifetime wait primitive for CLI paths that intentionally never return.
 export function waitForever() {
   // Keep the event loop alive with a ref'd interval. A pending Promise is not
   // an active handle on its own, so without the interval, Node exits the

@@ -1,3 +1,4 @@
+// OC Path module implements edit behavior.
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import type { OcPath } from "../oc-path.js";
 import {

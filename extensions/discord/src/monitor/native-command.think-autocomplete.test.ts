@@ -1,3 +1,4 @@
+// Discord tests cover native command.think autocomplete plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Control UI view renders overview log tail screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";

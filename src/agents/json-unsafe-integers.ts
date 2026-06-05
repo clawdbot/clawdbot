@@ -1,3 +1,7 @@
+/**
+ * JSON parsing helpers that preserve integer literals larger than
+ * Number.MAX_SAFE_INTEGER as strings before JSON.parse can round them.
+ */
 const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
 
 function isAsciiDigit(ch: string | undefined): boolean {

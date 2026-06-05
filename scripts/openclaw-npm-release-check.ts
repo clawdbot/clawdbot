@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Npm Release Check script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";

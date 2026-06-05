@@ -1,3 +1,4 @@
+// Doctor warnings and repairs for redundant bundled plugin load path aliases.
 import path from "node:path";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
@@ -30,6 +31,7 @@ function isOpenClawNodeModulesPackageRoot(packageRoot: string): boolean {
   return packageDir === "openclaw" && parentDir === "node_modules";
 }
 
+/** Find configured plugin load paths that alias bundled plugins already shipped by OpenClaw. */
 export function scanBundledPluginLoadPathMigrations(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -80,6 +82,7 @@ export function scanBundledPluginLoadPathMigrations(
       const oldPackageRoot = oldPackaged?.packageRoot ?? oldLegacy?.packageRoot;
       const oldBundledLeaf = oldPackaged?.bundledLeaf ?? oldLegacy?.bundledLeaf;
       const oldPackageMatch =
+        // Only rewrite paths rooted in the installed OpenClaw package; user plugin paths stay intact.
         oldPackageRoot && oldBundledLeaf && isOpenClawNodeModulesPackageRoot(oldPackageRoot)
           ? packagedBundledLeafMap.get(normalizeBundledLookupPath(oldBundledLeaf))
           : undefined;
@@ -105,6 +108,7 @@ export function scanBundledPluginLoadPathMigrations(
   return hits;
 }
 
+/** Format user-facing warnings for redundant bundled plugin load path aliases. */
 export function collectBundledPluginLoadPathWarnings(params: {
   hits: BundledPluginLoadPathHit[];
   doctorFixCommand: string;
@@ -120,6 +124,7 @@ export function collectBundledPluginLoadPathWarnings(params: {
   return lines.map((line) => sanitizeForLog(line));
 }
 
+/** Remove redundant bundled plugin load path aliases while preserving unrelated custom paths. */
 export function maybeRepairBundledPluginLoadPaths(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

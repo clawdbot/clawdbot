@@ -1,3 +1,4 @@
+// JSON output mode tests cover CLI JSON mode detection and output handling.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loggingState } from "../logging/state.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";

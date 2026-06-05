@@ -1,3 +1,4 @@
+// Control UI module implements chat model select state behavior.
 import type { AppViewState } from "./app-view-state.ts";
 import {
   buildCatalogDisplayLookup,

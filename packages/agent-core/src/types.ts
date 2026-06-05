@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,

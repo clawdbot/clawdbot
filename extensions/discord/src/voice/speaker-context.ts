@@ -1,3 +1,4 @@
+// Discord plugin module implements speaker context behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message dispatch behavior.
 export {
   loadSessionStore,
   readLatestAssistantTextFromSessionTranscript,

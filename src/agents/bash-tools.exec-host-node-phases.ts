@@ -1,3 +1,8 @@
+/**
+ * Phase helpers for node-host exec.
+ * Resolves nodes, prepares `system.run` payloads, analyzes remote approval
+ * requirements, and formats node invoke results for the exec tool.
+ */
 import crypto from "node:crypto";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -201,6 +206,7 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
 }
 
+/** Returns true when local policy allows direct node invoke without prepare/approval. */
 export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -211,6 +217,7 @@ export function shouldSkipNodeApprovalPrepare(params: {
   );
 }
 
+/** Formats a raw `node.invoke system.run` response as an exec tool result. */
 export function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
@@ -244,6 +251,7 @@ export function formatNodeRunToolResult(params: {
   };
 }
 
+/** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
 ): Promise<NodeExecutionTarget> {
@@ -295,6 +303,7 @@ export async function resolveNodeExecutionTarget(
   };
 }
 
+/** Builds the `node.invoke` payload for `system.run`. */
 export function buildNodeSystemRunInvoke(params: {
   target: NodeExecutionTarget;
   command: string[];
@@ -345,6 +354,7 @@ export function buildNodeSystemRunInvoke(params: {
   };
 }
 
+/** Invokes `system.run` directly when approval policy is fully bypassed. */
 export async function invokeNodeSystemRunDirect(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
@@ -366,6 +376,7 @@ export async function invokeNodeSystemRunDirect(params: {
   return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });
 }
 
+/** Prepares a node-host system run using remote prepare support or local fallback. */
 export async function prepareNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
@@ -444,6 +455,7 @@ function buildLocalPreparedNodeRun(params: {
   };
 }
 
+/** Analyzes whether a prepared node run satisfies node/caller approval policy. */
 export async function analyzeNodeApprovalRequirement(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;

@@ -1,3 +1,4 @@
+// Message action tests cover channel message action schema and invocation behavior.
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";

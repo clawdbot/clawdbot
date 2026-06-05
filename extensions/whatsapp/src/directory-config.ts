@@ -1,3 +1,4 @@
+// Whatsapp helper module supports directory config behavior.
 import {
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,

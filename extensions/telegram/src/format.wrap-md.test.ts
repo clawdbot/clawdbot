@@ -1,3 +1,4 @@
+// Telegram tests cover format.wrap md plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,

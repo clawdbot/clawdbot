@@ -1,3 +1,4 @@
+// Agent Core tests cover truncate behavior.
 import { describe, expect, it } from "vitest";
 import { truncateHead, truncateTail } from "./truncate.js";
 

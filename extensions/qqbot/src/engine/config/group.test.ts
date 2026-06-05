@@ -1,3 +1,4 @@
+// Qqbot tests cover group plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,

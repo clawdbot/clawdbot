@@ -1,3 +1,4 @@
+// Memory host dreaming helpers record and load memory dreaming artifacts.
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {

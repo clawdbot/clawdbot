@@ -1,3 +1,4 @@
+// Command registration policy tests cover CLI registration boundaries and duplicate guards.
 import { describe, expect, it } from "vitest";
 import {
   shouldEagerRegisterSubcommands,

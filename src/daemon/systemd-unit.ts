@@ -1,3 +1,4 @@
+/** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
@@ -15,6 +16,8 @@ function systemdEscapeArg(value: string): string {
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
+  // systemd ExecStart/Environment parsing honors backslash escapes inside
+  // quotes; match that contract for round-trip parser tests.
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
@@ -110,6 +113,7 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
     }
     let out = "";
     let escapeNext = false;
+    // systemd quote parsing consumes one backslash before the next character.
     for (const ch of trimmed.slice(1, -1)) {
       if (escapeNext) {
         out += ch;

@@ -1,3 +1,4 @@
+// Browser tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { collectBrowserSecurityAuditFindings } from "./security-audit.js";
 

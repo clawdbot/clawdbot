@@ -1,3 +1,4 @@
+// Test path helpers resolve repository-relative fixture paths.
 import path from "node:path";
 
 // Cross-platform path containment helper for tests.

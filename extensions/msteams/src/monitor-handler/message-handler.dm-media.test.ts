@@ -1,3 +1,4 @@
+// Msteams tests cover message handlerm media plugin behavior.
 import { describe, expect, it } from "vitest";
 import { translateMSTeamsDmConversationIdForGraph } from "../inbound.js";
 

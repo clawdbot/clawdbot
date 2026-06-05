@@ -1,3 +1,5 @@
+// Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
+// config hashing, and cached bridge invalidation.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -290,6 +292,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("publishes noVNC on loopback and injects noVNC password env", async () => {
+    // noVNC password stays in the container environment; external access uses a
+    // short-lived observer token so URLs do not carry the password.
     const result = await ensureTestSandboxBrowser({
       scopeKey: "session:test",
       workspaceDir: "/tmp/workspace",
@@ -327,6 +331,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("applies read-only skill overlays after browser custom binds", async () => {
+    // Browser sandboxes share workspace mount semantics with shell sandboxes:
+    // protected skill overlays must win over custom binds.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -610,6 +616,8 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("force-removes the browser container when CDP never becomes reachable", async () => {
+    // A browser container that starts but never exposes CDP is unusable; remove
+    // it immediately so the next attempt recreates from a clean state.
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));
     bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
       await params.onEnsureAttachTarget?.({});

@@ -1,3 +1,4 @@
+// Markdown Core tests cover ir.table code behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToIR } from "./ir.js";
 

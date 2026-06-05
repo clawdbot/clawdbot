@@ -1,3 +1,5 @@
+// Audio preflight transcribes voice notes before mention checks and optionally
+// echoes the transcript back to the source chat.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";

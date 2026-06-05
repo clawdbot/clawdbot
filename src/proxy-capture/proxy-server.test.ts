@@ -1,3 +1,4 @@
+// Proxy capture server tests cover request recording and response handling.
 import { describe, expect, it } from "vitest";
 import { parseConnectTarget } from "./proxy-server.js";
 

@@ -1,3 +1,4 @@
+// Run state machine tests cover channel run lifecycle transitions and terminal states.
 import { describe, expect, it, vi } from "vitest";
 import { createRunStateMachine } from "./run-state-machine.js";
 

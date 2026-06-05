@@ -1,3 +1,4 @@
+// Memory Lancedb tests cover memory lancedb plugin behavior.
 import { describe, expect, test } from "vitest";
 import { installTmpDirHarness } from "./test-helpers.js";
 

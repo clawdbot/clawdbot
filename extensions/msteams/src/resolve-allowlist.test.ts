@@ -1,3 +1,4 @@
+// Msteams tests cover resolve allowlist plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {

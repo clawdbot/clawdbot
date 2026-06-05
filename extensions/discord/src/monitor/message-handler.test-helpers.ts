@@ -1,3 +1,4 @@
+// Discord helper module supports message handler helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { vi } from "vitest";
 import type { createDiscordMessageHandler } from "./message-handler.js";

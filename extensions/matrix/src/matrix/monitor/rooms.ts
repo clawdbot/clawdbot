@@ -1,3 +1,4 @@
+// Matrix plugin module implements rooms behavior.
 import type { MatrixRoomConfig } from "../../types.js";
 import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "./runtime-api.js";
 

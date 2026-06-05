@@ -1,3 +1,4 @@
+// Kilocode tests cover provider models plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

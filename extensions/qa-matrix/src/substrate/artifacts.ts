@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements artifacts behavior.
 import type { MatrixQaObservedEvent } from "./events.js";
 
 export function buildMatrixQaObservedEventsArtifact(params: {

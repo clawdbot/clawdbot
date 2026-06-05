@@ -1,3 +1,4 @@
+// Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { validateSessionId } from "./paths.js";
 import type { SessionEntry } from "./types.js";
@@ -47,6 +48,7 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
     const sessionId = value.sessionId.trim();
     const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
     if (!transcriptSessionId && !sessionFile) {
+      // Old non-transcript ids can survive only when a separate sessionFile pins the path.
       const { sessionId: _dropSessionId, ...rest } = next;
       next = rest as SessionEntry;
     } else if (sessionId !== value.sessionId) {

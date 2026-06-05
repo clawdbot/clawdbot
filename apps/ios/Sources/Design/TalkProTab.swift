@@ -15,6 +15,7 @@ struct TalkProTab: View {
             gatewayConnected: self.gatewayConnected,
             isEnabled: self.appModel.talkMode.isEnabled || self.talkEnabled,
             statusText: self.appModel.talkMode.statusText,
+            isConfigLoaded: self.appModel.talkMode.gatewayTalkConfigLoaded,
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
             isUserSpeechDetected: self.appModel.talkMode.isUserSpeechDetected,
@@ -282,6 +283,9 @@ struct TalkProTab: View {
         if self.state
             .prefersPermissionCopy { return "Gateway approval is required before this phone can capture voice." }
         if !self.gatewayConnected { return "Connect to your gateway to start a voice conversation." }
+        if !self.appModel.talkMode.gatewayTalkConfigLoaded {
+            return "Open Voice settings after the gateway loads Talk configuration."
+        }
         let subtitle = (self.appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !subtitle.isEmpty { return subtitle }
@@ -365,6 +369,7 @@ struct TalkProState: Equatable {
     let gatewayConnected: Bool
     let isEnabled: Bool
     let statusText: String
+    let isConfigLoaded: Bool
     let isListening: Bool
     let isSpeaking: Bool
     let isUserSpeechDetected: Bool
@@ -390,6 +395,7 @@ struct TalkProState: Equatable {
         default:
             break
         }
+        if !self.isConfigLoaded { return "Voice config unavailable" }
         if self.isSpeaking { return "Speaking" }
         if self.isListening { return "Listening" }
         if self.normalizedStatus.contains("connecting") { return "Connecting" }
@@ -412,6 +418,7 @@ struct TalkProState: Equatable {
         default:
             break
         }
+        if !self.isConfigLoaded { return "Config" }
         if self.isSpeaking { return "Speaking" }
         if self.isListening { return "Listening" }
         if self.isEnabled { return "Ready" }
@@ -432,6 +439,7 @@ struct TalkProState: Equatable {
         default:
             break
         }
+        if !self.isConfigLoaded { return "exclamationmark.triangle.fill" }
         if self.isSpeaking { return "speaker.wave.2.fill" }
         if self.isListening { return "mic.fill" }
         if self.normalizedStatus.contains("thinking") { return "sparkles" }
@@ -447,6 +455,7 @@ struct TalkProState: Equatable {
         case .missingScope, .requestingUpgrade, .upgradeRequested, .apiKeyMissing:
             return OpenClawBrand.warn
         default:
+            if !self.isConfigLoaded { return OpenClawBrand.warn }
             return self.isEnabled ? OpenClawBrand.ok : OpenClawBrand.accentHot
         }
     }
@@ -518,6 +527,7 @@ struct TalkProState: Equatable {
         default:
             break
         }
+        if !self.isConfigLoaded { return .still }
         if self.isSpeaking { return .speaking }
         if self.isListening, self.isUserSpeechDetected { return .inputSpeech }
         if self.isListening { return .level(micLevel) }

@@ -1,3 +1,4 @@
+// Gateway Client module implements readiness behavior.
 import type { GatewayClientOptions } from "./client.js";
 import {
   waitForEventLoopReady,

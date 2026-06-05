@@ -1,3 +1,8 @@
+/**
+ * Channel ingress decision graph builder.
+ *
+ * Evaluates route, sender, command, and mention gates into one admission decision.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
 import { resolveInboundMentionDecision } from "../mention-gating.js";

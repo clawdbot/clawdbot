@@ -1,3 +1,4 @@
+// Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToMatrixHtml, renderMarkdownToMatrixHtmlWithMentions } from "./format.js";
 

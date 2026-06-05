@@ -1,3 +1,5 @@
+// Setup tests cover model-resolution hooks and effective runtime model context
+// metadata before an embedded run starts.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -82,6 +84,8 @@ describe("resolveHookModelSelection", () => {
 });
 
 function createRuntimeModel(): ProviderRuntimeModel {
+  // Runtime model fixture uses provider-discovered limits; setup tests compare
+  // those against configured model metadata.
   return {
     provider: "openai",
     id: "gpt-5.5",
@@ -100,6 +104,8 @@ function createRuntimeModel(): ProviderRuntimeModel {
 function createConfiguredModel(
   overrides: Partial<ModelDefinitionConfig> = {},
 ): ModelDefinitionConfig {
+  // Configured model fixture represents the user/provider config path that can
+  // override runtime-discovered context windows.
   return {
     id: "gpt-5.5",
     name: "gpt-5.5",

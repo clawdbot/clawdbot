@@ -1,3 +1,8 @@
+/**
+ * Terminal device-status-report helpers.
+ * Intercepts cursor-position requests from PTY output and generates compact
+ * responses when a real terminal cannot answer them.
+ */
 const ESC = String.fromCharCode(0x1b);
 const DSR_PATTERN = new RegExp(`${ESC}\\[\\??6n`, "g");
 

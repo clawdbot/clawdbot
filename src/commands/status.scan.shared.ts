@@ -1,3 +1,6 @@
+// Shared status scan helpers for gateway probing, Tailscale URL formatting, and memory status.
+// This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
+
 import { existsSync } from "node:fs";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
@@ -101,6 +104,7 @@ function shouldTryLocalStatusRpcFallback(params: {
   gatewayUrl: string;
   gatewayProbe: GatewayProbeResult;
 } {
+  // Only retry local loopback probes; remote endpoints should not receive an extra status RPC.
   if (
     params.gatewayMode !== "local" ||
     !params.gatewayProbe ||
@@ -133,6 +137,7 @@ async function applyLocalStatusRpcFallback(params: {
     return params.gatewayProbe;
   }
   const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
+  // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
       callGateway({
@@ -178,6 +183,7 @@ function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): bo
   return agents.some((agent) => agent?.id === agentId && Object.hasOwn(agent, "memorySearch"));
 }
 
+/** Resolves whether memory status should be shown and which slot owns it. */
 export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -190,6 +196,7 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
 }
 
+/** Resolves gateway connection details, probe result, auth warnings, and call overrides. */
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -271,6 +278,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewaySelf,
     ...(remoteUrlMissing
       ? {
+          // Remote-url-missing reports use local fallback URL for follow-up diagnostic calls.
           gatewayCallOverrides: {
             url: gatewayConnection.url,
             token: gatewayProbeAuthResolution.auth.token,
@@ -281,6 +289,7 @@ export async function resolveGatewayProbeSnapshot(params: {
   };
 }
 
+/** Builds the published Tailscale HTTPS Control UI URL when exposure is enabled. */
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
@@ -297,6 +306,7 @@ export function buildTailscaleHttpsUrl(params: {
     : null;
 }
 
+/** Resolves memory provider status without creating default stores just for status output. */
 export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
@@ -312,6 +322,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   const agentId = agentStatus.defaultId ?? "main";
 
   if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
+    // Non-default memory slots are plugin-owned; ask the manager directly instead of checking built-in files.
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
@@ -321,6 +332,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     !hasExplicitMemorySearchConfig(cfg, agentId) &&
     !existsSync(defaultStorePath)
   ) {
+    // Avoid instantiating built-in memory for users who never created the default store.
     return null;
   }
   const resolvedMemory = params.resolveMemoryConfig(cfg, agentId);
@@ -354,6 +366,7 @@ async function resolveMemoryManagerStatusSnapshot(
     try {
       const currentStatus = manager.status();
       if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
+        // Built-in vector store has a store-level probe that avoids conflating index absence with plugin failure.
         await manager.probeVectorStoreAvailability();
       } else {
         await manager.probeVectorAvailability();
@@ -362,6 +375,7 @@ async function resolveMemoryManagerStatusSnapshot(
     const status = manager.status();
     return { agentId, ...status };
   } finally {
+    // Status probes must not leak plugin resources such as SQLite handles.
     await manager.close?.().catch(() => {});
   }
 }

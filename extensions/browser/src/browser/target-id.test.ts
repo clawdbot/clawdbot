@@ -1,3 +1,4 @@
+// Browser tests cover target id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 

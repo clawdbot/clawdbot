@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.turn watches plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

@@ -1,3 +1,4 @@
+// Voice Call plugin module implements response model behavior.
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 

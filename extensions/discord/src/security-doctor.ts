@@ -1,3 +1,4 @@
+// Discord plugin module implements security doctor behavior.
 export function isDiscordMutableAllowEntry(raw: string): boolean {
   const text = raw.trim();
   if (!text || text === "*") {

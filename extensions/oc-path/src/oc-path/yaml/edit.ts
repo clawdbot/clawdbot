@@ -1,3 +1,4 @@
+// OC Path module implements edit behavior.
 import {
   Document,
   isMap,

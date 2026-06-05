@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover stream plugin behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "./stream.runtime.js";
 

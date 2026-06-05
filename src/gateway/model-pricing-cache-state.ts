@@ -1,3 +1,5 @@
+// Gateway model-pricing cache state.
+// Stores normalized pricing rows and source-health failures for runtime reads.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeModelRef } from "../agents/model-selection.js";
@@ -42,6 +44,8 @@ const sourceFailures = new Map<
 >();
 
 function modelPricingCacheKey(provider: string, model: string): string {
+  // Keys accept both provider/model and provider-prefixed model ids so external
+  // catalogs can be queried without double-prefixing.
   const providerId = normalizeProviderId(provider);
   const modelId = model.trim();
   if (!providerId || !modelId) {

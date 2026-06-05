@@ -1,3 +1,4 @@
+// Browser tests cover bridge server.auth plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
 import type { ResolvedBrowserConfig } from "./config.js";

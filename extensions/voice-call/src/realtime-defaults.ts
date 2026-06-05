@@ -1,3 +1,4 @@
+// Voice Call plugin module implements realtime defaults behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
 
 // Default realtime instructions for the voice-call plugin's phone interface.

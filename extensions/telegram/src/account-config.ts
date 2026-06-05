@@ -1,3 +1,4 @@
+// Telegram helper module supports account config behavior.
 import {
   normalizeAccountId,
   resolveNormalizedAccountEntry,

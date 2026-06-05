@@ -1,3 +1,4 @@
+// Core command registry that lazily imports command groups based on parsed argv.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
@@ -142,6 +143,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
+  // Descriptor metadata and import specs stay separate so help can stay cheap.
   return buildCommandGroupEntries(
     getCoreCliCommandDescriptors(),
     coreEntrySpecs,

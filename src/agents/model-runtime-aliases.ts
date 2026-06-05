@@ -1,3 +1,6 @@
+/**
+ * Resolves CLI runtime aliases to provider/model auth labels and execution ids.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

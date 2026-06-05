@@ -1,3 +1,4 @@
+// Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTailscaleHttpsUrl,

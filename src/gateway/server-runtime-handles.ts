@@ -1,3 +1,5 @@
+// Gateway mutable runtime handles.
+// Provides stop-safe defaults for timers, sidecars, subscriptions, and services.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -37,6 +39,8 @@ export type GatewayServerMutableState = {
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
 export function createGatewayServerMutableState(): GatewayServerMutableState {
   const noopInterval = () => {
+    // Dummy unref'd timers give shutdown code a concrete handle to clear even
+    // when startup exits before real maintenance intervals are installed.
     const timer = setInterval(() => {}, 1 << 30);
     timer.unref?.();
     return timer;

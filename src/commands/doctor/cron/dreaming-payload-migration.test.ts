@@ -1,3 +1,4 @@
+// Dreaming payload migration tests cover cron doctor repair of old dreaming payloads.
 import { describe, expect, it } from "vitest";
 import {
   countStaleDreamingJobs,

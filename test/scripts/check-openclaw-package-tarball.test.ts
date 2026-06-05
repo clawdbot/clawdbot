@@ -1,3 +1,4 @@
+// Check Openclaw Package Tarball tests cover check openclaw package tarball script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

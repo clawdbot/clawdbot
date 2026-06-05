@@ -1,3 +1,4 @@
+// Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 

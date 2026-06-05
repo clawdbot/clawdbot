@@ -1,3 +1,4 @@
+// Discord helper module supports message handler.module test helpers behavior.
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import type { DiscordMessageRunQueueTestingHooks } from "./message-run-queue.js";

@@ -1,3 +1,4 @@
+// Link detection tests cover ordering, dedupe, markdown suppression, and SSRF hostname filtering.
 import { describe, expect, it } from "vitest";
 import { extractLinksFromMessage } from "./detect.js";
 

@@ -1,3 +1,5 @@
+// Shutdown drain tests protect bounded session_end hook emission for tracked
+// active sessions during gateway shutdown and restart.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

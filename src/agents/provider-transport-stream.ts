@@ -1,3 +1,8 @@
+/**
+ * Transport-aware stream factory selection.
+ *
+ * Routes models that need OpenClaw-managed proxy/TLS/local-service semantics onto built-in transport implementations.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
@@ -99,14 +104,17 @@ function hasOpenClawTransportRequirement(model: Model): boolean {
   return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
 }
 
+/** Returns whether OpenClaw has a managed transport implementation for this API. */
 export function isTransportAwareApiSupported(api: Api): boolean {
   return SUPPORTED_TRANSPORT_APIS.has(api);
 }
 
+/** Maps public model APIs to the internal transport API id used by simple runtime dispatch. */
 export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
   return SIMPLE_TRANSPORT_API_ALIAS[api];
 }
 
+/** Creates a managed transport stream only when request overrides require it. */
 export function createTransportAwareStreamFnForModel(
   model: Model,
   ctx?: ProviderTransportStreamContext,
@@ -122,6 +130,7 @@ export function createTransportAwareStreamFnForModel(
   return createSupportedTransportStreamFn(model, ctx);
 }
 
+/** Creates a managed OpenClaw transport stream for explicit fallback/runtime callers. */
 export function createOpenClawTransportStreamFnForModel(
   model: Model,
   ctx?: ProviderTransportStreamContext,

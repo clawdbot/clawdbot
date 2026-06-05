@@ -1,3 +1,4 @@
+// Runs oxlint over extension source roots with repo-local boundary artifacts.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,9 @@ import {
 } from "./local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
+/**
+ * Runs focused extension oxlint with a temp config and local heavy-check lock.
+ */
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
   const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");

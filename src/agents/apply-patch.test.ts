@@ -1,3 +1,8 @@
+/**
+ * Tests apply_patch execution and path safety.
+ * Covers host/sandbox file operations, workspace guards, symlink races, and
+ * update hunk behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

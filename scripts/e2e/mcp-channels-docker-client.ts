@@ -1,3 +1,4 @@
+// Mcp Channels Docker Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import {
   assert,

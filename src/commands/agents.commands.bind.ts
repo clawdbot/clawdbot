@@ -1,3 +1,4 @@
+// Implements agent route binding list/add/remove subcommands.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -173,6 +174,7 @@ async function resolveConfigAndTargetAgentIdOrExit(params: {
   return { cfg, agentId, baseHash: configSnapshot.hash };
 }
 
+/** List configured agent route bindings, optionally filtered by target agent. */
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -228,6 +230,7 @@ export async function agentsBindingsCommand(
   );
 }
 
+/** Add route bindings for an agent and fail when another agent already owns the route. */
 export async function agentsBindCommand(
   opts: AgentsBindOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -309,6 +312,7 @@ export async function agentsBindCommand(
   }
 }
 
+/** Remove selected route bindings, or all bindings owned by an agent with `--all`. */
 export async function agentsUnbindCommand(
   opts: AgentsUnbindOptions,
   runtime: RuntimeEnv = defaultRuntime,

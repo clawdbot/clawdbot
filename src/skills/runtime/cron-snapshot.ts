@@ -1,3 +1,4 @@
+// Cron snapshot helpers collect runtime skill state for scheduled agents.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../types.js";

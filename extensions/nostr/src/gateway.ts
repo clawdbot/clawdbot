@@ -1,3 +1,4 @@
+// Nostr plugin module implements gateway behavior.
 import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,

@@ -1,3 +1,4 @@
+// Tlon tests cover channel ops plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scryUrbitPath } from "./channel-ops.js";
 import { urbitFetch } from "./fetch.js";

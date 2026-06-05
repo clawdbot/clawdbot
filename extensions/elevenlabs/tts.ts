@@ -1,3 +1,4 @@
+// Elevenlabs plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,

@@ -1,3 +1,4 @@
+// Non-interactive auth-choice tests cover built-in, custom, deprecated, and plugin provider dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";

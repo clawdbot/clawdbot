@@ -1,5 +1,9 @@
+/**
+ * Lazy-loaded dependency bundle for remote-profile tab operation tests.
+ */
 import { afterEach, beforeEach, vi } from "vitest";
 
+/** Modules and helpers shared by remote-profile tab operation tests. */
 export type RemoteProfileTestDeps = {
   cdpModule: typeof import("./cdp.js");
   chromeModule: typeof import("./chrome.js");
@@ -16,6 +20,7 @@ export type RemoteProfileTestDeps = {
 
 let remoteProfileTestDepsPromise: Promise<RemoteProfileTestDeps> | undefined;
 
+/** Loads remote-profile tab operation dependencies after Chrome mocks are installed. */
 export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
   remoteProfileTestDepsPromise ??= (async () => {
     await import("./server-context.chrome-test-harness.js");
@@ -49,6 +54,7 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
   return await remoteProfileTestDepsPromise;
 }
 
+/** Installs per-test mock reset and Playwright connection cleanup. */
 export function installRemoteProfileTestLifecycle(deps: RemoteProfileTestDeps): void {
   beforeEach(() => {
     vi.clearAllMocks();

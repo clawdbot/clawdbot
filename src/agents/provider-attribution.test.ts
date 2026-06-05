@@ -1,6 +1,8 @@
+// Verifies provider attribution headers and endpoint classification policies.
 import { describe, expect, it, vi } from "vitest";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Policy helpers return broad records; assertions pin only the relevant fields.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -13,6 +15,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 
 const providerEndpointPlugins = vi.hoisted(() => [
   {
+    // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
       { endpointClass: "openai-public", hosts: ["api.openai.com"] },
       { endpointClass: "openai", hosts: ["chatgpt.com"] },
@@ -239,6 +242,7 @@ describe("provider attribution", () => {
   });
 
   it("lists the current attribution support matrix", () => {
+    // Matrix order is user-facing evidence for docs/review summaries.
     expect(
       listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
         policy.provider,

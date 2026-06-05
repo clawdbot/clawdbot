@@ -1,3 +1,4 @@
+// Matrix plugin module implements verification status behavior.
 import type { MatrixDeviceVerificationStatusLike } from "./types.js";
 
 function isMatrixDeviceLocallyVerified(

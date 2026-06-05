@@ -1,3 +1,4 @@
+/** Shared filter, sort, and page result types for cron job listing. */
 import type { CronJob, CronRunStatus } from "../types.js";
 
 /** Enabled-state filter accepted by paginated cron listing. */

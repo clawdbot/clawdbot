@@ -1,3 +1,4 @@
+// Qa Channel tests cover bus client plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";

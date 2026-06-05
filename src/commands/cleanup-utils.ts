@@ -1,3 +1,4 @@
+// Shared destructive-cleanup planning and guarded removal helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
@@ -46,6 +47,7 @@ function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   return [...dirs];
 }
 
+/** Determine which config, credential, and workspace paths cleanup should consider. */
 export function buildCleanupPlan(params: {
   cfg: OpenClawConfig | undefined;
   stateDir: string;
@@ -63,6 +65,7 @@ export function buildCleanupPlan(params: {
   };
 }
 
+/** Return true when `child` resolves inside `parent`. */
 export function isPathWithin(child: string, parent: string): boolean {
   return isPathInside(parent, child);
 }
@@ -83,6 +86,7 @@ function isUnsafeRemovalTarget(target: string): boolean {
   return false;
 }
 
+/** Remove one path after rejecting empty/root/home targets and honoring dry-run mode. */
 export async function removePath(
   target: string,
   runtime: RuntimeEnv,
@@ -112,6 +116,7 @@ export async function removePath(
   }
 }
 
+/** Remove workspace attestation files associated with cleanup-target workspaces. */
 export async function removeWorkspaceAttestationPaths(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
@@ -200,6 +205,7 @@ async function removePathPreserving(
   }
 }
 
+/** Remove state plus config/OAuth paths, preserving selected paths nested inside state. */
 export async function removeStateAndLinkedPaths(
   cleanup: CleanupResolvedPaths,
   runtime: RuntimeEnv,
@@ -236,6 +242,7 @@ export async function removeStateAndLinkedPaths(
   }
 }
 
+/** Remove all workspace directories selected by the cleanup plan. */
 export async function removeWorkspaceDirs(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
@@ -249,6 +256,7 @@ export async function removeWorkspaceDirs(
   }
 }
 
+/** List per-agent session directories beneath a state directory. */
 export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
   const root = path.join(stateDir, "agents");
   try {

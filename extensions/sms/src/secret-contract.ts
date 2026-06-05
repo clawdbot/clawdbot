@@ -1,3 +1,4 @@
+// Sms plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   getChannelSurface,

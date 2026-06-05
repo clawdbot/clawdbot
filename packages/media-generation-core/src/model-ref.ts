@@ -1,3 +1,4 @@
+// Media Generation Core module implements model ref behavior.
 import { normalizeOptionalString } from "./string.js";
 
 /** Provider/model pair parsed from a generation model reference like `provider/model`. */

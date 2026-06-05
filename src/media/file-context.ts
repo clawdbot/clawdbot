@@ -1,3 +1,4 @@
+// File context helpers build user-visible context for media file references.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 

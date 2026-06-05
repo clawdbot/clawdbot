@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover exec approvals validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateExecApprovalRequestParams,

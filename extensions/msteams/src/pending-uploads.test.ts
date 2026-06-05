@@ -1,3 +1,4 @@
+// Msteams tests cover pending uploads plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearPendingUploads,

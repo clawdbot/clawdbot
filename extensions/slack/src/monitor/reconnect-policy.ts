@@ -1,3 +1,4 @@
+// Slack plugin module implements reconnect policy behavior.
 import { formatSlackError } from "../errors.js";
 
 const SLACK_AUTH_ERROR_RE =

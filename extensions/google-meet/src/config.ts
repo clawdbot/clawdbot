@@ -1,3 +1,4 @@
+// Google Meet helper module supports config behavior.
 import {
   addTimerTimeoutGraceMs,
   resolvePositiveTimerTimeoutMs,

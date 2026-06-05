@@ -1,8 +1,9 @@
-import type { ChannelResolveResult } from "./types.adapters.js";
-
 /**
- * Shared helpers for channel target resolution flows.
+ * Channel target resolver helpers.
+ *
+ * Builds unresolved rows and token-gated resolution flows for setup/allowlist targets.
  */
+import type { ChannelResolveResult } from "./types.adapters.js";
 
 /**
  * Builds unresolved target results with one common note.

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements model selection behavior.
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,

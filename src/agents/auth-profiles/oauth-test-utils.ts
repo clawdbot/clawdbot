@@ -1,3 +1,8 @@
+/**
+ * Shared OAuth test fixtures and temp-dir helpers.
+ * Provides deterministic credential/store builders, state-dir setup, and
+ * provider-runtime mock reset helpers for auth-profile tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +12,7 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-// Shared OAuth test fixtures and temp-dir helpers.
+/** Environment keys OAuth tests override while creating isolated state roots. */
 export const OAUTH_AGENT_ENV_KEYS = ["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"];
 
 /** Call resolveApiKeyForProfile with an empty config in tests. */

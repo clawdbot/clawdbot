@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

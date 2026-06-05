@@ -1,3 +1,4 @@
+// Browser tests cover chrome.loopback ssrf.integration plugin behavior.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";

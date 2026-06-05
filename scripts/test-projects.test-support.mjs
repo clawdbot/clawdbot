@@ -1,3 +1,6 @@
+// Test-project planning helpers used by scripts/run-vitest.mjs,
+// scripts/test-projects.mjs, and focused tests. Exports are intentionally
+// granular so project selection stays testable without spawning Vitest.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -250,6 +253,9 @@ function uniqueOrdered(values) {
   return [...new Set(values)];
 }
 
+/**
+ * Orders full-suite specs so expensive shards start first in parallel runs.
+ */
 export function orderFullSuiteSpecsForParallelRun(specs, shardTimings = new Map()) {
   const sortedSpecs = specs.toSorted((a, b) => {
     const weightDelta =
@@ -831,7 +837,9 @@ const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+/** Default no-output timeout applied to test-projects Vitest children. */
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
+/** Default heartbeat interval applied to test-projects Vitest children. */
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
@@ -1138,6 +1146,9 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
   });
 }
 
+/**
+ * Finds explicit test path targets that do not match any known project plan.
+ */
 export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const { targetArgs } = parseTestProjectsArgs(args, cwd);
   if (targetArgs.length === 0) {
@@ -1775,6 +1786,9 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   return null;
 }
 
+/**
+ * Maps changed repo paths to the smallest useful Vitest target plan.
+ */
 export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   if (changedPaths.length === 0) {
     return { mode: "none", targets: [] };
@@ -1789,6 +1803,7 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
   const skipImportGraph = changedLanes.lanes.all && !useBroadFallback;
   const targets = [];
+  const skippedBroadFallbackPaths = [];
   for (const changedPath of changedPaths) {
     const preciseTargets = resolvePreciseChangedTestTargets(changedPath, {
       ...options,
@@ -1803,6 +1818,7 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
       if (useBroadFallback) {
         return { mode: "broad", targets: [] };
       }
+      skippedBroadFallbackPaths.push(changedPath);
       continue;
     }
     if (isRoutableChangedTarget(changedPath)) {
@@ -1812,7 +1828,11 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   if (useBroadFallback && changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
-  return { mode: "targets", targets: [...new Set(targets)] };
+  const plan = { mode: "targets", targets: [...new Set(targets)] };
+  if (skippedBroadFallbackPaths.length > 0) {
+    plan.skippedBroadFallbackPaths = [...new Set(skippedBroadFallbackPaths)];
+  }
+  return plan;
 }
 
 export function listFullExtensionVitestProjectConfigs() {
@@ -1828,19 +1848,31 @@ export function resolveChangedTargetArgs(
   listChangedPaths = listChangedPathsFromGit,
   options = {},
 ) {
+  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, listChangedPaths, options);
+  if (!plan) {
+    return null;
+  }
+  if (plan.mode === "broad") {
+    return null;
+  }
+  return plan.targets;
+}
+
+export function resolveChangedTestTargetPlanForArgs(
+  args,
+  cwd = process.cwd(),
+  listChangedPaths = listChangedPathsFromGit,
+  options = {},
+) {
   const baseRef = extractChangedBaseRef(args);
   if (!baseRef) {
     return null;
   }
   const changedPaths = listChangedPaths(baseRef, cwd);
-  const plan = resolveChangedTestTargetPlan(changedPaths, {
+  return resolveChangedTestTargetPlan(changedPaths, {
     cwd,
     ...options,
   });
-  if (plan.mode === "broad") {
-    return null;
-  }
-  return plan.targets;
 }
 
 function classifyTarget(arg, cwd) {

@@ -1,3 +1,4 @@
+// Requirement tests cover merging and formatting runtime requirements.
 import { describe, expect, it } from "vitest";
 import {
   buildConfigChecks,

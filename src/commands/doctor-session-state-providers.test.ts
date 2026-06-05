@@ -1,3 +1,4 @@
+// Doctor session state provider tests cover route-state repair and configured provider resolution.
 import { describe, expect, it, vi } from "vitest";
 import {
   applySessionRouteStateRepair,

@@ -1,3 +1,4 @@
+// Feishu plugin module implements setup surface behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,

@@ -1,3 +1,8 @@
+/**
+ * Provider auth resolution entry points used during model config generation.
+ * The resolvers return env/profile/config marker values so discovery can prove
+ * auth availability without writing secret material into generated config.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -22,9 +27,6 @@ import {
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
-// Provider auth resolution entry points. These functions return marker values
-// for config/env/profile sources so model discovery can prove auth without
-// exposing secret material in generated model config.
 export type {
   ProfileApiKeyResolution,
   ProviderApiKeyResolver,
@@ -89,6 +91,7 @@ function resolveProviderIdForAuthFromCaches(
   return caches.aliasMap[normalized] ?? normalized;
 }
 
+/** Create a resolver that returns redacted API-key markers for provider discovery. */
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,

@@ -1,3 +1,4 @@
+// Write Build Info script supports OpenClaw repository automation.
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

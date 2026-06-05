@@ -1,3 +1,4 @@
+// Store entry lookup resolves canonical keys and safe legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -17,6 +18,7 @@ export function foldedSessionKeyAliasCandidates(normalizedKey: string): string[]
     aliases.add(foldedLegacyKey);
   }
   if (requiresFoldedSessionKeyAliasProof(normalizedKey)) {
+    // Thread suffixes preserve their opaque thread id while only folding the legacy base key.
     const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
     const foldedBaseKey = normalizeLowercaseStringOrEmpty(baseSessionKey);
     if (baseSessionKey && threadId && foldedBaseKey !== baseSessionKey) {
@@ -107,6 +109,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
   const targets = entryDeliveryTargets(entry);
+  // Existing delivery metadata is treated as proof against folding to a different opaque target.
   if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
     return true;
   }

@@ -1,3 +1,4 @@
+// Telegram tests cover auto topic label plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const generateConversationLabel = vi.hoisted(() => vi.fn());

@@ -1,3 +1,4 @@
+// Talk event tests cover realtime voice event normalization.
 import { describe, expect, it } from "vitest";
 import { createTalkEventSequencer } from "./talk-events.js";
 

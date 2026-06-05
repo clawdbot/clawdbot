@@ -1,3 +1,4 @@
+// Control UI tests cover channels behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot } from "../types.ts";
 import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";

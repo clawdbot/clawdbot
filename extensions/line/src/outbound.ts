@@ -1,3 +1,4 @@
+// Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,

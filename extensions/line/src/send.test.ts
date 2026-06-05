@@ -1,3 +1,4 @@
+// Line tests cover send plugin behavior.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {

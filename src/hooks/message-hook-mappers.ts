@@ -1,3 +1,4 @@
+// Message hook mappers translate runtime message events into hook payloads.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

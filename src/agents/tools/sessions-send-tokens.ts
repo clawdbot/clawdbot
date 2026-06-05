@@ -1,11 +1,10 @@
+/**
+ * sessions_send sentinel tokens.
+ *
+ * Defines non-deliverable reply markers used by sessions_send and subagent completion delivery.
+ */
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
-/**
- * Sentinel reply tokens used by sessions_send and subagent completion delivery.
- *
- * These tokens are control signals, not visible chat replies, so delivery code
- * must filter them before sending user-facing messages.
- */
 /** Suppresses a subagent completion announcement. */
 export const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 /** Suppresses a direct reply delivery. */

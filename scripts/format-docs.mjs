@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Formats docs Markdown/MDX and repairs Mintlify accordion indentation.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -1,7 +1,13 @@
+/**
+ * Arcee model catalog metadata. These definitions back both direct Arcee and
+ * OpenRouter-routed provider catalogs.
+ */
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
+/** Default direct Arcee API base URL. */
 export const ARCEE_BASE_URL = "https://api.arcee.ai/api/v1";
 
+/** Static Arcee model catalog used for provider registration. */
 export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "trinity-mini",
@@ -51,6 +57,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   },
 ];
 
+/** Build one OpenAI-compatible Arcee model definition. */
 export function buildArceeModelDefinition(
   model: (typeof ARCEE_MODEL_CATALOG)[number],
 ): ModelDefinitionConfig {

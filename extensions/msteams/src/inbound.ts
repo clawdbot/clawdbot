@@ -1,3 +1,4 @@
+// Msteams plugin module implements inbound behavior.
 type MSTeamsQuoteInfo = {
   sender: string;
   body: string;

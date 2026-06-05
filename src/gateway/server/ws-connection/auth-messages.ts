@@ -1,3 +1,4 @@
+// WebSocket auth messages format client-specific handshake failures without exposing secret material.
 import {
   isGatewayCliClient,
   isOperatorUiClient,

@@ -1,3 +1,4 @@
+// Shared base compatibility normalizers reused by core and plugin setup migrations.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   normalizeLegacyBrowserConfig,
@@ -15,6 +16,7 @@ import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
 import { migrateLegacyWebSearchConfig } from "./legacy-web-search-migrate.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
+/** Run common compatibility migrations before caller-specific setup/channel passes. */
 export function normalizeBaseCompatibilityConfigValues(
   cfg: OpenClawConfig,
   changes: string[],

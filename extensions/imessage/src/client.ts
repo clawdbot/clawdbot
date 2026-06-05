@@ -1,3 +1,4 @@
+// Imessage plugin module implements client behavior.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

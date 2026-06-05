@@ -1,3 +1,4 @@
+// Covers Codex-native web search activation and payload projection.
 import { describe, expect, it } from "vitest";
 import {
   buildCodexNativeWebSearchTool,
@@ -47,6 +48,8 @@ describe("resolveCodexNativeSearchActivation", () => {
   });
 
   it("activates for direct openai when auth exists", () => {
+    // Direct OpenAI needs bridgeable auth before OpenClaw can suppress the
+    // managed web-search tool in favor of Codex native search.
     const result = resolveCodexNativeSearchActivation({
       config: {
         ...baseConfig,
@@ -79,6 +82,8 @@ describe("resolveCodexNativeSearchActivation", () => {
   });
 
   it("activates for api-compatible openai-chatgpt-responses providers without separate Codex auth", () => {
+    // Gateway-style providers already execute through a compatible Responses
+    // API, so native search can be enabled without a separate OpenAI profile.
     const result = resolveCodexNativeSearchActivation({
       config: baseConfig,
       modelProvider: "gateway",
@@ -188,6 +193,8 @@ describe("Codex native web-search payload helpers", () => {
 
   it("injects native web_search into provider payloads", () => {
     const payload: Record<string, unknown> = { tools: [{ type: "function", name: "read" }] };
+    // Payload patching mutates the provider request in place because callers
+    // already hold the request object that will be sent to the model runtime.
     const result = patchCodexNativeWebSearchPayload({ payload, config: baseConfig });
 
     expect(result.status).toBe("injected");
@@ -228,6 +235,8 @@ describe("shouldSuppressManagedWebSearchTool", () => {
 
 describe("isCodexNativeWebSearchRelevant", () => {
   it("treats a default model with model-level openai-chatgpt-responses api as relevant", () => {
+    // Provider-level APIs can be generic while individual models opt into the
+    // ChatGPT Responses shape that supports native web_search.
     expect(
       isCodexNativeWebSearchRelevant({
         config: {

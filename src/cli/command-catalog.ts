@@ -1,3 +1,4 @@
+// Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
@@ -50,6 +51,7 @@ export type CliCommandCatalogEntry = {
   };
 };
 
+/** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["crestodian"],

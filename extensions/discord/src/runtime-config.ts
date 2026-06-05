@@ -1,3 +1,4 @@
+// Discord helper module supports runtime config behavior.
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,

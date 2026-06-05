@@ -1,3 +1,4 @@
+// Plugin sandbox sync tests cover syncing plugin-provided skills into sandbox state.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

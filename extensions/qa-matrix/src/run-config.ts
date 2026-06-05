@@ -1,3 +1,4 @@
+// Qa Matrix helper module supports run config behavior.
 export type QaProviderMode = "mock-openai" | "live-frontier";
 export type QaProviderModeInput = QaProviderMode | "live-openai";
 

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements source sync state behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";

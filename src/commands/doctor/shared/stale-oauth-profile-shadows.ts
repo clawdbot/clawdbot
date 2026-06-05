@@ -1,3 +1,4 @@
+// Doctor cleanup for per-agent OAuth profiles shadowing fresher main-agent credentials.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -106,6 +107,7 @@ function shouldRemoveLocalOAuthShadow(params: {
   return mainExpires >= localExpires;
 }
 
+/** Find local OAuth profiles that safely inherit fresher main-agent credentials instead. */
 export async function scanStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -263,6 +265,7 @@ async function repairStaleOAuthProfilesForAgent(params: {
     : { status: "unchanged" };
 }
 
+/** Format warnings for stale per-agent OAuth profile shadows. */
 export function collectStaleOAuthProfileShadowWarnings(params: {
   hits: StaleOAuthProfileShadow[];
   doctorFixCommand: string;
@@ -273,6 +276,7 @@ export function collectStaleOAuthProfileShadowWarnings(params: {
   );
 }
 
+/** Remove stale per-agent OAuth profile shadows after rechecking each locked store. */
 export async function repairStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

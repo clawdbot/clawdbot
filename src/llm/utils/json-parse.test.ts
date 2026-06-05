@@ -1,3 +1,4 @@
+// JSON parse tests cover tolerant parsing of partial model JSON output.
 import { describe, expect, it } from "vitest";
 import { parseJsonWithRepair, parseStreamingJson, repairJson } from "./json-parse.js";
 

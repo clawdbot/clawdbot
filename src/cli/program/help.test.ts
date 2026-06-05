@@ -1,3 +1,4 @@
+// Help tests cover command help generation and inherited help options.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";

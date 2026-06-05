@@ -1,3 +1,4 @@
+// Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type InlineDirectiveParseResult = {

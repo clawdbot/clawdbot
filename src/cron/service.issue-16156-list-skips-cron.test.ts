@@ -1,3 +1,4 @@
+// Cron list regression tests cover preserving cron jobs in list output.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

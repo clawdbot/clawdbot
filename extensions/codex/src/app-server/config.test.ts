@@ -1,3 +1,4 @@
+// Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";

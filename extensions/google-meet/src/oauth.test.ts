@@ -1,3 +1,4 @@
+// Google Meet tests cover oauth plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,

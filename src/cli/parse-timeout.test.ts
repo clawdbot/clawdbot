@@ -1,3 +1,4 @@
+// Parse timeout tests cover CLI timeout argument parsing and validation.
 import { describe, expect, it } from "vitest";
 import { parseTimeoutMs, parseTimeoutMsWithFallback } from "./parse-timeout.js";
 

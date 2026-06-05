@@ -1,13 +1,14 @@
+/**
+ * Chat target prefix parsers.
+ *
+ * Parses service-qualified chat ids, guids, identifiers, and sender allowlist targets.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
-
-/**
- * Shared parsing helpers for chat ids, chat guids, and service-prefixed targets.
- */
 
 /**
  * Prefix mapping for service-qualified target strings.

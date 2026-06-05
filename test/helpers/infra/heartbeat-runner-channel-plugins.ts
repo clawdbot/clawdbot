@@ -1,3 +1,4 @@
+// Heartbeat runner channel plugin fixtures build channel plugin contracts for tests.
 import type {
   ChannelId,
   ChannelMessagingAdapter,

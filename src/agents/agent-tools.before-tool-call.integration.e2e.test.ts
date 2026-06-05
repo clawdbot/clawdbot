@@ -1,3 +1,8 @@
+/**
+ * End-to-end coverage for before_tool_call hook integration.
+ * Exercises runtime wrapping, client-tool adaptation, code-mode params, and
+ * adjusted parameter handoff across the tool boundary.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

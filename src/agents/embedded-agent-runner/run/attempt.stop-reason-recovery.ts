@@ -1,3 +1,6 @@
+/**
+ * Recovers sensitive stop reasons by wrapping provider stream functions.
+ */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { StreamFn } from "../../runtime/index.js";

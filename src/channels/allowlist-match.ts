@@ -1,10 +1,13 @@
+/**
+ * Channel allowlist matching primitives.
+ *
+ * Compiles normalized allowlists and records match metadata for diagnostics.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 
-// Shared allowlist matching primitives for channel ingress, setup, and plugin
-// helpers. Callers provide candidate sources so audit logs can explain matches.
 export type AllowlistMatchSource =
   | "wildcard"
   | "id"

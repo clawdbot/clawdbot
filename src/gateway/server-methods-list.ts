@@ -1,3 +1,5 @@
+// Gateway method/event catalog.
+// Lists advertised core, auxiliary, channel plugin methods, and websocket events.
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";

@@ -1,3 +1,4 @@
+// Telegram plugin module implements security audit behavior.
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveNativeSkillsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

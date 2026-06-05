@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Syncs source docs into the generated publish tree.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -298,6 +299,9 @@ function getGitHeadSha(repoPath) {
   }
 }
 
+/**
+ * Resolves the local ClawHub repository path used for docs mirroring.
+ */
 export function resolveClawHubRepoPath(value = "", options = {}) {
   const required = options.required !== false;
   const candidates = [
@@ -579,6 +583,9 @@ function rewriteClawHubMarkdownLinks(raw, relativeSourcePath, source) {
   });
 }
 
+/**
+ * Mirrors ClawHub docs into the target docs tree.
+ */
 export function syncClawHubDocsTree(targetDocsDir, options = {}) {
   const repoPath = resolveClawHubRepoPath(options.repoPath || "", {
     required: options.required !== false,

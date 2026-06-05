@@ -1,3 +1,6 @@
+/**
+ * Shared parameter types for embedded-agent run orchestration.
+ */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,

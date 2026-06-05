@@ -1,3 +1,4 @@
+// Standalone runtime registry loader builds plugin runtime registries outside gateway startup.
 import {
   type ActiveRuntimePluginRegistrySurface,
   getLoadedRuntimePluginRegistry,

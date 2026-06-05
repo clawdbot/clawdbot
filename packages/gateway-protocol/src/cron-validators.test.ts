@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover cron validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,

@@ -1,3 +1,4 @@
+// Browser tests cover server context.hot reload profiles plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.types.js";
 

@@ -1,3 +1,4 @@
+// Audio media tests cover audio type normalization and extension mapping.
 import { describe, expect, it } from "vitest";
 import {
   isVoiceCompatibleAudio,

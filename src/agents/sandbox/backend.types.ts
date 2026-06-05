@@ -1,14 +1,13 @@
+/**
+ * Shared sandbox backend registration contracts.
+ *
+ * Runtime creation and lifecycle cleanup stay behind this backend boundary.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 import type { SandboxConfig } from "./types.js";
 
-/**
- * Shared sandbox backend registration contracts.
- *
- * Docker, SSH, and future backends expose a factory plus optional manager so
- * runtime creation and lifecycle cleanup stay behind one backend boundary.
- */
 /** Current runtime state reported by a sandbox backend manager. */
 export type SandboxBackendRuntimeInfo = {
   running: boolean;

@@ -1,3 +1,4 @@
+// Proves workspace plugin auth evidence participates in model auth checks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,8 @@ import {
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
+  // Creates a trusted workspace plugin manifest with local-file auth evidence
+  // so runtime and picker checks exercise the same scoped metadata path.
   const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-cloud");
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
@@ -44,6 +47,8 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 
 describe("workspace plugin model auth evidence", () => {
   it("uses trusted workspace plugin auth evidence across runtime and picker auth checks", async () => {
+    // Without workspace scope the same env var is ignored; with scope, the
+    // plugin-owned marker is accepted across all auth surfaces.
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-auth-"));
     const workspaceDir = path.join(tempRoot, "workspace");
     const bundledDir = path.join(tempRoot, "bundled");

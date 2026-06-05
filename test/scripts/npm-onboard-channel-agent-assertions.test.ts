@@ -1,3 +1,4 @@
+// Npm Onboard Channel Agent Assertions tests cover npm onboard channel agent assertions script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Commander registration for model catalog, status, auth, alias, and fallback commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -5,6 +6,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  // Model subcommands are heavy; load each implementation once on first use.
   let promise: Promise<T> | undefined;
   return () => (promise ??= load());
 }

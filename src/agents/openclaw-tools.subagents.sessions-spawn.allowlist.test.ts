@@ -1,3 +1,4 @@
+// Verifies sessions_spawn agent allowlists and sandbox escalation guards.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -26,6 +27,7 @@ function resolveSandboxRuntimeStatusFromConfig(params: {
   cfg?: Record<string, unknown>;
   sessionKey?: string;
 }) {
+  // Test-only sandbox resolver mirrors the per-agent/default precedence used by runtime.
   const agentId =
     typeof params.sessionKey === "string"
       ? (params.sessionKey.split(":").slice(0, 2).at(1) ?? undefined)
@@ -55,6 +57,7 @@ async function spawn(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
 }) {
+  // Small wrapper keeps each allowlist case focused on config and requested agent.
   return await spawnSubagentDirect(
     {
       task: params.task ?? "do thing",

@@ -1,3 +1,4 @@
+// Channel entry contracts validate plugin channel entrypoints and runtime API facades.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

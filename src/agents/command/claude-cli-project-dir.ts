@@ -1,3 +1,6 @@
+/**
+ * Resolves Claude CLI project storage directories for OpenClaw workspaces.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

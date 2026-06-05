@@ -1,3 +1,4 @@
+// Slack plugin module implements channel type behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

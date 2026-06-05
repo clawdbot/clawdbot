@@ -1,3 +1,4 @@
+// Approval tests cover channel plugin approval request formatting and dispatch.
 import { describe, expect, it, vi } from "vitest";
 import { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";
 

@@ -1,3 +1,4 @@
+// Check Changelog Attributions tests cover check changelog attributions script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";

@@ -1,3 +1,5 @@
+// Talk session methods manage unified realtime/transcription/handoff sessions,
+// audio appends, tool results, steering, turns, joins, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

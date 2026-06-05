@@ -1,3 +1,5 @@
+// Gateway Talk transcription relay.
+// Bridges browser audio to realtime STT providers and emits Talk events.
 import { randomUUID } from "node:crypto";
 import {
   parseFiniteNumber as readFiniteNumber,

@@ -1,3 +1,5 @@
+// Covers agent delivery planning from explicit inputs, session history,
+// turn-source overrides, and route-aware target normalization.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

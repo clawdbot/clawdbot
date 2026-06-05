@@ -1,3 +1,4 @@
+// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
   resolveMemorySearchConfig,

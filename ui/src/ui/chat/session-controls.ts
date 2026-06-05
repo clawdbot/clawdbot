@@ -1,3 +1,4 @@
+// Control UI chat module implements session controls behavior.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";

@@ -1,3 +1,6 @@
+/**
+ * Shared Chrome module mocks for Browser server-context tests.
+ */
 import { vi } from "vitest";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 

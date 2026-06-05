@@ -1,3 +1,4 @@
+// Media parse helpers normalize media references from user and channel input.
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,

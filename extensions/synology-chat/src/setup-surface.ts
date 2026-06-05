@@ -1,3 +1,4 @@
+// Synology Chat plugin module implements setup surface behavior.
 import {
   createAllowFromSection,
   createSetupTranslator,

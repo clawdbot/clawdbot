@@ -1,3 +1,4 @@
+/** Sends cron announce payloads and best-effort failure notifications. */
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -55,6 +56,8 @@ async function resolveCronAnnounceDelivery(params: {
     }
   | { ok: false; error: Error }
 > {
+  // Resolve the target before building outbound identity/session so send errors
+  // report the configured route, not only the cron job id.
   const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: params.target.channel as CronMessageChannel | undefined,
     to: params.target.to,
@@ -95,6 +98,8 @@ async function deliverCronAnnouncePayload(params: {
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
+  // Cron delivery is durable and non-best-effort for primary announces; partial
+  // channel failure must surface as a cron run failure.
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,

@@ -1,3 +1,8 @@
+/**
+ * Shared channel action helpers.
+ *
+ * Filters token-backed accounts and composes account-level action gates.
+ */
 type OptionalDefaultGate<TKey extends string> = (key: TKey, defaultValue?: boolean) => boolean;
 
 type TokenSourcedAccount = {

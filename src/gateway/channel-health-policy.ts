@@ -1,3 +1,5 @@
+// Gateway channel health policy.
+// Evaluates channel lifecycle snapshots for restart/readiness decisions.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = {
@@ -131,6 +133,8 @@ export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
 ): ChannelRestartReason {
+  // Restart reasons are intentionally coarse: downstream logs/UI need stable
+  // categories, while detailed channel state stays in the health snapshot.
   if (evaluation.reason === "stale-socket") {
     return "stale-socket";
   }

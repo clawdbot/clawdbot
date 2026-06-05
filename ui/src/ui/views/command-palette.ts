@@ -1,3 +1,4 @@
+// Control UI view renders command palette screen content.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";

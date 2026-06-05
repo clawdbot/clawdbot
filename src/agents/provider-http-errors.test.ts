@@ -1,3 +1,4 @@
+// Verifies provider HTTP error parsing, redaction, and response-size limits.
 import { describe, expect, it } from "vitest";
 import {
   assertOkOrThrowProviderError,
@@ -15,6 +16,7 @@ function createStreamingBinaryResponse(params: {
   chunkSize: number;
   byte: number;
 }): { response: Response; getReadCount: () => number } {
+  // Streaming fixture proves oversized binary reads stop before buffering everything.
   let reads = 0;
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -107,6 +109,7 @@ describe("provider error utils", () => {
   });
 
   it("attaches structured provider error metadata", async () => {
+    // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(
       JSON.stringify({
         error: {

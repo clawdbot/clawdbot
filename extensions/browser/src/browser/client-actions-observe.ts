@@ -1,3 +1,9 @@
+/**
+ * Browser client observation helpers.
+ *
+ * Wraps browser-control endpoints that read console/debug data or save page
+ * output without directly mutating page state.
+ */
 import type { BrowserActionPathResult } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
@@ -18,6 +24,7 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
   return encoded.length > 0 ? `?${encoded}` : "";
 }
 
+/** Read browser console messages for a tab. */
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
@@ -35,6 +42,7 @@ export async function browserConsoleMessages(
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
+/** Save the current page as PDF through browser control. */
 export async function browserPdfSave(
   baseUrl: string | undefined,
   opts: { targetId?: string; profile?: string } = {},

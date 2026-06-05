@@ -1,3 +1,7 @@
+/**
+ * Tests workspace and cwd path selection during tool assembly.
+ * Covers task cwd, spawned workspace inheritance, and sandbox path behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

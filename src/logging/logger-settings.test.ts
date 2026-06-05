@@ -1,8 +1,9 @@
+// Logger settings tests cover file-backed logger settings behavior.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 
-let originalTestFileLog: string | undefined;
-let originalOpenClawLogLevel: string | undefined;
+let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let logging: typeof import("../logging.js");
 
 beforeAll(async () => {
@@ -10,8 +11,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  originalTestFileLog = process.env.OPENCLAW_TEST_FILE_LOG;
-  originalOpenClawLogLevel = process.env.OPENCLAW_LOG_LEVEL;
+  envSnapshot = captureEnv(["OPENCLAW_TEST_FILE_LOG", "OPENCLAW_LOG_LEVEL"]);
   delete process.env.OPENCLAW_TEST_FILE_LOG;
   delete process.env.OPENCLAW_LOG_LEVEL;
   logging.resetLogger();
@@ -19,16 +19,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalTestFileLog === undefined) {
-    delete process.env.OPENCLAW_TEST_FILE_LOG;
-  } else {
-    process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
-  }
-  if (originalOpenClawLogLevel === undefined) {
-    delete process.env.OPENCLAW_LOG_LEVEL;
-  } else {
-    process.env.OPENCLAW_LOG_LEVEL = originalOpenClawLogLevel;
-  }
+  envSnapshot?.restore();
+  envSnapshot = undefined;
   logging.resetLogger();
   logging.setLoggerOverride(null);
   logging.setLoggerConfigLoaderForTests();

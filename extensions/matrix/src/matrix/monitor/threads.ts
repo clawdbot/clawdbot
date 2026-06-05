@@ -1,3 +1,4 @@
+// Matrix plugin module implements threads behavior.
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { RelationType } from "./types.js";

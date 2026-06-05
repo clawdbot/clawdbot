@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs knip unused-file detection and compares results to the allowlist.
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -8,9 +9,21 @@ import {
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const KNIP_VERSION = "6.8.0";
+/**
+ * Timeout for the unused-file knip child process.
+ */
 export const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Grace period before force-killing a timed-out knip child process.
+ */
 export const KNIP_KILL_GRACE_MS = 5_000;
+/**
+ * Heartbeat interval used while knip runs without output.
+ */
 export const KNIP_HEARTBEAT_MS = 60_000;
+/**
+ * Maximum buffered knip output retained for diagnostics.
+ */
 export const KNIP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const KNIP_ARGS = [
   "--config",
@@ -37,6 +50,9 @@ function isLikelyRepoFilePath(value) {
   return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
 }
 
+/**
+ * Parses compact knip output into unused file paths.
+ */
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -68,6 +84,9 @@ export function parseKnipCompactUnusedFiles(output) {
   return uniqueSorted(files);
 }
 
+/**
+ * Compares detected unused files against the checked-in allowlist.
+ */
 export function compareUnusedFilesToAllowlist(
   actualFiles,
   allowlistFiles,
@@ -90,6 +109,9 @@ export function compareUnusedFilesToAllowlist(
   };
 }
 
+/**
+ * Formats unused-file allowlist drift for CLI output.
+ */
 export function formatUnusedFileComparison(comparison) {
   const lines = [];
   if (!comparison.allowlistIsSorted) {
@@ -132,6 +154,9 @@ function signalProcessTree(child, signal) {
   }
 }
 
+/**
+ * Runs knip and returns parsed unused-file results.
+ */
 export async function runKnipUnusedFiles(params = {}) {
   const run = params.spawnCommand ?? spawn;
   const timeoutMs = params.timeoutMs ?? KNIP_TIMEOUT_MS;
@@ -284,6 +309,9 @@ export async function runKnipUnusedFiles(params = {}) {
     });
   });
 }
+/**
+ * Checks detected unused files against the current allowlist.
+ */
 export function checkUnusedFiles(
   output,
   allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST,

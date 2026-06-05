@@ -1,3 +1,4 @@
+// Plugin install planning helpers for bundled, official external, and npm fallback paths.
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
@@ -66,6 +67,7 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findBundledSource: BundledLookup;
 }): { bundledSource: BundledPluginSource; warning: string } | null {
+  // Bundled plugin ids win before npm lookup so local official plugins do not hit the registry.
   const rawSpec = params.rawSpec.trim();
   if (!rawSpec) {
     return null;

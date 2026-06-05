@@ -1,3 +1,4 @@
+// Skill runtime config helpers read the active runtime config snapshot for skill loading.
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";

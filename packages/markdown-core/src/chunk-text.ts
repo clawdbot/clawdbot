@@ -1,3 +1,4 @@
+// Markdown Core module implements chunk text behavior.
 function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
   if (!text) {
     return [];

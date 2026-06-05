@@ -1,3 +1,5 @@
+// Node pairing authorization tests cover approved node reconnects, visible
+// command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {

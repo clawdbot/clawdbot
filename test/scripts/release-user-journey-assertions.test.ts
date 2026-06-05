@@ -1,3 +1,4 @@
+// Release User Journey Assertions tests cover release user journey assertions script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";

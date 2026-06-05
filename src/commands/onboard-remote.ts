@@ -1,3 +1,9 @@
+/**
+ * Interactive remote gateway onboarding.
+ *
+ * It can discover gateways, validate remote WebSocket security, and store
+ * remote token/password auth as plaintext or secret references.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
@@ -45,6 +51,7 @@ function validateGatewayWebSocketUrl(value: string): string | undefined {
   return undefined;
 }
 
+/** Prompts for remote gateway connection and auth settings. */
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
@@ -74,6 +81,8 @@ export async function promptRemoteGatewayConfig(
   }
 
   if (wantsDiscover) {
+    // Wide-area discovery is bounded and optional; manual URL entry remains the
+    // fallback so setup is usable without Bonjour or DNS-SD results.
     const wideAreaDomain = resolveWideAreaDiscoveryDomain({
       configDomain: cfg.discovery?.wideArea?.domain,
     });
@@ -128,6 +137,8 @@ export async function promptRemoteGatewayConfig(
           initialValue: false,
         });
         if (trusted) {
+          // Only pin discovery TLS when the user accepts the discovered endpoint;
+          // manual edits later clear the pin to avoid trusting a different host.
           discoveryTlsFingerprint = fingerprint;
           trustedDiscoveryUrl = suggestedUrl;
           await prompter.note(
@@ -188,6 +199,8 @@ export async function promptRemoteGatewayConfig(
       },
     });
     if (selectedMode === "ref") {
+      // Remote token refs use gateway-specific env var hints but still flow
+      // through the shared setup secret-ref contract.
       const resolved = await promptSecretRefForSetup({
         provider: "gateway-remote-token",
         config: cfg,
@@ -231,6 +244,8 @@ export async function promptRemoteGatewayConfig(
       },
     });
     if (selectedMode === "ref") {
+      // Password refs mirror token refs so remote auth can stay out of config
+      // even when password mode is selected.
       const resolved = await promptSecretRefForSetup({
         provider: "gateway-remote-password",
         config: cfg,

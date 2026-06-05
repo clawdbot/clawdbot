@@ -1,3 +1,4 @@
+// Classifies bundled extension files as production, barrel, test-like, or infra artifacts.
 const CODE_FILE_RE = /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 const DECLARATION_FILE_RE = /\.d\.ts$/u;
 const RUNTIME_API_BARREL_RE = /(^|\/)runtime-api\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
@@ -17,6 +18,7 @@ function normalizeExtensionSourcePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
 
+/** Classify one bundled extension source path for boundary and packaging guards. */
 export function classifyBundledExtensionSourcePath(filePath) {
   const normalizedPath = normalizeExtensionSourcePath(filePath);
   const isCodeFile = CODE_FILE_RE.test(normalizedPath) && !DECLARATION_FILE_RE.test(normalizedPath);

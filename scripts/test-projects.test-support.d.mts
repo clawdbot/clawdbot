@@ -20,6 +20,12 @@ export type ChangedTestTargetOptions = {
   broad?: boolean;
 };
 
+export type ChangedTestTargetPlan = {
+  mode: "none" | "broad" | "targets";
+  targets: string[];
+  skippedBroadFallbackPaths?: string[];
+};
+
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS: string;
 
@@ -49,10 +55,14 @@ export function resolveChangedTargetArgs(
 export function resolveChangedTestTargetPlan(
   changedPaths: string[],
   options?: ChangedTestTargetOptions,
-): {
-  mode: "none" | "broad" | "targets";
-  targets: string[];
-};
+): ChangedTestTargetPlan;
+
+export function resolveChangedTestTargetPlanForArgs(
+  args: string[],
+  cwd?: string,
+  listChangedPaths?: (baseRef: string, cwd: string) => string[],
+  options?: ChangedTestTargetOptions,
+): ChangedTestTargetPlan | null;
 
 export function listFullExtensionVitestProjectConfigs(): string[];
 

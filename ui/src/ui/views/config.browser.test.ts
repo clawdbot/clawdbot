@@ -1,3 +1,4 @@
+// Control UI tests cover config behavior.
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeMode, ThemeName } from "../theme.ts";

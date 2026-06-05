@@ -1,3 +1,5 @@
+// Auto-audio runner tests cover provider fallback selection and local binary
+// discovery for audio transcription.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

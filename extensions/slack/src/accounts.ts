@@ -1,3 +1,4 @@
+// Slack plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,

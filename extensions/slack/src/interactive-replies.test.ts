@@ -1,3 +1,4 @@
+// Slack tests cover interactive replies plugin behavior.
 import { describe, expect, it } from "vitest";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 

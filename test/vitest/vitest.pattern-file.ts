@@ -1,3 +1,4 @@
+// Vitest pattern file helper reads include and exclude patterns from files.
 import fs from "node:fs";
 import path from "node:path";
 

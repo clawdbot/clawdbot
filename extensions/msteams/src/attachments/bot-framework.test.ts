@@ -1,3 +1,4 @@
+// Msteams tests cover bot framework plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {

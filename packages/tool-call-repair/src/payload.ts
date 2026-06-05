@@ -1,3 +1,4 @@
+// Tool Call Repair module implements payload behavior.
 import {
   consumeLineBreak,
   END_TOOL_REQUEST,

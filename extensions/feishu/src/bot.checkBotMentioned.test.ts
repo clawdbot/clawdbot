@@ -1,3 +1,4 @@
+// Feishu tests cover bot.checkBotMentioned plugin behavior.
 import { describe, it, expect } from "vitest";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 

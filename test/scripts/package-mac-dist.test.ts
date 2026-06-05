@@ -1,3 +1,4 @@
+// Package Mac Dist tests cover package mac dist script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements memory palace behavior.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown, type WikiPageKind } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";

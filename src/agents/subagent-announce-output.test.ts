@@ -1,3 +1,5 @@
+// Subagent announce output tests cover transcript reads, completion extraction,
+// compact stats, and wait-outcome text used in announce messages.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -30,6 +32,8 @@ function installOutputDeps(params: {
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
+  // sessions_yield is requester control flow, not child output; fixtures keep
+  // that wait turn adjacent to later assistant completions.
   return [
     {
       role: "assistant",
@@ -204,6 +208,8 @@ describe("readSubagentOutput", () => {
       ],
     });
 
+    // Private transcript data is fresher for recovered runs and avoids exposing
+    // stale gateway-visible history after an internal completion is persisted.
     await expect(
       readSubagentOutput("agent:main:subagent:child", undefined, {
         sessionFile: "/tmp/openclaw-internal-run.jsonl",

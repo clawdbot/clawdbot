@@ -1,3 +1,5 @@
+// Remote filesystem bridge tests cover SSH-style sandbox file operations using
+// the pinned mutation helper and remote stat/path guards.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +15,8 @@ function createLocalRemoteRuntime(params: {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
 }) {
+  // Execute remote shell snippets locally so the bridge scripts are exercised
+  // without a real SSH host.
   const calls: Array<Parameters<RemoteShellSandboxHandle["runRemoteShellScript"]>[0]> = [];
   const runtime: RemoteShellSandboxHandle = {
     remoteWorkspaceDir: params.remoteWorkspaceDir,
@@ -148,6 +152,8 @@ describe("remote sandbox fs bridge", () => {
   );
 
   it.runIf(process.platform !== "win32")("rejects symlink escapes while reading", async () => {
+    // The remote helper uses no-follow file opens; symlinked final components
+    // must fail even when the local caller cannot inspect the remote inode.
     await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const outsideDir = path.join(stateDir, "outside");
@@ -183,6 +189,8 @@ describe("remote sandbox fs bridge", () => {
   );
 
   it("saturates unsafe stat size output without returning NaN", async () => {
+    // Remote stat output is untrusted shell text; unsafe numeric fields should
+    // clamp to deterministic values instead of leaking NaN into callers.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });

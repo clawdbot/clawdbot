@@ -1,3 +1,4 @@
+// Codex tests cover command plugins management plugin behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {

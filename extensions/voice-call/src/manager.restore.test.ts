@@ -1,3 +1,4 @@
+// Voice Call tests cover manager.restore plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,

@@ -1,3 +1,4 @@
+// WebSocket auth context resolves handshake credentials before device pairing and capability checks run.
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

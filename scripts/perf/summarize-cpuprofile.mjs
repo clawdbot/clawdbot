@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Summarizes V8 CPU profile files by frame and module.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -7,6 +8,9 @@ import { parsePositiveInt } from "../lib/numeric-options.mjs";
 
 const DEFAULT_LIMIT = 30;
 
+/**
+ * Parses CPU profile file paths and --limit.
+ */
 export function parseArgs(argv) {
   const files = [];
   let limit = DEFAULT_LIMIT;

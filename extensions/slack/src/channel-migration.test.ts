@@ -1,3 +1,4 @@
+// Slack tests cover channel migration plugin behavior.
 import { describe, expect, it } from "vitest";
 import { migrateSlackChannelConfig, migrateSlackChannelsInPlace } from "./channel-migration.js";
 

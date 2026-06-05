@@ -1,3 +1,4 @@
+// Line plugin module implements message behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import type { FlexContainer } from "./types.js";
 

@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.body plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 

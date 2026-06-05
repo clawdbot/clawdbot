@@ -1,3 +1,4 @@
+// Imessage tests cover group allowlist warnings plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   resetGroupAllowlistWarningsForTesting,

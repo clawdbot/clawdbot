@@ -1,3 +1,4 @@
+// Nostr plugin module implements nostr state store behavior.
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;

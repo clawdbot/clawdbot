@@ -1,3 +1,6 @@
+/**
+ * Test harness mocks for embedded-run overflow compaction coverage.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";

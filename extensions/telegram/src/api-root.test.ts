@@ -1,3 +1,4 @@
+// Telegram tests cover api root plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TELEGRAM_API_ROOT,

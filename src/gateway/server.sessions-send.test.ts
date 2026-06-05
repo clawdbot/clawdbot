@@ -1,3 +1,5 @@
+// sessions_send tests cover tool-driven agent-to-agent delivery, transcript
+// updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

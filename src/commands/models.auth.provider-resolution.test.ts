@@ -1,3 +1,4 @@
+// Models auth provider-resolution tests cover provider auth status grouping and selection.
 import { describe, expect, it } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { resolveRequestedLoginProviderOrThrow } from "./models/auth.js";

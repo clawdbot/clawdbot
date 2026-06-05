@@ -1,3 +1,9 @@
+/**
+ * Browser config mutation helpers.
+ *
+ * Persists browser-control credentials and profile config changes through the
+ * canonical config writer while preserving port/color allocation rules.
+ */
 import { mutateConfigFile } from "../config/config.js";
 import type { BrowserProfileConfig } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
@@ -45,6 +51,7 @@ const cdpPortRange = (resolved: {
   return deriveDefaultBrowserCdpPortRange(resolved.controlPort);
 };
 
+/** Persist the generated browser-control token or password in gateway auth config. */
 export async function persistBrowserControlCredential(
   credential: BrowserControlCredential,
 ): Promise<void> {
@@ -62,6 +69,7 @@ export async function persistBrowserControlCredential(
   });
 }
 
+/** Create and persist a browser profile config with allocated color and CDP port. */
 export async function createBrowserProfileConfig(params: {
   name: string;
   resolved: ResolvedBrowserConfig;
@@ -153,6 +161,7 @@ export async function createBrowserProfileConfig(params: {
   return mutation.result;
 }
 
+/** Delete a persisted browser profile config by name. */
 export async function deleteBrowserProfileConfig(name: string): Promise<void> {
   await mutateConfigFile({
     afterWrite: { mode: "auto" },

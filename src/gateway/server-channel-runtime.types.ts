@@ -1,7 +1,7 @@
+// Gateway channel runtime snapshot types.
+// Exposes read-only channel/account state to status and server-method surfaces.
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 
-// Channel runtime snapshots are the read-only Gateway view of channel/account
-// state used by status and server-method surfaces.
 /** Snapshot of channel runtime state keyed by channel and account id. */
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;

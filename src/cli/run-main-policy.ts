@@ -1,3 +1,4 @@
+// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -82,6 +83,7 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
 }
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
+  // Preserve the old root --update spelling by rewriting before Commander registration.
   const index = argv.indexOf("--update");
   if (index === -1) {
     return argv;

@@ -1,3 +1,8 @@
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -24,12 +29,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-/**
- * Shared data shapes and classification helpers for session tools.
- *
- * Session list/send/status tools use this module to agree on row fields,
- * requester visibility context, and compact session kind/channel labels.
- */
 /** Coarse session category used by session list/status tools. */
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 

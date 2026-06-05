@@ -1,3 +1,4 @@
+// Matrix helper module supports config update behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";

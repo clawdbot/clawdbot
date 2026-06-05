@@ -1,3 +1,4 @@
+// Browser tests cover chrome.internal plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";

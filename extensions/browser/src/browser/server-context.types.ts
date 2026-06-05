@@ -1,3 +1,7 @@
+/**
+ * Shared Browser server context types used by route handlers and profile
+ * operation factories.
+ */
 import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserTab, BrowserTransport } from "./client.types.js";
@@ -5,9 +9,7 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 
 export type { BrowserTab };
 
-/**
- * Runtime state for a single profile's Chrome instance.
- */
+/** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
@@ -31,6 +33,7 @@ export type ProfileRuntimeState = {
   } | null;
 };
 
+/** Runtime state for the Browser control server. */
 export type BrowserServerState = {
   server?: Server | null;
   port: number;
@@ -58,6 +61,7 @@ type BrowserProfileActions = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
+/** Profile-aware operations exposed to Browser route handlers. */
 export type BrowserRouteContext = {
   state: () => BrowserServerState;
   forProfile: (profileName?: string) => ProfileContext;
@@ -66,10 +70,12 @@ export type BrowserRouteContext = {
   mapTabError: (err: unknown) => { status: number; message: string } | null;
 } & BrowserProfileActions;
 
+/** Operations scoped to a single resolved Browser profile. */
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
 } & BrowserProfileActions;
 
+/** Status payload returned by Browser profile listing. */
 export type ProfileStatus = {
   name: string;
   transport: BrowserTransport;
@@ -85,6 +91,7 @@ export type ProfileStatus = {
   reconcileReason?: string | null;
 };
 
+/** Inputs for creating a Browser route context. */
 export type ContextOptions = {
   getState: () => BrowserServerState | null;
   onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;

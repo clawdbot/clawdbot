@@ -1,3 +1,4 @@
+// Slack API module exposes the plugin public contract.
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

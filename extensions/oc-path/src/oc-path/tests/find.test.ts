@@ -1,3 +1,4 @@
+// OC Path tests cover find plugin behavior.
 import { describe, expect, it } from "vitest";
 import { findOcPaths } from "../find.js";
 import { parseJsonc } from "../jsonc/parse.js";

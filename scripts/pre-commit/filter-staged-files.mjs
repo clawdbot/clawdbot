@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Filters staged file paths for pre-commit lint/format hooks.
 import path from "node:path";
 
 /**

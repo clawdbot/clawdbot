@@ -1,3 +1,4 @@
+// Memory Host SDK module implements qmd process behavior.
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";

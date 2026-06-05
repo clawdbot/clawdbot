@@ -1,3 +1,4 @@
+// Commander registration for debug proxy capture, validation, query, and blob commands.
 import { InvalidArgumentError, type Command } from "commander";
 import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
@@ -10,6 +11,7 @@ const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
 );
 
 async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
+  // Keep proxy CA/server/sqlite dependencies out of normal CLI startup.
   return await proxyCliRuntimeLoader.load();
 }
 

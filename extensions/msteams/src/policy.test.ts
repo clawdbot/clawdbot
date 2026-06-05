@@ -1,3 +1,4 @@
+// Msteams tests cover policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";

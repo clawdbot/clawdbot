@@ -1,3 +1,5 @@
+// Covers send validation for target/channel mismatches, configured channel
+// availability, and explicit target requirements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

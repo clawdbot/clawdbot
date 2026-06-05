@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements claim health behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 

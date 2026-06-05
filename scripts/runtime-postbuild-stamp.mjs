@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Writes the runtime postbuild stamp after generated runtime artifacts are current.
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { writeRuntimePostBuildStamp } from "./lib/local-build-metadata.mjs";

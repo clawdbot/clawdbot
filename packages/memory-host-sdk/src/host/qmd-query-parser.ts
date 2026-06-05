@@ -1,3 +1,4 @@
+// Memory Host SDK module implements qmd query parser behavior.
 import { formatErrorMessage } from "./error-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 

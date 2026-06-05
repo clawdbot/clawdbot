@@ -1,3 +1,4 @@
+// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,

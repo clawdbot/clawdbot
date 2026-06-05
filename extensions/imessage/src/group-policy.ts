@@ -1,3 +1,4 @@
+// Imessage plugin module implements group policy behavior.
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,

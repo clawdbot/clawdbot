@@ -1,3 +1,4 @@
+// Image operation helpers normalize image transforms and adapter calls.
 import {
   createRastermill,
   isRastermillUnavailableError,

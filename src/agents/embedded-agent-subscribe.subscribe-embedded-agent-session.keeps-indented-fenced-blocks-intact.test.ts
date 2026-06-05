@@ -1,3 +1,5 @@
+// Fenced block chunking tests ensure indented and longer Markdown fences remain
+// intact when paragraph block replies are split.
 import { describe, expect, it, vi } from "vitest";
 import {
   createParagraphChunkedBlockReplyHarness,
@@ -7,6 +9,8 @@ import {
 
 describe("subscribeEmbeddedAgentSession", () => {
   it("keeps indented fenced blocks intact", () => {
+    // Indented fences are still code blocks for block-reply chunking and should
+    // not be split into malformed fragments.
     const onBlockReply = vi.fn();
     const { emit } = createParagraphChunkedBlockReplyHarness({
       onBlockReply,

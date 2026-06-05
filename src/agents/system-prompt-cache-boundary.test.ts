@@ -1,3 +1,5 @@
+// System prompt cache-boundary tests cover the internal marker that separates
+// stable prompt text from dynamic per-turn additions.
 import { describe, expect, it } from "vitest";
 import {
   ensureSystemPromptCacheBoundary,
@@ -76,6 +78,8 @@ describe("ensureSystemPromptCacheBoundary", () => {
   });
 
   it("lets a per-turn addition split into the uncached suffix for a marker-free prompt", () => {
+    // Marker-free overrides become stable prefixes; additions stay in the
+    // dynamic suffix so prompt-cache bytes remain deterministic.
     const result = prependSystemPromptAdditionAfterCacheBoundary({
       systemPrompt: ensureSystemPromptCacheBoundary("Marker-free override"),
       systemPromptAddition: "Per-turn media task hint",

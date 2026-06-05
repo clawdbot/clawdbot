@@ -1,3 +1,4 @@
+// Mcp Channel Limits tests cover mcp channel limits script behavior.
 import { describe, expect, it } from "vitest";
 import { readMcpChannelLimits } from "../../scripts/e2e/mcp-channel-limits.ts";
 

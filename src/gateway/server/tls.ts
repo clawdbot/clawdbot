@@ -1,3 +1,4 @@
+// Gateway TLS boundary loads listener certificate material from gateway config.
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import {
   type GatewayTlsRuntime,

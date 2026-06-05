@@ -1,3 +1,4 @@
+// Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createImportedCustomThemeFixture as createImportedTheme,

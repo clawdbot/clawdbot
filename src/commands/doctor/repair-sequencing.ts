@@ -1,3 +1,4 @@
+// Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import {
@@ -37,6 +38,7 @@ import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
+/** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;

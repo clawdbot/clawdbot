@@ -1,3 +1,5 @@
+// Active session shutdown tracker.
+// Remembers sessions needing `session_end` hooks during gateway shutdown/restart.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Module-level tracker of sessions that have received `session_start` but not
@@ -39,6 +41,8 @@ export function forgetActiveSessionForShutdown(sessionId: string | undefined): v
 }
 
 export function listActiveSessionsForShutdown(): ActiveSessionForShutdown[] {
+  // Return a snapshot, not the backing map, so shutdown drains can iterate while
+  // lifecycle hooks concurrently forget finalized sessions.
   return Array.from(trackedSessions.values());
 }
 

@@ -1,3 +1,4 @@
+// Control UI tests cover session run state behavior.
 import { describe, expect, it } from "vitest";
 import { isSessionRunActive } from "./session-run-state.ts";
 

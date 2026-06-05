@@ -1,3 +1,4 @@
+// Matrix plugin module implements sdk behavior.
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,

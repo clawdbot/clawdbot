@@ -1,3 +1,4 @@
+// Discord tests cover message handler.hydration plugin behavior.
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import {

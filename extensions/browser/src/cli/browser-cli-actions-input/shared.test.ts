@@ -1,3 +1,4 @@
+// Browser tests cover shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { readFields } from "./shared.js";
 

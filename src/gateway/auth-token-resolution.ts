@@ -1,3 +1,5 @@
+// Gateway auth token resolution applies explicit/config/SecretRef/env
+// precedence with caller-controlled env fallback behavior.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { trimToUndefined } from "./credentials.js";

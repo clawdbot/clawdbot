@@ -1,3 +1,4 @@
+// Workspace fixture writer commands for E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { assert, readJson, requireArg, write, writeJson } from "./common.mjs";

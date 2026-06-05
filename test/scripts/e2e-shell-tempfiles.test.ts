@@ -1,3 +1,4 @@
+// E2E Shell Tempfiles tests cover e2e shell tempfiles script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -162,9 +163,9 @@ exit 42
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(42);
       const scratchEntries = await readdir(scratchRoot);
-      expect(scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home."))).toEqual(
-        [],
-      );
+      expect(
+        scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
+      ).toEqual([]);
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

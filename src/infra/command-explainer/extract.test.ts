@@ -1,3 +1,5 @@
+// Covers rich shell-command extraction, fake parser shapes, source span mapping,
+// nested wrapper parsing, and parser error handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Node as TreeSitterNode, Parser, Tree } from "web-tree-sitter";
 import { explainShellCommand } from "./extract.js";

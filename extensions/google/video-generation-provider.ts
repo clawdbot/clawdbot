@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,

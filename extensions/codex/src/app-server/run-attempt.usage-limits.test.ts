@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.usage limits plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { rememberCodexRateLimits } from "./rate-limit-cache.js";

@@ -1,3 +1,4 @@
+// Doctor capability lookup for channel-specific policy and migration behavior.
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -43,6 +44,7 @@ function getManifestDoctorCapabilities(
   return findBundledPackageChannelMetadata(channelId)?.doctorCapabilities;
 }
 
+/** Resolve doctor behavior capabilities from channel metadata, plugin runtime, or defaults. */
 export function getDoctorChannelCapabilities(channelName?: string): DoctorChannelCapabilities {
   if (!channelName) {
     return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;

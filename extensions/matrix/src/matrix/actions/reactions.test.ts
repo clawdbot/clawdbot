@@ -1,3 +1,4 @@
+// Matrix tests cover reactions plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { listMatrixReactions, removeMatrixReactions } from "./reactions.js";

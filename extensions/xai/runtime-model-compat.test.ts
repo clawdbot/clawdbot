@@ -1,3 +1,4 @@
+// Xai tests cover runtime model compat plugin behavior.
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 

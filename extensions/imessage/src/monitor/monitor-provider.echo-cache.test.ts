@@ -1,3 +1,4 @@
+// Imessage tests cover monitor provider.echo cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createIMessagePluginStateSyncStoreForTest,

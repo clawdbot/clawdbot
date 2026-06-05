@@ -1,3 +1,8 @@
+/**
+ * Durable inbound receive journal.
+ *
+ * Tracks accepted, pending, completed, and retryable inbound platform events.
+ */
 import type { PluginStateKeyedStore } from "../../plugin-state/plugin-state-store.types.js";
 import type { ChannelIngressQueue, ChannelIngressQueuePruneOptions } from "./ingress-queue.js";
 

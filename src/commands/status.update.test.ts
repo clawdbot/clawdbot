@@ -1,3 +1,4 @@
+// Status update tests cover update check display and availability formatting.
 import { describe, expect, it } from "vitest";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { VERSION } from "../version.js";

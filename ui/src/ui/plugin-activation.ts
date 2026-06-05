@@ -1,3 +1,4 @@
+// Control UI module implements plugin activation behavior.
 import type { ConfigSnapshot } from "./types.ts";
 
 type PluginActivationOptions = {

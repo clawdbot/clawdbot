@@ -1,3 +1,8 @@
+/**
+ * Session transcript guard for tool-call/result consistency.
+ *
+ * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
+ */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

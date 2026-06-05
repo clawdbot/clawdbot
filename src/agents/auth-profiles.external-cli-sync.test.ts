@@ -1,3 +1,8 @@
+/**
+ * External CLI OAuth sync tests.
+ * Covers cached credential readers, bootstrap/replace policy, and runtime-only
+ * profile persistence decisions without touching real CLI credential stores.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";

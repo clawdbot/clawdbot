@@ -1,3 +1,4 @@
+// Browser tests cover profiles plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
 import {

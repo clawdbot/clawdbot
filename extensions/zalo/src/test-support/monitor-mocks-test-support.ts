@@ -1,3 +1,4 @@
+// Zalo plugin module implements monitor mocks test support behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createEmptyPluginRegistry,

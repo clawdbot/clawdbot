@@ -1,3 +1,4 @@
+// Log line parsing tests cover structured log parsing from text lines.
 import { describe, expect, it } from "vitest";
 import { parseLogLine } from "./parse-log-line.js";
 

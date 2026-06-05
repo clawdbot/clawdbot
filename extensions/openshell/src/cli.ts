@@ -1,3 +1,4 @@
+// Openshell plugin module implements cli behavior.
 import {
   createSshSandboxSessionFromConfigText,
   runPluginCommandWithTimeout,

@@ -1,3 +1,4 @@
+// Cron model override tests cover model selection overrides for scheduled runs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,

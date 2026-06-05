@@ -1,3 +1,5 @@
+// Runtime proxy tests cover SSE parsing, terminal error handling, and request
+// payload scrubbing before proxying model streams.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -46,6 +48,8 @@ describe("streamProxy", () => {
   });
 
   it("flushes a final SSE frame without a trailing newline", async () => {
+    // Provider proxies can close immediately after the last SSE frame; the
+    // parser still has to emit the terminal done event.
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       responseFromText(
         `data: ${JSON.stringify({

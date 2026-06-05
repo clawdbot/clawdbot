@@ -1,3 +1,4 @@
+// Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";

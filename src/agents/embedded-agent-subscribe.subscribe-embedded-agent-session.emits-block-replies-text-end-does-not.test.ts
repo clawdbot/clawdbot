@@ -1,3 +1,5 @@
+// Text-end block reply tests cover streamed block delivery, message_end
+// de-duplication, and OpenAI Responses phase handling.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -24,6 +26,8 @@ function emitOpenAiResponsesTextEvent(params: {
   signaturePhase?: OpenAiResponsesTextEventPhase;
   partialPhase?: OpenAiResponsesTextEventPhase;
 }) {
+  // Responses events carry item ids and phase signatures; tests preserve those
+  // fields so commentary/final routing matches provider payloads.
   const { emit, ...eventParams } = params;
   emit(createOpenAiResponsesTextEvent(eventParams));
 }
@@ -80,6 +84,8 @@ async function emitSuppressedCommentary(params: {
   emit: TextEndBlockReplyHarness["emit"];
   text: string;
 }) {
+  // Commentary can stream before final_answer; this helper proves suppressed
+  // commentary does not count as a delivered block.
   params.emit({ type: "message_start", message: { role: "assistant" } });
   emitOpenAiResponsesTextDeltaAndEnd({
     emit: params.emit,
@@ -101,6 +107,7 @@ function expectSingleBlockReplyText(params: {
 }
 
 function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPayload {
+  // Most cases expect exactly one user-visible block reply.
   const call = onBlockReply.mock.calls[0];
   if (!call) {
     throw new Error("expected first block reply call");

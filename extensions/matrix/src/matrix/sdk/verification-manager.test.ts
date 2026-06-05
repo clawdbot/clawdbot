@@ -1,3 +1,4 @@
+// Matrix tests cover verification manager plugin behavior.
 import { EventEmitter } from "node:events";
 import {
   VerificationPhase,

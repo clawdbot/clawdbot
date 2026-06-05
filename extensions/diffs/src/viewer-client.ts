@@ -1,3 +1,4 @@
+// Diffs plugin module implements viewer client behavior.
 import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type {
   FileContents,

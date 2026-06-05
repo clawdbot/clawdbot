@@ -1,3 +1,4 @@
+// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 

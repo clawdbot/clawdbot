@@ -1,3 +1,4 @@
+// Daemon response tests cover normalized daemon command response shapes.
 import { describe, expect, it } from "vitest";
 import { buildDaemonHintItems } from "./response.js";
 

@@ -1,3 +1,4 @@
+// Config path docs tests validate documented config path references.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,9 @@
+/**
+ * Browser action request normalization.
+ *
+ * Converts loosely typed route bodies into the closed BrowserActRequest union
+ * used by Playwright and Chrome MCP action executors.
+ */
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_CLICK_DELAY_MS,
@@ -39,6 +45,7 @@ function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
+/** Validate that nested batch actions cannot drift to a different target tab. */
 export function validateBatchTargetIds(
   actions: BrowserActRequest[],
   targetId: string,
@@ -110,6 +117,7 @@ function readResizeDimension(body: Record<string, unknown>, key: "width" | "heig
   return value;
 }
 
+/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch" },

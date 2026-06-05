@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements compile behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";

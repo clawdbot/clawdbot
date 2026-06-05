@@ -1,3 +1,4 @@
+// Minimax tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMinimaxApiModelDefinition,

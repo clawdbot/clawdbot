@@ -1,3 +1,4 @@
+// Frontmatter tests cover skill metadata parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
   parseFrontmatter,

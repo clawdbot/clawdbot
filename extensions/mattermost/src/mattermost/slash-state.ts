@@ -62,8 +62,29 @@ type SlashCommandAccountState = {
   triggerMap: Map<string, string>;
 };
 
-/** Map from accountId → per-account slash command state. */
-const accountStates = new Map<string, SlashCommandAccountState>();
+/**
+ * Map from accountId → per-account slash command state.
+ *
+ * Anchored to globalThis so that jiti-loaded (route registration) and
+ * native-ESM-loaded (monitor/activation) module instances share the
+ * same Map. Without this, each module loader creates its own copy of
+ * the module-level variable and the HTTP handler never sees the tokens
+ * populated by the monitor.
+ */
+const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
+
+function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[ACCOUNT_STATES_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, SlashCommandAccountState>;
+  }
+  const accountStates = new Map<string, SlashCommandAccountState>();
+  globalStore[ACCOUNT_STATES_KEY] = accountStates;
+  return accountStates;
+}
+
+const accountStates = getSlashAccountStates();
 
 export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{

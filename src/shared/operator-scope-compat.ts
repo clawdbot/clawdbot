@@ -1,3 +1,4 @@
+// Operator scope compatibility helpers normalize legacy operator role names.
 const OPERATOR_ROLE = "operator";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";

@@ -1,3 +1,4 @@
+// Browser tests cover request policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isPersistentBrowserProfileMutation } from "./request-policy.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";

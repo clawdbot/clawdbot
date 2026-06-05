@@ -1,5 +1,11 @@
+/**
+ * Token usage normalization helpers.
+ * Converts provider-specific usage shapes into OpenClaw's normalized input,
+ * output, cache, reasoning, and total token accounting fields.
+ */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
+/** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -41,6 +47,7 @@ export type UsageLike = {
   };
 };
 
+/** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
   output?: number;
@@ -50,6 +57,7 @@ export type NormalizedUsage = {
   total?: number;
 };
 
+/** OpenAI chat-completions compatible usage shape. */
 export type OpenAiChatCompletionsUsage = {
   prompt_tokens: number;
   completion_tokens: number;
@@ -58,6 +66,7 @@ export type OpenAiChatCompletionsUsage = {
   completion_tokens_details?: { reasoning_tokens: number };
 };
 
+/** Assistant usage snapshot with token counts and computed cost buckets. */
 export type AssistantUsageSnapshot = {
   input: number;
   output: number;
@@ -73,6 +82,7 @@ export type AssistantUsageSnapshot = {
   };
 };
 
+/** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   return {
     input: 0,
@@ -90,6 +100,7 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
+/** Return true when any normalized usage bucket is positive. */
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
@@ -115,6 +126,7 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
   return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
 };
 
+/** Normalize provider-specific token usage fields into OpenClaw usage buckets. */
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
     return undefined;
@@ -238,6 +250,7 @@ export function toOpenAiChatCompletionsUsage(
   };
 }
 
+/** Derive prompt/context tokens from normalized input and cache buckets. */
 export function derivePromptTokens(usage?: {
   input?: number;
   cacheRead?: number;
@@ -253,6 +266,7 @@ export function derivePromptTokens(usage?: {
   return sum > 0 ? sum : undefined;
 }
 
+/** Resolve context prompt tokens from explicit override, last call, or aggregate usage. */
 export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
   promptTokens?: number;
@@ -266,6 +280,7 @@ export function deriveContextPromptTokens(params: {
   return derivePromptTokens(params.lastCallUsage) ?? derivePromptTokens(params.usage);
 }
 
+/** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;

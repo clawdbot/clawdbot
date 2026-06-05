@@ -1,3 +1,4 @@
+// Terminal Core module implements safe text behavior.
 import { stripAnsi } from "./ansi.js";
 
 /**

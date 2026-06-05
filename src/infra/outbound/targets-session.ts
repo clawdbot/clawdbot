@@ -1,3 +1,5 @@
+// Session target resolution chooses the effective channel, destination,
+// account, and thread from explicit input, turn source, or session history.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

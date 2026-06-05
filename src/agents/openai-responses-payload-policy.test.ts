@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for OpenAI Responses payload policy.
+ * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {

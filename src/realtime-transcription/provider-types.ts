@@ -1,3 +1,4 @@
+// Realtime transcription provider types describe streaming transcription providers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Public contracts for realtime transcription provider plugins and sessions.

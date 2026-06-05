@@ -1,5 +1,7 @@
-// OpenAI Chat Completions compatibility helpers. Some providers only accept
-// role/content messages with plain string content instead of text block arrays.
+/**
+ * OpenAI Chat Completions compatibility helpers. Some providers only accept
+ * role/content messages with plain string content instead of text block arrays.
+ */
 function flattenStringOnlyCompletionContent(content: unknown): unknown {
   if (!Array.isArray(content)) {
     return content;

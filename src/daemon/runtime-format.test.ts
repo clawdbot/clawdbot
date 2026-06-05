@@ -1,3 +1,4 @@
+// Daemon runtime format tests cover formatted runtime command display.
 import { describe, expect, it } from "vitest";
 import { formatRuntimeStatus } from "./runtime-format.js";
 

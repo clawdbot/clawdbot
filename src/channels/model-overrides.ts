@@ -1,3 +1,8 @@
+/**
+ * Channel-scoped model override resolver.
+ *
+ * Matches conversation ids, parent sessions, and wildcard config entries to model overrides.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

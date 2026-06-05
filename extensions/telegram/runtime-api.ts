@@ -1,3 +1,4 @@
+// Telegram API module exposes the plugin public contract.
 export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export type { TelegramApiOverride } from "./src/send.js";

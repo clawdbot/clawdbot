@@ -1,3 +1,4 @@
+// Provider-index planner tests cover preview catalog row generation and provider filtering.
 import { describe, expect, it } from "vitest";
 import { planProviderIndexModelCatalogRows } from "./index.js";
 

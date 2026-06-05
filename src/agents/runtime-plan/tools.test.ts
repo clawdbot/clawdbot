@@ -1,3 +1,5 @@
+// Runtime plan tool tests cover schema normalization and diagnostics when the
+// runtime plan owns tool policy, with legacy provider fallback still available.
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
@@ -57,6 +59,8 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it("quarantines unreadable tools before RuntimePlan normalization", () => {
+    // Broken plugin tool getters are removed before plan/provider normalization
+    // so one bad tool cannot crash the full runtime tool list.
     const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
     const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
     Object.defineProperty(unreadable, "parameters", {
@@ -190,6 +194,8 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it("preserves plugin metadata when provider schema normalization clones tools", () => {
+    // Provider normalization may clone tool objects; plugin metadata has to move
+    // with the clone so later dispatch still knows the owning plugin/MCP server.
     const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
     setPluginToolMeta(tool, {
       pluginId: "bundle-mcp",

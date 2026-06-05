@@ -1,3 +1,4 @@
+// Boundary invariant tests cover plugin boundary rules that must hold across the repo.
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

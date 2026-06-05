@@ -1,3 +1,4 @@
+// Config-runtime Vitest shims expose lightweight config helpers for capability runtime tests.
 import { resolveActiveTalkProviderConfig } from "../../config/talk.js";
 import type { OpenClawConfig } from "../../config/types.js";
 

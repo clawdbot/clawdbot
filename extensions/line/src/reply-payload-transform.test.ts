@@ -1,3 +1,4 @@
+// Line tests cover reply payload transform plugin behavior.
 import { describe, expect, it } from "vitest";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 

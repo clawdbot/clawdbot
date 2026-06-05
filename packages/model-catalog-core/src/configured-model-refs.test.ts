@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover configured model refs behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectConfiguredModelRefs,

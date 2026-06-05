@@ -1,3 +1,4 @@
+// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";

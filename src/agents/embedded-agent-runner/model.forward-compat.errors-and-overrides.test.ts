@@ -1,3 +1,4 @@
+// Coverage for forward-compatible model fallback errors and provider overrides.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../config/config.js";
 import { discoverModels } from "../agent-model-discovery.js";
@@ -58,6 +59,8 @@ beforeEach(() => {
 });
 
 function createRuntimeHooks() {
+  // Dynamic provider hooks are opt-in here so tests can distinguish runtime
+  // fallback behavior from static catalog and discovery results.
   return createProviderRuntimeTestMock({
     handledDynamicProviders: ["google-antigravity", "zai", "openai"],
   });
@@ -90,6 +93,8 @@ function createAnthropicTemplateModel() {
 }
 
 function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProviderConfig>) {
+  // Provider config overrides must merge onto discovered template models without
+  // losing the template's API, cost, and capability metadata.
   mockDiscoveredModel(discoverModels, {
     provider: "anthropic",
     modelId: "claude-sonnet-4-5",
@@ -136,6 +141,8 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
+    // Spark is intentionally suppressed from direct OpenAI routing; falling back
+    // would make a removed catalog row appear usable.
     const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent");
 
     expect(result.model).toBeUndefined();

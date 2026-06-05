@@ -1,3 +1,5 @@
+// HTTP request trace tests ensure gateway request scope reaches logs and
+// diagnostic events for per-request debugging.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

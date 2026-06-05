@@ -1,3 +1,4 @@
+// Irc tests cover protocol plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseIrcLine,

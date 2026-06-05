@@ -1,3 +1,5 @@
+// Provider registry tests cover runtime provider loading, normalization aliases,
+// manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMediaUnderstandingRegistry,

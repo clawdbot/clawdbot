@@ -1,3 +1,5 @@
+// Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
+// tools, hooks, abort wrapping, and transcript projection.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -159,6 +161,8 @@ describe("Tool Search", () => {
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
+    // Overlapping run attempts can share a session id; run-scoped catalogs keep
+    // one attempt from calling tools only exposed to another.
     const runATool = pluginTool("fake_run_a", "Tool visible only to run A");
     const runBTool = pluginTool("fake_run_b", "Tool visible only to run B");
     const config = {

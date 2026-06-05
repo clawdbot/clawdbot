@@ -1,3 +1,4 @@
+// Non-interactive gateway onboarding tests cover local/remote setup, auth, daemon install, and config writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

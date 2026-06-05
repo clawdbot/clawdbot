@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for depth-derived subagent capabilities.
+ * Verifies main/orchestrator/leaf role and control-scope decisions.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 

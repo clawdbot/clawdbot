@@ -1,11 +1,16 @@
+// Googlechat plugin module implements gateway behavior.
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { isGoogleChatNativeApprovalClientEnabled } from "./approval-native.js";
 import type { GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -18,6 +23,7 @@ export async function startGoogleChatGatewayAccount(ctx: {
   cfg: OpenClawConfig;
   runtime: GoogleChatRuntimeEnv;
   abortSignal: AbortSignal;
+  channelRuntime?: ChannelRuntimeSurface;
   setStatus: (next: ChannelAccountSnapshot) => void;
   log?: {
     info?: (message: string) => void;
@@ -38,6 +44,21 @@ export async function startGoogleChatGatewayAccount(ctx: {
     audienceType: account.config.audienceType,
     audience: account.config.audience,
   });
+  if (
+    isGoogleChatNativeApprovalClientEnabled({
+      cfg: ctx.cfg,
+      accountId: account.accountId,
+    })
+  ) {
+    registerChannelRuntimeContext({
+      channelRuntime: ctx.channelRuntime,
+      channelId: "googlechat",
+      accountId: account.accountId,
+      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+      context: { account },
+      abortSignal: ctx.abortSignal,
+    });
+  }
   await runPassiveAccountLifecycle({
     abortSignal: ctx.abortSignal,
     start: async () =>

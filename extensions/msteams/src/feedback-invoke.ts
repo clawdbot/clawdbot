@@ -1,3 +1,4 @@
+// Msteams plugin module implements feedback invoke behavior.
 import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";

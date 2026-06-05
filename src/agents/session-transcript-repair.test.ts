@@ -1,3 +1,4 @@
+// Verifies transcript repair pairs tool calls/results and sanitizes tool inputs.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,6 +20,7 @@ const TOOL_CALL_BLOCK_TYPES = new Set([
 ]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
+  // Helper inspects all legacy/current tool-call block spellings in assistant content.
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
   if (!assistant || !Array.isArray(assistant.content)) {
     return [] as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
@@ -149,6 +151,7 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("keeps parallel tool results when code-mode display turns arrive first", () => {
+    // Display-only assistant turns must not cause synthetic results before real results arrive.
     const input = castAgentMessages([
       {
         role: "assistant",

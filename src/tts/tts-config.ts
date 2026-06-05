@@ -1,3 +1,4 @@
+// TTS config helpers read and normalize text-to-speech provider settings.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";

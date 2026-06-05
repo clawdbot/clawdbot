@@ -1,3 +1,4 @@
+// Root option value tests cover root CLI option parsing and inherited values.
 import { describe, expect, it } from "vitest";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 

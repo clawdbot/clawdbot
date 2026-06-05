@@ -1,3 +1,5 @@
+// Prompt template tests cover command argument parsing and bounded positional
+// substitutions for agent prompt snippets.
 import { describe, expect, it } from "vitest";
 import { parseCommandArgs, substituteArgs } from "./prompt-templates.js";
 
@@ -16,6 +18,8 @@ describe("prompt template argument substitution", () => {
   });
 
   it("rejects unsafe slice starts and lengths", () => {
+    // Huge indices should fail closed instead of coercing into surprising array
+    // slices or allocating large intermediate ranges.
     const args = ["alpha", "beta", "gamma"];
 
     expect(substituteArgs("${@:9007199254740992}", args)).toBe("");

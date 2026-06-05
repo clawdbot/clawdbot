@@ -1,3 +1,4 @@
+// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
 import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";

@@ -1,3 +1,4 @@
+// Provider auth tests cover credential resolution, setup state, and auth method contracts.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 

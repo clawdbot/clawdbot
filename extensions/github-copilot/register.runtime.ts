@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements register behavior.
 import {
   coerceSecretRef,
   ensureAuthProfileStore,

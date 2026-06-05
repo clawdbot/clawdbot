@@ -1,3 +1,4 @@
+// Agent skill filter helpers select skills that apply to a configured agent.
 import type { OpenClawConfig } from "../../config/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSkillFilter } from "./filter.js";

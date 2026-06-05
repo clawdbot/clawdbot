@@ -1,3 +1,4 @@
+// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -72,6 +73,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   workspaceDir: string;
   agentId: string;
 } {
+  // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig();
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
@@ -285,6 +287,11 @@ export function registerSkillsCli(program: Command) {
     .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
+    .option(
+      "--force-install",
+      "Install a pending GitHub-backed skill before ClawHub scan completes",
+      false,
+    )
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
@@ -294,6 +301,7 @@ export function registerSkillsCli(program: Command) {
         opts: {
           version?: string;
           force?: boolean;
+          forceInstall?: boolean;
           global?: boolean;
           agent?: string;
           as?: string;
@@ -343,6 +351,7 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            ...(opts.forceInstall ? { forceInstall: true } : {}),
             logger: {
               info: (message) => defaultRuntime.log(message),
             },
@@ -365,12 +374,17 @@ export function registerSkillsCli(program: Command) {
     .description("Update ClawHub-installed skills in the active or shared managed directory")
     .argument("[slug]", "Single skill slug")
     .option("--all", "Update all tracked ClawHub skills", false)
+    .option(
+      "--force-install",
+      "Install a pending GitHub-backed skill before ClawHub scan completes",
+      false,
+    )
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(
       async (
         slug: string | undefined,
-        opts: { all?: boolean; global?: boolean; agent?: string },
+        opts: { all?: boolean; forceInstall?: boolean; global?: boolean; agent?: string },
         command: Command,
       ) => {
         try {
@@ -396,6 +410,7 @@ export function registerSkillsCli(program: Command) {
           const results = await updateSkillsFromClawHub({
             workspaceDir,
             slug,
+            ...(opts.forceInstall ? { forceInstall: true } : {}),
             logger: {
               info: (message) => defaultRuntime.log(message),
             },

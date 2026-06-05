@@ -1,3 +1,5 @@
+// Outbound envelopes wrap payload projections, metadata, and delivery JSON for
+// tool responses while flattening simple delivery-only results.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OutboundDeliveryJson } from "./format.js";
 import { normalizeOutboundPayloadsForJson, type OutboundPayloadJson } from "./payloads.js";

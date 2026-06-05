@@ -1,3 +1,8 @@
+/**
+ * Footer data provider for session UI.
+ *
+ * Watches git metadata and exposes current branch/repository state without blocking rendering.
+ */
 import { type ExecFileException, execFile, spawnSync } from "node:child_process";
 import {
   existsSync,

@@ -1,3 +1,4 @@
+// Interactive payload helpers normalize structured interactive UI payloads.
 import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,

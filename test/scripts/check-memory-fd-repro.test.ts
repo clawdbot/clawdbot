@@ -1,3 +1,4 @@
+// Check Memory Fd Repro tests cover check memory fd repro script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";

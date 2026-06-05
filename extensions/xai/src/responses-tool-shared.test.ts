@@ -1,3 +1,4 @@
+// Xai tests cover responses tool shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "./responses-tool-shared.js";
 

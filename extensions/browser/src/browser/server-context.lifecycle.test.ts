@@ -1,3 +1,4 @@
+// Browser tests cover server context.lifecycle plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveIdleProfileStopOutcome } from "./server-context.lifecycle.js";
 import { makeBrowserProfile } from "./server-context.test-harness.js";

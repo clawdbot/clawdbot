@@ -1,3 +1,4 @@
+// Discord plugin module implements agent components.wildcard controls behavior.
 import { ButtonStyle, ComponentType } from "discord-api-types/v10";
 import { parseDiscordComponentCustomIdForInteraction } from "../component-custom-id.js";
 import {

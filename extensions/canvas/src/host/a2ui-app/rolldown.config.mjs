@@ -1,3 +1,6 @@
+/**
+ * Rolldown config for bundling the Canvas A2UI app into a single browser asset.
+ */
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";

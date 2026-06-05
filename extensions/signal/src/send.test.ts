@@ -1,3 +1,4 @@
+// Signal tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());

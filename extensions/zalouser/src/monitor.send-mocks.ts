@@ -1,3 +1,4 @@
+// Zalouser plugin module implements monitor.send mocks behavior.
 import { vi } from "vitest";
 
 const sendMocks = vi.hoisted(() => ({

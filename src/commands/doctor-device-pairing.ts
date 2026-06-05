@@ -1,3 +1,4 @@
+/** Doctor diagnostics for pending, paired, and locally cached device auth state. */
 import path from "node:path";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -466,6 +467,7 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
       role,
     ]);
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
+    // Local device auth survives gateway restarts; compare timestamps to catch stale cached tokens.
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
       lines.push(
         `- Local cached ${role} device token for ${deviceLabel} predates the gateway rotation. This is a stale device-token pattern and can fail with device token mismatch. Reconnect with shared gateway auth to refresh it, or rotate again with ${rotateCommand}.`,
@@ -488,6 +490,12 @@ function formatPairingStoreReadIssue(error: JsonFileReadError): string {
   return `- Device pairing store ${error.filePath} ${problem}. OpenClaw refused to treat it as empty to avoid overwriting approved pairings. Fix the JSON or file permissions, or move it aside and re-pair devices.`;
 }
 
+/**
+ * Emits device pairing repair guidance from live gateway state or local pairing files.
+ *
+ * Remote gateways only report through the gateway API; local gateways can fall back to on-disk
+ * pairing state when the gateway is down.
+ */
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;

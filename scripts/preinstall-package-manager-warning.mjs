@@ -1,3 +1,4 @@
+// Warns during install lifecycle when a package manager other than pnpm is used.
 import { pathToFileURL } from "node:url";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -14,6 +15,9 @@ function normalizeLifecyclePackageManagerName(value) {
   return allowedLifecyclePackageManagers.has(normalized) ? normalized : null;
 }
 
+/**
+ * Detects the package manager running the current lifecycle script.
+ */
 export function detectLifecyclePackageManager(env = process.env) {
   const userAgent = normalizeEnvValue(env.npm_config_user_agent);
   const userAgentMatch = /^([A-Za-z0-9._-]+)\//u.exec(userAgent);
@@ -38,6 +42,9 @@ export function detectLifecyclePackageManager(env = process.env) {
   return null;
 }
 
+/**
+ * Builds the warning shown for non-pnpm lifecycle installs.
+ */
 export function createPackageManagerWarningMessage(packageManager) {
   if (!packageManager || packageManager === "pnpm") {
     return null;
@@ -50,6 +57,9 @@ export function createPackageManagerWarningMessage(packageManager) {
   ].join("\n");
 }
 
+/**
+ * Emits the non-pnpm lifecycle warning when needed.
+ */
 export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
   const message = createPackageManagerWarningMessage(detectLifecyclePackageManager(env));
   if (!message) {

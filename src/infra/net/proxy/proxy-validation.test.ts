@@ -1,3 +1,5 @@
+// Covers proxy validation config precedence, TLS overrides, denied-destination
+// canaries, and APNs reachability result interpretation.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

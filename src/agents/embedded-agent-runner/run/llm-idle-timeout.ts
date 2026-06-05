@@ -1,3 +1,6 @@
+/**
+ * Wraps LLM streams with idle-timeout detection and diagnostics.
+ */
 import {
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,

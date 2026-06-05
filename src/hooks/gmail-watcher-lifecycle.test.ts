@@ -1,3 +1,4 @@
+// Gmail watcher lifecycle tests cover start, stop, and restart behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startGmailWatcherMock } = vi.hoisted(() => ({

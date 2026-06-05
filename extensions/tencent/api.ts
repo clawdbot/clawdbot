@@ -1,3 +1,4 @@
+// Tencent API module exposes the plugin public contract.
 export {
   buildTokenHubModelDefinition,
   TOKENHUB_BASE_URL,

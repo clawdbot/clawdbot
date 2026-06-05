@@ -1,3 +1,8 @@
+/**
+ * User-facing tool display formatter.
+ *
+ * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
@@ -11,12 +16,6 @@ import {
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import type { ToolDetailMode } from "./tool-display-exec.js";
 
-/**
- * Formats user-facing tool labels and compact details from display metadata.
- *
- * This module is presentation-only: it redacts final detail text and leaves
- * execution semantics to the runtime.
- */
 type ToolDisplay = {
   name: string;
   emoji: string;

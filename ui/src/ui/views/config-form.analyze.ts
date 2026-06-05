@@ -1,3 +1,4 @@
+// Control UI view renders config form.analyze screen content.
 import { pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigSchemaAnalysis = {

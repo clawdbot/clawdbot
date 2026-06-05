@@ -1,3 +1,4 @@
+// Discord plugin module implements tts behavior.
 import {
   getTtsProvider,
   resolveAgentDir,

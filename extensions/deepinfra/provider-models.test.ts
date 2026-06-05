@@ -1,3 +1,4 @@
+// Deepinfra tests cover provider models plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const isProviderApiKeyConfiguredMock = vi.hoisted(() => vi.fn<(p: unknown) => boolean>());

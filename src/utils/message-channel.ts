@@ -1,3 +1,4 @@
+// Message channel helpers classify and format channel identifiers.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,

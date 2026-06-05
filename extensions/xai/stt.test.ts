@@ -1,3 +1,4 @@
+// Xai tests cover stt plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildXaiMediaUnderstandingProvider,

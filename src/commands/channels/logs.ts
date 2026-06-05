@@ -1,3 +1,4 @@
+// Implements channel-scoped tailing of the OpenClaw log file.
 import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -104,6 +105,7 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
   }
 }
 
+/** Print or serialize recent log lines matching one channel subsystem/module. */
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
   runtime: RuntimeEnv = defaultRuntime,

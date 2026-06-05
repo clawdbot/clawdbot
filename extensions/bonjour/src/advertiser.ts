@@ -1,3 +1,7 @@
+/**
+ * Bonjour advertiser runtime. It publishes gateway/canvas/SSH service records,
+ * watches ciao state, and repairs stuck or conflicting advertisements.
+ */
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -12,10 +16,12 @@ const childProcessModule = nodeRequire("node:child_process") as {
   exec: typeof import("node:child_process").exec;
 };
 
+/** Running Bonjour advertiser handle. */
 export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
+/** Input data used to publish OpenClaw gateway Bonjour records. */
 export type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
@@ -359,6 +365,7 @@ function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandle
   };
 }
 
+/** Start Bonjour advertisements for the local gateway services. */
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps = {},

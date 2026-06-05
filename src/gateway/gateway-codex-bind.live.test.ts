@@ -1,3 +1,4 @@
+// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -31,8 +32,14 @@ import { startGatewayServer } from "./server.js";
 const LIVE = isLiveTestEnabled();
 const CODEX_BIND_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_BIND);
 const describeLive = LIVE && CODEX_BIND_LIVE ? describe : describe.skip;
-const CODEX_BIND_TIMEOUT_MS = 10 * 60_000;
-const CODEX_BIND_REQUEST_TIMEOUT_MS = 180_000;
+const CODEX_BIND_TIMEOUT_MS = resolveLiveTimeoutMs(
+  process.env.OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS,
+  900_000,
+);
+const CODEX_BIND_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
+  process.env.OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS,
+  300_000,
+);
 const DEFAULT_CODEX_BIND_MODEL = "gpt-5.5";
 
 type CapturedOutboundReply = {
@@ -41,6 +48,15 @@ type CapturedOutboundReply = {
   threadId?: string | number;
   to: string;
 };
+
+function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function logCodexBindStep(message: string): void {
+  console.info(`[live-codex-bind] ${message}`);
+}
 
 function createSlackCurrentConversationBindingRegistry(outboundReplies: CapturedOutboundReply[]) {
   return createTestRegistry([
@@ -164,14 +180,24 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
-async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
-  const result: { status?: string } = await client.request(
-    "agent.wait",
-    { runId, timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS },
-    { timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS + 5_000 },
-  );
+async function waitForAgentRunOk(
+  client: GatewayClient,
+  runId: string,
+  context: string,
+): Promise<void> {
+  let result: { status?: string };
+  try {
+    result = await client.request(
+      "agent.wait",
+      { runId, timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS },
+      { timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS + 5_000 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${context}: agent.wait error for ${runId}: ${message}`, { cause: error });
+  }
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`${context}: agent.wait failed for ${runId}: status=${String(result?.status)}`);
   }
 }
 
@@ -179,6 +205,7 @@ async function sendChatAndWait(params: {
   client: GatewayClient;
   sessionKey: string;
   idempotencyKey: string;
+  context: string;
   message: string;
   originatingChannel: string;
   originatingTo: string;
@@ -201,9 +228,13 @@ async function sendChatAndWait(params: {
     attachments: params.attachments,
   });
   if (started?.status !== "started" || typeof started.runId !== "string") {
-    throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
+    throw new Error(
+      `${params.context}: chat.send did not start correctly: ${JSON.stringify(started)}`,
+    );
   }
-  await waitForAgentRunOk(params.client, started.runId);
+  logCodexBindStep(`${params.context} started (${started.runId})`);
+  await waitForAgentRunOk(params.client, started.runId, params.context);
+  logCodexBindStep(`${params.context} completed`);
 }
 
 async function waitForAssistantText(params: {
@@ -344,8 +375,10 @@ async function writeGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
         model: { primary: `${modelProvider}/${params.model}` },
+        models: {
+          [`${modelProvider}/${params.model}`]: { agentRuntime: { id: "codex" } },
+        },
         skipBootstrap: true,
         heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
@@ -462,6 +495,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           client,
           sessionKey,
           idempotencyKey: `idem-codex-bind-${randomUUID()}`,
+          context: "bind command",
           message: `/codex bind --cwd ${workspace} --model ${bindModel}${
             bindProvider ? ` --provider ${bindProvider}` : ""
           }`,
@@ -481,6 +515,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           accountId,
           conversationId,
         });
+        logCodexBindStep(`binding resolved to ${boundSessionKey}`);
         let commandReplyCount = bindReply.outboundTexts.length;
 
         const sendCodexCommand = async (message: string, contains: string, timeoutMs = 60_000) => {
@@ -488,6 +523,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             client,
             sessionKey,
             idempotencyKey: `idem-codex-command-${randomUUID()}`,
+            context: message,
             message,
             originatingChannel: "slack",
             originatingTo: conversationId,
@@ -530,6 +566,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           client,
           sessionKey,
           idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
+          context: "bound text turn",
           message: `Reply with exactly this token and nothing else: ${textToken}`,
           originatingChannel: "slack",
           originatingTo: conversationId,
@@ -547,6 +584,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           client,
           sessionKey,
           idempotencyKey: `idem-codex-bound-image-${randomUUID()}`,
+          context: "bound image turn",
           message:
             "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
           originatingChannel: "slack",
@@ -578,7 +616,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         clearRuntimeConfigSnapshot();
         await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
         await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true });
+        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         restoreEnvVar("CODEX_HOME", previous.codexHome);
         restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
         restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);

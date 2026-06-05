@@ -1,3 +1,4 @@
+// Control UI controller manages debug gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../types.ts";
 

@@ -1,3 +1,8 @@
+/**
+ * Agent session service factory.
+ *
+ * Creates cwd-bound auth, settings, model registry, resource loader, and session instances for the CLI runtime.
+ */
 import { join } from "node:path";
 import type { Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";

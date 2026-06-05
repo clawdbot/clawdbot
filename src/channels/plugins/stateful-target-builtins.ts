@@ -1,7 +1,10 @@
+/**
+ * Built-in stateful binding target registration.
+ *
+ * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
+ */
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
-// Lazily registers built-in stateful binding target drivers. Keep imports
-// dynamic so non-ACP channel flows do not load the ACP runtime boundary.
 type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
 
 let builtinsRegisteredPromise: Promise<void> | null = null;

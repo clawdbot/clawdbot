@@ -1,3 +1,8 @@
+/**
+ * Tests workspace-root path guarding for file tools.
+ * Covers container path mapping, malformed suffix cleanup, and normalized path
+ * forwarding for guarded operations.
+ */
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./agent-tools.types.js";

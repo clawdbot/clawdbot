@@ -1,3 +1,4 @@
+// Control UI module implements session run state behavior.
 import type { SessionRunStatus } from "./types.ts";
 
 type SessionRunState = {

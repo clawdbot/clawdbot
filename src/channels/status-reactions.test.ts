@@ -1,3 +1,4 @@
+// Status reaction tests cover generic reaction selection and update behavior for channel replies.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   resolveToolEmoji,

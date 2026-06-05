@@ -1,3 +1,4 @@
+// Policy plugin module implements policy conformance behavior.
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";

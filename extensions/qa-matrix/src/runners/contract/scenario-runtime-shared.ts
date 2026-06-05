@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";

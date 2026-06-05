@@ -1,3 +1,4 @@
+// Lobster plugin module implements lobster runner behavior.
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";

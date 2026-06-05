@@ -1,3 +1,4 @@
+// Coverage for final bundled-tool policy filtering in embedded runs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,8 @@ import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
 function makeTool(name: string): AnyAgentTool {
+  // Minimal tool shape keeps policy tests independent from executor/runtime
+  // implementations while still exercising plugin metadata.
   return {
     name,
     label: name,
@@ -28,6 +31,8 @@ describe("applyFinalEffectiveToolPolicy", () => {
   });
 
   it("filters bundled tools through inherited subagent allowlists", () => {
+    // Inherited allowlists are persisted by session key; use a real temp store
+    // so parsing and lookup match production policy application.
     const agentId = `bundled-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:subagent:limited`;
     const storePath = path.join(os.tmpdir(), `openclaw-bundled-inherited-allow-${agentId}.json`);
@@ -113,6 +118,8 @@ describe("applyFinalEffectiveToolPolicy", () => {
   });
 
   it("applies channel-normalized per-sender policy to bundled tools", () => {
+    // Teams normalizes to msteams in policy keys, which must happen before
+    // sender-specific deny rules are applied.
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
       config: {

@@ -1,3 +1,4 @@
+// Dependency tests cover CLI dependency imports and cold-start safety.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";

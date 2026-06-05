@@ -1,3 +1,9 @@
+/**
+ * Browser agent tool registration.
+ *
+ * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
+ * maps high-level actions onto browser control client calls.
+ */
 import crypto from "node:crypto";
 import {
   executeActAction,
@@ -441,6 +447,7 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
+/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;

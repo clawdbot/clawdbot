@@ -1,3 +1,4 @@
+// Covers streaming chunk boundaries for embedded-agent text blocks.
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
@@ -27,6 +28,8 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 
 describe("EmbeddedBlockChunker", () => {
   it("breaks at paragraph boundary right after fence close", () => {
+    // A closed fence is a safe boundary; splitting before it would corrupt
+    // markdown rendered by downstream clients.
     const chunker = new EmbeddedBlockChunker({
       minChars: 1,
       maxChars: 40,
@@ -109,6 +112,7 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {
+    // Blank lines inside fenced code are content, not paragraph boundaries.
     const chunker = new EmbeddedBlockChunker({
       minChars: 10,
       maxChars: 200,
@@ -136,6 +140,7 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("parses fence spans once per drain call for long fenced buffers", () => {
+    // Long streaming buffers should not rescan fences for every emitted chunk.
     const parseSpy = vi.spyOn(fences, "parseFenceSpans");
     const chunker = new EmbeddedBlockChunker({
       minChars: 20,
@@ -152,6 +157,8 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("does not split inside the closing fence marker when clamping at maxChars", () => {
+    // Clamp-based splitting rewraps fenced chunks so no partial closing marker
+    // leaks into the stream.
     const chunker = new EmbeddedBlockChunker({
       minChars: 10,
       maxChars: 30,

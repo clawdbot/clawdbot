@@ -1,3 +1,4 @@
+// OC Path module implements resolve value behavior.
 import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 

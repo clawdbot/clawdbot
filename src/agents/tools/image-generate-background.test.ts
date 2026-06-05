@@ -1,3 +1,5 @@
+// Image generation background tests cover detached task creation, progress
+// updates, and completion wake delivery for generated image results.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_GENERATION_TASK_KIND } from "../image-generation-task-status.js";
 import {
@@ -78,6 +80,8 @@ describe("image generate background helpers", () => {
   });
 
   it("queues a completion event through the shared generated-media wake path", async () => {
+    // Successful media completion is routed through the announce handoff so the
+    // requesting session receives model-mediated visible reply instructions.
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",

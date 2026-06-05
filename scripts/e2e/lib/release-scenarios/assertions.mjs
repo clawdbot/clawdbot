@@ -1,3 +1,4 @@
+// Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";

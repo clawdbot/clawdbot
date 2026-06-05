@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements fault proxy behavior.
 import {
   createServer,
   type IncomingHttpHeaders,

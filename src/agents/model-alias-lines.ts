@@ -1,3 +1,6 @@
+/**
+ * Formats configured model aliases for prompt-visible model guidance.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

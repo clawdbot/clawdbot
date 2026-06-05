@@ -1,3 +1,4 @@
+// Discord tests cover presence plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 

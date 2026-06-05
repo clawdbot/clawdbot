@@ -1,3 +1,4 @@
+// Install fallback tests cover alternate skill install paths when primary paths fail.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

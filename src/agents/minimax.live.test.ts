@@ -1,3 +1,4 @@
+// Live-gated MiniMax text smoke probe.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +15,8 @@ const LIVE = isLiveTestEnabled(["MINIMAX_LIVE_TEST"]);
 const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;
 
 async function runMinimaxTextProbe(model: Model<"anthropic-messages">, maxTokens: number) {
+  // MiniMax uses the Anthropic-compatible message surface, so the smoke probe
+  // goes through completeSimple instead of provider-specific helpers.
   const res = await completeSimple(
     model,
     {

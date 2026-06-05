@@ -1,3 +1,8 @@
+/**
+ * Runtime bridge for provider-owned model id normalization hooks. Source and
+ * built artifacts can resolve different extensions, so this module probes both
+ * once and caches the result.
+ */
 import { createRequire } from "node:module";
 
 type ProviderRuntimeModule = Pick<

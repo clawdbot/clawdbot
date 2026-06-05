@@ -1,3 +1,4 @@
+// Legacy cron delivery hint migration from top-level payload fields to delivery objects.
 import { z } from "zod";
 import {
   DeliveryThreadIdFieldSchema,
@@ -20,6 +21,7 @@ function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
   };
 }
 
+/** Return true when a payload still carries legacy delivery hint fields. */
 export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
   const hints = parseLegacyDeliveryHintsInput(payload);
   return (
@@ -32,6 +34,7 @@ export function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
   );
 }
 
+/** Build a new delivery object from legacy top-level payload delivery fields. */
 export function buildDeliveryFromLegacyPayload(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -53,6 +56,7 @@ export function buildDeliveryFromLegacyPayload(
   return next;
 }
 
+/** Build a partial delivery patch from legacy payload fields, or null when none exist. */
 export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
   const hints = parseLegacyDeliveryHintsInput(payload);
   const next: Record<string, unknown> = {};
@@ -92,6 +96,7 @@ export function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unkn
   return hasPatch ? next : null;
 }
 
+/** Merge legacy payload delivery hints into an existing delivery object. */
 export function mergeLegacyDeliveryInto(
   delivery: Record<string, unknown>,
   payload: Record<string, unknown>,
@@ -128,6 +133,7 @@ export function mergeLegacyDeliveryInto(
   return { delivery: next, mutated };
 }
 
+/** Normalize delivery and strip consumed legacy delivery fields from the payload. */
 export function normalizeLegacyDeliveryInput(params: {
   delivery?: Record<string, unknown> | null;
   payload?: Record<string, unknown> | null;

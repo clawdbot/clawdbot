@@ -1,3 +1,4 @@
+// Telegram plugin module implements status issues behavior.
 import type {
   ChannelAccountSnapshot,
   ChannelStatusIssue,

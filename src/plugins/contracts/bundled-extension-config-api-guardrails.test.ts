@@ -1,3 +1,4 @@
+// Bundled extension config API guardrail tests cover config API usage in bundled extensions.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

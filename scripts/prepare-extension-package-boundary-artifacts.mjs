@@ -1,3 +1,5 @@
+// Prepares declaration and entry-shim artifacts that prove plugin package
+// boundary imports resolve through public package surfaces.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
@@ -248,6 +250,9 @@ function isRelevantTypeInput(filePath) {
   return TYPE_INPUT_EXTENSIONS.has(path.extname(filePath));
 }
 
+/**
+ * Parses the artifact preparation mode from CLI arguments.
+ */
 export function parseMode(argv = process.argv.slice(2)) {
   const modeArg = argv.find((arg) => arg.startsWith("--mode="));
   const mode = modeArg?.slice("--mode=".length) ?? "all";
@@ -257,6 +262,9 @@ export function parseMode(argv = process.argv.slice(2)) {
   return mode;
 }
 
+/**
+ * Reads the root shim timeout override for long package-boundary builds.
+ */
 export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
   const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
   if (!raw) {
@@ -309,6 +317,9 @@ function collectOldestMtime(paths, params = {}) {
   return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
 }
 
+/**
+ * Compares input and output mtimes to skip fresh generated artifacts.
+ */
 export function isArtifactSetFresh(params) {
   const newestInputMtimeMs = collectNewestMtime(params.inputPaths, {
     rootDir: params.rootDir,
@@ -335,6 +346,9 @@ function writeStampFile(relativePath) {
   fs.writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
+/**
+ * Prefixes streamed child output line-by-line without breaking partial chunks.
+ */
 export function createPrefixedOutputWriter(label, target) {
   let buffered = "";
   const prefix = `[${label}] `;
@@ -412,6 +426,9 @@ function installNodeStepParentSignalForwarders() {
   });
 }
 
+/**
+ * Runs one artifact step with timeout, abort propagation, and prefixed output.
+ */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
@@ -516,6 +533,9 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
   });
 }
 
+/**
+ * Runs independent artifact steps together and aborts siblings on first failure.
+ */
 export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
@@ -529,6 +549,9 @@ export async function runNodeStepsInParallel(steps) {
   }
 }
 
+/**
+ * Chooses serial or parallel artifact execution based on local heavy-check policy.
+ */
 export async function runNodeSteps(steps, env = process.env) {
   if (!isLocalCheckEnabled(env)) {
     await runNodeStepsInParallel(steps);

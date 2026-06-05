@@ -1,3 +1,4 @@
+// Qa Matrix tests cover config plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

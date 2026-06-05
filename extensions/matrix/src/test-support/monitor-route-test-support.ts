@@ -1,3 +1,4 @@
+// Matrix plugin module implements monitor route test support behavior.
 export {
   registerSessionBindingAdapter,
   testing,

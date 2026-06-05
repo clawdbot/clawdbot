@@ -1,3 +1,4 @@
+// Kimi Coding provider module implements model/runtime integration.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,

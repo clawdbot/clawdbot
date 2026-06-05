@@ -1,3 +1,5 @@
+// Session creation tests protect dashboard-origin session records, transcript
+// creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";

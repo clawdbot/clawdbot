@@ -1,3 +1,4 @@
+// Control UI view renders channelsiscord screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";

@@ -1,3 +1,4 @@
+/** Shared Windows schtasks fixtures and temp-env helpers for daemon tests. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

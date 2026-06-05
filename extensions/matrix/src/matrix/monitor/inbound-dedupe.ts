@@ -1,3 +1,4 @@
+// Matrix plugin module implements inbound dedupe behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

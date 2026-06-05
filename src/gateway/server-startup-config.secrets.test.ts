@@ -1,3 +1,5 @@
+// Startup config secret tests protect gateway token preparation, weak-secret
+// detection, auth profile loading, warning emission, and runtime activation.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

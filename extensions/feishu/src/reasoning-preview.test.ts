@@ -1,3 +1,4 @@
+// Feishu tests cover reasoning preview plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";

@@ -1,3 +1,4 @@
+// Feishu tests cover docx batch insert plugin behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";

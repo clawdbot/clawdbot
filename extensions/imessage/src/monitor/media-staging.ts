@@ -1,3 +1,4 @@
+// Imessage plugin module implements media staging behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";

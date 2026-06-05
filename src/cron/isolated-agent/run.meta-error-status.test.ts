@@ -1,3 +1,4 @@
+// Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
 import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import {

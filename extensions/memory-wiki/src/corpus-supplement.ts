@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements corpus supplement behavior.
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";

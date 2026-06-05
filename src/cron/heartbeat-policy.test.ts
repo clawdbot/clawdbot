@@ -1,3 +1,4 @@
+// Cron heartbeat policy tests cover heartbeat status classification.
 import { describe, expect, it } from "vitest";
 import {
   shouldEnqueueCronMainSummary,

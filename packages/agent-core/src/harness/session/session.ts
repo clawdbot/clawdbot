@@ -1,3 +1,4 @@
+// Agent Core module implements session behavior.
 import type { ImageContent, TextContent } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 import {

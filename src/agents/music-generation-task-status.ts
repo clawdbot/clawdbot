@@ -1,3 +1,8 @@
+/**
+ * Music-generation task status adapters. The module specializes the shared
+ * media-generation task helpers with music task ids, duplicate guards, and
+ * user-facing status text.
+ */
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildActiveMediaGenerationTaskPromptContextForSession,

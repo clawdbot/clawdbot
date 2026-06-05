@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements channel base behavior.
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   listQaChannelAccountIds,

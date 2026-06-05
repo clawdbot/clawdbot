@@ -1,3 +1,4 @@
+// OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";

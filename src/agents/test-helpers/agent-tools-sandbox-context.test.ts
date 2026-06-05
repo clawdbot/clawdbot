@@ -1,3 +1,5 @@
+// Agent-tools sandbox context tests keep shared sandbox fixture defaults and
+// override behavior stable for tool tests.
 import { describe, expect, it } from "vitest";
 import { createAgentToolsSandboxContext } from "./agent-tools-sandbox-context.js";
 

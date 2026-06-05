@@ -1,3 +1,4 @@
+// Verifies sandbox context resolution, backend registration, and main-session bypass.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +50,7 @@ let sandboxFixtureRoot = "";
 let sandboxFixtureCount = 0;
 
 async function createSandboxFixtureDir(prefix: string): Promise<string> {
+  // Shared fixture root avoids repeated temp-dir setup across sandbox context cases.
   const dir = path.join(sandboxFixtureRoot, `${prefix}-${sandboxFixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
   return dir;
@@ -102,6 +104,7 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
+    // Mode=off should short-circuit before resolving any backend implementation.
     const backendFactory = vi.fn(async () => ({
       id: "test-off-backend",
       runtimeId: "unexpected-runtime",

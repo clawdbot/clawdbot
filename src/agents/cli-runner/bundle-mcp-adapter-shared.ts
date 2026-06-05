@@ -1,8 +1,11 @@
+/**
+ * Shared normalization helpers for CLI-specific bundle MCP adapters.
+ */
 import { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 import type { BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+/** Re-exported record guard for adapter modules that share loose JSON inputs. */
 export { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 
-// Shared normalization helpers for CLI-specific bundle MCP adapters.
 function normalizeStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
     ? [...value]

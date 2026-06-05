@@ -1,3 +1,4 @@
+// Test routing roots for model provider extension suites.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const providerExtensionIds = [

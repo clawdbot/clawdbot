@@ -1,3 +1,4 @@
+// Delivery-result adapters for channel turn receipts.
 import { listMessageReceiptPlatformIds } from "../message/receipt.js";
 import type { MessageReceipt } from "../message/types.js";
 import type { ChannelDeliveryIntent, ChannelDeliveryResult } from "./types.js";

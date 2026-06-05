@@ -1,3 +1,4 @@
+// Run context lifecycle contract tests cover plugin run context setup and cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

@@ -1,3 +1,4 @@
+// Whatsapp tests cover send plugin behavior.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";

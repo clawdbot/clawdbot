@@ -1,3 +1,4 @@
+// ACP Core tests cover error text behavior.
 import { describe, expect, it } from "vitest";
 import { formatAcpRuntimeErrorText, toAcpRuntimeErrorText } from "./error-text.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "./errors.js";

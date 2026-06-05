@@ -1,3 +1,4 @@
+// Config presence tests cover channel config detection and missing-config diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Root Commander help, global options, banner, version, and example formatting.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -92,6 +93,7 @@ export function configureProgramHelp(
   });
 
   const formatHelpOutput = (str: string) => {
+    // Commander emits plain section labels; decorate them after command-specific help renders.
     let output = str;
     const isRootHelp = new RegExp(
       `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,

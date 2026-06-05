@@ -1,3 +1,4 @@
+// Normalization Core tests cover string coerce behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeStringifiedEntries } from "./string-coerce.js";
 

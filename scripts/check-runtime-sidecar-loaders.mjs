@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Finds hidden local runtime sidecar loaders missing tsdown entries.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -79,6 +80,9 @@ function readObjectEntrySources(entry) {
   return Object.values(entry).filter((value) => typeof value === "string");
 }
 
+/**
+ * Collects explicit source entry files from tsdown configuration.
+ */
 export function collectTsdownEntrySources(config) {
   const configs = Array.isArray(config) ? config : [config];
   return new Set(
@@ -86,6 +90,9 @@ export function collectTsdownEntrySources(config) {
   );
 }
 
+/**
+ * Finds local runtime require loaders not represented as explicit tsdown entries.
+ */
 export function findRuntimeSidecarLoaderViolations(content, importerPath, explicitEntrySources) {
   const sourceFile = ts.createSourceFile(importerPath, content, ts.ScriptTarget.Latest, true);
   const createRequireNames = new Set();
@@ -220,6 +227,9 @@ export function findRuntimeSidecarLoaderViolations(content, importerPath, explic
   return violations;
 }
 
+/**
+ * Collects runtime sidecar loader violations across configured roots.
+ */
 export async function collectRuntimeSidecarLoaderViolations(params) {
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],

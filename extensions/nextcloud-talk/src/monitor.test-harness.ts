@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements monitor harness behavior.
 import type { AddressInfo } from "node:net";
 import { afterEach } from "vitest";
 import { createNextcloudTalkWebhookServer } from "./monitor.js";

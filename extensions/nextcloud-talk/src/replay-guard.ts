@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements replay guard behavior.
 import path from "node:path";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 

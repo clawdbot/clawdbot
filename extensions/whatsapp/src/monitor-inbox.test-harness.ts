@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox harness behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";

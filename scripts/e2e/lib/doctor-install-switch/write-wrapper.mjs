@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Writes wrapper scripts for doctor install-switch E2E scenarios.
 import fs from "node:fs";
 
 const [wrapperPath, npmBin, logPath = `${process.env.HOME}/openclaw-wrapper-argv.log`] =

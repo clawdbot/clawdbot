@@ -1,3 +1,4 @@
+// Cron model override forwarding tests cover passing overrides into agent runs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCliSessionMock,

@@ -1,3 +1,8 @@
+/**
+ * Branch-summary bridge from session managers to the shared agent-core summarizer.
+ *
+ * Keeps session-manager branch traversal local while delegating summary generation to agent-core.
+ */
 import type { Model } from "../../../llm/types.js";
 import {
   collectEntriesForBranchSummaryFromBranches,
@@ -10,9 +15,6 @@ import {
 } from "../../runtime/index.js";
 import type { SessionEntry, ReadonlySessionManager } from "../session-manager.js";
 
-/**
- * Branch-summary bridge from session managers to the shared agent-core summarizer.
- */
 export type { BranchPreparation, BranchSummaryDetails, FileOperations };
 export { prepareBranchEntries };
 

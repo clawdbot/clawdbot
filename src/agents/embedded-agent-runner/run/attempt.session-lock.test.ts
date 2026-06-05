@@ -1,3 +1,4 @@
+// Coverage for embedded attempt session-file ownership and write locks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -43,6 +44,8 @@ afterEach(async () => {
 });
 
 async function createTempSessionFile(): Promise<string> {
+  // Use a real file so owner normalization can exercise realpath/symlink
+  // behavior.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-lock-"));
   tempDirs.push(dir);
   const sessionFile = path.join(dir, "session.jsonl");
@@ -118,6 +121,8 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("releases the eagerly-held attempt lock on dispose when cleanup is skipped (#86014)", async () => {
+    // Exceptions after prompt submission can skip cleanup acquisition; dispose
+    // still owns the original eager lock.
     const releases: string[] = [];
     const acquireSessionWriteLockLocal27 = vi
       .fn()
@@ -138,6 +143,8 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("releases the eagerly-held lock when the fence read throws during prompt release", async () => {
+    // A filesystem error can occur after the controller clears its in-memory
+    // lock reference; the underlying lease still must be released.
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocalFad845 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({

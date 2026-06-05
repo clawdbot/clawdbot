@@ -1,3 +1,4 @@
+// CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerDnsCli } from "./dns-cli.js";

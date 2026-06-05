@@ -1,3 +1,9 @@
+/**
+ * Session listing command.
+ *
+ * It loads one or more agent session stores, enriches rows with model/runtime
+ * metadata, and emits JSON or fixed-width terminal tables.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -106,6 +112,8 @@ function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined):
   if (limit > TOP_N_SELECTION_LIMIT) {
     return rows.toSorted(compareSessionRowsByUpdatedAt).slice(0, limit);
   }
+  // For small limits, keep only the top N rows without sorting the full store;
+  // large limits use the simpler full sort above.
   const selected: SessionRow[] = [];
   for (const row of rows) {
     const insertAt = selected.findIndex(
@@ -241,6 +249,8 @@ function stripChannelRecipientPrefix(
   }
   const stripped = raw.slice(prefix.length);
   const topicMarkerIndex = stripped.toLowerCase().indexOf(":topic:");
+  // Topic suffixes are routing detail, not the peer id used by runtime-policy
+  // session-key display.
   return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
 }
 
@@ -272,6 +282,8 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     stripChannelRecipientPrefix(to, channel) ??
     stripChannelRecipientPrefix(from, channel);
 
+  // Direct-message runtime policy can route by native user id, stripped
+  // recipient, or sender; expose the derived key when it differs from the row.
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,
     sessionKey: key,
@@ -296,6 +308,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     : undefined;
 }
 
+/** Lists sessions across selected stores with optional JSON output. */
 export async function sessionsCommand(
   opts: {
     json?: boolean;
@@ -369,6 +382,8 @@ export async function sessionsCommand(
           entry,
         });
         const acpRuntime = acpMeta != null;
+        // ACP rows need stored-key metadata before model/runtime resolution so
+        // bridge sessions and true ACP runtime sessions display differently.
         const modelRef = applyAcpModelOverlayIfNeeded(
           resolveSessionDisplayModelRef(cfg, row),
           acpSessionKey,
@@ -443,6 +458,8 @@ export async function sessionsCommand(
             totalTokens: resolveSessionTotalTokens(r) ?? null,
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+            // Prefer row-level context tokens, then config/model lookup, so JSON
+            // mirrors the terminal percentage calculation.
             contextTokens:
               r.contextTokens ??
               configuredContextTokens ??

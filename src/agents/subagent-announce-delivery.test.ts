@@ -1,3 +1,5 @@
+// Subagent announce delivery tests cover the last-mile routing used when child
+// runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
@@ -86,6 +88,8 @@ function createQueueOutcomeMock(
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
+  // Sequence mocks model retry paths where the embedded run can become
+  // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
@@ -187,6 +191,8 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceTool?: string;
   requesterAbandoned?: boolean;
 }) {
+  // Slack thread delivery exercises all origins because direct, session, and
+  // completion routing can differ after a child run outlives its requester.
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
@@ -1479,6 +1485,142 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectFinal: true,
       forceSyntheticClient: true,
       timeoutMs: 120_000,
+    });
+  });
+
+  it.each([
+    { name: "no payloads", result: { payloads: [] } },
+    {
+      name: "tool calls without delivery evidence",
+      result: { payloads: [], meta: { toolSummary: { calls: 1 } } },
+    },
+  ])(
+    "fails session-only completion handoff when the in-process agent returns $name",
+    async ({ result: agentResult }) => {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+        result: agentResult,
+      });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-local",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({}) as never,
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:local-session",
+        targetRequesterSessionKey: "agent:main:local-session",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-local-empty",
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      });
+      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+        deliver: false,
+        channel: undefined,
+        to: undefined,
+        bestEffortDeliver: true,
+      });
+    },
+  );
+
+  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-silent",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it.each([
+    {
+      name: "accepted session spawn",
+      result: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      },
+    },
+    {
+      name: "successful cron add",
+      result: {
+        payloads: [],
+        successfulCronAdds: 1,
+      },
+    },
+  ])("accepts session-only completion handoff with $name evidence", async ({ result }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result,
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-side-effect",
+    });
+
+    expectRecordFields(delivery, {
+      delivered: true,
+      path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
     });
   });
 

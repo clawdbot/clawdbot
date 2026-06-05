@@ -1,3 +1,4 @@
+// Msteams tests cover file consent plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   CONSENT_UPLOAD_HOST_ALLOWLIST,

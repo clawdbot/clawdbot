@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa transport registry plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeQaTransportId } from "./qa-transport-registry.js";
 

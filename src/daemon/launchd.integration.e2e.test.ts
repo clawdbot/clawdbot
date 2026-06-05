@@ -1,3 +1,4 @@
+// Launchd integration tests cover daemon CLI behavior in macOS-like scenarios.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";

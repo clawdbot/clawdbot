@@ -1,3 +1,4 @@
+// Ios Sync Versioning script supports OpenClaw repository automation.
 import path from "node:path";
 import { syncIosVersioning } from "./lib/ios-version.ts";
 

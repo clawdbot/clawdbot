@@ -1,3 +1,4 @@
+// Channel Message Flows tests cover channel message flows script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   parseChannelMessageFlowArgs,

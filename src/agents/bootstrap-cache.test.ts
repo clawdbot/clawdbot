@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for per-session workspace bootstrap caching.
+ * Verifies reuse, refresh, pruning, and explicit cache clears.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 

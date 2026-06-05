@@ -1,3 +1,4 @@
+// Telegram plugin module implements accounts behavior.
 import util from "node:util";
 import {
   createAccountActionGate,

@@ -1,3 +1,4 @@
+// Feishu tests cover subagent hooks plugin behavior.
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,

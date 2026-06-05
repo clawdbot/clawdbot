@@ -1,3 +1,4 @@
+/** Base Vitest mocks for Windows schtasks daemon tests. */
 import { vi } from "vitest";
 import {
   inspectPortUsage,

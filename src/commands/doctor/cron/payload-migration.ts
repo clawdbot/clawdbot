@@ -1,3 +1,4 @@
+// Legacy cron payload migration for provider/channel aliases and OpenAI Codex model refs.
 import {
   normalizeOptionalLowercaseString,
   readStringValue as readString,
@@ -27,6 +28,7 @@ function normalizeChannel(value: string): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
 
+/** Return true when a cron payload contains legacy `openai-codex/*` model refs. */
 export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
   if (toCanonicalOpenAIModelRef(payload.model)) {
     return true;
@@ -58,6 +60,7 @@ function migrateLegacyOpenAICodexModelRefs(payload: UnknownRecord): boolean {
   return mutated;
 }
 
+/** Normalize legacy cron payload channel/provider and model reference fields in place. */
 export function migrateLegacyCronPayload(payload: UnknownRecord): boolean {
   let mutated = false;
 

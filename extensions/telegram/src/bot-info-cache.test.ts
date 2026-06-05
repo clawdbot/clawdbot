@@ -1,3 +1,4 @@
+// Telegram tests cover bot info cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteCachedTelegramBotInfo,

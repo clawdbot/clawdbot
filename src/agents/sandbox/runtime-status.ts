@@ -1,3 +1,8 @@
+/**
+ * Sandbox runtime status and tool-policy diagnostics.
+ *
+ * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
@@ -14,12 +19,6 @@ import {
 } from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
-/**
- * Resolves whether a session is sandboxed and why sandbox tool policy blocks a tool.
- *
- * This module is used by tool entrypoints before execution, so diagnostics must
- * be actionable without exposing full session keys.
- */
 function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
   if (cfg.mode === "off") {
     return false;

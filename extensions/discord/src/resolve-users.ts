@@ -1,3 +1,4 @@
+// Discord plugin module implements resolve users behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

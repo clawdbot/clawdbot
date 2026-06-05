@@ -1,3 +1,4 @@
+// Implements `openclaw agents add`, including config mutation, workspace setup, auth copy, and route binding setup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -102,6 +103,7 @@ function formatSkippedOAuthProfilesMessage(params: {
     : `OAuth profiles were not copied from "${params.sourceAgentId}"; sign in separately for this agent.`;
 }
 
+/** Create or update an agent through the non-interactive path or guided wizard. */
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,

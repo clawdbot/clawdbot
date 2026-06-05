@@ -1,6 +1,7 @@
+// Lazy image-runtime facade that avoids loading model/provider code until image
+// understanding is invoked.
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-// Lazy image-runtime facade; avoids loading provider code until image understanding is used.
 const loadImageRuntime = createLazyRuntimeModule(() => import("./image.js"));
 const bindImageRuntime = createLazyRuntimeMethodBinder(loadImageRuntime);
 

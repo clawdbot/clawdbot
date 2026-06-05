@@ -1,3 +1,4 @@
+// Chat target prefix tests cover channel target prefix parsing and display behavior.
 import { describe, expect, it } from "vitest";
 import {
   createAllowedChatSenderMatcher,

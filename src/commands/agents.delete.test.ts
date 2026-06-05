@@ -1,3 +1,4 @@
+// Agents delete tests cover config removal, workspace attestation cleanup, and binding updates.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";

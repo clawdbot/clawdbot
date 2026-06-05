@@ -1,3 +1,7 @@
+/**
+ * Browser plugin registration helpers. This file keeps registration lazy while
+ * advertising Browser tools, services, node-host commands, and audits.
+ */
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -140,8 +144,10 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   };
 }
 
+/** Browser plugin reload policy. */
 export const browserPluginReload = { restartPrefixes: ["browser"] };
 
+/** Node-host command descriptors exposed by the Browser plugin. */
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "browser.proxy",
@@ -153,6 +159,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
 ];
 
+/** Security audit collectors contributed by the Browser plugin. */
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
     const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
@@ -189,6 +196,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   };
 }
 
+/** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
     createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);

@@ -1,3 +1,4 @@
+// Covers provider-specific transcript turn validation and repair.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,6 +20,8 @@ function makeDualToolUseAssistantContent() {
 }
 
 function makeDualToolAnthropicTurns(nextUserContent: unknown[]) {
+  // Anthropic places tool results inside the next user turn, so these fixtures
+  // exercise sibling tool-use pruning.
   return asMessages([
     { role: "user", content: [{ type: "text", text: "Use tools" }] },
     {
@@ -85,6 +88,8 @@ describe("validateGeminiTurns", () => {
   });
 
   it("should merge consecutive assistant messages", () => {
+    // Gemini expects alternating turns; adjacent assistant text can be merged
+    // without changing the visible answer.
     const msgs = asMessages([
       { role: "user", content: "Hello" },
       {
@@ -258,6 +263,8 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("keeps newest metadata when merging consecutive users", () => {
+    // Merged user turns should keep latest metadata such as attachments while
+    // preserving all content in chronological order.
     const msgs = asMessages([
       {
         role: "user",
@@ -335,7 +342,7 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("should handle mixed scenario with steering messages", () => {
-    // Simulates: user asks -> assistant errors -> steering user message injected
+    // Simulates: user asks -> assistant errors -> steering user message injected.
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Original question" }] },
       {
@@ -440,8 +447,8 @@ describe("mergeConsecutiveUserTurns", () => {
 
 describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
   it("should strip tool_use blocks without matching tool_result", () => {
-    // Simulates: user asks -> assistant has tool_use -> user responds without tool_result
-    // This happens after compaction trims history
+    // Compaction can trim tool results; dangling tool_use blocks must be removed
+    // before Anthropic replay.
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -605,6 +612,8 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
   });
 
   it("preserves signed-thinking turns whose sibling tool calls still resolve", () => {
+    // Signed thinking is valid only when its neighboring tool call remains part
+    // of the replayable turn.
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {

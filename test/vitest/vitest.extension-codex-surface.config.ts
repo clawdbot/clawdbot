@@ -1,3 +1,4 @@
+// Vitest extension codex surface config wires the extension codex surface test shard.
 import { codexExtensionTestRoots } from "./vitest.extension-codex-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

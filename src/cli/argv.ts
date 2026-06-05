@@ -1,3 +1,4 @@
+// Low-level CLI argv helpers for root options, help/version detection, and command paths.
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
@@ -64,7 +65,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     }
     const [primary] = positionals;
     // Positional `help` may be a command argument for known leaf commands.
-    // Unknown roots are treated as plugin command namespaces.
+    // Unknown roots stay help-compatible because plugins may register namespaces later.
     if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
       return true;
     }

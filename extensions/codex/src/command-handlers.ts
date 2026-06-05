@@ -1,3 +1,4 @@
+// Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";

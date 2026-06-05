@@ -1,6 +1,9 @@
+// Coverage for prompt helper decisions used before embedded attempts.
 import { describe, expect, it, vi } from "vitest";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
+  // Media task modules are mocked so prompt helper tests can assert trigger and
+  // session-key routing without real task stores.
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
@@ -107,6 +110,8 @@ describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
 
 describe("resolvePromptSubmissionSkipReason", () => {
   it("skips empty prompt submissions without history or images", () => {
+    // Empty visible prompt plus no useful replay context should not start a
+    // model request.
     expect(
       resolvePromptSubmissionSkipReason({
         prompt: "   ",
@@ -194,6 +199,8 @@ describe("resolvePromptSubmissionSkipReason", () => {
 
 describe("resolvePromptBuildHookResult drain cache", () => {
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
+    // Retry attempts reuse the first drain result so plugin-provided next-turn
+    // context is not consumed or duplicated multiple times.
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [

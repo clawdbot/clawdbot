@@ -1,3 +1,4 @@
+// Subagent format tests cover concise subagent status and duration formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatDurationCompact,

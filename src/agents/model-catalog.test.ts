@@ -1,3 +1,4 @@
+// Covers model catalog loading, plugin manifests, normalization, and suppression.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -38,6 +39,8 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
 }
 
 function mockCatalogImportFailThenRecover() {
+  // Simulates a transient discovery import failure so cache/error handling can
+  // prove the catalog loader recovers on the next attempt.
   let call = 0;
   setModelCatalogImportForTest(async () => {
     call += 1;
@@ -138,6 +141,8 @@ function manifestModelCatalogSnapshot(model: {
   reasoning?: boolean;
   contextWindow?: number;
 }) {
+  // Minimal plugin metadata snapshot containing a manifest-owned external
+  // provider model catalog.
   return {
     policyHash: "policy",
     index: {
@@ -205,6 +210,8 @@ function requireCatalogEntry(
   provider: string,
   id: string,
 ): ModelCatalogEntry {
+  // Most catalog tests need a narrowed entry before checking capabilities or
+  // normalized ids; fail loudly when the fixture model disappears.
   const entry = findCatalogEntry(entries, provider, id);
   if (!entry) {
     throw new Error(`expected catalog entry ${provider}/${id}`);

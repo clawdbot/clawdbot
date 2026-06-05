@@ -1,3 +1,4 @@
+// MCP CLI for configured servers, OAuth auth, diagnostics, and channel MCP serving.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -127,6 +128,7 @@ async function clearStaleMcpOAuthCredentialsForReplacement(params: {
   previous: unknown;
   next: unknown;
 }): Promise<void> {
+  // Replacing an OAuth HTTP server should not leave credentials bound to the old URL.
   if (!hasOAuthAuth(params.previous)) {
     return;
   }

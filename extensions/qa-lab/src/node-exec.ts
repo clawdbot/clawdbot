@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements node exec behavior.
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";

@@ -1,3 +1,4 @@
+// Home environment test support isolates HOME-style paths for skill tests.
 import os from "node:os";
 import { vi } from "vitest";
 

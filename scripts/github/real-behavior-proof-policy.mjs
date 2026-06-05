@@ -1,5 +1,7 @@
+// Shared real-behavior proof policy for GitHub PR checks and label decisions.
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
+/** Label that lets maintainers override real-behavior proof requirements. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";

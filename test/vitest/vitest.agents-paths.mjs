@@ -1,3 +1,4 @@
+// Test routing globs for agent core, embedded-agent, tool, and support suites.
 export const agentsAllTestPatterns = ["src/agents/**/*.test.ts"];
 
 export const agentsCoreTestPatterns = ["src/agents/*.test.ts"];

@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {

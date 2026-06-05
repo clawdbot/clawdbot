@@ -1,3 +1,4 @@
+// Research text helpers extract text blocks from model messages for skill research capture.
 const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
 
 // Transcript content can be raw strings or Responses-style typed text blocks.

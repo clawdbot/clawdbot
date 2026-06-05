@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover provider model id normalize behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeGooglePreviewModelId } from "./provider-model-id-normalize.js";
 

@@ -1,3 +1,4 @@
+// WebSocket message handler validates frames, dispatches gateway RPCs, manages pairing, and reports responses.
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";

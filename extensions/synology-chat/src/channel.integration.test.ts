@@ -1,3 +1,4 @@
+// Synology Chat tests cover channel.integration plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {

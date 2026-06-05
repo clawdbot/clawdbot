@@ -1,3 +1,8 @@
+/**
+ * Channel pairing adapter types.
+ *
+ * Defines setup/allowlist approval hooks used by pairing flows.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 

@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover embedding provider plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { testing, hasAwsCredentials } from "./embedding-provider.js";
 

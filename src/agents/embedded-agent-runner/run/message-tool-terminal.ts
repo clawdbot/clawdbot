@@ -1,3 +1,6 @@
+/**
+ * Detects message-tool-only sends that should terminate an agent turn.
+ */
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { isMessageToolSendActionName } from "../../embedded-agent-messaging.js";
 import { isToolResultError } from "../../embedded-agent-subscribe.tools.js";

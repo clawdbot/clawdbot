@@ -1,3 +1,4 @@
+// Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

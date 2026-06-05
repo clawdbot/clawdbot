@@ -1,3 +1,4 @@
+// Openai tests cover media understanding provider plugin behavior.
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,

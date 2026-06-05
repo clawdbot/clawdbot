@@ -1,3 +1,4 @@
+// Workspace load tests cover loading skills from workspace directories and manifests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

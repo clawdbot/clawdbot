@@ -1,3 +1,4 @@
+// Feishu helper module supports wiki schema behavior.
 import { Type, type Static } from "typebox";
 
 const WIKI_SPACE_ID_DESCRIPTION =

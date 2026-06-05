@@ -1,3 +1,8 @@
+/**
+ * Channel configured-binding provider resolver.
+ *
+ * Extracts plugin binding providers from channel plugin definitions.
+ */
 import type { ChannelConfiguredBindingProvider } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 

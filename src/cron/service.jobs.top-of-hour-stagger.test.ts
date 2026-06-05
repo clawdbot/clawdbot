@@ -1,3 +1,4 @@
+// Top-of-hour stagger tests cover spreading jobs that would otherwise collide.
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { computeJobNextRunAtMs } from "./service/jobs.js";

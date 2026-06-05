@@ -1,3 +1,4 @@
+// OpenAI-compatible speech provider sends speech synthesis requests to OpenAI-style APIs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertOkOrThrowHttpError,

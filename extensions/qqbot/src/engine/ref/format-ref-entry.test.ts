@@ -1,3 +1,4 @@
+// Qqbot tests cover format ref entry plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatRefEntryForAgent } from "./format-ref-entry.js";
 import type { RefIndexEntry } from "./types.js";

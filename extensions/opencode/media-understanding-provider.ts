@@ -1,3 +1,4 @@
+// Opencode provider module implements model/runtime integration.
 import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,

@@ -1,3 +1,4 @@
+// Chat command tests cover discovery and invocation of skill-provided commands.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch output behavior.
 import { describe, expect, it } from "vitest";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 

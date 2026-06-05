@@ -1,3 +1,4 @@
+// Video generation capability helpers derive supported sizes, durations, and modes.
 import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,

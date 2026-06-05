@@ -1,3 +1,4 @@
+// Google Meet plugin module implements chrome audio device behavior.
 export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
 
 export function outputMentionsBlackHole2ch(output: string): boolean {

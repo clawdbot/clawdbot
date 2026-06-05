@@ -1,3 +1,5 @@
+// Covers bound delivery routing for active bindings, requester matching,
+// ambiguous bindings, and fail-closed fallback reasons.
 import { beforeEach, describe, expect, it } from "vitest";
 import { createBoundDeliveryRouter } from "./bound-delivery-router.js";
 import {

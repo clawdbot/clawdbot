@@ -1,3 +1,8 @@
+/**
+ * Remote shell-backed sandbox filesystem bridge.
+ *
+ * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
+ */
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { isPathInside } from "../../infra/path-guards.js";

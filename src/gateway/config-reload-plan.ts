@@ -1,3 +1,5 @@
+// Gateway config reload planner.
+// Maps changed config paths to hot-reload actions, no-ops, or full restarts.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   getActivePluginChannelRegistryVersion,
@@ -146,6 +148,8 @@ function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   const activeRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  // Plugin/channel reload rules are process-stable until the active registry
+  // version changes; cache them to keep every config diff cheap.
   if (
     registry !== cachedRegistry ||
     activeRegistryVersion !== cachedActiveRegistryVersion ||

@@ -1,3 +1,4 @@
+// Verifies the Google simple-completion wrapper and thinking-payload sanitizer hook.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 
@@ -26,6 +27,8 @@ vi.mock("./custom-api-registry.js", () => ({
 const { GOOGLE_SIMPLE_COMPLETION_API, prepareGoogleSimpleCompletionModel } =
   await import("./google-simple-completion-stream.js");
 
+// Mirrors the provider catalog shape closely enough for wrapper registration
+// without pulling live Google model discovery into unit tests.
 function makeGoogleModel(id = "gemini-flash-latest"): Model<"google-generative-ai"> {
   return {
     id,
@@ -92,6 +95,8 @@ describe("prepareGoogleSimpleCompletionModel", () => {
         ...args: unknown[]
       ) => unknown;
 
+      // The custom alias must unwrap to the real Google API before delegating,
+      // then sanitize the exact outbound payload produced by streamSimple.
       await streamFn(wrapped, { messages: [] }, { apiKey: "key", reasoning });
 
       expect(streamSimple).toHaveBeenCalledTimes(1);

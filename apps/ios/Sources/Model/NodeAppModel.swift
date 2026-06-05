@@ -1034,18 +1034,18 @@ final class NodeAppModel {
                 OpenClawCanvasPresentParams()
             let url = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if url.isEmpty {
-                self.screen.showDefaultCanvas()
+                self.screen.presentDefaultCanvas()
             } else {
-                self.screen.navigate(to: url)
+                self.screen.present(urlString: url)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
-            self.screen.showDefaultCanvas()
+            self.screen.hideCanvas()
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
             let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.screen.navigate(to: trimmedURL)
+            self.screen.present(urlString: trimmedURL)
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -1937,6 +1937,15 @@ extension NodeAppModel {
             password: cfg.password,
             connectOptions: cfg.nodeOptions,
             forceReconnect: forceReconnect)
+    }
+
+    func resetGatewaySessionsForForcedReconnect() async {
+        self.nodeGatewayTask?.cancel()
+        self.nodeGatewayTask = nil
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+        await self.nodeGateway.disconnect()
     }
 
     func disconnectGateway() {
@@ -4555,6 +4564,10 @@ extension NodeAppModel {
         in config: GatewayConnectConfig?) -> GatewayConnectConfig?
     {
         self.clearingBootstrapToken(in: config)
+    }
+
+    func _test_hasGatewayLoopTasks() -> (node: Bool, operator: Bool) {
+        (self.nodeGatewayTask != nil, self.operatorGatewayTask != nil)
     }
 
     func _test_handleSuccessfulBootstrapGatewayOnboarding() async {

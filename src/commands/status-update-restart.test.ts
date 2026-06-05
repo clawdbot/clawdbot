@@ -1,3 +1,4 @@
+// Status update restart tests cover restart sentinel messages and update restart action lines.
 import { describe, expect, it } from "vitest";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {

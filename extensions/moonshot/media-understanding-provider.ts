@@ -1,3 +1,4 @@
+// Moonshot provider module implements model/runtime integration.
 import {
   buildOpenAiCompatibleVideoRequestBody,
   coerceOpenAiCompatibleVideoText,

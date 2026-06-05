@@ -1,7 +1,9 @@
+/**
+ * Chooses a configured provider/model fallback when defaults are absent from
+ * the user's model config.
+ */
 import type { OpenClawConfig } from "../config/types.js";
 
-// Selects a configured provider/model fallback when the default provider/model is
-// not present in models config.
 type ProviderModelRef = {
   provider: string;
   model: string;

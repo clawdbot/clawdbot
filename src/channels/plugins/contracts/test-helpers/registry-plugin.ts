@@ -1,8 +1,11 @@
+/**
+ * Bundled channel plugin contract shard selectors.
+ *
+ * Assigns plugin ids to deterministic registry contract shards.
+ */
 import type { ChannelId } from "../../channel-id.types.js";
 import { listBundledChannelPluginIds } from "./bundled-channel-plugin-loader.js";
 
-// Shard helper for plugin contract registry tests. It keeps shard assignment
-// deterministic by using the bundled channel catalog order.
 type PluginContractRef = {
   id: ChannelId;
 };

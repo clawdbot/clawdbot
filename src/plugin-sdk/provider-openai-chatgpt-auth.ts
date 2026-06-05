@@ -1,3 +1,4 @@
+// OpenAI ChatGPT auth helpers normalize OAuth session data for provider plugins.
 import { resolveExpiresAtMsFromEpochSeconds } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 

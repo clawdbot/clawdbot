@@ -1,3 +1,4 @@
+// Classification coverage for compaction failure and skip reason telemetry.
 import { describe, expect, it } from "vitest";
 import {
   classifyCompactionReason,
@@ -7,6 +8,8 @@ import {
 
 describe("resolveCompactionFailureReason", () => {
   it("replaces generic compaction cancellation with the safeguard reason", () => {
+    // Safeguard cancellation is the actionable root cause; preserving only the
+    // generic cancellation text would hide the provider/auth failure.
     expect(
       resolveCompactionFailureReason({
         reason: "Compaction cancelled",
@@ -65,6 +68,8 @@ describe("formatUnknownCompactionReasonDetail", () => {
   });
 
   it("strips terminal escapes and log separators from unknown reasons", () => {
+    // Unknown reason detail is embedded in metric tags, so strip control
+    // characters and separators before exporting it.
     expect(
       formatUnknownCompactionReasonDetail("\u001b[31mNo API\u001b[0m provider = ollama\nnext"),
     ).toBe("No_API_provider_ollama_next");

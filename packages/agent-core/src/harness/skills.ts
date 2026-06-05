@@ -1,3 +1,4 @@
+// Agent Core module implements skills behavior.
 import ignore from "ignore";
 import {
   basenameEnvPath,

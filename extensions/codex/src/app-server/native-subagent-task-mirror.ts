@@ -1,3 +1,7 @@
+/**
+ * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
+ * runtime rows so parent sessions can observe child progress.
+ */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
@@ -13,11 +17,13 @@ import type {
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
+/** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 export type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
   "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
 >;
 
+/** Stable parent/session context used while mirroring native subagent tasks. */
 export type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
@@ -25,6 +31,7 @@ export type CodexNativeSubagentTaskMirrorParams = {
   now?: () => number;
 };
 
+/** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
 export class CodexNativeSubagentTaskMirror {
   private readonly mirroredThreadIds = new Set<string>();
   private readonly failedMirrorThreadIds = new Set<string>();
@@ -322,10 +329,12 @@ export class CodexNativeSubagentTaskMirror {
   }
 }
 
+/** Converts a Codex child thread id into the OpenClaw task-runtime run id. */
 export function codexNativeSubagentRunId(threadId: string): string {
   return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
 }
 
+/** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */
 export function readSubagentThreadSpawnSource(
   source: CodexSessionSource | null | undefined,
   parentThreadId: string,

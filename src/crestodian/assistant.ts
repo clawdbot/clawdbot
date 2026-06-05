@@ -1,3 +1,4 @@
+// Crestodian assistant planning converts fuzzy user text into one safe command.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -58,6 +59,7 @@ export async function planCrestodianCommand(params: {
   overview: CrestodianOverview;
   deps?: CrestodianPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
+  // Prefer the user's configured model; local runtime planners are only a fallback.
   const configured = await planCrestodianCommandWithConfiguredModel(params);
   if (configured) {
     return configured;
@@ -180,6 +182,7 @@ async function runLocalRuntimePlanner(
 ): Promise<string | undefined> {
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   try {
+    // Planner sessions are isolated in a temp workspace and run with no tools for command planning.
     const runId = `crestodian-planner-${randomUUID()}`;
     const sessionFile = path.join(tempDir, "session.jsonl");
     const sessionId = `${runId}-session`;

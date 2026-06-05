@@ -1,3 +1,4 @@
+// Browser tests cover route numeric plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../timer-delay.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";

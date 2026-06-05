@@ -1,3 +1,4 @@
+// Discord tests cover send.messages plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const restMock = {

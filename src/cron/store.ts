@@ -1,3 +1,4 @@
+/** Public cron store load/save API backed by SQLite plus quarantine sidecars. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -119,6 +120,8 @@ export async function saveCronJobsStore(
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   if (opts?.stateOnly) {
+    // Hot-path timer updates only mutate runtime columns; full config JSON stays
+    // untouched so user-authored cron definitions do not churn.
     runOpenClawStateWriteTransaction(({ db }) => {
       updateCronRuntimeRows(db, storeKey, store);
     });

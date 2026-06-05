@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements live transport cli behavior.
 import path from "node:path";
 import { resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import type { QaProviderMode } from "../run-config.js";

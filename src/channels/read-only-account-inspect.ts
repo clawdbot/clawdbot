@@ -1,3 +1,4 @@
+// Read-only channel account inspection facade for setup and status diagnostics.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBundledChannelAccountInspector } from "./plugins/bundled.js";
 import { getLoadedChannelPlugin } from "./plugins/registry.js";

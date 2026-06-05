@@ -1,4 +1,8 @@
 #!/usr/bin/env bun
+/**
+ * Android release helper that bumps version fields, builds release AAB variants,
+ * verifies signatures, and prints SHA-256 checksums.
+ */
 
 import { $ } from "bun";
 import { dirname, join } from "node:path";

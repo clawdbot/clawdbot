@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements cli behavior.
 import {
   printLiveTransportQaArtifacts,
   startLiveTransportQaOutputTee,

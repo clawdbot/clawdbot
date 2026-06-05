@@ -1,3 +1,4 @@
+// Doctor repair for configured plugins, runtimes, channels, and providers missing install records.
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -1153,8 +1154,11 @@ async function adoptExistingNpmPackage(params: {
 }
 
 export type RepairMissingPluginInstallsResult = {
+  /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
+  /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
   /**
    * The full install-record map after repair. Equal to the input
@@ -1168,6 +1172,7 @@ export type RepairMissingPluginInstallsResult = {
   records: Record<string, PluginInstallRecord>;
 };
 
+/** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1190,6 +1195,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   });
 }
 
+/** Repair missing installs for an explicit plugin/channel id set. */
 export async function repairMissingPluginInstallsForIds(params: {
   cfg: OpenClawConfig;
   pluginIds: Iterable<string>;

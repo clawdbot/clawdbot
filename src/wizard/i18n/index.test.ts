@@ -1,3 +1,4 @@
+// Wizard i18n tests cover locale lookup and fallback behavior.
 import { describe, expect, it } from "vitest";
 import {
   WIZARD_SUPPORTED_LOCALES,

@@ -1,3 +1,5 @@
+// Model config helper tests cover provider auth detection across config and
+// stored agent auth profiles for reusable media tools.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
@@ -24,6 +26,8 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("keeps auth-store profiles as valid tool auth", () => {
+    // Tool-specific model selection should honor the same stored profile shape
+    // used by agent sessions, not only process env/config keys.
     expect(
       hasProviderAuthForTool({
         provider: "hatchery",

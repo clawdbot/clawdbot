@@ -1,3 +1,5 @@
+// Subagent depth tests cover depth recovery from persisted session metadata and
+// timer-safe timeout normalization for spawned agent runs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +42,8 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("derives depth from spawnedBy ancestry when spawnDepth is missing", () => {
+    // Ancestry fallback keeps restored sessions useful when old stores predate
+    // the explicit spawnDepth field.
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
     const key3 = "agent:main:subagent:three";

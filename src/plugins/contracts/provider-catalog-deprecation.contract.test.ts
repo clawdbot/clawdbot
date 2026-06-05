@@ -1,3 +1,4 @@
+// Provider catalog deprecation contract tests cover deprecated provider catalog metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

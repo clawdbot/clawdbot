@@ -1,3 +1,6 @@
+/**
+ * Browser profile reset operations for local managed profiles.
+ */
 import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserResetUnsupportedError } from "./errors.js";
@@ -18,6 +21,7 @@ type ResetOps = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
+/** Builds the reset-profile operation for one resolved browser profile. */
 export function createProfileResetOps({
   profile,
   getProfileState,

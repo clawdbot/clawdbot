@@ -1,3 +1,4 @@
+/** Tests normalized agent run terminal outcomes and sticky timeout/cancel behavior. */
 import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,

@@ -1,3 +1,4 @@
+// Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { INCLUDE_KEY } from "../../config/includes.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
@@ -6,6 +7,7 @@ import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
+/** Return true when a config tree uses authored includes that doctor must not flatten. */
 function containsAuthoredInclude(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -16,6 +18,7 @@ function containsAuthoredInclude(value: unknown): boolean {
   return Object.values(value).some((entry) => containsAuthoredInclude(entry));
 }
 
+/** Migrate a legacy config snapshot during update, unless includes or validation block it. */
 export async function repairLegacyConfigForUpdateChannel(params: {
   configSnapshot: ConfigSnapshot;
   jsonMode: boolean;

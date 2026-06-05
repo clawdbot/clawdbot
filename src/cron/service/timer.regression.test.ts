@@ -1,3 +1,4 @@
+// Timer regression tests cover historical cron timer scheduling failures.
 import { describe, expect, it, vi } from "vitest";
 import {
   createAbortAwareIsolatedRunner,

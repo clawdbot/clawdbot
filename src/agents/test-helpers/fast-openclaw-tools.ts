@@ -1,9 +1,11 @@
+/**
+ * Fast OpenClaw tool-bundle mock.
+ *
+ * Provides lightweight built-in tool stubs for inventory-heavy tests.
+ */
 import { vi } from "vitest";
 import { stubTool } from "./fast-tool-stubs.js";
 
-/**
- * Fast Vitest mock for the OpenClaw tool bundle used by inventory-heavy tests.
- */
 function stubActionTool(name: string, actions: string[]) {
   return {
     ...stubTool(name),

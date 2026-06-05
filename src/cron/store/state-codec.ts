@@ -1,3 +1,4 @@
+/** SQLite column codec for mutable cron runtime state. */
 import type { CronJobState } from "../types.js";
 import {
   booleanToInteger,

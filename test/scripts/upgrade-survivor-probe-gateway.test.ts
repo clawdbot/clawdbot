@@ -1,3 +1,4 @@
+// Upgrade Survivor Probe Gateway tests cover upgrade survivor probe gateway script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
@@ -106,16 +107,7 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     expect(timeoutResult.stderr).toContain("invalid --timeout-ms: 1e3");
 
     const bodyLimitResult = await runProbe(
-      [
-        "--base-url",
-        "http://127.0.0.1:9",
-        "--path",
-        "/readyz",
-        "--expect",
-        "ready",
-        "--out",
-        out,
-      ],
+      ["--base-url", "http://127.0.0.1:9", "--path", "/readyz", "--expect", "ready", "--out", out],
       5_000,
       {
         OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64bytes",

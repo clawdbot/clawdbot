@@ -1,3 +1,4 @@
+// Control UI module implements session key behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

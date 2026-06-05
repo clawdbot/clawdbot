@@ -1,3 +1,4 @@
+/** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -93,6 +94,7 @@ function resolveExportTrajectoryOptions(
   };
 }
 
+/** Resolves the requested session and exports its trajectory summary or JSON result. */
 export async function exportTrajectoryCommand(
   opts: ExportTrajectoryCommandOptions,
   runtime: RuntimeEnv,

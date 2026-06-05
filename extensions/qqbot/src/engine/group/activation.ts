@@ -1,3 +1,4 @@
+// Qqbot plugin module implements activation behavior.
 import fs from "node:fs";
 import path from "node:path";
 

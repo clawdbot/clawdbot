@@ -1,3 +1,4 @@
+// Coverage for embedded attempt startup stage timing diagnostics.
 import { describe, expect, it } from "vitest";
 import {
   createEmbeddedRunStageTracker,
@@ -8,6 +9,8 @@ import {
 
 describe("embedded run stage timing", () => {
   it("captures stage duration and elapsed time", () => {
+    // Stage snapshots carry both local duration and total elapsed time so slow
+    // startup logs can identify where time accumulated.
     let clock = 10;
     const tracker = createEmbeddedRunStageTracker({ now: () => clock });
 
@@ -69,6 +72,8 @@ describe("embedded run stage timing", () => {
   });
 
   it("names first-attempt dispatch subspans for slow startup summaries", () => {
+    // First-attempt dispatch stages use stable names because logs are compared
+    // across provider/runtime startup regressions.
     let clock = 0;
     const tracker = createEmbeddedRunStageTracker({ now: () => clock });
 

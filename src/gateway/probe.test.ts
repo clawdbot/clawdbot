@@ -1,3 +1,5 @@
+// Gateway probe tests cover bootstrap auth, pairing prompts, startup retries,
+// event-loop readiness checks, and close/error reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayClientState = vi.hoisted(() => ({

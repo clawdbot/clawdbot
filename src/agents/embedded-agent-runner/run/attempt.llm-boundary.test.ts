@@ -1,3 +1,4 @@
+// Coverage for sanitizing replay messages at the LLM boundary.
 import { describe, expect, it } from "vitest";
 import {
   installModelPromptTransform,
@@ -7,6 +8,8 @@ import {
 
 describe("normalizeMessagesForLlmBoundary", () => {
   it("strips inbound metadata from historical user turns before model replay", () => {
+    // Historical envelopes contain untrusted routing metadata that should not be
+    // replayed as user instructions.
     const historicalEnvelope =
       'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
     const currentEnvelope =
@@ -152,6 +155,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
   });
 
   it("keeps only pre-user current-turn runtime context at the LLM boundary", () => {
+    // Runtime context belongs immediately before the active user turn; stale
+    // context after that turn should not leak into provider replay.
     const input = [
       {
         role: "user",

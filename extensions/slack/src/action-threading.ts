@@ -1,3 +1,4 @@
+// Slack plugin module implements action threading behavior.
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseSlackTarget } from "./targets.js";

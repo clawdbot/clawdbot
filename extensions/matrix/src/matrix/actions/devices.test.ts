@@ -1,3 +1,4 @@
+// Matrix tests cover devices plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const withResolvedActionClientMock = vi.fn();

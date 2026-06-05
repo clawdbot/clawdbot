@@ -1,3 +1,8 @@
+/**
+ * Auth profile mutation helpers.
+ * Updates profile order, last-good state, usage stats, and provider profile
+ * records through locked or immediate store writes.
+ */
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
@@ -252,7 +257,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
   });
 }
 
-/** Clears lastGood for a provider when it points at the supplied profile. */
+/** Clear the last-good profile pointer for a provider under the store lock. */
 export async function clearLastGoodProfileWithLock(params: {
   provider: string;
   profileId: string;
@@ -275,7 +280,7 @@ export async function clearLastGoodProfileWithLock(params: {
   });
 }
 
-/** Marks an auth profile as successful and updates lastGood/usage state. */
+/** Mark a profile as successfully used and update ordering/usage metadata. */
 export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;

@@ -1,3 +1,4 @@
+// Matrix plugin module implements actions behavior.
 export type {
   MatrixActionClientOpts,
   MatrixMessageSummary,

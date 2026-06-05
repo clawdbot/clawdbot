@@ -1,3 +1,4 @@
+// Update Job Timeout script supports OpenClaw repository automation.
 interface TimedUpdateJobOptions {
   append(this: void, chunk: string): void;
   label: string;

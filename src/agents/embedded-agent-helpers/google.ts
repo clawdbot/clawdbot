@@ -1,3 +1,6 @@
+/**
+ * Google/Gemini-specific embedded-agent runtime helpers.
+ */
 import { isGemma4ModelId } from "../../shared/google-models.js";
 import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
 

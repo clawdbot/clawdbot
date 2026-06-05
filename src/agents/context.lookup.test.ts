@@ -1,3 +1,5 @@
+// Covers context-token lookup caches, discovery warmup, and provider-qualified
+// model resolution.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,6 +43,8 @@ function mockContextDeps(params: {
   getRuntimeConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
+  // The context module keeps process-local cache state, so tests replace the
+  // dependency seams before asking the already-imported module for values.
   contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
   contextTestState.ensureOpenClawModelsJson.mockClear();
@@ -75,6 +79,8 @@ function createContextOverrideConfig(provider: string, model: string, contextWin
 }
 
 async function flushAsyncWarmup() {
+  // Warmup may run via timers or microtasks depending on the import path; flush
+  // both so assertions observe stable cache state.
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
     return;
@@ -172,6 +178,8 @@ describe("lookupContextTokens", () => {
   });
 
   it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
+    // The shared runtime snapshot should survive module reloads so lookups do
+    // not synchronously reread config on every import.
     const firstLoadConfigMock = vi.fn(() => ({
       models: {
         providers: {
@@ -237,6 +245,8 @@ describe("lookupContextTokens", () => {
   });
 
   it("returns the smaller window when the same bare model id is discovered under multiple providers", async () => {
+    // Bare model ids are ambiguous across providers; the conservative minimum
+    // prevents over-budget prompts when callers lack provider context.
     mockDiscoveryDeps([
       { id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 },
       { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
@@ -417,11 +427,8 @@ describe("lookupContextTokens", () => {
   });
 
   it("resolveContextTokensForModel(model-only) does not apply config scan for inferred provider", async () => {
-    // status.ts log-usage fallback calls resolveContextTokensForModel({ model })
-    // with no provider. When model = "google/gemini-2.5-pro" (OpenRouter ID),
-    // resolveProviderModelRef infers provider="google". Without the guard,
-    // resolveConfiguredProviderContextWindow would return Google's configured
-    // window and misreport context limits for the OpenRouter session.
+    // Model-only calls can infer the wrong provider from slash-containing model
+    // IDs. Config scans are reserved for explicit providers to avoid that.
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);

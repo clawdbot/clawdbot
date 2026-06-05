@@ -1,3 +1,4 @@
+// Live-checks Gemini switching after unsigned tool calls from another provider surface.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -73,6 +74,8 @@ describeLive("gemini live switch", () => {
         },
       );
 
+      // Preview models can have upstream transient failures; non-preview
+      // coverage still proves unsigned prior tool calls do not poison Gemini.
       if (modelId.includes("preview") && res.stopReason === "error") {
         return;
       }

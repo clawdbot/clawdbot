@@ -1,3 +1,4 @@
+// Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
 import {
   normalizeStringEntries,
   uniqueStrings,

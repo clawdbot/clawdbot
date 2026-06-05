@@ -1,3 +1,5 @@
+// Node proxy agent helpers adapt env or explicit proxy settings for libraries
+// that need node:http Agent instances.
 import type { Agent as HttpAgent } from "node:http";
 import { createRequire } from "node:module";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
@@ -53,6 +55,8 @@ function parseTargetUrl(targetUrl: string | URL): URL | undefined {
 }
 
 function formatNoProxyTargetUrl(targetUrl: string | URL): string | undefined {
+  // WebSocket proxy bypass uses HTTP(S) semantics so NO_PROXY default ports and
+  // hostname matching stay aligned with normal requests.
   const target = parseTargetUrl(targetUrl);
   if (target === undefined) {
     return undefined;

@@ -1,3 +1,4 @@
+// Npm Telegram Rtt Driver tests cover npm telegram rtt driver script behavior.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

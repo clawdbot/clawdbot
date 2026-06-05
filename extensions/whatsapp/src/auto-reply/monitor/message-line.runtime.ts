@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements message line behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export {

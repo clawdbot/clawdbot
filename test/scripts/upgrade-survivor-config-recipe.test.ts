@@ -1,3 +1,4 @@
+// Upgrade Survivor Config Recipe tests cover upgrade survivor config recipe script behavior.
 import { describe, expect, it } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,

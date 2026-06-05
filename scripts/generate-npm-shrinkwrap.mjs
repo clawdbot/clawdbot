@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Generates npm-shrinkwrap.json files that mirror pnpm lock policy for
+// published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -384,6 +386,9 @@ function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   return normalized;
 }
 
+/**
+ * Resolves the npm command invocation used by shrinkwrap generation.
+ */
 export function createNpmShrinkwrapCommand(args, options = {}) {
   return resolveNpmRunner({
     comSpec: options.comSpec,
@@ -395,6 +400,9 @@ export function createNpmShrinkwrapCommand(args, options = {}) {
   });
 }
 
+/**
+ * Reads a positive integer env override for shrinkwrap subprocess limits.
+ */
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const text = String(env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {
@@ -407,6 +415,9 @@ export function readPositiveIntEnv(name, fallback, env = process.env) {
   return value;
 }
 
+/**
+ * Builds execFileSync options with bounded timeout and output buffer limits.
+ */
 export function createNpmShrinkwrapExecOptions(invocation, cwd, env = process.env) {
   return {
     cwd,
@@ -1299,6 +1310,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 export {
+  // Test-facing helpers cover lockfile normalization, override merging, and
+  // changed-package detection without invoking npm.
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,

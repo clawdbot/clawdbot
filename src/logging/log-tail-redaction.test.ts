@@ -1,11 +1,13 @@
+// Log tail redaction tests cover scrubbing sensitive data from tailed logs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { captureEnv } from "../test-utils/env.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+const originalEnv = captureEnv(["OPENCLAW_CONFIG_PATH"]);
 let tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
@@ -15,11 +17,7 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
+  originalEnv.restore();
   setLoggerOverride(null);
   resetLogger();
   await Promise.all(tempDirs.map((dir) => fs.rm(dir, { force: true, recursive: true })));

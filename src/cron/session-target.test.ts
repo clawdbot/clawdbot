@@ -1,3 +1,4 @@
+// Session target tests cover target resolution for cron-created sessions.
 import { describe, expect, it } from "vitest";
 import {
   resolveCronCurrentSessionTarget,

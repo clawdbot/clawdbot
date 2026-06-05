@@ -1,3 +1,5 @@
+// Covers message-action reply/thread inheritance, single-reply modes, and
+// outbound mirror route preparation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.reply typing policy behavior.
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 

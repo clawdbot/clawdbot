@@ -1,3 +1,4 @@
+// Deepinfra tests cover image generation provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 

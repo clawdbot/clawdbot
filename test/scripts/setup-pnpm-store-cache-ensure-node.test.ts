@@ -1,3 +1,4 @@
+// Setup Pnpm Store Cache Ensure Node tests cover setup pnpm store cache ensure node script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

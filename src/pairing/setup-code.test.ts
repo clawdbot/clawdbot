@@ -1,6 +1,7 @@
 // Tests setup code generation and environment-derived defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
+import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: vi.fn(async () => ({
@@ -182,10 +183,17 @@ describe("pairing setup code", () => {
     expectResolvedSetupOk(resolved, { authLabel: params.expectedAuthLabel });
   }
 
+  let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
+
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    gatewayEnvSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_PORT",
+    ]);
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "";
+    process.env.OPENCLAW_GATEWAY_PORT = "";
   });
 
   beforeEach(() => {
@@ -193,7 +201,8 @@ describe("pairing setup code", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   });
 
   it.each([

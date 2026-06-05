@@ -1,3 +1,4 @@
+// Google Meet plugin module implements voice call gateway behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   GatewayClient,

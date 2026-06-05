@@ -1,3 +1,4 @@
+// Context-engine initialization registers built-in engines before plugin resolution.
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 
 /**

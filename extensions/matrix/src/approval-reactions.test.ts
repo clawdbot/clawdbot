@@ -1,3 +1,4 @@
+// Matrix tests cover approval reactions plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixApprovalReactionHint,

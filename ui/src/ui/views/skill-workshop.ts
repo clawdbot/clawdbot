@@ -1,3 +1,4 @@
+// Control UI view renders skill workshop screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";

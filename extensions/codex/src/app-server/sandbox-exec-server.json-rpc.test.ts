@@ -1,3 +1,4 @@
+// Codex tests cover sandbox exec server.json rpc plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { sendResult } from "./sandbox-exec-server/json-rpc.js";

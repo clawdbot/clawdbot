@@ -14,6 +14,7 @@ function loadSecuritySurface(): SecuritySurface {
   });
 }
 
+/** Collect Feishu plugin security findings through the lazy bundled-plugin facade. */
 export const collectFeishuSecurityAuditFindings: SecuritySurface["collectFeishuSecurityAuditFindings"] =
   ((...args) =>
     loadSecuritySurface().collectFeishuSecurityAuditFindings(

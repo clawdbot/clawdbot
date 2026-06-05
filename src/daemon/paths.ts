@@ -1,3 +1,4 @@
+/** Resolves daemon state, home, and generated task-script paths. */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayProfileSuffix } from "./constants.js";
@@ -27,6 +28,8 @@ function resolveUserPathWithHome(input: string, home?: string): string {
     return path.resolve(expanded);
   }
   if (windowsAbsolutePath.test(trimmed) || windowsUncPath.test(trimmed)) {
+    // Do not path.resolve Windows paths on POSIX hosts during cross-platform
+    // service rendering; it would corrupt drive and UNC prefixes.
     return trimmed;
   }
   return path.resolve(trimmed);
@@ -40,6 +43,8 @@ export function resolveGatewayStateDir(env: Record<string, string | undefined>):
   }
   const home = resolveHomeDir(env);
   const suffix = resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE);
+  // Profile suffixes isolate managed service files while preserving the default
+  // historical ~/.openclaw state path.
   return path.join(home, `.openclaw${suffix}`);
 }
 

@@ -1,3 +1,4 @@
+// Matrix tests cover mentions plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 // Mock the runtime before importing resolveMentions

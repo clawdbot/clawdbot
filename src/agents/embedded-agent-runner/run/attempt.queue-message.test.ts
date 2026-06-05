@@ -1,3 +1,4 @@
+// Coverage for queued steering message commit and cancellation behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelQueuedSteeringMessage,
@@ -7,6 +8,8 @@ import {
 
 describe("embedded OpenClaw queued steering cancellation", () => {
   it("waits for the queued user message_end transcript boundary", async () => {
+    // A queued steer is only durable once the user message_end event lands in
+    // the active transcript.
     let emit!: (event: unknown) => void;
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       getSteeringMessages: () => [],
@@ -45,6 +48,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {
+    // Timeout cleanup must surgically remove the queued text entry without
+    // damaging rich unrelated queued content.
     const unrelatedImage = {
       type: "image",
       source: { type: "base64", data: "abc", media_type: "image/png" },
@@ -144,6 +149,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("keeps queued steering pending when auto-retry starts after agent_end", async () => {
+    // agent_end can be followed by an automatic retry; do not cancel the queued
+    // steer until the retry path either commits it or truly terminates.
     vi.useFakeTimers();
     try {
       let emit!: (event: unknown) => void;

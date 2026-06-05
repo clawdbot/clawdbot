@@ -1,3 +1,4 @@
+// Canvas tests cover bundle a2ui plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

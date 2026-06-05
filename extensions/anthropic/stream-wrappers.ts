@@ -1,3 +1,7 @@
+/**
+ * Anthropic stream wrappers. They add beta headers, service tier/fast-mode
+ * payload fields, and thinking-prefill cleanup around provider stream functions.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -101,6 +105,7 @@ function hasConfiguredAnthropicBeta(extraParams: Record<string, unknown> | undef
   return configured.some((beta) => typeof beta === "string" && beta.trim().length > 0);
 }
 
+/** Resolve configured Anthropic beta headers from extra model params. */
 export function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   _modelId: string,
@@ -128,6 +133,7 @@ export function resolveAnthropicBetas(
   return betas.size > 0 ? [...betas] : undefined;
 }
 
+/** Wrap a stream function to merge OpenClaw and configured Anthropic beta headers. */
 export function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
@@ -148,6 +154,7 @@ export function createAnthropicBetaHeadersWrapper(
   };
 }
 
+/** Wrap a stream function with the Anthropic fast-mode service tier. */
 export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -155,6 +162,7 @@ export function createAnthropicFastModeWrapper(
   return createAnthropicServiceTierWrapper(baseStreamFn, resolveAnthropicFastServiceTier(enabled));
 }
 
+/** Wrap a stream function with an explicit Anthropic service tier when allowed. */
 export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: AnthropicServiceTier,
@@ -181,6 +189,7 @@ export function createAnthropicServiceTierWrapper(
   };
 }
 
+/** Wrap a stream function to strip trailing assistant prefill before thinking requests. */
 export function createAnthropicThinkingPrefillWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -191,6 +200,7 @@ export function createAnthropicThinkingPrefillWrapper(
   });
 }
 
+/** Resolve Anthropic fast-mode setting from model extra params. */
 export function resolveAnthropicFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
@@ -199,6 +209,7 @@ export function resolveAnthropicFastMode(
   );
 }
 
+/** Resolve Anthropic service tier from model extra params. */
 export function resolveAnthropicServiceTier(
   extraParams: Record<string, unknown> | undefined,
 ): AnthropicServiceTier | undefined {
@@ -211,6 +222,7 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
+/** Compose all Anthropic stream wrappers for one provider/model context. */
 export function wrapAnthropicProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
@@ -236,6 +248,7 @@ export function wrapAnthropicProviderStream(
   );
 }
 
+/** Test-only hooks for Anthropic stream wrapper behavior. */
 export const testing = {
   log,
   stripTrailingAssistantPrefillWhenThinking: stripTrailingAnthropicAssistantPrefillWhenThinking,

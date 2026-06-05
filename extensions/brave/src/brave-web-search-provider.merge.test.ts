@@ -1,3 +1,4 @@
+// Brave tests cover brave web search provider.merge plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 

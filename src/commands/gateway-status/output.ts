@@ -1,3 +1,4 @@
+/** Text and JSON rendering for the gateway status command. */
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { writeRuntimeJson } from "../../runtime.js";
@@ -12,6 +13,7 @@ import {
 } from "./helpers.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
+/** Warning emitted when gateway status finds degraded or surprising probe state. */
 export type GatewayStatusWarning = {
   code: string;
   message: string;
@@ -38,6 +40,7 @@ function readModelPricingDegradedDetail(health: unknown): string | null {
     : "pricing bootstrap or refresh failed";
 }
 
+/** Chooses the reachable target that best represents the user's requested gateway. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -49,6 +52,7 @@ export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   );
 }
 
+/** Builds operator-facing warnings from probe, discovery, and SSH tunnel results. */
 export function buildGatewayStatusWarnings(params: {
   probed: GatewayStatusProbedTarget[];
   sshTarget: string | null;
@@ -88,6 +92,8 @@ export function buildGatewayStatusWarnings(params: {
     });
   }
   if (reachable.length > 1) {
+    // Multiple reachable gateways are valid for isolated profiles but surprising
+    // enough to call out before users debug against the wrong process.
     warnings.push({
       code: "multiple_gateways",
       message:
@@ -137,6 +143,7 @@ export function buildGatewayStatusWarnings(params: {
   return warnings;
 }
 
+/** Writes the machine-readable gateway status payload and exits nonzero when unreachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -193,6 +200,7 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
+/** Writes the human-readable gateway status report and exits nonzero when unreachable. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;

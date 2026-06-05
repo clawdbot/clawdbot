@@ -1,3 +1,4 @@
+// Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
 import {
   isAuthErrorMessage,
@@ -10,6 +11,7 @@ import {
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
+      // Z.ai 1311 is a plan entitlement failure, not rate limiting.
       const raw =
         '{"code":1311,"message":"The model you requested is not available in your current plan"}';
       expect(isBillingErrorMessage(raw)).toBe(true);
@@ -102,6 +104,8 @@ describe("Z.ai vendor error codes (#48988)", () => {
 
 describe("server error status classification", () => {
   it("classifies a bare internal server error status as server error", () => {
+    // Bare status lines from providers should classify, while prefixed prose is
+    // too ambiguous and tested below as a non-match.
     expect(isServerErrorMessage("status: internal server error")).toBe(true);
   });
 

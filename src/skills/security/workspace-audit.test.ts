@@ -1,3 +1,4 @@
+// Workspace audit tests cover security audit results for workspace skill folders.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";

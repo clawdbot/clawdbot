@@ -1,3 +1,4 @@
+// Next-run regression tests cover unresolved next-run state after service updates.
 import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultIsolatedRunner,

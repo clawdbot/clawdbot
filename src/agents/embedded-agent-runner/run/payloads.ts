@@ -1,3 +1,6 @@
+/**
+ * Builds embedded-agent payload objects from attempt inputs and outcomes.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

@@ -1,3 +1,4 @@
+// Runtime logging tests cover plugin runtime log routing and verbosity behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loggingMocks = vi.hoisted(() => {

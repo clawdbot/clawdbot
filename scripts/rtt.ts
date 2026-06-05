@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Rtt script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

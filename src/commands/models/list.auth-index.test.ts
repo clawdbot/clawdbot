@@ -1,3 +1,4 @@
+// Model auth index tests cover auth index loading while listing models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

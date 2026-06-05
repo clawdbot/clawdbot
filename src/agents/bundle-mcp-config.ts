@@ -1,3 +1,7 @@
+/**
+ * Merges bundled plugin MCP servers with user-configured MCP servers for agent
+ * runtimes.
+ */
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -44,6 +48,7 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
   return next as BundleMcpServerConfig;
 }
 
+/** Loads enabled bundled MCP servers and overlays user config by server name. */
 export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;

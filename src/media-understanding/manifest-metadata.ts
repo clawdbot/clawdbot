@@ -1,3 +1,5 @@
+// Manifest metadata registry builder for media-understanding providers without
+// loading plugin runtime code.
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
@@ -24,6 +26,8 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
     for (const [providerId, metadata] of Object.entries(
       plugin.mediaUnderstandingProviderMetadata ?? {},
     )) {
+      // Metadata is trusted only when the plugin also declares the corresponding
+      // provider contract; stray manifest fields must not register providers.
       const normalizedProviderId = normalizeMediaProviderId(providerId);
       if (!normalizedProviderId || !declaredProviders.has(normalizedProviderId)) {
         continue;

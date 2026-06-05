@@ -1,3 +1,5 @@
+// Gateway chat runtime projects agent events into chat/session subscriber
+// streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";

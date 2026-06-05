@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for non-secret model-auth marker helpers.
+ * Verifies core, plugin, env-var, OAuth, AWS, and secret-ref marker handling.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 

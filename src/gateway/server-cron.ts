@@ -1,5 +1,7 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+// Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
+// plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -114,6 +116,7 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
   };
 }
 
+/** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;

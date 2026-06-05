@@ -1,3 +1,4 @@
+// Control UI test helper supports custom theme setup.
 import { normalizeImportedCustomTheme } from "../ui/custom-theme.ts";
 
 export function createTweakcnThemePayload() {

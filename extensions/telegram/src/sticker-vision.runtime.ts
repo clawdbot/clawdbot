@@ -1,3 +1,4 @@
+// Telegram plugin module implements sticker vision behavior.
 import {
   findModelInCatalog,
   loadModelCatalog,

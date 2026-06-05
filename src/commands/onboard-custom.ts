@@ -1,3 +1,9 @@
+/**
+ * Interactive custom provider onboarding prompts and endpoint verification.
+ *
+ * The pure config helpers are re-exported from here because setup and configure
+ * flows import this command module as their custom API entrypoint.
+ */
 import { modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -126,6 +132,8 @@ async function requestVerification(params: {
     );
     if (res.ok && !isJsonVerificationResponse(res)) {
       const contentType = res.headers.get("content-type") || "missing content-type";
+      // HTML success often means the user pasted a dashboard/root URL instead
+      // of the API base path; fail before storing a config that cannot run.
       return {
         ok: false,
         error: `Verification returned ${contentType} instead of JSON. Check the provider base URL; OpenAI-compatible endpoints usually need a /v1 path prefix.`,
@@ -171,6 +179,8 @@ async function promptBaseUrlAndKey(params: {
   const baseUrl = baseUrlInput.trim();
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
   let apiKeyInput: SecretInput | undefined;
+  // Keep the persisted key shape from the credential helper while also keeping
+  // the resolved plaintext only for the immediate verification probe.
   const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     provider: providerHint,
@@ -239,6 +249,7 @@ async function applyCustomApiRetryChoice(params: {
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
+/** Prompts for a custom API provider, verifies it, and persists the selected model. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -273,6 +284,8 @@ export async function promptCustomApiConfig(params: {
   while (true) {
     let verifiedFromProbe = false;
     if (!compatibility) {
+      // Probe in a fixed order so unknown endpoints converge to a concrete
+      // config API value before we write provider metadata.
       const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
       const openaiProbe = await requestOpenAiVerification({
         baseUrl,
@@ -328,6 +341,8 @@ export async function promptCustomApiConfig(params: {
       break;
     }
 
+    // Explicit compatibility choices still get a live probe so setup does not
+    // persist endpoints or models that fail the selected protocol.
     const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
     const result =
       compatibility === "anthropic"
@@ -389,6 +404,8 @@ export async function promptCustomApiConfig(params: {
         baseUrl,
         providerId: providerIdInput,
       });
+      // Alias validation must use the post-collision provider id, otherwise a
+      // renamed endpoint could incorrectly collide with the requested id.
       const modelRef = modelKey(resolvedProvider.providerId, modelId);
       return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
     },

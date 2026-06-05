@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Runs gateway startup and QA scenarios while checking hot CPU observations.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -350,6 +351,9 @@ async function main(params = {}) {
   }
 }
 
+/**
+ * Test-only access to the gateway CPU scenario parser and runner helpers.
+ */
 export const testing = {
   hasPrivateQaDist,
   parseArgs,

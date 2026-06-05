@@ -1,3 +1,8 @@
+/**
+ * Runtime contract tests for auth profile forwarding.
+ * Ensures CLI and embedded agent runtimes receive the selected auth profile
+ * across provider aliases and plugin runtime manifests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for token usage normalization.
+ * Verifies provider usage aliases, OpenAI-compatible output, and prompt-token derivation.
+ */
 import { describe, expect, it } from "vitest";
 import {
   deriveContextPromptTokens,

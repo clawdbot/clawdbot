@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message dispatch.media behavior.
 type TelegramMediaContextPayload = {
   MediaPath?: string;
   MediaUrl?: string;

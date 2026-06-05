@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements model behavior.
 import {
   resolveAgentEffectiveModelPrimary,
   resolveDefaultAgentId,

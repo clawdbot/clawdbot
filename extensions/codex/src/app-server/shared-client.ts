@@ -1,3 +1,7 @@
+/**
+ * Owns shared and isolated Codex app-server client startup, auth application,
+ * lease tracking, and teardown.
+ */
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
@@ -142,12 +146,14 @@ async function resolveCodexAppServerClientStartContext(
   return { agentDir, usesNativeAuth, authProfileId, startOptions };
 }
 
+/** Gets or starts a shared Codex app-server client without retaining a lease. */
 export async function getSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
   return (await acquireSharedCodexAppServerClient(options)).client;
 }
 
+/** Gets or starts a shared Codex app-server client and records a release lease. */
 export async function getLeasedSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
@@ -159,6 +165,7 @@ export async function getLeasedSharedCodexAppServerClient(
   return acquired.client;
 }
 
+/** Releases one outstanding lease for a shared Codex app-server client. */
 export function releaseLeasedSharedCodexAppServerClient(client: CodexAppServerClient): boolean {
   const state = getSharedCodexAppServerClientState();
   const releases = state.leasedReleases.get(client);
@@ -260,6 +267,7 @@ async function acquireSharedCodexAppServerClient(
   }
 }
 
+/** Starts a non-shared Codex app-server client owned entirely by the caller. */
 export async function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
@@ -284,6 +292,7 @@ export async function createIsolatedCodexAppServerClient(
   }
 }
 
+/** Clears and closes all shared clients for deterministic tests. */
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
@@ -294,6 +303,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   }
 }
 
+/** Clears and closes all shared clients. */
 export function clearSharedCodexAppServerClient(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
@@ -303,6 +313,7 @@ export function clearSharedCodexAppServerClient(): void {
   }
 }
 
+/** Clears and closes the shared entry only if it still owns the supplied client. */
 export function clearSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): boolean {
@@ -320,6 +331,7 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
+/** Detaches the shared entry without closing the client when it still matches. */
 export function detachSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): boolean {
@@ -336,6 +348,7 @@ export function detachSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
+/** Retains the matching shared client and returns a release callback. */
 export function retainSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): (() => void) | undefined {
@@ -351,6 +364,7 @@ export function retainSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
+/** Marks a matching shared client to close after active leases/acquires drain. */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): { activeLeases: number; closed: boolean } | undefined {
@@ -373,6 +387,7 @@ export function retireSharedCodexAppServerClientIfCurrent(
   return undefined;
 }
 
+/** Clears a matching shared client and waits for its process to exit. */
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
   options?: {
@@ -394,6 +409,7 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   return false;
 }
 
+/** Clears all shared clients and waits for their processes to exit. */
 export async function clearSharedCodexAppServerClientAndWait(options?: {
   exitTimeoutMs?: number;
   forceKillDelayMs?: number;
@@ -433,6 +449,7 @@ function clearSharedClientEntryIfCurrent(key: string, client: CodexAppServerClie
   }
 }
 
+/** Clears a matching shared client only when no lease or acquire currently claims it. */
 export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
   client: CodexAppServerClient | undefined,
 ): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {

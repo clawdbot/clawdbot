@@ -1,3 +1,4 @@
+// Vitest ui config wires the ui test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { jsdomOptimizedDeps } from "./vitest.shared.config.ts";
 import { unitUiIncludePatterns } from "./vitest.ui-paths.mjs";

@@ -1,3 +1,5 @@
+// Gateway node catalog builder.
+// Merges paired devices, approved node records, and live websocket sessions.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
@@ -5,9 +7,6 @@ import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
-// Known node catalog merges three sources: legacy paired devices, approved
-// node-pairing records, and live websocket sessions. Live data wins for current
-// metadata; pairing records keep approval and last-seen history.
 type KnownNodeDevicePairingSource = {
   nodeId: string;
   displayName?: string;

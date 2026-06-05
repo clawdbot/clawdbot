@@ -1,3 +1,4 @@
+// Matrix tests cover file sync store plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

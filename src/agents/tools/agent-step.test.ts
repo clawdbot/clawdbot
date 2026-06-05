@@ -1,3 +1,5 @@
+// Agent step tests cover nested session handoff, transcript bookkeeping, and
+// MCP runtime retirement after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep, testing } from "./agent-step.js";
@@ -26,6 +28,8 @@ describe("runAgentStep", () => {
   });
 
   it("retires bundle MCP runtime after successful nested agent steps", async () => {
+    // Nested steps disable automatic delivery and carry provenance so the reply
+    // returns through the message tool path instead of the channel.
     const gatewayCalls: CallGatewayOptions[] = [];
     testing.setDepsForTest({
       callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {

@@ -1,3 +1,8 @@
+/**
+ * SSH sandbox backend implementation.
+ *
+ * Creates remote workspace copies, builds remote exec specs, and exposes a backend-neutral filesystem bridge.
+ */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {

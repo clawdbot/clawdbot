@@ -1,3 +1,4 @@
+// Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -69,6 +70,71 @@ function parseChangedLaneOutput(output: string): {
     paths: string[];
     lanes: ReturnType<typeof createEmptyChangedLanes>;
   };
+}
+
+function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
+  const absolutePath = path.join(repoDir, filePath);
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, contents, "utf8");
+}
+
+function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
+  const dir = makeTempRepoRoot(tempDirs, prefix);
+  git(dir, ["init", "-q", "--initial-branch=main"]);
+  writeRepoFile(dir, "README.md", "base\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "base",
+  ]);
+  const staleBase = git(dir, ["rev-parse", "HEAD"]);
+
+  git(dir, ["switch", "-q", "-c", "feature"]);
+  writeRepoFile(dir, "src/pr.ts", "export const pr = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "feature",
+  ]);
+
+  git(dir, ["switch", "-q", "main"]);
+  writeRepoFile(dir, "src/main-only.ts", "export const mainOnly = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "main only",
+  ]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "merge",
+    "--no-ff",
+    "feature",
+    "-m",
+    "synthetic merge",
+  ]);
+
+  return { dir, staleBase };
 }
 
 afterEach(() => {
@@ -249,6 +315,23 @@ describe("scripts/changed-lanes", () => {
         process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = previousRawSync;
       }
     }
+  });
+
+  it("uses the merge commit first parent instead of a stale PR payload base", () => {
+    const { dir, staleBase } = createSyntheticMergeRepo("openclaw-changed-lanes-merge-");
+
+    expect(listChangedPathsFromGit({ base: staleBase, cwd: dir, includeWorktree: false })).toEqual([
+      "src/main-only.ts",
+      "src/pr.ts",
+    ]);
+    expect(
+      listChangedPathsFromGit({
+        base: staleBase,
+        cwd: dir,
+        includeWorktree: false,
+        mergeHeadFirstParent: true,
+      }),
+    ).toEqual(["src/pr.ts"]);
   });
 
   it("ignores local Crabbox metadata in the default local diff", () => {

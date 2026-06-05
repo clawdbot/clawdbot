@@ -1,3 +1,4 @@
+// Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "./runtime-channel.js";
 

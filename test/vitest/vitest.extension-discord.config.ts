@@ -1,3 +1,4 @@
+// Vitest extension discord config wires the extension discord test shard.
 import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-channel-single-config.ts";
 
 export function createExtensionDiscordVitestConfig(

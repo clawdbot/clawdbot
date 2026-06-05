@@ -1,3 +1,4 @@
+// Slack plugin module implements progress blocks behavior.
 import { createHash } from "node:crypto";
 import type { AnyChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";

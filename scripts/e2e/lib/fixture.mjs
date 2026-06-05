@@ -1,3 +1,4 @@
+// Shared command fixture dispatcher for E2E scripts.
 import { configCommands } from "./fixtures/config.mjs";
 import { pluginCommands } from "./fixtures/plugins.mjs";
 import { workspaceCommands } from "./fixtures/workspace.mjs";

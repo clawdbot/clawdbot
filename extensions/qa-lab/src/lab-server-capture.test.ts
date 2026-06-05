@@ -1,3 +1,4 @@
+// Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { mapCaptureEventForQa, probeTcpReachability } from "./lab-server-capture.js";

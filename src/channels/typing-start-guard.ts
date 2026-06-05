@@ -1,3 +1,4 @@
+// Circuit breaker for channel typing-start calls.
 type TypingStartGuard = {
   run: (start: () => Promise<void> | void) => Promise<"started" | "skipped" | "failed" | "tripped">;
   reset: () => void;

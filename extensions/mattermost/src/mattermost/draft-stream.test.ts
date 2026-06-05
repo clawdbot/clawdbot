@@ -1,3 +1,4 @@
+// Mattermost tests cover draft stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";

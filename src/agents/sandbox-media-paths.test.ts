@@ -1,3 +1,4 @@
+// Verifies sandbox media paths resolve through bridge and workspace-only guards.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSandboxBridgeReadFile,
@@ -44,6 +45,7 @@ describe("createSandboxBridgeReadFile", () => {
   });
 
   it("keeps workspace-only container paths under the sandbox workspace mount", async () => {
+    // Container paths must stay inside the remote workspace mount when workspaceOnly is set.
     const resolvePath = vi.fn(({ filePath }: { filePath: string }) => {
       if (filePath === "/tmp/sandbox-root") {
         return {

@@ -1,3 +1,4 @@
+// Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
@@ -76,6 +77,8 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
+    // OpenAI provider id alone is not enough: custom compatible endpoints may
+    // not support Codex runtime assumptions or model contracts.
     const config = {
       models: {
         providers: {
@@ -98,6 +101,8 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("ignores malformed agents.list while scanning best-effort config", () => {
+    // Runtime collection is diagnostic/setup support, so malformed optional
+    // agent lists should not hide valid defaults-level runtime requirements.
     const config = {
       agents: {
         defaults: {

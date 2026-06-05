@@ -1,3 +1,8 @@
+/**
+ * Builds the operator-facing effective inventory for bundle MCP tools. Runtime
+ * schema policy quarantines incompatible tools and emits notices instead of
+ * silently hiding them.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -20,8 +25,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
-// MCP tools often expose low-signal labels identical to their names. Prefer the
-// display resolver in that case so inventory output stays readable.
 function resolveMcpToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (

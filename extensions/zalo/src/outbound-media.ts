@@ -1,3 +1,4 @@
+// Zalo plugin module implements outbound media behavior.
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";

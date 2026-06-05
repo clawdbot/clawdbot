@@ -1,3 +1,4 @@
+// Line tests cover outbound media plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({

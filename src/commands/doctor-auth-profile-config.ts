@@ -1,3 +1,4 @@
+/** Protects active auth profile metadata while doctor repairs broader config state. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -153,6 +154,12 @@ function ensureAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileC
   return auth.profiles as Record<string, AuthProfileConfig>;
 }
 
+/**
+ * Restores valid metadata for auth profiles still referenced by active model config.
+ *
+ * Doctor can rebuild or prune auth config; this guard keeps active profiles usable when their
+ * provider/mode metadata can be inferred from the before/after config or profile id.
+ */
 export function protectActiveAuthProfileConfig(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;

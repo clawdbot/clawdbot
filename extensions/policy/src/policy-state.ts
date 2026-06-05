@@ -1,3 +1,4 @@
+// Policy plugin module implements policy state behavior.
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";

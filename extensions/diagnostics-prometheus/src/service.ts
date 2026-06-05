@@ -1,3 +1,4 @@
+// Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   DiagnosticEventMetadata,

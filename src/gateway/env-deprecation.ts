@@ -1,3 +1,5 @@
+// Gateway legacy environment warning.
+// Emits a one-shot notice for ignored pre-OpenClaw environment prefixes.
 import { isVitestRuntimeEnv } from "../infra/env.js";
 
 // Legacy env warnings are process-wide and intentionally one-shot so normal
@@ -15,6 +17,8 @@ export function warnLegacyOpenClawEnvVars(env: NodeJS.ProcessEnv = process.env):
 
   const prefixCounts = new Map<LegacyEnvPrefix, number>();
   for (const key of Object.keys(env)) {
+    // Count by prefix only; never print env names or values because some legacy
+    // names may still encode account/provider secrets.
     const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
     if (prefix) {
       prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);

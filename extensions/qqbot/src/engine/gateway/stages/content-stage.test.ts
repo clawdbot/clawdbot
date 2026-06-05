@@ -1,3 +1,4 @@
+// Qqbot tests cover content stage plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { QueuedMessage } from "../message-queue.js";
 import { buildUserContent } from "./content-stage.js";

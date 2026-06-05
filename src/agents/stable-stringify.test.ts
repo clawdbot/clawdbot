@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for deterministic unknown-value stringification.
+ * Verifies sorted keys, repeated references, cycles, binary data, and errors.
+ */
 import { describe, expect, it } from "vitest";
 import { stableStringify } from "./stable-stringify.js";
 

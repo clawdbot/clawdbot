@@ -1,3 +1,4 @@
+// Verifies OpenAI Responses replay preserves reasoning and response item ids.
 import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
@@ -88,6 +89,7 @@ async function runAbortedOpenAIResponsesStream(params: {
   }>;
   replayResponsesItemIds?: boolean;
 }) {
+  // Abort after payload capture so tests inspect serialization without network I/O.
   const controller = new AbortController();
   controller.abort();
   let payload: Record<string, unknown> | undefined;
@@ -224,6 +226,7 @@ describe("openai-responses reasoning replay", () => {
   });
 
   it("does not replay a signed assistant message id after its reasoning item was pruned", async () => {
+    // Signed message ids are only safe to replay when their preceding reasoning item survived.
     expect(
       resolveReplayableResponsesMessageId({
         replayResponsesItemIds: true,

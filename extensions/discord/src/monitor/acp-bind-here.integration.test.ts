@@ -1,3 +1,4 @@
+// Discord tests cover acp bind here.integration plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 

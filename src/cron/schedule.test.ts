@@ -1,3 +1,4 @@
+// Cron schedule tests cover schedule parsing and next-run calculations.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   coerceFiniteScheduleNumber,

@@ -1,3 +1,4 @@
+// Message tool API tests cover channel message tool descriptors and runtime calls.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({

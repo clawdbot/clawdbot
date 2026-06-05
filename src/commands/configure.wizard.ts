@@ -1,3 +1,4 @@
+// Main interactive configure/update wizard implementation.
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -371,6 +372,7 @@ async function promptWebToolsConfig(
   };
 }
 
+/** Run the configure/update wizard, optionally limited to selected sections. */
 export async function runConfigureWizard(
   opts: ConfigureWizardParams,
   runtime: RuntimeEnv = defaultRuntime,

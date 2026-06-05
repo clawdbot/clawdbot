@@ -1,3 +1,4 @@
+// Mistral setup module handles plugin onboarding behavior.
 import {
   createDefaultModelPresetAppliers,
   type OpenClawConfig,

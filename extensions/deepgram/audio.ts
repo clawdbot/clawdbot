@@ -1,3 +1,4 @@
+// Deepgram plugin module implements audio behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,

@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements outbound behavior.
 import { resolveQaChannelAccount } from "./accounts.js";
 import { buildQaTarget, parseQaTarget, sendQaBusMessage } from "./bus-client.js";
 import type { CoreConfig } from "./types.js";

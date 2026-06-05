@@ -1,3 +1,4 @@
+// Browser tests cover chrome mcp.snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildAiSnapshotFromChromeMcpSnapshot,

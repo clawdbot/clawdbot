@@ -1,7 +1,11 @@
+/**
+ * Stdio MCP launch config normalization.
+ * Accepts OpenClaw and upstream MCP config field names, keeping only
+ * command/args/env/cwd needed to spawn a stdio server.
+ */
 import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
-// Stdio MCP launch config normalization. Raw bundle config can use OpenClaw or
-// upstream field names; this keeps only command/args/env/cwd needed to spawn.
+/** Normalized stdio MCP server launch config. */
 export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];

@@ -1,3 +1,4 @@
+// Whatsapp tests cover last route plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { trackBackgroundTask } from "./last-route.js";
 

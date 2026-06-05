@@ -1,3 +1,4 @@
+// Kill tree tests cover process tree termination and platform-specific fallbacks.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 

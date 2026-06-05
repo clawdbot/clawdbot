@@ -1,3 +1,4 @@
+// Telegram plugin module implements raw update log behavior.
 const MAX_RAW_UPDATE_STRING = 500;
 const MAX_RAW_UPDATE_ARRAY = 20;
 const REDACTED_TELEGRAM_FIELD = "[redacted]";

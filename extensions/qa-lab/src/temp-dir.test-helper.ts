@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements temp dir helper behavior.
 import {
   tempWorkspace,
   resolvePreferredOpenClawTmpDir,

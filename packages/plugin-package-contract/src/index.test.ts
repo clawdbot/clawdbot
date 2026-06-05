@@ -1,3 +1,4 @@
+// Plugin Package Contract tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import {
   EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS,

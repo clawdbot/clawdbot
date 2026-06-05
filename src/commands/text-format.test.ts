@@ -1,3 +1,4 @@
+// Text format tests cover command-facing shortening helpers.
 import { describe, expect, it } from "vitest";
 import { shortenText } from "./text-format.js";
 

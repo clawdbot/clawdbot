@@ -1,3 +1,9 @@
+/**
+ * Browser route utility functions.
+ *
+ * Wraps async handlers, profile lookup, JSON errors, and route value coercion
+ * shared across browser control endpoints.
+ */
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
@@ -5,6 +11,7 @@ function normalizeOptionalString(value: string): string | undefined {
   return value.trim() || undefined;
 }
 
+/** Convert thrown async route errors into next(error) calls for the HTTP layer. */
 export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHandler {
   return (req, res) => handler(req, res);
 }
@@ -13,6 +20,7 @@ export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHan
  * Extract profile name from query string or body and get profile context.
  * Query string takes precedence over body for consistency with GET routes.
  */
+/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
@@ -39,10 +47,12 @@ export function getProfileContext(
   }
 }
 
+/** Send a simple JSON error response. */
 export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
 }
 
+/** Coerce route values to strings while treating nullish values as empty. */
 export function toStringOrEmpty(value: unknown) {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return normalizeOptionalString(String(value)) ?? "";
@@ -50,6 +60,7 @@ export function toStringOrEmpty(value: unknown) {
   return "";
 }
 
+/** Coerce route numeric values from numbers or decimal strings. */
 export function toNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -62,6 +73,7 @@ export function toNumber(value: unknown) {
   return undefined;
 }
 
+/** Coerce route boolean values from booleans or common string forms. */
 export function toBoolean(value: unknown) {
   if (typeof value === "boolean") {
     return value;
@@ -79,6 +91,7 @@ export function toBoolean(value: unknown) {
   return undefined;
 }
 
+/** Coerce a route value to a string array when every entry is a string. */
 export function toStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

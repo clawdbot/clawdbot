@@ -1,3 +1,4 @@
+// Matrix helper module supports formatting behavior.
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixHtml,

@@ -1,3 +1,4 @@
+// Qa Matrix tests cover sync plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixQaObservedEvent } from "./events.js";
 import {

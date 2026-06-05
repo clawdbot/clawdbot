@@ -1,3 +1,4 @@
+// Openai plugin module implements openai chatgpt oauth behavior.
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";

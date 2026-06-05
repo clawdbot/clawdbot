@@ -1,3 +1,4 @@
+// Irc tests cover control chars plugin behavior.
 import { describe, expect, it } from "vitest";
 import { hasIrcControlChars, isIrcControlChar, stripIrcControlChars } from "./control-chars.js";
 

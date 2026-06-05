@@ -1,3 +1,4 @@
+// Line plugin module implements probe behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";

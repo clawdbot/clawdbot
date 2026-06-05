@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Code Mode Namespace Live script supports OpenClaw repository automation.
 import { performance } from "node:perf_hooks";
 import { Type } from "typebox";
 import type { Model } from "../../packages/agent-core/src/llm.js";

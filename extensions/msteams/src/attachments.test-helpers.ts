@@ -1,3 +1,4 @@
+// Msteams helper module supports attachments helpers behavior.
 export async function readRemoteMediaResponse(
   res: Response,
   params: { maxBytes?: number; filePathHint?: string },

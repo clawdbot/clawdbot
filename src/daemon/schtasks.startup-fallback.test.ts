@@ -1,3 +1,4 @@
+// Windows schtasks startup fallback tests cover fallback startup task behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";

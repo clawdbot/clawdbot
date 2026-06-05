@@ -1,3 +1,8 @@
+/**
+ * Session-level auth profile override rotation.
+ * Keeps automatic profile choice stable within a session while still rotating
+ * across new sessions, compactions, provider changes, and cooldowns.
+ */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";

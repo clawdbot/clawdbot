@@ -1,3 +1,4 @@
+// Barnacle Auto Response tests cover barnacle auto response script behavior.
 import { describe, expect, it } from "vitest";
 import {
   candidateLabels,

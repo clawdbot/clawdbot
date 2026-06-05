@@ -1,3 +1,4 @@
+// Discord plugin module implements message channel info behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

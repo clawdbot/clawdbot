@@ -1,3 +1,5 @@
+// Gateway tool restart tests cover the sentinel handoff that lets an agent
+// resume private work after the gateway process restarts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
@@ -163,6 +165,8 @@ describe("gateway tool restart continuation", () => {
     });
 
     expect(writeRestartSentinelMock).not.toHaveBeenCalled();
+    // The sentinel is emitted by the restart scheduler hook, so failed restart
+    // delivery can still clean up a prepared file before the process exits.
     await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
@@ -231,6 +235,8 @@ describe("gateway tool restart continuation", () => {
 
     await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
+    // Older model-facing arguments should not reintroduce system-event
+    // continuations; visible replies still go through the message tool.
     expect(requireRestartSentinelPayload().continuation).toEqual({
       kind: "agentTurn",
       message: "Reply after restart",

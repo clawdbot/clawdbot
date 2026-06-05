@@ -1,3 +1,4 @@
+// Mattermost plugin module implements gateway auth bypass behavior.
 const DEFAULT_SLASH_CALLBACK_PATH = "/api/channels/mattermost/command";
 
 type MattermostSlashCommandConfigInput = {

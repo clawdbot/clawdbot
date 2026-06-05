@@ -1,3 +1,4 @@
+// Proxy capture coverage helpers summarize which network calls were captured.
 import process from "node:process";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
 import type { CaptureProtocol } from "./types.js";

@@ -1,3 +1,4 @@
+// Core extension facade boundary tests cover allowed imports between core and extension facades.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

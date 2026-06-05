@@ -1,3 +1,4 @@
+// Coverage for provider-owned tool_stream defaults in extra params.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -17,6 +18,8 @@ type ToolStreamCase = {
 };
 
 function runToolStreamCase(params: ToolStreamCase) {
+  // Provider runtime hooks mutate the final payload through the shared
+  // extra-params harness, matching production transport composition.
   return runExtraParamsCase({
     applyModelId: params.applyModelId,
     applyProvider: params.applyProvider,
@@ -33,6 +36,8 @@ describe("extra-params: provider tool_stream support", () => {
     ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => {
+        // Z.AI and xAI require streaming tool-call deltas unless config
+        // explicitly disables the provider-owned default.
         const extraParams = { ...params.context.extraParams };
         if (
           (params.provider === "zai" || params.provider === "xai") &&

@@ -1,3 +1,4 @@
+// Discord tests cover send.components plugin behavior.
 import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";

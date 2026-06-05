@@ -1,3 +1,4 @@
+// Activation name tests cover wake/activation name normalization for talk mode.
 import { describe, expect, it } from "vitest";
 import {
   isSupportedRealtimeVoiceActivationName,

@@ -1,3 +1,4 @@
+// Mattermost plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,

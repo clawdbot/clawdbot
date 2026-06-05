@@ -1,3 +1,4 @@
+// Turn context tracker tests cover bounded context retention.
 import { describe, expect, it } from "vitest";
 import { createRealtimeVoiceTurnContextTracker } from "./turn-context-tracker.js";
 

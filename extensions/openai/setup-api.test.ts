@@ -1,3 +1,4 @@
+// Openai tests cover setup api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildOpenAISetupProvider } from "./setup-api.js";
 

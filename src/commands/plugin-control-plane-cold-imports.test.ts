@@ -1,3 +1,4 @@
+// Plugin control-plane cold-import tests guard setup and plugin metadata paths against runtime-heavy imports.
 import { afterEach, describe, expect, it } from "vitest";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {

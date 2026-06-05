@@ -1,3 +1,4 @@
+/** Auth availability index for `openclaw models list` rows. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -26,6 +27,7 @@ export type ModelListAuthIndex = {
   allowsProviderAuthAvailabilityFallback(provider: string): boolean;
 };
 
+/** Inputs used to build the auth index without re-reading process-wide state. */
 export type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
@@ -77,6 +79,7 @@ function listValidatedSyntheticAuthProviderRefs(params: {
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
 
+/** Builds a provider-auth lookup from profiles, env, config, and synthetic plugin refs. */
 export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
 ): ModelListAuthIndex {
@@ -104,6 +107,8 @@ export function createModelListAuthIndex(
     if (credential.type !== "oauth" && credential.type !== "token") {
       return false;
     }
+    // OpenAI OAuth/token profiles only authenticate provider rows when config
+    // routes OpenAI through Codex runtime semantics.
     return openAIProviderUsesCodexRuntimeByDefault({
       provider: normalizedProvider,
       config: params.cfg,
@@ -160,6 +165,8 @@ export function createModelListAuthIndex(
     params.cfg.agents?.defaults?.model,
   )?.split("/", 1)[0];
   if (primaryModelProvider === "codex") {
+    // A Codex primary model is a synthetic provider auth signal even when no
+    // normal provider key exists in the profile store.
     addSyntheticProvider("codex");
   }
 

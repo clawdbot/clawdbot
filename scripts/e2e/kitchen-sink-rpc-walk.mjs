@@ -1,3 +1,4 @@
+// Walks the kitchen-sink gateway RPC scenario for E2E smoke coverage.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

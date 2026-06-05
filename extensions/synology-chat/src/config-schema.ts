@@ -1,3 +1,4 @@
+// Synology Chat helper module supports config schema behavior.
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 

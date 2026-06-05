@@ -1,3 +1,5 @@
+// CLI backend live helpers prepare workspace/bootstrap fixtures and gateway
+// clients for live CLI backend model/runtime tests.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

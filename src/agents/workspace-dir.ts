@@ -1,3 +1,7 @@
+/**
+ * Workspace directory normalization helpers. They expand user paths, reject
+ * filesystem roots, and provide cwd fallback for runtime callers.
+ */
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 

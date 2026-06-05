@@ -1,3 +1,4 @@
+// Config schema tests cover channel plugin config schema validation and defaults.
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {

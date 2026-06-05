@@ -1,3 +1,4 @@
+// Feishu tests cover comment reaction plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {

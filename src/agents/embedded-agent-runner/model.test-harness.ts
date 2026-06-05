@@ -1,9 +1,12 @@
+// Shared model fixtures for embedded runner model resolution tests.
 import { vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 
 type DiscoverModelsMock = typeof import("../agent-model-discovery.js").discoverModels;
 
 export const makeModel = (id: string): ModelDefinitionConfig => ({
+  // Smallest valid model row used when tests only care about inheritance or
+  // provider routing.
   id,
   name: id,
   reasoning: false,
@@ -57,6 +60,8 @@ export function buildOpenAICodexForwardCompatExpectation(
   api: string;
   baseUrl: string;
 } {
+  // Expected metadata varies by requested future Codex id while preserving the
+  // native ChatGPT Responses transport contract.
   const isGpt54 = id === "gpt-5.4";
   const isGpt55 = id === "gpt-5.5";
   const isGpt54Mini = id === "gpt-5.4-mini";
@@ -101,6 +106,8 @@ export function mockDiscoveredModel(
     templateModel: unknown;
   },
 ): void {
+  // Discovery mock returns exactly one template row so fallback tests cannot
+  // accidentally pass by matching a sibling model.
   vi.mocked(discoverModelsMock).mockReturnValue({
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {

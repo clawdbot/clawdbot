@@ -1,3 +1,4 @@
+// Slack helper module supports prepare helpers behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";

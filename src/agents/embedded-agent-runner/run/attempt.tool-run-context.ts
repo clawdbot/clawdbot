@@ -1,3 +1,6 @@
+/**
+ * Builds tool run context passed to embedded-agent tool handlers.
+ */
 import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,

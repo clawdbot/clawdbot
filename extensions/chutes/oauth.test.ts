@@ -1,3 +1,4 @@
+// Chutes tests cover oauth plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
 

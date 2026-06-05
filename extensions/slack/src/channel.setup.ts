@@ -1,3 +1,4 @@
+// Slack plugin module implements channel.setup behavior.
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,

@@ -1,3 +1,4 @@
+// Bundled channel config runtime helper loads public bundled channel config surfaces.
 import * as bundledChannelModule from "../../../src/channels/plugins/bundled.js";
 import type {
   ChannelConfigRuntimeSchema,

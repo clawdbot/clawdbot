@@ -1,3 +1,5 @@
+// Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
+// warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applyToolPolicyPipeline,
@@ -175,6 +177,8 @@ describe("tool-policy-pipeline", () => {
   });
 
   test("bounds the warning dedupe cache so new warnings still surface", () => {
+    // Warning dedupe is bounded so long-running agents do not grow unbounded
+    // memory while still surfacing new unknown allowlist entries.
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
 

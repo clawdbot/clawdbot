@@ -1,3 +1,5 @@
+// Sandbox env sanitizer tests cover credential filtering for inherited and
+// explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
 import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
@@ -67,6 +69,8 @@ describe("sanitizeEnvVars", () => {
   });
 
   it("allows explicit configured sandbox env names that look like credentials", () => {
+    // Explicit sandbox env config is operator intent; value validation still
+    // runs, but name-based credential blocking does not.
     const result = sanitizeExplicitSandboxEnvVars({
       GEMINI_API_KEY: "dummy-gemini-api-key",
       GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",

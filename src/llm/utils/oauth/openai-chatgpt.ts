@@ -1,3 +1,4 @@
+// OpenAI ChatGPT OAuth helpers manage ChatGPT OAuth login and token refresh.
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "../../../plugin-sdk/facade-runtime.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";

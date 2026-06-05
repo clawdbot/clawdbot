@@ -1,3 +1,4 @@
+// Control UI tests cover plugin activation behavior.
 import { describe, expect, it } from "vitest";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 

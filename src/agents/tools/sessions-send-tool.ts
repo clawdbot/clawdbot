@@ -1,3 +1,8 @@
+/**
+ * sessions_send built-in tool.
+ *
+ * Sends messages to visible sessions, starts embedded runs, and optionally announces replies.
+ */
 import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";

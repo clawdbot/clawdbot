@@ -1,3 +1,4 @@
+// Context engine host compatibility tests cover host API compatibility behavior.
 import { describe, expect, it } from "vitest";
 import {
   assertContextEngineHostSupport,

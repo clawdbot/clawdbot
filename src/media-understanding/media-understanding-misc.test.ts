@@ -1,3 +1,5 @@
+// Misc media-understanding tests cover scope matching and attachment cache SSRF
+// and local path safety behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

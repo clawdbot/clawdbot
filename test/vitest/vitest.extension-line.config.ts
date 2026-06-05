@@ -1,3 +1,4 @@
+// Vitest extension line config wires the extension line test shard.
 import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-channel-single-config.ts";
 
 export function createExtensionLineVitestConfig(

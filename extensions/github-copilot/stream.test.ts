@@ -1,3 +1,4 @@
+// Github Copilot tests cover stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "./stream.js";
 import {

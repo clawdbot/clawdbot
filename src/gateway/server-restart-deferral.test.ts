@@ -1,3 +1,5 @@
+// Restart deferral tests protect queue-depth checks that delay gateway restart
+// until in-flight reply deliveries and command work have drained.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllDispatchers,

@@ -1,3 +1,4 @@
+// Memory Core tests cover provider adapter registration plugin behavior.
 import { describe, expect, it } from "vitest";
 import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 

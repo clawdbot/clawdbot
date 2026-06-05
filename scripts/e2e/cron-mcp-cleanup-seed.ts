@@ -1,3 +1,4 @@
+// Cron Mcp Cleanup Seed script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";

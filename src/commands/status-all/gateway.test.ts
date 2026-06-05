@@ -1,3 +1,4 @@
+// Status-all gateway tests cover log-tail summaries for auth and runtime diagnostic lines.
 import { describe, expect, it } from "vitest";
 import { summarizeLogTail } from "./gateway.js";
 

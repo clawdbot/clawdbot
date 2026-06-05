@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings worker child behavior.
 import { createLocalEmbeddingProviderInProcess } from "./embeddings.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 

@@ -1,3 +1,8 @@
+/**
+ * Tests read behavior and schema aliases in assembled coding tools.
+ * Covers sandbox read guards, adaptive paging, and model-facing schema
+ * normalization.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

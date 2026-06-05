@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover model catalog normalize behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";

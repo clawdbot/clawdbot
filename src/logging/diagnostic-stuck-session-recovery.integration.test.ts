@@ -1,3 +1,4 @@
+// Stuck session recovery integration tests cover end-to-end recovery diagnostics.
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {

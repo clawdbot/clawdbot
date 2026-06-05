@@ -1,3 +1,4 @@
+// Coverage for bounded trajectory flush during attempt cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 
@@ -16,6 +17,8 @@ describe("embedded attempt trajectory flush cleanup", () => {
   });
 
   it("times out a stalled trajectory flush without rejecting attempt cleanup", async () => {
+    // Trajectory persistence is diagnostic best-effort; a stalled flush should
+    // warn with recorder state but not block attempt cleanup.
     const flush = vi.fn(async () => new Promise<never>(() => {}));
     const describeFlushState = vi.fn(
       () => "pendingWrites=1 queuedBytes=704 activeOperation=file-append",

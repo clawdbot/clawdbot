@@ -1,3 +1,6 @@
+/**
+ * Resolves trigger-specific prompt injection behavior.
+ */
 import type { EmbeddedRunTrigger } from "./params.js";
 
 type EmbeddedRunTriggerPolicy = {

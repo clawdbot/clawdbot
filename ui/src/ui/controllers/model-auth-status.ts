@@ -1,3 +1,4 @@
+// Control UI controller manages model auth status gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelAuthStatusResult } from "../types.ts";
 

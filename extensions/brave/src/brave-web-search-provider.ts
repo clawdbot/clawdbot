@@ -1,3 +1,7 @@
+/**
+ * Brave web-search provider factory. It builds the agent tool definition and
+ * lazy-loads HTTP execution only when a search is run.
+ */
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   SearchConfigRecord,
@@ -89,6 +93,7 @@ function createBraveToolDefinition(
   };
 }
 
+/** Create the runtime Brave Search provider descriptor. */
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
   return {
     ...buildBraveWebSearchProviderBase(),

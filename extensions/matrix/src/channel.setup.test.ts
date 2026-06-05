@@ -1,3 +1,4 @@
+// Matrix tests cover channel.setup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 

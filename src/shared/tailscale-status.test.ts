@@ -1,3 +1,4 @@
+// Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import { resolveTailnetHostWithRunner } from "./tailscale-status.js";
 

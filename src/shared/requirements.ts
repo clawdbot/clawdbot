@@ -1,3 +1,4 @@
+// Requirement types describe runtime requirements advertised by shared surfaces.
 export type Requirements = {
   bins: string[];
   anyBins: string[];

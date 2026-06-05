@@ -1,3 +1,4 @@
+// Setup plugin config tests cover plugin choices and generated config.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";

@@ -1,3 +1,4 @@
+// Session key case tests cover preserving meaningful case in session keys.
 import { describe, expect, it } from "vitest";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";

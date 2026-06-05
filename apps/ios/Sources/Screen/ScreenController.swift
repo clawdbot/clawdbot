@@ -10,6 +10,7 @@ final class ScreenController {
 
     var urlString: String = ""
     var errorText: String?
+    var isCanvasPresented: Bool = false
 
     /// Callback invoked when an openclaw:// deep link is tapped in the canvas
     var onDeepLink: ((URL) -> Void)?
@@ -75,7 +76,23 @@ final class ScreenController {
         self.reload()
     }
 
+    func presentDefaultCanvas() {
+        self.isCanvasPresented = true
+        self.showDefaultCanvas()
+    }
+
+    func present(urlString: String) {
+        self.isCanvasPresented = true
+        self.navigate(to: urlString)
+    }
+
+    func hideCanvas() {
+        self.isCanvasPresented = false
+        self.showDefaultCanvas()
+    }
+
     func showLocalA2UI() {
+        self.isCanvasPresented = true
         guard let url = Self.localA2UIURL else {
             self.showDefaultCanvas()
             return

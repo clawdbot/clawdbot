@@ -1,3 +1,4 @@
+// Moonshot stream wrapper normalizes Moonshot streamed text and reasoning output.
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { streamSimple } from "../../stream.js";

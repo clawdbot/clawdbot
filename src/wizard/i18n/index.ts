@@ -1,3 +1,4 @@
+// Wizard i18n helpers resolve translated onboarding copy by locale.
 import { en } from "./locales/en.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";

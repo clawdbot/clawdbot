@@ -1,3 +1,4 @@
+// Control UI view renders skills grouping screen content.
 import type { SkillStatusEntry } from "../types.ts";
 
 export type SkillGroup = {

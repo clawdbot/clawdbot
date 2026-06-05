@@ -1,3 +1,4 @@
+// Warning log capture helpers collect warning output during tests.
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../logger.js";

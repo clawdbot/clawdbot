@@ -1,3 +1,4 @@
+// Verifies sessions_spawn lifecycle hooks, binding cleanup, and gateway calls.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -57,6 +58,7 @@ let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").reset
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 function getGatewayRequests(): GatewayRequest[] {
+  // Gateway call list is the observable side effect for spawn orchestration.
   return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as GatewayRequest);
 }
 
@@ -179,6 +181,7 @@ function expectThreadBindFailureCleanup(
   result: { childSessionKey?: string; error?: string },
   pattern: RegExp,
 ): void {
+  // Failed child-thread binding must delete the child before agent startup.
   expect(result.error).toMatch(pattern);
   expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
   expectSessionsDeleteWithoutAgentStart();

@@ -1,3 +1,4 @@
+// Voice Call tests cover mock plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { MockProvider } from "./mock.js";

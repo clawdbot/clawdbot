@@ -1,3 +1,4 @@
+// Check No Random Messaging Tmp tests cover check no random messaging tmp script behavior.
 import { describe, expect, it } from "vitest";
 import {
   findMessagingTmpdirCallLines,

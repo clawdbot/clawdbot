@@ -1,3 +1,4 @@
+// Vitest gateway server config wires the gateway server test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const gatewayServerBackedHttpTests = [

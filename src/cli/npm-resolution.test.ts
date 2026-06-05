@@ -1,3 +1,4 @@
+// npm resolution tests cover CLI plugin package resolution from installed roots.
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {

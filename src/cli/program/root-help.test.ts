@@ -1,3 +1,4 @@
+// Root help tests cover top-level help rendering and command visibility.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderRootHelpText } from "./root-help.js";
 

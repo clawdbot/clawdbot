@@ -1,3 +1,4 @@
+// Voice Call tests cover store plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";

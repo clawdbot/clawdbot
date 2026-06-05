@@ -1,3 +1,4 @@
+// Browser tests cover agent.snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 

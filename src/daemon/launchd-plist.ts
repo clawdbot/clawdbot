@@ -1,3 +1,4 @@
+/** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
@@ -119,6 +120,8 @@ async function readLaunchAgentEnvironmentFile(
       ].filter((candidate): candidate is string => Boolean(candidate)),
     ),
   );
+  // Corrupted wrapper args can still point near the generated env dir. Try the
+  // sibling canonical env file before giving up so repair rewrites retain env.
   for (const candidate of candidateEnvFilePaths) {
     try {
       content = await fs.readFile(candidate, "utf8");
@@ -237,6 +240,8 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
     const environment = { ...inlineEnvironment, ...fileEnvironment };
     const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+    // Track source provenance so repair flows can tell inline plist env from the
+    // generated env file and preserve both when they overlap.
     for (const key of Object.keys(inlineEnvironment)) {
       environmentValueSources[key] = Object.hasOwn(fileEnvironment, key)
         ? "inline-and-file"

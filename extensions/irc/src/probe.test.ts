@@ -1,3 +1,4 @@
+// Irc tests cover probe plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeIrc } from "./probe.js";
 

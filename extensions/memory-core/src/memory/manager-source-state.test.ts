@@ -1,3 +1,4 @@
+// Memory Core tests cover manager source state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   loadMemorySourceFileState,

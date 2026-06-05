@@ -1,3 +1,4 @@
+// Codex tests cover dynamic tools plugin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {

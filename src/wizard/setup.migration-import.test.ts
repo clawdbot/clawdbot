@@ -1,3 +1,4 @@
+// Setup migration import tests cover importing existing config into onboarding.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

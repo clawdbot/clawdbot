@@ -1,3 +1,4 @@
+// Context-engine host compatibility checks prevent engines from running on unsupported harnesses.
 import type {
   ContextEngine,
   ContextEngineHostCapability,
@@ -81,6 +82,7 @@ export function evaluateContextEngineHostSupport(params: {
   }
 
   const supported = new Set(params.host.capabilities);
+  // Capabilities are host-advertised facts; requirements stay engine-authored per operation.
   const missingCapabilities = requirements.requiredCapabilities.filter(
     (capability) => !supported.has(capability),
   );

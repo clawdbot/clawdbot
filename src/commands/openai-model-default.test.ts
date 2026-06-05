@@ -1,3 +1,4 @@
+// OpenAI model default tests cover provider-specific default model migration helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

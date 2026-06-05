@@ -1,3 +1,5 @@
+// Message-tool suppression tests cover delivery tracking, source-reply mirrors,
+// and duplicate reply prevention after message tool sends.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +11,8 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
+  // Harness exposes both emitted block replies and subscription state so tests
+  // can distinguish suppression from missing delivery tracking.
   const { session, emit } = createStubSessionHarness();
   const onBlockReply = vi.fn();
   const subscription = subscribeEmbeddedAgentSession({
@@ -27,6 +31,8 @@ async function emitMessageToolLifecycle(params: {
   media?: string;
   result: unknown;
 }) {
+  // Message tool sends are modeled as normal tool start/end events because the
+  // subscription records pending send text at start and delivery at end.
   params.emit({
     type: "tool_execution_start",
     toolName: "message",
@@ -97,6 +103,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("tracks internal-ui source replies for message-tool-only final payloads", async () => {
+    // internal-ui source replies are not ordinary channel sends; they are stored
+    // for terminal payload mirroring in message_tool_only mode.
     const { emit, subscription } = createBlockReplyHarness("message_end");
 
     await emitMessageToolLifecycle({

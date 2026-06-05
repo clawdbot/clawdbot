@@ -1,3 +1,5 @@
+// Delivery queue recovery drains pending outbound sends with backoff, crash
+// replay protection, unknown-send reconciliation, and failed-entry pruning.
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -387,6 +389,8 @@ async function drainQueuedEntry(opts: {
     entry.recoveryState === "send_attempt_started" ||
     entry.recoveryState === "unknown_after_send"
   ) {
+    // A crash after platform send start cannot be blindly replayed; adapters
+    // must reconcile whether the platform already committed the message.
     const reconciliation = await reconcileUnknownQueuedDelivery({
       entry,
       cfg: opts.cfg,

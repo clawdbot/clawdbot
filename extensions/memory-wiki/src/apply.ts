@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements apply behavior.
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,

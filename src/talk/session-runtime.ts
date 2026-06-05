@@ -1,3 +1,4 @@
+// Talk session runtime manages realtime voice session lifecycle and provider wiring.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {

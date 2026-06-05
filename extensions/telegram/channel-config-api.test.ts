@@ -1,3 +1,4 @@
+// Telegram tests cover channel config api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./channel-config-api.js";
 

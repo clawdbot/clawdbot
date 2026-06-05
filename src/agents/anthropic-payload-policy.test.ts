@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic payload policy mutation.
+ * Covers service tier, cache-control retention, prompt cache boundaries, and
+ * deprecated marker compatibility.
+ */
 import { describe, expect, it } from "vitest";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -9,6 +14,7 @@ type TestPayload = {
   messages: Array<{ role: string; content: unknown }>;
   service_tier?: string;
   system?: unknown;
+  tools?: unknown;
 };
 
 function textBlock(text: string, cache_control?: { type: "ephemeral"; ttl?: "1h" }) {
@@ -90,12 +96,169 @@ describe("anthropic payload policy", () => {
     expect(payload.messages[1]).toEqual({
       role: "user",
       content: [
-        { type: "text", text: "Hello" },
+        { type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } },
         {
           type: "tool_result",
           tool_use_id: "tool_1",
           content: "done",
           cache_control: { type: "ephemeral", ttl: "1h" },
+        },
+      ],
+    });
+  });
+
+  it("keeps a stable user marker while advancing through trailing tool results", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Investigate the cache writes." }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I'll inspect the logs." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I'll inspect the next log." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_2", content: "next chunk" }],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "Investigate the cache writes.",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+    });
+    expect(payload.messages[4]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_2",
+          content: "next chunk",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+  });
+
+  it("falls back to the latest tool result when no user text or image exists", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Continue." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_2", content: "second" }],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "tool_1", content: "first" }],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_2",
+          content: "second",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+  });
+
+  it("uses the latest tool result when only one message cache marker remains", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Claude Code identity." },
+        { type: "text", text: "Follow policy." },
+      ],
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Investigate the cache writes." }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I'll inspect the logs." }],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Investigate the cache writes." }],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_1",
+          content: "log chunk",
+          cache_control: { type: "ephemeral" },
         },
       ],
     });

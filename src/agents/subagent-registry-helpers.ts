@@ -1,3 +1,8 @@
+/**
+ * Subagent registry persistence and recovery helpers.
+ *
+ * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
+ */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

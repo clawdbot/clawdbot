@@ -1,3 +1,4 @@
+// Agent Core module implements shell output behavior.
 import {
   type ExecutionEnv,
   type ExecutionEnvExecOptions,

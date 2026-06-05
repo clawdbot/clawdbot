@@ -1,3 +1,4 @@
+// Msteams API module exposes the plugin public contract.
 import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { listDirectoryEntriesFromSources } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeMSTeamsMessagingTarget } from "./src/resolve-allowlist.js";

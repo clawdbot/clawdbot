@@ -1,3 +1,4 @@
+// Msteams tests cover shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,

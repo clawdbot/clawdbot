@@ -1,3 +1,4 @@
+// Msteams plugin module implements inbound media behavior.
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,

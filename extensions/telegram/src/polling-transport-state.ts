@@ -1,3 +1,4 @@
+// Telegram plugin module implements polling transport state behavior.
 import type { TelegramTransport } from "./fetch.js";
 
 type TelegramPollingTransportStateOpts = {

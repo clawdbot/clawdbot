@@ -1,3 +1,5 @@
+// Block-reply flush ordering tests ensure text buffered before tool execution
+// is delivered before the tool lifecycle event advances the turn.
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -6,6 +8,7 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 function firstBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string | undefined {
+  // Flush tests only care about the first emitted user-visible chunk.
   const firstCall = onBlockReply.mock.calls[0];
   if (!firstCall) {
     throw new Error("expected onBlockReply to be called");
@@ -96,6 +99,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("waits for async block replies before tool_execution_start flush", async () => {
+    // The flush callback should observe delivered block replies, not merely
+    // scheduled async promises.
     const { session, emit } = createStubSessionHarness();
     const delivered: string[] = [];
     const flushSnapshots: string[][] = [];

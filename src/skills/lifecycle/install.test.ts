@@ -1,3 +1,4 @@
+// Skill install tests cover lifecycle install flows and validation failures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

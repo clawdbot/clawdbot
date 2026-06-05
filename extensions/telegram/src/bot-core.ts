@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,

@@ -1,3 +1,4 @@
+// Opencode Go tests cover index plugin behavior.
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,

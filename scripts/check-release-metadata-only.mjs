@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Validates release metadata-only changed scopes for CI routing.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mjs";

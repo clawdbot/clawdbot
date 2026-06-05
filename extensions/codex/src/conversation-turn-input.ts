@@ -1,3 +1,4 @@
+// Codex plugin module implements conversation turn input behavior.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";

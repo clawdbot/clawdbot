@@ -1,3 +1,4 @@
+// Generate Secretref Credential Matrix script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { buildSecretRefCredentialMatrix } from "../src/secrets/credential-matrix.js";

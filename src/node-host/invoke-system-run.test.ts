@@ -27,6 +27,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -317,18 +318,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     run: (ctx: { tempHome: string }) => Promise<T>;
   }): Promise<T> {
     const tempHome = sharedOpenClawHome;
-    const previousOpenClawHomeLocal = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = tempHome;
-    saveExecApprovals(params.approvals);
-    try {
+    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      saveExecApprovals(params.approvals);
       return await params.run({ tempHome });
-    } finally {
-      if (previousOpenClawHomeLocal === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previousOpenClawHomeLocal;
-      }
-    }
+    });
   }
 
   async function withPathTokenCommand<T>(params: {
@@ -341,17 +334,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const link = path.join(binDir, "poccmd");
     fs.symlinkSync("/bin/echo", link);
     const expected = fs.realpathSync(link);
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-    try {
-      return await params.run({ link, expected });
-    } finally {
-      if (oldPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = oldPath;
-      }
-    }
+    return await withEnvAsync({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, () =>
+      params.run({ link, expected }),
+    );
   }
 
   async function withFakeRuntimeOnPath<T>(params: {
@@ -371,17 +356,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }
       sharedRuntimeBins.add(params.runtime);
     }
-    const oldPath = process.env.PATH;
-    process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
-    try {
-      return await params.run();
-    } finally {
-      if (oldPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = oldPath;
-      }
-    }
+    return await withEnvAsync(
+      { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
+      () => params.run(),
+    );
   }
 
   function expectCommandPinnedToCanonicalPath(params: {

@@ -1,3 +1,4 @@
+// Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";

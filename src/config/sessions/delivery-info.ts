@@ -1,3 +1,4 @@
+// Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveSessionStoreAgentId,
@@ -83,6 +84,8 @@ export function extractDeliveryInfo(
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
   const paths = new Set<string>();
   paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  // Delivery can be restored from any resolved agent target; store order keeps the configured
+  // primary path first while still covering per-agent stores.
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     if (target.agentId === agentId) {
       paths.add(target.storePath);
@@ -205,6 +208,8 @@ function buildFreshestSessionEntryIndex(
     ) {
       index.set(normalized, entry);
     }
+    // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
+    // opaque ids must keep exact-case delivery evidence.
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
     if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;

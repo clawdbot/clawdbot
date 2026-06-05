@@ -1,3 +1,4 @@
+// Input provenance tests cover source metadata attached to session inputs.
 import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,

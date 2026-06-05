@@ -1,3 +1,4 @@
+// Telegram tests cover model buttons plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildModelSelectionCallbackData,

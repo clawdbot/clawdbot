@@ -1,3 +1,5 @@
+// System prompt report tests cover prompt accounting, bootstrap injection
+// matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -146,6 +148,8 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("emits content hashes for prompt and tool parity checks", () => {
+    // Hashes catch same-length prompt/tool drift that plain character counts
+    // would miss when comparing runtime payloads.
     const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
     const report = buildSystemPromptReport({
       source: "run",

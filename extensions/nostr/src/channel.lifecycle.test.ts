@@ -1,3 +1,4 @@
+// Nostr tests cover channel.lifecycle plugin behavior.
 import {
   createStartAccountContext,
   createPluginRuntimeMock,

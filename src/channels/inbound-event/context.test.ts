@@ -1,3 +1,4 @@
+// Inbound event context tests cover channel event context construction before routing.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,

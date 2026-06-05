@@ -1,3 +1,4 @@
+// Qa Matrix tests cover events plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeMatrixQaObservedEvent } from "./events.js";
 

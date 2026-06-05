@@ -1,3 +1,4 @@
+/** Sanitizes MCP server/tool names into stable model-facing tool ids. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -38,6 +39,7 @@ function sanitizeToolName(raw: string): string {
   return sanitizeToolFragment(raw, "tool");
 }
 
+/** Normalizes reserved tool names for collision checks. */
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
   return new Set(
     Array.from(names ?? [], (name) => normalizeOptionalLowercaseString(name)).filter(

@@ -1,3 +1,4 @@
+// Command descriptor utility tests cover CLI descriptor helpers and Commander integration.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {

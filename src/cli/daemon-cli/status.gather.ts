@@ -1,3 +1,4 @@
+// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
@@ -164,6 +165,7 @@ function hasOwnKey(value: unknown, key: string): boolean {
 }
 
 function needsFullStatusConfigRead(raw: string, parsed: unknown): boolean {
+  // Fast reads skip config expansion; includes/env placeholders require full config IO.
   return raw.includes("$include") || raw.includes("${") || hasOwnKey(parsed, "env");
 }
 

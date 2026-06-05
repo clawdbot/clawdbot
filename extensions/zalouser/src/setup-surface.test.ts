@@ -1,3 +1,4 @@
+// Zalouser tests cover setup surface plugin behavior.
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,

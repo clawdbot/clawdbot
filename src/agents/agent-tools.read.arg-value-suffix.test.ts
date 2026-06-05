@@ -1,3 +1,7 @@
+/**
+ * Tests malformed XML arg_value suffix cleanup for read paths.
+ * The wrapper should repair path params without touching unrelated payloads.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";

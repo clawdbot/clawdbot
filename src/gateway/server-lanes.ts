@@ -1,3 +1,5 @@
+// Gateway command-lane concurrency applier.
+// Pushes config-derived agent/cron limits into the process command queue.
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

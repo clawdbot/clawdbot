@@ -1,3 +1,4 @@
+// Gateway bind URL helpers compute listener URLs from host and port settings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayBindUrlResult =

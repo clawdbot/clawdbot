@@ -1,3 +1,4 @@
+// Official channel catalog tests validate catalog metadata and entries.
 import fs from "node:fs";
 import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";

@@ -1,3 +1,4 @@
+/** Shared ACP translator bridge request/event fixtures and assertions. */
 import type {
   LoadSessionRequest,
   NewSessionRequest,
@@ -21,6 +22,7 @@ export function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   } as unknown as NewSessionRequest;
 }
 
+/** Builds a minimal ACP load-session request for translator tests. */
 export function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadSessionRequest {
   return {
     sessionId,
@@ -30,6 +32,7 @@ export function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadS
   } as unknown as LoadSessionRequest;
 }
 
+/** Builds a minimal ACP prompt request for translator tests. */
 export function createPromptRequest(
   sessionId: string,
   text: string,
@@ -42,6 +45,7 @@ export function createPromptRequest(
   } as unknown as PromptRequest;
 }
 
+/** Builds a minimal ACP set-session-mode request for translator tests. */
 export function createSetSessionModeRequest(
   sessionId: string,
   modeId: string,
@@ -53,6 +57,7 @@ export function createSetSessionModeRequest(
   } as unknown as SetSessionModeRequest;
 }
 
+/** Builds a minimal ACP set-session-config-option request for translator tests. */
 export function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
@@ -66,6 +71,7 @@ export function createSetSessionConfigOptionRequest(
   } as unknown as SetSessionConfigOptionRequest;
 }
 
+/** Builds a Gateway tool event fixture for translator tests. */
 export function createToolEvent(params: {
   sessionKey: string;
   phase: "start" | "update" | "result";
@@ -94,6 +100,7 @@ export function createToolEvent(params: {
   } as unknown as EventFrame;
 }
 
+/** Builds a Gateway final chat event fixture for translator tests. */
 export function createChatFinalEvent(sessionKey: string): EventFrame {
   return {
     event: "chat",

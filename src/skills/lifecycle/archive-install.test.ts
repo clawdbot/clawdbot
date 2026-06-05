@@ -1,3 +1,4 @@
+// Archive install tests cover archive validation, extraction, and install output.
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";

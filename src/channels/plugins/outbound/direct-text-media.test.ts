@@ -1,3 +1,4 @@
+// Direct text media outbound tests cover text and media delivery payload normalization.
 import { describe, expect, it, vi } from "vitest";
 import {
   sendPayloadMediaSequenceAndFinalize,

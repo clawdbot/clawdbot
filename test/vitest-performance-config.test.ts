@@ -1,3 +1,4 @@
+// Vitest performance config tests validate performance test project setup.
 import { describe, expect, it } from "vitest";
 import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 

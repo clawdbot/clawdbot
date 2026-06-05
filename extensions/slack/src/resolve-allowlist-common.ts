@@ -1,3 +1,4 @@
+// Slack plugin module implements resolve allowlist common behavior.
 type SlackCursorResponse = {
   response_metadata?: { next_cursor?: string };
 };

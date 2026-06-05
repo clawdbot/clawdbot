@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements apply behavior.
 import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {

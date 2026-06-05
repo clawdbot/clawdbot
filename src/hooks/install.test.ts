@@ -1,3 +1,4 @@
+// Hook install tests cover archive extraction, validation, and install records.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

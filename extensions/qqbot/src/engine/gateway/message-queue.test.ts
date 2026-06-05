@@ -1,3 +1,4 @@
+// Qqbot tests cover message queue plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
 

@@ -1,3 +1,4 @@
+// Telegram plugin module implements delivery.replies behavior.
 import { type Bot, GrammyError, InputFile } from "grammy";
 import {
   createOutboundPayloadPlan,

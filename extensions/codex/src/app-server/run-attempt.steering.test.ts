@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";

@@ -1,3 +1,4 @@
+// Realtime transcription provider registry stores transcription provider factories.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,

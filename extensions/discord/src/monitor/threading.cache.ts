@@ -1,3 +1,4 @@
+// Discord plugin module implements threading.cache behavior.
 import type { DiscordThreadStarter } from "./threading.types.js";
 
 type DiscordThreadStarterCacheEntry = {

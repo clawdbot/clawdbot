@@ -1,9 +1,11 @@
+/**
+ * Shell command plans for sandbox filesystem bridge operations.
+ *
+ * Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+ */
 import type { AnchoredSandboxEntry, PathSafetyCheck } from "./fs-bridge-path-safety.js";
 import type { SandboxResolvedFsPath } from "./fs-paths.js";
 
-/**
- * Shell command plans run by sandbox fs bridges after path-safety checks pass.
- */
 export type SandboxFsCommandPlan = {
   checks: PathSafetyCheck[];
   script: string;

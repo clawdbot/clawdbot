@@ -1,3 +1,4 @@
+// Browser tests cover cdp proxy bypass plugin behavior.
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

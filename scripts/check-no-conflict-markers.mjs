@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Rejects unresolved merge conflict markers in tracked files.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,6 +12,9 @@ function isBinaryBuffer(buffer) {
   return buffer.includes(0);
 }
 
+/**
+ * Returns one-based line numbers containing merge conflict markers.
+ */
 export function findConflictMarkerLines(content) {
   const lines = content.split(/\r?\n/u);
   const matches = [];
@@ -27,6 +31,9 @@ export function findConflictMarkerLines(content) {
   return matches;
 }
 
+/**
+ * Lists tracked files in the repository.
+ */
 export function listTrackedFiles(cwd = process.cwd()) {
   const output = execFileSync("git", ["ls-files", "-z"], {
     cwd,
@@ -38,6 +45,9 @@ export function listTrackedFiles(cwd = process.cwd()) {
     .map((relativePath) => path.join(cwd, relativePath));
 }
 
+/**
+ * Scans files for merge conflict markers, skipping binary content.
+ */
 export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync) {
   const violations = [];
   for (const filePath of filePaths) {
@@ -64,6 +74,9 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
   return violations;
 }
 
+/**
+ * Uses git grep to list tracked files that may contain conflict markers.
+ */
 export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd(), run = spawnSync) {
   const result = run(
     "git",
@@ -87,10 +100,16 @@ export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd()
     .map((relativePath) => path.join(cwd, relativePath));
 }
 
+/**
+ * Finds merge conflict markers in tracked repository files.
+ */
 export function findConflictMarkersInTrackedFiles(cwd = process.cwd()) {
   return findConflictMarkersInFiles(listTrackedFilesWithConflictMarkerCandidates(cwd));
 }
 
+/**
+ * Runs the merge conflict marker check.
+ */
 export async function main() {
   const cwd = process.cwd();
   const violations = findConflictMarkersInTrackedFiles(cwd);

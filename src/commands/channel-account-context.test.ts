@@ -1,3 +1,4 @@
+// Channel account context tests cover default account resolution and read-only account inspection fallback.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";

@@ -1,3 +1,4 @@
+// Twitch plugin module implements access control behavior.
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,

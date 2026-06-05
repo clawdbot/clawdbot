@@ -1,3 +1,5 @@
+// Gateway node registry.
+// Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
 import { randomUUID } from "node:crypto";
 import {
   addTimerTimeoutGraceMs,
@@ -8,8 +10,6 @@ import {
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-
-// Registry for connected Gateway nodes plus invoke and system.run authorization state.
 
 /** Connected node session advertised over Gateway websocket. */
 export type NodeSession = {

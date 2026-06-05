@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime reaction behavior.
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   advanceMatrixQaActorCursor,

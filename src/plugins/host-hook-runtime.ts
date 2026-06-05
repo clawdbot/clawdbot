@@ -6,6 +6,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   isPluginJsonValue,
+  type PluginAgentEventSubscriptionRegistration,
   type PluginHostCleanupReason,
   type PluginJsonValue,
   type PluginRunContextGetParams,
@@ -17,6 +18,9 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type PluginRunContextNamespaces = Map<string, PluginJsonValue>;
 type PluginRunContextByPlugin = Map<string, PluginRunContextNamespaces>;
+type PluginAgentEventSubscriptionContext = Parameters<
+  PluginAgentEventSubscriptionRegistration["handle"]
+>[1];
 
 type SchedulerJobRecord = {
   pluginId: string;
@@ -209,12 +213,11 @@ export function setPluginRunContext(params: {
   return true;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
 /** Reads previously stored plugin run context for one run/plugin/namespace tuple. */
-export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
+export function getPluginRunContext(params: {
   pluginId: string;
   get: PluginRunContextGetParams;
-}): T | undefined {
+}): PluginJsonValue | undefined {
   const runId = normalizeOptionalString(params.get.runId);
   const namespace = normalizeNamespace(params.get.namespace);
   if (!runId || !namespace) {
@@ -224,7 +227,7 @@ export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>
     runId,
     pluginId: params.pluginId,
   })?.get(namespace);
-  return value === undefined ? undefined : (copyJsonValue(value) as T);
+  return value === undefined ? undefined : copyJsonValue(value);
 }
 
 export function clearPluginRunContext(params: {
@@ -306,10 +309,12 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
     let handlerActive = true;
-    const ctx = {
-      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-      getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
-        getPluginRunContext<T>({ pluginId, get: { runId, namespace } }),
+    const ctx: PluginAgentEventSubscriptionContext = {
+      getRunContext: ((namespace: string) =>
+        getPluginRunContext({
+          pluginId,
+          get: { runId, namespace },
+        })) as PluginAgentEventSubscriptionContext["getRunContext"],
       setRunContext: (namespace: string, value: PluginJsonValue) => {
         setPluginRunContext({
           pluginId,

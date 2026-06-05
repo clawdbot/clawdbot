@@ -1,3 +1,4 @@
+// Google tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./api.js";
 

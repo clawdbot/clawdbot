@@ -1,3 +1,6 @@
+/**
+ * Public BytePlus provider plugin API exports.
+ */
 export { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
 export {
   buildBytePlusModelDefinition,

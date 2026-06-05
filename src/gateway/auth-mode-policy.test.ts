@@ -1,3 +1,5 @@
+// Covers gateway auth mode validation when token and password inputs are both
+// configured directly or via secret defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

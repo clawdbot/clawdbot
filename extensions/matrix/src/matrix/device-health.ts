@@ -1,3 +1,4 @@
+// Matrix plugin module implements device health behavior.
 export type MatrixManagedDeviceInfo = {
   deviceId: string;
   displayName: string | null;

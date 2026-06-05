@@ -1,3 +1,4 @@
+/** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -61,6 +62,8 @@ function bindScheduleColumns(
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  // job_json stores config shape only; runtime state lives in split columns and
+  // state_json so state-only writes never rewrite public job config.
   return { ...rest, state: {} };
 }
 
@@ -72,6 +75,8 @@ function mergeFailureDestinationProjection(
   if (!failureDestination) {
     return configJob;
   }
+  // Empty SQLite sentinels preserve explicit undefined fields for failure
+  // destination overrides; project them back into the config sidecar shape.
   const delivery: Record<string, unknown> =
     isRecord(configJob.delivery) && !Array.isArray(configJob.delivery)
       ? { ...configJob.delivery }

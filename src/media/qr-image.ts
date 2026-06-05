@@ -1,3 +1,4 @@
+// QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";

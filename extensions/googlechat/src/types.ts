@@ -1,3 +1,4 @@
+// Googlechat type declarations define plugin contracts.
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
@@ -53,8 +54,19 @@ export type GoogleChatMessage = {
   argumentText?: string;
   sender?: GoogleChatUser;
   thread?: GoogleChatThread;
+  cardsV2?: GoogleChatCardV2[];
   attachment?: GoogleChatAttachment[];
   annotations?: GoogleChatAnnotation[];
+};
+
+export type GoogleChatActionParameter = {
+  key?: string;
+  value?: string;
+};
+
+export type GoogleChatAction = {
+  actionMethodName?: string;
+  parameters?: GoogleChatActionParameter[];
 };
 
 export type GoogleChatEvent = {
@@ -64,10 +76,64 @@ export type GoogleChatEvent = {
   space?: GoogleChatSpace;
   user?: GoogleChatUser;
   message?: GoogleChatMessage;
+  action?: GoogleChatAction;
+  common?: {
+    invokedFunction?: string;
+    parameters?: Record<string, string>;
+  };
+  commonEventObject?: {
+    invokedFunction?: string;
+    parameters?: Record<string, string>;
+  };
 };
 
 export type GoogleChatReaction = {
   name?: string;
   user?: GoogleChatUser;
   emoji?: { unicode?: string };
+};
+
+export type GoogleChatTextParagraphWidget = {
+  textParagraph: {
+    text: string;
+  };
+};
+
+export type GoogleChatButtonWidget = {
+  buttonList: {
+    buttons: Array<{
+      text: string;
+      onClick: {
+        action: {
+          function: string;
+          parameters?: GoogleChatActionParameter[];
+          loadIndicator?: "SPINNER" | "NONE";
+        };
+      };
+    }>;
+  };
+};
+
+export type GoogleChatDividerWidget = { divider: Record<string, never> };
+
+export type GoogleChatWidget =
+  | GoogleChatTextParagraphWidget
+  | GoogleChatButtonWidget
+  | GoogleChatDividerWidget;
+
+export type GoogleChatCardV2 = {
+  cardId?: string;
+  card: {
+    header?: {
+      title?: string;
+      subtitle?: string;
+      imageType?: "SQUARE" | "CIRCLE";
+    };
+    sections?: Array<{
+      header?: string;
+      collapsible?: boolean;
+      uncollapsibleWidgetsCount?: number;
+      widgets?: GoogleChatWidget[];
+    }>;
+  };
 };

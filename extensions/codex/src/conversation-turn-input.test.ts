@@ -1,3 +1,4 @@
+// Codex tests cover conversation turn input plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 

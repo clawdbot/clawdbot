@@ -1,3 +1,7 @@
+/**
+ * Claude CLI provider discovery descriptor. It exposes subscription-backed
+ * synthetic auth for catalog/runtime discovery without full Anthropic registration.
+ */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
 

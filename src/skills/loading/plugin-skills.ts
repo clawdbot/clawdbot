@@ -1,3 +1,4 @@
+// Plugin skill loaders discover and normalize skills exposed by plugin packages.
 import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";

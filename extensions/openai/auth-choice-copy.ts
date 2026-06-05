@@ -1,3 +1,4 @@
+// Openai plugin module implements auth choice copy behavior.
 export const OPENAI_API_KEY_LABEL = "OpenAI API Key";
 export const OPENAI_CHATGPT_LOGIN_LABEL = "ChatGPT Login";
 export const OPENAI_CHATGPT_LOGIN_HINT = "Sign in with your ChatGPT or Codex subscription";

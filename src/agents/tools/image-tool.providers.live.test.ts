@@ -1,3 +1,5 @@
+// Live image provider tests verify real provider calls downscale large local
+// images before sending them to OpenAI or Anthropic.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +82,8 @@ function createLargeCenterRedPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The provider hook receives JPEG bytes after optimization; parsing SOF
+  // markers keeps the downscale proof independent from image libraries.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {

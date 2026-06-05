@@ -67,7 +67,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
-    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank, comment, header, fence, or empty-checklist scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
 

@@ -1,3 +1,4 @@
+// QR terminal render tests cover terminal QR output formatting.
 import QRCode from "qrcode";
 import { describe, expect, it } from "vitest";
 import { renderQrTerminal } from "./qr-terminal.ts";

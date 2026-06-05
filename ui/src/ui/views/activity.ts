@@ -1,3 +1,4 @@
+// Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "../activity-model.ts";

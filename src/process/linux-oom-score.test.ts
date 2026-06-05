@@ -1,3 +1,4 @@
+// Linux OOM score tests cover best-effort process OOM score adjustment.
 import { describe, expect, it } from "vitest";
 import {
   hardenedEnvForChildOomWrap,

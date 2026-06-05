@@ -1,3 +1,4 @@
+// Doctor post-upgrade tests cover upgrade sentinel handling, config/state repair, and plugin record migration.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

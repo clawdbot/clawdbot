@@ -1,3 +1,4 @@
+// SSRF test helpers mock network protections for request validation tests.
 import { vi } from "vitest";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import * as ssrf from "../infra/net/ssrf.js";

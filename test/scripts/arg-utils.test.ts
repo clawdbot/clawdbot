@@ -1,3 +1,4 @@
+// Arg Utils tests cover arg utils script behavior.
 import { describe, expect, it } from "vitest";
 import {
   floatFlag,

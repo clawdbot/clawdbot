@@ -1,3 +1,4 @@
+// Verifies prompt composition invariants across generated agent scenarios.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createPromptCompositionScenarios,
@@ -7,6 +8,7 @@ import {
 type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenarios>>;
 
 function getTurn(scenario: PromptScenario, id: string) {
+  // Scenario assertions use named turns so failures identify the prompt boundary.
   const turn = scenario.turns.find((entry) => entry.id === id);
   if (!turn) {
     throw new Error(`expected turn ${scenario.scenario}:${id}`);
@@ -23,6 +25,7 @@ function getScenario(fixture: ScenarioFixture, id: string): PromptScenario {
 }
 
 function countOccurrences(text: string, needle: string): number {
+  // Avoid regex escaping when checking exact prompt-body duplication.
   if (!needle) {
     return 0;
   }

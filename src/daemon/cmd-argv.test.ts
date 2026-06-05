@@ -1,3 +1,4 @@
+// Daemon command argv tests cover command argument construction.
 import { describe, expect, it } from "vitest";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 

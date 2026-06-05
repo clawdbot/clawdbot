@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Mattermost tests cover slash state plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostRegisteredCommand } from "./slash-commands.js";
@@ -46,6 +47,49 @@ const slashApi = {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
 };
+
+const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
+
+describe("slash-state global singleton", () => {
+  afterEach(() => {
+    deactivateSlashCommands();
+  });
+
+  it("anchors accountStates on globalThis", () => {
+    deactivateSlashCommands();
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["tok-a"],
+      registeredCommands: [],
+      api: slashApi,
+    });
+
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const map = globalStore[ACCOUNT_STATES_KEY];
+    expect(map).toBeInstanceOf(Map);
+    expect((map as Map<string, unknown>).has("a1")).toBe(true);
+  });
+
+  it("preserves slash state across module reloads", async () => {
+    deactivateSlashCommands();
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["tok-reload"],
+      registeredCommands: [],
+      api: slashApi,
+    });
+
+    vi.resetModules();
+    const reloaded = await import("./slash-state.js");
+    const match = reloaded.resolveSlashHandlerForToken("tok-reload");
+
+    expect(match.kind).toBe("single");
+    if (match.kind !== "single") {
+      throw new Error("expected single match after module reload");
+    }
+    expect(match.accountIds).toEqual(["a1"]);
+  });
+});
 
 describe("slash-state token routing", () => {
   it("returns single match when token belongs to one account", () => {

@@ -1,3 +1,8 @@
+/**
+ * Embedded-mode Gateway method stub.
+ *
+ * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
+ */
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -10,12 +15,6 @@ import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readPositiveIntegerParam } from "./common.js";
 
-/**
- * Local Gateway method stub used when session tools run in embedded mode.
- *
- * It implements only the Gateway methods needed by session tools and rejects
- * everything else so callers do not accidentally depend on partial behavior.
- */
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
 interface EmbeddedGatewayRuntime {

@@ -1,3 +1,5 @@
+// Video runner tests cover provider request wiring, auth/config precedence, and
+// provider output handling for video attachments.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";

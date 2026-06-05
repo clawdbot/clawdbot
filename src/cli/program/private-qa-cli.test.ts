@@ -1,3 +1,4 @@
+// Private QA CLI tests cover private QA command registration and filesystem behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Control UI module implements chat model ref behavior.
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 export type { ChatModelOverride } from "./chat-model-ref.types.ts";

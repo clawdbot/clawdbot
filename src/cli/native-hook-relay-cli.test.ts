@@ -1,3 +1,4 @@
+// Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { describe, expect, it, vi } from "vitest";
 import {
   createReadableTextStream,

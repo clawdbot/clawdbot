@@ -1,3 +1,4 @@
+// Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";

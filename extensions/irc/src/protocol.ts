@@ -1,3 +1,4 @@
+// Irc plugin module implements protocol behavior.
 import { randomUUID } from "node:crypto";
 import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 

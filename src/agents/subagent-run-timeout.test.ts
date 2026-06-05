@@ -1,3 +1,5 @@
+// Subagent run timeout tests keep semantic deadlines separate from the maximum
+// delay that Node timers can safely schedule.
 import { describe, expect, it } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
@@ -20,6 +22,8 @@ describe("subagent run timeout helpers", () => {
   });
 
   it("caps actual timer delays without shortening semantic durations", () => {
+    // Long-lived subagent runs retain their requested deadline even though the
+    // watchdog timer must be scheduled in bounded chunks.
     const thirtyDaysSeconds = 30 * 24 * 60 * 60;
 
     expect(resolveSubagentRunTimerDelayMs(thirtyDaysSeconds)).toBe(MAX_TIMER_TIMEOUT_MS);

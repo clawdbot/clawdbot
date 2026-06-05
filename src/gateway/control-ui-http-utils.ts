@@ -1,3 +1,5 @@
+// Control UI HTTP utilities provide tiny plain-text helpers for static routes
+// before requests enter the larger Gateway JSON/auth stack.
 import type { ServerResponse } from "node:http";
 
 // Small HTTP response helpers used by Control UI routes before they enter the

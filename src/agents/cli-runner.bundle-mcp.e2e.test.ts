@@ -1,3 +1,4 @@
+/** E2E proof for CLI runner bundle-MCP subprocess execution. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,7 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function resetBundleMcpPluginState() {
+  // Bundle MCP setup caches plugin discovery; reset between temp plugin roots.
   const { resetPluginLoaderTestStateForTest } = await import("../plugins/loader.test-fixtures.js");
   const { clearPluginSetupRegistryCache } = await import("../plugins/setup-registry.js");
   resetPluginLoaderTestStateForTest();
@@ -57,6 +59,8 @@ async function createBundleMcpFixture(params: {
   liveSession?: boolean;
   tempPrefix: string;
 }): Promise<BundleMcpFixture> {
+  // Fixture creates a real temp plugin + MCP server + fake CLI binary, but keeps
+  // it isolated from persisted plugin registry state.
   await resetBundleMcpPluginState();
   const envSnapshot = captureEnv([
     "HOME",
@@ -143,6 +147,8 @@ async function prepareBundleMcpExecutionContext(params: {
   sessionId: string;
   workspaceDir: string;
 }): Promise<PreparedCliRunContext> {
+  // Exercise bundle MCP config preparation while bypassing unrelated full
+  // runCliAgent context assembly.
   const { prepareCliBundleMcpConfig } = await import("./cli-runner/bundle-mcp.js");
   const preparedBackend = (await prepareCliBundleMcpConfig({
     enabled: true,

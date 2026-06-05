@@ -1,3 +1,4 @@
+// Memory Core tests cover manager fts state plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";

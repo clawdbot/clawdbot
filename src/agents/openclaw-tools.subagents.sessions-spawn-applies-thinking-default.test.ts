@@ -1,3 +1,4 @@
+// Verifies sessions_spawn thinking defaults, overrides, and inheritance.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -13,6 +14,7 @@ function expectResolvedThinkingPlan(input: {
   targetAgentConfig?: unknown;
   cfg?: OpenClawConfig;
 }) {
+  // Assert both the effective override and initial session patch in one place.
   const cfg =
     input.cfg ??
     ({

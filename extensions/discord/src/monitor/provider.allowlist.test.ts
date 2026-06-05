@@ -1,3 +1,4 @@
+// Discord tests cover provider.allowlist plugin behavior.
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";

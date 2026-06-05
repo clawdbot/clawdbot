@@ -1,3 +1,5 @@
+// MCP loopback tool schema projection.
+// Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
@@ -56,6 +58,8 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
 }
 
 function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
+  // MCP clients vary in union-schema support. Merge only safe object variants
+  // and keep common required fields so generated forms remain usable.
   const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;

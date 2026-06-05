@@ -1,3 +1,4 @@
+// Matrix plugin module implements async lock behavior.
 export type AsyncLock = <T>(fn: () => Promise<T>) => Promise<T>;
 
 export function createAsyncLock(): AsyncLock {

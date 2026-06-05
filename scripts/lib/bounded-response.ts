@@ -1,3 +1,4 @@
+// Bounded Response script supports OpenClaw repository automation.
 type BoundedResponseTextOptions = {
   createTooLargeError?: (message: string) => Error;
   formatTooLargeMessage?: (label: string, maxBytes: number) => string;

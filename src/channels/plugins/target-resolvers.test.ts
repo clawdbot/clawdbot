@@ -1,3 +1,4 @@
+// Target resolver tests cover channel plugin target resolution from user input and bindings.
 import { describe, expect, it } from "vitest";
 import {
   buildUnresolvedTargetResults,

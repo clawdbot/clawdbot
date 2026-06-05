@@ -1,3 +1,5 @@
+// Missing-flush-callback tests ensure subscription streams tolerate omitted
+// onBlockReplyFlush handlers during tool events.
 import { describe, expect, it, vi } from "vitest";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
@@ -9,6 +11,7 @@ type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedAgentSession", () => {
   it("does not call onBlockReplyFlush when callback is not provided", () => {
+    // A missing optional flush callback should not break tool lifecycle events.
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {
       subscribe: (fn) => {

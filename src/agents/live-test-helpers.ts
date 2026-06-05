@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for live provider tests and timeout-wrapped completions.
+ */
 import { isTruthyEnvValue } from "../infra/env.js";
 import { completeSimple } from "../llm/stream.js";
 import type { Api, Model } from "../llm/types.js";

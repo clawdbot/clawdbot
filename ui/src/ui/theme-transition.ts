@@ -1,3 +1,4 @@
+// Control UI module implements theme transition behavior.
 import type { ResolvedTheme } from "./theme.ts";
 
 export type ThemeTransitionContext = {

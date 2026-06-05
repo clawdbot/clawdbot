@@ -1,3 +1,4 @@
+// Feishu plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

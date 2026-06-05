@@ -1,3 +1,5 @@
+// Transport params runtime-contract tests cover default extra params and
+// provider transport patching for embedded OpenClaw/OpenAI execution paths.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +124,8 @@ describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", ()
   });
 
   it("composes provider preparation before transport patch resolution", () => {
+    // Provider preparation can rewrite transport context; transport-specific
+    // patches must see that prepared context before final payload mutation.
     const resolveProviderExtraParamsForTransport = vi.fn((_params: unknown) => ({
       patch: {
         parallel_tool_calls: false,

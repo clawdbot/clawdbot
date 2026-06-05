@@ -1,3 +1,4 @@
+// Voice Call plugin module implements lookup behavior.
 import type { CallId, CallRecord } from "../types.js";
 
 // Lookup helpers for active calls by internal or provider call ids.

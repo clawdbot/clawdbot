@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements model selection behavior.
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 

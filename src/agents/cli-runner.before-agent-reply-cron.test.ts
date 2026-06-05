@@ -1,3 +1,4 @@
+/** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cliBackendLog } from "./cli-runner/log.js";
@@ -74,6 +75,7 @@ const baseRunParams = {
 let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
 
 function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
+  // Stub only the prepared context shape runCliAgent needs after the hook gate.
   return {
     params,
     started: Date.now(),
@@ -152,6 +154,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       const syntheticTurnLog = logInfoSpy.mock.calls
         .map(([message]) => message)
         .find((message) => message.startsWith("cli synthetic turn:"));
+      // Synthetic turn logs prove the branch without leaking hook reply text.
       expect(syntheticTurnLog).toContain("provider=codex-cli");
       expect(syntheticTurnLog).toContain("model=<synthetic>");
       expect(syntheticTurnLog).toContain("requestedModel=gpt-5.5");

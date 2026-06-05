@@ -1,3 +1,4 @@
+// Session store target tests cover session-store path resolution for command surfaces.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreTargets } from "./session-store-targets.js";
 

@@ -1,3 +1,4 @@
+// Plugin SDK subpath tests cover documented SDK subpath exports and package aliases.
 import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

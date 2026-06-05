@@ -1,3 +1,4 @@
+// Discord tests cover thread title plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeGeneratedThreadTitle } from "./thread-title.js";
 

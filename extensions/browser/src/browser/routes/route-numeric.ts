@@ -1,3 +1,9 @@
+/**
+ * Strict numeric parsers for browser route input.
+ *
+ * Converts query/body values into finite integer/timeout numbers while
+ * preserving route-specific error messages for JSON responses.
+ */
 import {
   parseStrictFiniteNumber,
   parseStrictInteger,
@@ -10,6 +16,7 @@ function hasRouteInputValue(value: unknown): boolean {
   return value != null;
 }
 
+/** Read an optional finite number route field. */
 export function readRouteFiniteNumber(value: unknown, fieldName: string): number | undefined {
   const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined && hasRouteInputValue(value)) {
@@ -18,6 +25,7 @@ export function readRouteFiniteNumber(value: unknown, fieldName: string): number
   return parsed;
 }
 
+/** Read an optional finite number, treating blank strings as absent. */
 export function readOptionalRouteFiniteNumber(
   value: unknown,
   fieldName: string,
@@ -28,6 +36,7 @@ export function readOptionalRouteFiniteNumber(
   return readRouteFiniteNumber(value, fieldName);
 }
 
+/** Read an optional integer route field. */
 export function readRouteInteger(
   value: unknown,
   fieldName: string,
@@ -40,6 +49,7 @@ export function readRouteInteger(
   return parsed;
 }
 
+/** Read an optional positive integer route field. */
 export function readRoutePositiveInteger(
   value: unknown,
   fieldName: string,
@@ -52,6 +62,7 @@ export function readRoutePositiveInteger(
   return parsed;
 }
 
+/** Read and normalize an optional positive timeout value. */
 export function readRouteTimerTimeoutMs(
   value: unknown,
   fieldName = "timeoutMs",
@@ -61,6 +72,7 @@ export function readRouteTimerTimeoutMs(
   return parsed === undefined ? undefined : normalizeBrowserTimerDelayMs(parsed, opts);
 }
 
+/** Read an optional non-negative integer route field. */
 export function readRouteNonNegativeInteger(
   value: unknown,
   fieldName: string,

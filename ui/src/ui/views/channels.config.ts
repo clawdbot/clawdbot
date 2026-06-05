@@ -1,3 +1,4 @@
+// Control UI view renders channels screen content.
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements outbound base behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   listCombinedAccountIds,

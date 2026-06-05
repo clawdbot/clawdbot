@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight channel context plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
 

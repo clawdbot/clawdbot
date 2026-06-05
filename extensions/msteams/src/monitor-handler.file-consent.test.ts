@@ -1,3 +1,4 @@
+// Msteams tests cover monitor handler.file consent plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

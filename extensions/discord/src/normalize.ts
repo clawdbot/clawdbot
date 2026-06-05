@@ -1,3 +1,4 @@
+// Discord helper module supports normalize behavior.
 import { parseDiscordTarget } from "./target-parsing.js";
 
 export function normalizeDiscordMessagingTarget(raw: string): string | undefined {

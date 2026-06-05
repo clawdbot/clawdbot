@@ -1,3 +1,4 @@
+// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";

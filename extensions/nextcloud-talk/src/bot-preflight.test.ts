@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover bot preflight plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 

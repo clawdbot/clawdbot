@@ -1,3 +1,4 @@
+// Shared command runner tests cover update helper command execution and error capture.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { createGlobalCommandRunner, parseTimeoutMsOrExit } from "./shared.js";

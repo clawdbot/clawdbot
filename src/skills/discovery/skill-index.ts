@@ -1,3 +1,4 @@
+// Skill index helpers map normalized skill names to loaded skill entries.
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import type { SkillEntry } from "../types.js";

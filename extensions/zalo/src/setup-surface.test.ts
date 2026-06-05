@@ -1,3 +1,4 @@
+// Zalo tests cover setup surface plugin behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPluginSetupWizardConfigure,

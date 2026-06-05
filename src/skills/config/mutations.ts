@@ -1,3 +1,4 @@
+// Skill config mutation helpers update persisted skill settings through config retries.
 import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

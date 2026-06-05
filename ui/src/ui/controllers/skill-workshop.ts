@@ -1,3 +1,4 @@
+// Control UI controller manages skill workshop gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   SkillWorkshopAction,

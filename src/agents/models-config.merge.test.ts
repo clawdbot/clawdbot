@@ -1,3 +1,4 @@
+// Verifies models.json provider/model merge behavior and secret preservation.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -8,6 +9,8 @@ let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
 let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
 
 async function loadMergeModules() {
+  // Merge helpers depend on real manifest registry behavior; undo previous
+  // mocks before importing the module under test.
   vi.doUnmock("../plugins/manifest-registry.js");
   ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
   ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
@@ -212,6 +215,8 @@ describe("models-config merge helpers", () => {
   });
 
   it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
+    // Existing local secrets win over regenerated provider config so planning
+    // does not overwrite operator-owned credentials.
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),

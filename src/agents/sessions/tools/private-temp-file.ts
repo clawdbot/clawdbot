@@ -1,11 +1,13 @@
+/**
+ * Private temporary file helper for tool output spillover.
+ *
+ * Creates owner-only log files without reusing predictable names.
+ */
 import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * Creates private temporary log files for tool output spillover.
- */
 /** Opens a unique write stream with owner-only permissions. */
 export function createPrivateTempWriteStream(prefix: string): {
   path: string;

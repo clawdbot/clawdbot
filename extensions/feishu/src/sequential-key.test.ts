@@ -1,3 +1,4 @@
+// Feishu tests cover sequential key plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";

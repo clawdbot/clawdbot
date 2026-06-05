@@ -1,3 +1,4 @@
+// I18n registry tests cover locale bundle lookup and fallback behavior.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";

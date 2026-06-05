@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements gateway behavior.
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
 import type { ChannelGatewayContext } from "./runtime-api.js";

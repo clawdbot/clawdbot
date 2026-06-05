@@ -1,3 +1,4 @@
+// Media Understanding Common tests cover format behavior.
 import { describe, expect, it } from "vitest";
 import { formatMediaUnderstandingBody } from "./format.js";
 

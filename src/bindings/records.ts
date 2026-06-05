@@ -1,3 +1,8 @@
+/**
+ * Conversation binding record facade.
+ *
+ * Routes binding CRUD helpers through the shared session binding service.
+ */
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -7,8 +12,6 @@ import {
   type SessionBindingUnbindInput,
 } from "../infra/outbound/session-binding-service.js";
 
-// Shared binding record helpers used by both configured bindings and
-// runtime-created plugin conversation bindings.
 export async function createConversationBindingRecord(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord> {

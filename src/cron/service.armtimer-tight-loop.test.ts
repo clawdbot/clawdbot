@@ -1,3 +1,4 @@
+// Timer tight-loop tests cover cron service guards against immediate rearm loops.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";

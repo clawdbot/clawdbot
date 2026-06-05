@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings remote fetch behavior.
 import { postJson } from "./post-json.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 

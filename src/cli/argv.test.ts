@@ -1,3 +1,4 @@
+// Argv tests cover CLI argument parsing helpers and platform-specific normalization.
 import { describe, expect, it } from "vitest";
 import {
   buildParseArgv,

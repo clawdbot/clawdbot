@@ -1,3 +1,4 @@
+/** Cross-platform daemon service names, labels, and profile-aware descriptions. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Default service labels (canonical + legacy compatibility)
@@ -18,6 +19,7 @@ export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
   if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
+    // The default profile keeps the historical unqualified service names.
     return null;
   }
   return trimmed;

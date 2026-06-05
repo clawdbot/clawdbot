@@ -1,3 +1,6 @@
+/**
+ * Builds host capabilities passed into context-engine runtime calls.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";

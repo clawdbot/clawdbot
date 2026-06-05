@@ -1,3 +1,5 @@
+// Webchat media tests cover local audio embedding, voice-note metadata, data
+// image limits, reply directives, and safe local media root handling.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

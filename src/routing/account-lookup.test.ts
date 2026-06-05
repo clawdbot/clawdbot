@@ -1,3 +1,4 @@
+// Account lookup tests cover account matching by id, alias, and chat metadata.
 import { describe, expect, it } from "vitest";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
 

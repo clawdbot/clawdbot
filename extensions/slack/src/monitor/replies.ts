@@ -1,3 +1,4 @@
+// Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

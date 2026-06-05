@@ -1,3 +1,4 @@
+// Boot.md hook injects workspace boot notes into agent startup context.
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
 import { runBootOnce } from "../../../gateway/boot.js";

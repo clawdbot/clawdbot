@@ -1,3 +1,4 @@
+// Covers private transcript preparation for internal agent side effects.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +27,8 @@ describe("prepareInternalSessionEffectsTranscript", () => {
         runId: "run/with space",
       });
 
+      // The run id is filesystem-normalized and the transcript is private
+      // because internal side effects may contain hidden agent context.
       expect(sessionFile).toBe(path.join(dir, "internal-agent-runs", "run_with_space.jsonl"));
       expect(await fs.readFile(sessionFile, "utf8")).toBe("");
       expect((await fs.stat(sessionFile)).mode & 0o777).toBe(0o600);

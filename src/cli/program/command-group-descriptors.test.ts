@@ -1,3 +1,4 @@
+// Command group descriptor tests cover grouped CLI command metadata and help organization.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCommandGroupEntries,

@@ -1,3 +1,8 @@
+/**
+ * Channel ingress state resolver.
+ *
+ * Normalizes and matches route, sender, command, and access-group allowlists.
+ */
 import {
   normalizeStringEntries,
   uniqueStrings,

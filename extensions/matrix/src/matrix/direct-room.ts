@@ -1,3 +1,4 @@
+// Matrix plugin module implements direct room behavior.
 import type { MatrixClient } from "./sdk.js";
 
 function trimMaybeString(value: unknown): string | null {

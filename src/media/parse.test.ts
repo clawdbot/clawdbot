@@ -1,3 +1,4 @@
+// Media parse tests cover media reference parsing from text and payloads.
 import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput, type SplitMediaFromOutputOptions } from "./parse.js";
 

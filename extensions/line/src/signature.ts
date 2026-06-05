@@ -1,3 +1,4 @@
+// Line plugin module implements signature behavior.
 import crypto from "node:crypto";
 
 export function validateLineSignature(

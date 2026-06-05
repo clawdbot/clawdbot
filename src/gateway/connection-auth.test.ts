@@ -1,3 +1,5 @@
+// Gateway connection auth tests document token/password precedence for local,
+// remote, CLI override, env override, and config-secret connection flows.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

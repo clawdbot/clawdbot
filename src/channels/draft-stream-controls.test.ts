@@ -1,3 +1,4 @@
+// Draft stream control tests cover pause, resume, and cancellation handling for channel drafts.
 import { describe, expect, it, vi } from "vitest";
 import {
   clearFinalizableDraftMessage,

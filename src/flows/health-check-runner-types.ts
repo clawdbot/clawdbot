@@ -1,3 +1,4 @@
+// Health check runner types describe execution state for doctor health checks.
 import type {
   HealthCheck,
   HealthCheckContext,

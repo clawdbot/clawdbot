@@ -1,3 +1,4 @@
+// Discord tests cover agent control plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 

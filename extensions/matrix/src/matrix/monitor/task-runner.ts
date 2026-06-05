@@ -1,3 +1,4 @@
+// Matrix plugin module implements task runner behavior.
 import type { RuntimeLogger } from "../../runtime-api.js";
 
 export function createMatrixMonitorTaskRunner(params: {

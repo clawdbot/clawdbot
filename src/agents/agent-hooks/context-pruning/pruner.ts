@@ -1,3 +1,4 @@
+/** Context-pruning planner that trims old assistant/tool content under token pressure. */
 import type { ImageContent, TextContent, ToolResultMessage } from "../../../llm/types.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { dropThinkingBlocks } from "../../embedded-agent-runner/thinking.js";
@@ -285,6 +286,7 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
+/** Returns a pruned message array when configured thresholds are exceeded, otherwise original. */
 export function pruneContextMessages(params: {
   messages: AgentMessage[];
   settings: EffectiveContextPruningSettings;

@@ -1,3 +1,4 @@
+// Vydra provider module implements model/runtime integration.
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,

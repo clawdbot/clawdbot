@@ -1,3 +1,8 @@
+/**
+ * Session resource loader.
+ *
+ * Loads extensions, skills, prompts, themes, AGENTS files, and system prompt fragments for a cwd.
+ */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";

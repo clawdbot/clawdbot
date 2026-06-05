@@ -1,3 +1,4 @@
+// Codex tests cover context engine projection plugin behavior.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {

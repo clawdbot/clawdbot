@@ -1,3 +1,4 @@
+// Matrix setup module handles plugin onboarding behavior.
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";

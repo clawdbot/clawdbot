@@ -1,3 +1,4 @@
+// Cron snapshot tests cover runtime skill state attached to scheduled runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {

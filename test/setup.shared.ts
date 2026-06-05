@@ -1,3 +1,4 @@
+// Shared test setup installs common Vitest mocks and cleanup behavior.
 import { vi } from "vitest";
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";

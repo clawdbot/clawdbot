@@ -1,3 +1,4 @@
+// Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
 import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
 import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";

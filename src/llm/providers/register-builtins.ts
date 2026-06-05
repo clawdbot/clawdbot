@@ -1,3 +1,4 @@
+// Built-in provider registration installs the bundled provider factories.
 import { registerApiProvider, unregisterApiProviders } from "../api-registry.js";
 import type {
   Api,

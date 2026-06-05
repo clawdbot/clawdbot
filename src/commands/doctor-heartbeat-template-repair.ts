@@ -1,3 +1,4 @@
+/** Doctor repair for HEARTBEAT.md files that accidentally contain docs template wrappers. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -95,6 +96,7 @@ function linesEqual(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
+/** Classifies heartbeat template content as clean, repairable, or risky because it has user text. */
 export function analyzeHeartbeatTemplateForRepair(
   content: string,
 ): HeartbeatTemplateRepairAnalysis {
@@ -124,6 +126,7 @@ async function readCleanHeartbeatTemplate(): Promise<string> {
   return await fs.readFile(templatePath, "utf-8");
 }
 
+/** Replaces known dirty heartbeat templates with the clean runtime template when repair is enabled. */
 export async function maybeRepairHeartbeatTemplate(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;

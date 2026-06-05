@@ -1,3 +1,5 @@
+// Covers interpreter inline-eval flag detection, positional program forms, and
+// allowlist pattern matching for approval policy.
 import { describe, expect, it } from "vitest";
 import type { InterpreterInlineEvalHit } from "./inline-eval.js";
 import {

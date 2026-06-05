@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor plugin behavior.
 import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -159,6 +160,75 @@ describe("googlechat monitor bot loop protection", () => {
 });
 
 describe("googlechat monitor direct messages", () => {
+  it("creates typing messages by default", async () => {
+    const runTurn = vi.fn();
+    const buildContext = vi.fn((payload: unknown) => payload);
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            accountId: "work",
+            sessionKey: "session-1",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-googlechat-test",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
+        },
+        inbound: { buildContext, run: runTurn },
+      },
+    } as unknown as GoogleChatCoreRuntime;
+    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const account = {
+      accountId: "work",
+      config: {},
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      eventTime: "2026-03-22T00:00:00.001Z",
+      space: { name: "spaces/DM", type: "DM" },
+      message: {
+        name: "spaces/DM/messages/2",
+        text: "hello",
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await testing.processMessageWithPipeline({
+      event,
+      account,
+      config: {},
+      runtime,
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/DM",
+      text: "_OpenClaw is typing..._",
+      thread: undefined,
+    });
+    expect(runTurn).toHaveBeenCalledOnce();
+  });
+
   it("omits thread metadata from DM reply context and typing messages", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);

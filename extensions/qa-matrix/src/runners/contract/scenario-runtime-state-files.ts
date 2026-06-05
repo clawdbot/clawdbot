@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime state files behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,3 +1,6 @@
+/**
+ * Normalizes tool-call names, ids, and standalone text calls for providers.
+ */
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";

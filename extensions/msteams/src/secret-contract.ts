@@ -1,3 +1,4 @@
+// Msteams plugin module implements secret contract behavior.
 import {
   collectSecretInputAssignment,
   getChannelRecord,

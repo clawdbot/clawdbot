@@ -1,3 +1,4 @@
+// Line plugin module implements quick reply fallback behavior.
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function buildLineQuickReplyFallbackText(labels: readonly string[] | undefined): string {

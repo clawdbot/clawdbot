@@ -1,3 +1,5 @@
+// Gateway E2E test helpers.
+// Starts gateway servers, connects test clients, and handles device-auth fixtures.
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,10 +26,12 @@ import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { startGatewayServer } from "./server.js";
 
+/** Reserve a deterministic free port block for Gateway E2E tests. */
 export async function getFreeGatewayPort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
+/** Connect a GatewayClient with test defaults and resolve after hello-ok. */
 export async function connectGatewayClient(params: {
   url: string;
   token?: string;
@@ -91,7 +95,9 @@ export async function connectGatewayClient(params: {
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
-      ...(params.requestTimeoutMs !== undefined ? { requestTimeoutMs: params.requestTimeoutMs } : {}),
+      ...(params.requestTimeoutMs !== undefined
+        ? { requestTimeoutMs: params.requestTimeoutMs }
+        : {}),
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -119,6 +125,7 @@ export async function connectGatewayClient(params: {
   });
 }
 
+/** Stop a connected GatewayClient and wait for close. */
 export async function disconnectGatewayClient(client: GatewayClient): Promise<void> {
   await client.stopAndWait();
 }

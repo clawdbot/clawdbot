@@ -1,3 +1,4 @@
+// Tavily tests cover tavily client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.

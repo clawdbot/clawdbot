@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.set input files plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: Record<string, unknown> | null = null;

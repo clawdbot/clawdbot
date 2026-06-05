@@ -1,3 +1,4 @@
+// Control UI tests cover run lifecycle behavior.
 import { describe, expect, it } from "vitest";
 import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionsListResult } from "../types.ts";

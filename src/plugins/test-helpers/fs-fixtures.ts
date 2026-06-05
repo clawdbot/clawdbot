@@ -1,3 +1,4 @@
+// Filesystem fixture helpers create plugin filesystem layouts for registry and loader tests.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

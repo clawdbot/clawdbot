@@ -1,3 +1,4 @@
+// Legacy diagnostics config migrations for renamed runtime diagnostic options.
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -17,6 +18,7 @@ const MEMORY_PRESSURE_BUNDLE_RULE: LegacyConfigRule = {
   requireSourceLiteral: true,
 };
 
+/** Legacy config migration specs for diagnostics runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "diagnostics.memoryPressureBundle->memoryPressureSnapshot",

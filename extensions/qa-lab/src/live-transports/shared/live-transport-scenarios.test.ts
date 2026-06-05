@@ -1,3 +1,4 @@
+// Qa Lab tests cover live transport scenarios plugin behavior.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";

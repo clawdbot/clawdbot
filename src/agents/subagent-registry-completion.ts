@@ -1,3 +1,8 @@
+/**
+ * Subagent run completion helpers.
+ * Compares outcomes, maps them to lifecycle events, and emits completion hooks
+ * exactly once per completed child run.
+ */
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";

@@ -1,3 +1,4 @@
+// Discord tests cover resolve users plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";

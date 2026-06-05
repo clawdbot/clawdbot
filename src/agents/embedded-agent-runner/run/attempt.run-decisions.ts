@@ -1,3 +1,6 @@
+/**
+ * Resolves per-attempt runtime decisions from config and channel context.
+ */
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   resolveSessionLockMaxHoldFromTimeout,

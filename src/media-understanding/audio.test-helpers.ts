@@ -1,3 +1,5 @@
+// Shared audio provider test helpers install deterministic DNS pinning and
+// fetch request-capture mocks.
 import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";

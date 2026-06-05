@@ -1,7 +1,10 @@
+/**
+ * Channel config schema type contracts.
+ *
+ * Defines JSON Schema metadata, UI hints, and runtime parser result shapes.
+ */
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 
-// Channel config schema metadata consumed by setup, docs, and validation UI.
-// Runtime schemas stay duck-typed so plugins can provide zod-like validators.
 /** Optional UI metadata for a JSON Schema property. */
 export type ChannelConfigUiHint = {
   label?: string;

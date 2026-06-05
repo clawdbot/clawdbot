@@ -1,3 +1,4 @@
+// Slack tests cover prepare thread context root plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   applySlackThreadHistoryFilterPolicy,

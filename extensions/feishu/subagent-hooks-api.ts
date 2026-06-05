@@ -1,3 +1,4 @@
+// Feishu API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
 type FeishuSubagentHooksModule = typeof import("./src/subagent-hooks.js");

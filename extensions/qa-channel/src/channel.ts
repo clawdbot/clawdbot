@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements channel behavior.
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,

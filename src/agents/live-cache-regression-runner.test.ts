@@ -1,13 +1,16 @@
+// Verifies live cache regression baseline classification without live providers.
 import { describe, expect, it } from "vitest";
 import { testing } from "./live-cache-regression-runner.js";
-import { ProviderAuthError } from "./model-auth-runtime-shared.js";
 import {
   LiveCachePrerequisiteSkip,
   toLiveCachePrerequisiteSkip,
 } from "./live-cache-test-support.js";
+import { ProviderAuthError } from "./model-auth-runtime-shared.js";
 
 describe("live cache regression runner", () => {
   it("keeps OpenAI image cache floors observable without blocking release validation", () => {
+    // OpenAI cache metrics are provider-dependent and advisory here: keep the
+    // warning visible while avoiding a hard release gate.
     const regressions: string[] = [];
     const warnings: string[] = [];
 
@@ -60,6 +63,8 @@ describe("live cache regression runner", () => {
   });
 
   it("retries hard cache baseline misses once", () => {
+    // Hard regressions get one rerun to absorb provider cache warmup jitter;
+    // advisory warnings should not trigger reruns.
     expect(
       testing.shouldRetryBaselineFindings(
         {
@@ -124,6 +129,8 @@ describe("live cache regression runner", () => {
   });
 
   it("keeps missing Anthropic live-cache prerequisites blocking", async () => {
+    // Anthropic is the hard baseline provider, so missing prerequisites are
+    // treated as validation failures rather than advisory skips.
     const regressions: string[] = [];
     const warnings: string[] = [];
     const summary: Record<string, Record<string, unknown>> = {
@@ -305,6 +312,8 @@ describe("live cache regression runner", () => {
   });
 
   it("still rejects warmups with no cache write or cache hit evidence", () => {
+    // A successful best probe is not enough: warmup must prove either cache
+    // write or read evidence so the measured hit is meaningful.
     const findings = testing.evaluateAgainstBaseline({
       lane: "image",
       provider: "anthropic",

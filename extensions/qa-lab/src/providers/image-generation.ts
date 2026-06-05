@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements image generation behavior.
 import {
   normalizeTrimmedStringList,
   uniqueStrings,

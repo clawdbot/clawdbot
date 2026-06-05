@@ -1,3 +1,5 @@
+// Outbound message entrypoint resolves channel/target, durable capability
+// requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
@@ -33,6 +35,8 @@ let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runti
   null;
 
 function loadMessageConfigRuntime() {
+  // Keep config/runtime loading lazy so importing message helpers does not
+  // bootstrap plugin registries or gateway clients.
   messageConfigRuntimePromise ??= import("./message.config.runtime.js");
   return messageConfigRuntimePromise;
 }

@@ -1,3 +1,4 @@
+// Verifies when heartbeat guidance is injected into the default agent prompt.
 import { describe, expect, it } from "vitest";
 import { resolveHeartbeatPromptForSystemPrompt } from "./heartbeat-system-prompt.js";
 
@@ -65,6 +66,8 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
   });
 
   it("omits the heartbeat section when only a non-default agent has explicit heartbeat config", () => {
+    // The system prompt section is only for the default active agent; sibling
+    // agent heartbeat settings should not leak into the default prompt.
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {
@@ -87,6 +90,8 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
   });
 
   it("honors default-agent overrides for the prompt text", () => {
+    // Defaults establish cadence/shape, but the default agent can override the
+    // final visible prompt text.
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {

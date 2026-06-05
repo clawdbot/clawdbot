@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram ingress spool behavior.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Discord tests cover manager.ready listener plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { GatewayDispatchEvents } from "../internal/discord.js";
 import {

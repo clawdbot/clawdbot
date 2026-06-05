@@ -1,3 +1,9 @@
+/**
+ * Search setup command barrel.
+ *
+ * Keeps legacy onboard imports pointed at the shared search setup flow without
+ * pulling that flow into unrelated command modules.
+ */
 export {
   applySearchKey,
   applySearchProviderSelection,

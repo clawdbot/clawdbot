@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Creates the debug proxy CA and, on macOS, trusts it in the system keychain.
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { resolveSystemBin } from "../src/infra/resolve-system-bin.js";

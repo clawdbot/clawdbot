@@ -1,3 +1,4 @@
+// Session lifecycle event tests cover lifecycle event ordering and serialization.
 import { describe, expect, it } from "vitest";
 import { emitSessionLifecycleEvent, onSessionLifecycleEvent } from "./session-lifecycle-events.js";
 

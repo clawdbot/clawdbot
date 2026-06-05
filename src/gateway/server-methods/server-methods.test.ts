@@ -1,3 +1,5 @@
+// Shared server-method tests cover helpers and cross-method behavior that spans
+// chat, exec approvals, logs, timestamps, attachments, and history projection.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";

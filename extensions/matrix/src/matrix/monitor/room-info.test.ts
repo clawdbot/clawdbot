@@ -1,3 +1,4 @@
+// Matrix tests cover room info plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";

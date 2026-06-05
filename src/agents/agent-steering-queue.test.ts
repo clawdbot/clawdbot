@@ -1,3 +1,4 @@
+/** Tests subagent completion steering queue selection, leasing, and prompt merging. */
 import { describe, expect, it } from "vitest";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,

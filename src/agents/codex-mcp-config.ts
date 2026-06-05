@@ -1,3 +1,8 @@
+/**
+ * Projects enabled bundle MCP servers into Codex app-server thread config.
+ * The projection keeps loopback approval defaults and header env placeholders
+ * compatible with Codex's MCP config shape.
+ */
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -18,9 +23,6 @@ import type {
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
-// Projects enabled bundle MCP servers into Codex app-server thread config.
-// The projection keeps loopback approval defaults and header env placeholders
-// compatible with Codex's MCP config shape.
 export type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
@@ -64,6 +66,7 @@ function resolveCodexDefaultToolsApprovalMode(
   );
 }
 
+/** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,

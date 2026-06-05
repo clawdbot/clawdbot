@@ -1,3 +1,5 @@
+// Outbound send service chooses plugin-handled message actions or the core
+// message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -123,6 +125,8 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
+  // Plugin actions receive media access scoped to the same requester/session
+  // policy as core delivery so custom handlers cannot widen file reads.
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,

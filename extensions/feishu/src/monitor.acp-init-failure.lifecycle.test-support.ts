@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.acp init failure.lifecycle support behavior.
 import "./lifecycle.test-support.js";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

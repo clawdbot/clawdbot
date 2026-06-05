@@ -1,3 +1,4 @@
+// Command execution startup tests cover startup behavior before CLI command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());

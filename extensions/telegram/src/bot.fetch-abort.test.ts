@@ -1,3 +1,4 @@
+// Telegram tests cover bot.fetch abort plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
 

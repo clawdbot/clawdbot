@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements scenario packs behavior.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type QaScenarioPackDefinition = {

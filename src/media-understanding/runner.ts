@@ -1,3 +1,5 @@
+// Media-understanding runner resolves providers/models, local roots, auth, and
+// per-capability execution decisions for message attachments.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -98,6 +100,8 @@ async function hasProviderAuthAvailable(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<boolean> {
+  // Literal config keys are cheap to detect; defer loading model-auth until
+  // profile/env discovery is actually needed.
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
@@ -219,6 +223,8 @@ async function explicitImageModelVisionStatus(params: {
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
+  // Explicit model overrides should survive unknown catalog state, but known
+  // text-only models must not be routed into image understanding.
   if (
     isMinimaxVlmProvider(params.providerId) &&
     !isMinimaxVlmModel(params.providerId, params.model)

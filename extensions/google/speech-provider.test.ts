@@ -1,3 +1,4 @@
+// Google tests cover speech provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,

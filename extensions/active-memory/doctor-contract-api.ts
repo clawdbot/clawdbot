@@ -1,3 +1,7 @@
+/**
+ * Doctor migration contract for Active Memory state. It moves legacy per-session
+ * toggle JSON into the plugin state keyed store used by current runtimes.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -81,6 +85,7 @@ async function archiveLegacySource(params: {
   }
 }
 
+/** State migrations exposed to OpenClaw doctor for Active Memory. */
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "active-memory-session-toggles-json-to-plugin-state",

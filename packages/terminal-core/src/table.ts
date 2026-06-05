@@ -1,3 +1,4 @@
+// Terminal Core module implements table behavior.
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { displayString } from "./display-string.js";
 

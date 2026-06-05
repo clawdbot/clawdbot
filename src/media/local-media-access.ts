@@ -1,3 +1,4 @@
+// Local media access helpers validate workspace-local media path access.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";

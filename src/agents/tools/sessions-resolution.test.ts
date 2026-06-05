@@ -1,3 +1,5 @@
+// Sessions resolution tests cover alias mapping, session-id lookup, visibility
+// verification, and requester-spawned access checks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 const callGatewayMock = vi.fn();
@@ -218,6 +220,8 @@ describe("resolved session visibility checks", () => {
   });
 
   it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
+    // Exact spawned-session resolution should not depend on a truncated list
+    // response; otherwise high-volume session stores hide valid children.
     callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: { key?: string } }) => {
         if (request.method === "sessions.resolve") {

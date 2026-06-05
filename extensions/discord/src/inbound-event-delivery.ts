@@ -1,3 +1,4 @@
+// Discord plugin module implements inbound event delivery behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   asOptionalRecord as readRecord,

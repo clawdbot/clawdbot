@@ -1,3 +1,4 @@
+// Matrix plugin module implements crypto facade behavior.
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";

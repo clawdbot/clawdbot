@@ -1,3 +1,4 @@
+// Exercises per-session fallback skip markers, TTL expiry, and opt-in cache defaults.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_FALLBACK_SKIP_TTL_MS,
@@ -29,6 +30,8 @@ describe("fallback-skip-cache", () => {
   });
 
   it("treats falsy sessionId as a no-op for both mark and check", () => {
+    // Session scope is required. Without it, a permanent provider/auth failure
+    // could suppress fallback candidates across unrelated conversations.
     markFallbackCandidateSkipped({
       sessionId: undefined,
       provider: "anthropic",

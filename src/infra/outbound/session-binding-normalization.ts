@@ -1,3 +1,5 @@
+// Session-binding normalization creates stable channel/account/conversation keys
+// and removes invalid self-parent relationships.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

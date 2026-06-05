@@ -1,3 +1,9 @@
+/**
+ * Non-interactive onboarding command dispatcher.
+ *
+ * This module validates the existing config snapshot, routes local/remote
+ * setup, and handles explicit migration imports without interactive prompts.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -10,6 +16,7 @@ import { runNonInteractiveLocalSetup } from "./onboard-non-interactive/local.js"
 import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
+/** Runs a setup migration import with non-interactive prompt failures. */
 async function runNonInteractiveMigrationImport(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -18,6 +25,8 @@ async function runNonInteractiveMigrationImport(params: {
 }) {
   const providerId = params.opts.importFrom?.trim();
   if (!providerId) {
+    // Migration import cannot safely prompt in non-interactive mode; require the
+    // provider id so the import path is deterministic.
     params.runtime.error(
       `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
     );
@@ -52,12 +61,15 @@ async function runNonInteractiveMigrationImport(params: {
   });
 }
 
+/** Runs non-interactive onboarding in local, remote, or migration-import mode. */
 export async function runNonInteractiveSetup(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
+    // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
+    // does not erase malformed user state.
     runtime.error(
       `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
@@ -80,6 +92,8 @@ export async function runNonInteractiveSetup(
   }
 
   if (opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import") {
+    // Import flow owns its own commit path because migrations may intentionally
+    // shrink legacy config after extracting credentials.
     await runNonInteractiveMigrationImport({ opts, runtime, baseConfig, baseHash: snapshot.hash });
     return;
   }

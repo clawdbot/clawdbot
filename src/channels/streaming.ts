@@ -1,3 +1,4 @@
+// Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
@@ -42,6 +43,9 @@ export type StreamingCompatEntry = {
   /** Legacy native streaming transport toggle. */
   nativeStreaming?: unknown;
 };
+
+// Config reads accept legacy flat keys and current nested streaming config so
+// channel plugins can consume one normalized API surface.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

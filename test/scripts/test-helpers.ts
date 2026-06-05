@@ -1,3 +1,4 @@
+// Test script helpers provide shared filesystem and process utilities for script tests.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";

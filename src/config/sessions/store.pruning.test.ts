@@ -1,3 +1,4 @@
+// Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";

@@ -1,3 +1,5 @@
+// Artifact method tests cover collection from transcript messages, run/task
+// session lookup, list/get/download responses, and validation errors.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";

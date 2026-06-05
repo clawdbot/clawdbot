@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover talk config.contract behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildTalkConfigResponse } from "../../../src/config/talk.js";

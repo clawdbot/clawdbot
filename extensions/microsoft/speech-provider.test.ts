@@ -1,3 +1,4 @@
+// Microsoft tests cover speech provider plugin behavior.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

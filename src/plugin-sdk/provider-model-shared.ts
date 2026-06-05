@@ -1,3 +1,4 @@
+// Provider model helpers normalize model catalog entries shared by provider plugins.
 import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,

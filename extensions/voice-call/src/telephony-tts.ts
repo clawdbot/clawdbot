@@ -1,3 +1,4 @@
+// Voice Call plugin module implements telephony tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   parseTtsDirectives,

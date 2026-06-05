@@ -1,3 +1,4 @@
+// Hook loader tests cover loading bundled, workspace, and plugin hooks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

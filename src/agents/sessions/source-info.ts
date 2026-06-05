@@ -1,8 +1,10 @@
+/**
+ * Source metadata helpers for session resources.
+ *
+ * Tracks where prompts, skills, and extension-provided assets came from for diagnostics and UI.
+ */
 import type { PathMetadata } from "./package-manager.js";
 
-/**
- * Source metadata attached to prompts, skills, and extension-provided session assets.
- */
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";
 

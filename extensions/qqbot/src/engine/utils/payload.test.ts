@@ -1,3 +1,4 @@
+// Qqbot tests cover payload plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   decodeCronPayload,

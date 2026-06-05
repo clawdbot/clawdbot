@@ -1,3 +1,4 @@
+// Status command tests cover text/JSON output, gateway health, compatibility notices, and update state.
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";

@@ -1,3 +1,4 @@
+// Nvidia tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -201,6 +202,7 @@ describe("nvidia provider hooks", () => {
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext());
 
     expect(entries?.map((entry) => entry.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
@@ -219,6 +221,7 @@ describe("nvidia provider hooks", () => {
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
 
     expect(entries?.map((entry) => entry.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
@@ -287,6 +290,7 @@ describe("nvidia provider hooks", () => {
 
     const staticRows = await catalogProvider?.staticCatalog?.(buildCatalogContext());
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
+      "static:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
       "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "static:nvidia/moonshotai/kimi-k2.5",
       "static:nvidia/minimaxai/minimax-m2.7",

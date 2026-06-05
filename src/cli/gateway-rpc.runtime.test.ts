@@ -1,3 +1,4 @@
+// Gateway RPC runtime tests cover CLI gateway RPC calls and runtime error handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));

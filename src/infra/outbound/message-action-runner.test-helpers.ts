@@ -1,3 +1,5 @@
+// Message-action runner test helpers define reusable plugin fixtures, target
+// parsers, and dry-run wrappers.
 import type {
   ChannelDirectoryEntryKind,
   ChannelMessageActionName,

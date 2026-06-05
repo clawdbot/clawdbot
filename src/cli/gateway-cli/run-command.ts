@@ -1,3 +1,4 @@
+// Gateway run command option registration and lazy handoff to runtime startup.
 import type { Command } from "commander";
 
 const GATEWAY_AUTH_MODES = ["none", "token", "password", "trusted-proxy"] as const;

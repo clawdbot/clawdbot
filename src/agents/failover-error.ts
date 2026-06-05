@@ -1,3 +1,8 @@
+/**
+ * Provider/model failover error classification.
+ * Converts nested provider, transport, timeout, auth, and local coordination
+ * failures into structured failover reasons and remediation metadata.
+ */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
@@ -15,6 +20,7 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
+/** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
   readonly provider?: string;
@@ -65,6 +71,7 @@ export class FailoverError extends Error {
   }
 }
 
+/** Return true for native or serialized failover errors. */
 export function isFailoverError(err: unknown): err is FailoverError {
   if (err instanceof FailoverError) {
     return true;
@@ -77,6 +84,7 @@ export function isFailoverError(err: unknown): err is FailoverError {
   );
 }
 
+/** Map a failover reason to the closest HTTP-like status code. */
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
     case "billing":
@@ -345,6 +353,7 @@ function hasTimeoutHint(err: unknown): boolean {
   return Boolean(message && isTimeoutErrorMessage(message));
 }
 
+/** Return true when an unknown error shape represents a timeout. */
 export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
@@ -530,6 +539,7 @@ function resolveFailoverClassificationFromError(
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
+/** Resolve the failover reason represented by an unknown provider/runtime error. */
 export function resolveFailoverReasonFromError(
   err: unknown,
   providerHint?: string,
@@ -568,6 +578,7 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Build the operator command for reauthenticating one provider. */
 export function buildProviderReauthCommand(
   provider: string,
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -592,6 +603,7 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+/** Convert a failover or raw error into structured fields for logs/UI. */
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
@@ -629,6 +641,7 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+/** Convert a classified raw error into a FailoverError with optional request context. */
 export function coerceToFailoverError(
   err: unknown,
   context?: {

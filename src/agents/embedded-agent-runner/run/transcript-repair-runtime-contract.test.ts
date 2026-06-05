@@ -1,3 +1,5 @@
+// Transcript repair contract tests ensure orphaned user leaves are merged into
+// the next prompt consistently across runtime fixtures and strategy adapters.
 import {
   inlineDataUriOrphanLeaf,
   QUEUED_USER_MESSAGE_MARKER,
@@ -15,6 +17,8 @@ import {
 let restoreStrategy: (() => void) | undefined;
 
 afterEach(() => {
+  // The active merge strategy is global process state in tests; always restore
+  // it before the next runtime contract assertion.
   restoreStrategy?.();
   restoreStrategy = undefined;
 });
@@ -68,6 +72,8 @@ describe("embedded agent transcript repair runtime contract", () => {
   });
 
   it("summarizes inline data URI media instead of embedding payload bytes", () => {
+    // Inline data can be huge and provider-sensitive; repair keeps provenance
+    // while avoiding byte replay in the merged prompt.
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
       trigger: "user",
@@ -100,6 +106,8 @@ describe("embedded agent transcript repair runtime contract", () => {
   });
 
   it("allows the active transcript repair strategy to be replaced for adapter contracts", () => {
+    // Adapter-level contracts can install their own strategy, but the registry
+    // must still route through the same merge API.
     const mergeOrphanedTrailingUserPromptSpy = vi.fn((params: { prompt: string }) => ({
       prompt: `custom strategy: ${params.prompt}`,
       merged: false,

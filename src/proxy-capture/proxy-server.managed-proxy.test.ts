@@ -1,3 +1,4 @@
+// Managed proxy tests cover proxy server lifecycle with managed capture files.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";

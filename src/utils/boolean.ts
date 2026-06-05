@@ -1,3 +1,4 @@
+// Boolean utility helpers normalize string-like boolean inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 /**

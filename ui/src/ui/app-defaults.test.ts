@@ -1,3 +1,4 @@
+// Control UI tests cover app defaults behavior.
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 

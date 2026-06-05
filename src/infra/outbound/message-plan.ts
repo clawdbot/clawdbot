@@ -1,3 +1,5 @@
+// Message planning expands normalized payloads into ordered text/media send
+// units while preserving reply-to consumption rules.
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,

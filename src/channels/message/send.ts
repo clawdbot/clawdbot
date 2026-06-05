@@ -1,3 +1,8 @@
+/**
+ * Durable channel message sender.
+ *
+ * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";

@@ -1,3 +1,5 @@
+// Covers attempt-execution helper behavior around retries, Claude CLI
+// transcripts, and ACP visible text accumulation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -86,6 +88,8 @@ describe("resolveFallbackRetryPrompt", () => {
 
   it("prepends priorContextPrelude before the retry marker on fallback retry", () => {
     const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
+    // Claude fallback prelude must come before the retry marker so the model
+    // receives prior CLI context before the instruction about failure recovery.
     const result = resolveFallbackRetryPrompt({
       body: originalBody,
       isFallbackRetry: true,
@@ -150,6 +154,8 @@ describe("formatClaudeCliFallbackPrelude", () => {
   });
 
   it("formats user/assistant turns and tags tool blocks with compact hints", () => {
+    // Tool-use blocks are represented as compact hints because fallback prompts
+    // should preserve intent without replaying full tool schemas or outputs.
     const out = formatClaudeCliFallbackPrelude({
       recentTurns: [
         {
@@ -200,7 +206,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
       content: `turn ${i + 1} ${"x".repeat(80)}`,
     }));
     const out = formatClaudeCliFallbackPrelude({ recentTurns: turns }, { charBudget: 350 });
-    // Newest turn (turn 10) must be present; oldest (turn 1) must not be.
+    // Newest turn must be present; oldest turns are the first budget casualty.
     expect(out).toContain("turn 10");
     expect(out).not.toContain("turn 1 ");
   });
@@ -248,6 +254,8 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
     const sessionId = "e2e-session";
     const projectsDir = path.join(tmpHome, ".claude", "projects", "demo");
     try {
+      // Use Claude's JSONL shape directly so parser and formatter behavior stay
+      // aligned with real CLI transcripts rather than synthetic message arrays.
       await fs.mkdir(projectsDir, { recursive: true });
       const lines = [
         {

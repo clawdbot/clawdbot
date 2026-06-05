@@ -1,3 +1,4 @@
+// Slack plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createSlackWebClient } from "./client.js";

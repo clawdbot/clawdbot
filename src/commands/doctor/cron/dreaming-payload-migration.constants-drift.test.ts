@@ -1,3 +1,4 @@
+// Dreaming payload constant-drift tests cover cron doctor migration fixture drift.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

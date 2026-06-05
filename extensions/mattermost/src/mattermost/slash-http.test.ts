@@ -1,3 +1,4 @@
+// Mattermost tests cover slash http plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";

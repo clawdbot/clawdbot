@@ -1,3 +1,5 @@
+// MIME sanitization tests cover RFC parameter stripping and rejection of
+// malformed or injection-shaped MIME values.
 import { describe, expect, it } from "vitest";
 import { sanitizeMimeType } from "./apply.js";
 

@@ -1,3 +1,5 @@
+// OpenAI-compatible audio tests cover attribution headers, auth selection,
+// filename normalization, and stable malformed-response errors.
 import { describe, expect, it, vi } from "vitest";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { VERSION } from "../version.js";

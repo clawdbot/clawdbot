@@ -1,3 +1,4 @@
+// Talk session runtime tests cover provider lifecycle and session events.
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {

@@ -1,3 +1,4 @@
+// Build And Run Mac tests cover build and run mac script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

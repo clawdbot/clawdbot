@@ -1,3 +1,4 @@
+// Trajectory runtime file helpers create and append trajectory log files.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {

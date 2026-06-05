@@ -1,3 +1,4 @@
+// ClawHub verdict helpers normalize skill security verdicts from registry metadata.
 import {
   fetchClawHubSkillSecurityVerdicts,
   resolveClawHubBaseUrl,

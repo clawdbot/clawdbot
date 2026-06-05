@@ -1,3 +1,4 @@
+// Terminal Core tests cover osc progress behavior.
 import { describe, expect, it } from "vitest";
 import { createOscProgressController, supportsOscProgress } from "./osc-progress.js";
 

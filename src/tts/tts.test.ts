@@ -1,3 +1,4 @@
+// TTS integration tests cover text-to-speech command behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

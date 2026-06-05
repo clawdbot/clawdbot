@@ -1,3 +1,4 @@
+// Shared subagent tool test harness for gateway/config/queue dependency overrides.
 import { vi } from "vitest";
 import { testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -21,6 +22,7 @@ let configOverride: LoadedConfig = defaultConfig;
 async function callGatewayForTest<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
+  // Preserve the gateway call shape while giving tests a single mock to assert.
   return (await callGatewayMock(opts)) as T;
 }
 
@@ -33,6 +35,7 @@ export function resetSubagentsConfigOverride() {
 }
 
 function applySharedSubagentTestDeps() {
+  // Keep control, announce, and queue cleanup modules on the same mocked gateway.
   subagentControlTesting.setDepsForTest({
     callGateway: callGatewayForTest,
   });

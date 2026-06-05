@@ -1,3 +1,4 @@
+// Codex route warning tests cover doctor diagnostics for Codex route configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -2924,6 +2925,54 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
+  it("repairs live multi-agent Codex upgrade configs and enables Codex through allowlists", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["brave", "discord", "whatsapp"],
+          entries: {
+            brave: { enabled: true },
+            discord: { enabled: true },
+            whatsapp: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+          list: [
+            { id: "main", model: "openai-codex/gpt-5.5" },
+            { id: "meimei", model: "openai-codex/gpt-5.5" },
+            { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.cfg.agents?.list?.map((agent) => agent.model)).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.5",
+      "openai/gpt-5.5",
+    ]);
+    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    for (const agent of result.cfg.agents?.list ?? []) {
+      expect(agent.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "codex" });
+    }
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["brave", "discord", "whatsapp", "codex"]);
+    expect(result.changes.join("\n")).toContain(
+      "agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+    );
+    expect(result.changes.join("\n")).toContain(
+      "agents.list.main.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+    );
+  });
+
   it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise OpenClaw/API-key routed", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
@@ -3828,6 +3877,45 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.authProfileOverrideSource).toBe("auto");
     expect(store.main.agentHarnessId).toBeUndefined();
     expect(store.main.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("repairs Telegram direct session routes while preserving canonical OpenAI auth pins", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:telegram:default:direct:5550100999": {
+        sessionId: "s-telegram",
+        updatedAt: 1,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "auto",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "auto",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      now: 123,
+    });
+    const entry = store["agent:main:telegram:default:direct:5550100999"];
+
+    expect(result).toEqual({
+      changed: true,
+      sessionKeys: ["agent:main:telegram:default:direct:5550100999"],
+    });
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.5");
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.5");
+    expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.authProfileOverride).toBe("openai:work");
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.agentHarnessId).toBeUndefined();
+    expect(entry.agentRuntimeOverride).toBeUndefined();
   });
 
   it("repairs providerless auto Codex session overrides", () => {

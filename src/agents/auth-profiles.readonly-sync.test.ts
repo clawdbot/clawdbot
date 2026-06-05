@@ -1,3 +1,8 @@
+/**
+ * Read-only external auth overlay tests.
+ * Ensures runtime profile overlays do not persist or sync when callers request
+ * read-only auth-profile resolution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

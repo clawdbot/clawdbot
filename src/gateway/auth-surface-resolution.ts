@@ -1,3 +1,5 @@
+// Gateway auth surface resolver.
+// Centralizes credential precedence for probes and interactive clients.
 import type { OpenClawConfig } from "../config/types.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";

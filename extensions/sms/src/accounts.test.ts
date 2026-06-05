@@ -1,3 +1,4 @@
+// Sms tests cover accounts plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsConfigSchema } from "./config-schema.js";

@@ -1,3 +1,4 @@
+// Legacy MCP runtime config migrations for CLI-native transport aliases.
 import {
   defineLegacyConfigMigration,
   type LegacyConfigMigrationSpec,
@@ -18,6 +19,7 @@ const MCP_SERVER_TYPE_RULE: LegacyConfigRule = {
     Object.values(value).some((server) => isRecord(server) && isKnownCliMcpTypeAlias(server.type)),
 };
 
+/** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "mcp.servers.type->transport",

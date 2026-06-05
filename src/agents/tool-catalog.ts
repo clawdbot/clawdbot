@@ -1,3 +1,8 @@
+/**
+ * Core tool catalog and profile defaults.
+ * Drives built-in profile allowlists, group expansion, and UI section metadata
+ * for OpenClaw-owned tools.
+ */
 import {
   CRON_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
@@ -38,8 +43,6 @@ type CoreToolDefinition = {
   includeInOpenClawGroup?: boolean;
 };
 
-// The core tool catalog drives profile defaults, UI grouping, and group:openclaw
-// expansion. Keep ids normalized because policy matching is string-based.
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "fs", label: "Files" },
   { id: "runtime", label: "Runtime" },

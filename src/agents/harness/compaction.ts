@@ -1,3 +1,6 @@
+/**
+ * Routes compaction through selected native agent harnesses when supported.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";

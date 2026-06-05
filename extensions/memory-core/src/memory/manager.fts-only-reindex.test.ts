@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.fts only reindex plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

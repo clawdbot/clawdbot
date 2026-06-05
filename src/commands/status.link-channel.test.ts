@@ -1,3 +1,4 @@
+// Status link-channel tests cover channel link status summaries and redaction.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 

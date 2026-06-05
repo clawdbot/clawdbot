@@ -1,3 +1,5 @@
+// Gateway HTTP auth helpers.
+// Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -27,6 +29,8 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {
+  // Bearer parsing is intentionally minimal: callers pass the extracted token
+  // into the shared gateway auth verifier for constant-time comparison.
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
     return undefined;

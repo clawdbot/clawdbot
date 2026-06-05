@@ -1,3 +1,8 @@
+/**
+ * Read-only channel plugin discovery.
+ *
+ * Builds lightweight channel plugin views from config, manifests, and setup metadata.
+ */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

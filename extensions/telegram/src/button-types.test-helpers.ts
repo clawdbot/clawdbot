@@ -1,3 +1,4 @@
+// Telegram helper module supports button types helpers behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramInteractiveButtons, resolveTelegramInlineButtons } from "./button-types.js";
 

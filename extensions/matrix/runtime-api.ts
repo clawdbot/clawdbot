@@ -1,3 +1,4 @@
+// Matrix API module exposes the plugin public contract.
 export {
   type MatrixResolvedStringField,
   type MatrixResolvedStringValues,

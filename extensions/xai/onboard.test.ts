@@ -1,3 +1,4 @@
+// Xai tests cover onboard plugin behavior.
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,

@@ -1,12 +1,12 @@
-import { Type } from "typebox";
-import { optionalStringEnum } from "./schema/typebox.js";
-
 /**
  * TypeBox schemas for shell/process tools exposed to model providers.
  *
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
+import { Type } from "typebox";
+import { optionalStringEnum } from "./schema/typebox.js";
+
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
 /** Parameters accepted by the exec tool. */

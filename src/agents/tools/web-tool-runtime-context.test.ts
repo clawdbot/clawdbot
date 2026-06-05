@@ -1,3 +1,5 @@
+// Web tool runtime-context tests cover late-bound config snapshots and
+// plugin-owner lookups for search/fetch provider selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveWebFetchToolRuntimeContext,
@@ -23,6 +25,8 @@ vi.mock("../../secrets/runtime-state.js", () => ({
 }));
 
 function latestOwnerLookupParams(): Record<string, unknown> {
+  // Owner lookups are the evidence for whether runtime providers stay enabled
+  // or a configured plugin takes over the tool call.
   const params = mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("expected owner lookup params");

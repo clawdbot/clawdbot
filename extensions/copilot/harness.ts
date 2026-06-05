@@ -1,3 +1,4 @@
+// Copilot plugin module implements harness behavior.
 import type { CopilotClient } from "@github/copilot-sdk";
 import {
   compactWithSafetyTimeout,

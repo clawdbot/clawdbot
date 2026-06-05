@@ -1,3 +1,8 @@
+/**
+ * Discovers implicit model-provider config from plugin provider catalogs and
+ * static catalogs. It merges discovered provider models with explicit config
+ * while preserving user-controlled provider fields.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -35,9 +40,6 @@ import {
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
 
-// Discovers implicit model providers from plugin catalogs and merges them with
-// configured provider state. Discovery is scoped for live lanes and can fall
-// back to static catalogs when runtime catalog calls are unavailable.
 const log = createSubsystemLogger("agents/model-providers");
 
 const PROVIDER_IMPLICIT_MERGERS: Partial<

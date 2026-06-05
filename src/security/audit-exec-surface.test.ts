@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { captureEnv } from "../test-utils/env.js";
 import { collectExecRuntimeFindings } from "./audit.js";
 
 function hasFinding(
@@ -37,9 +38,7 @@ describe("security audit exec surface findings", () => {
   // `resolveRawHomeDir`) to a per-test tempdir so `saveExecApprovals` never
   // touches the real `~/.openclaw/exec-approvals.json` on the host running
   // the suite.
-  let previousOpenClawHome: string | undefined;
-  let previousHome: string | undefined;
-  let previousUserProfile: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempRoot = "";
   let tempCaseIndex = 0;
 
@@ -48,9 +47,7 @@ describe("security audit exec surface findings", () => {
   });
 
   beforeEach(async () => {
-    previousOpenClawHome = process.env.OPENCLAW_HOME;
-    previousHome = process.env.HOME;
-    previousUserProfile = process.env.USERPROFILE;
+    envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME", "USERPROFILE"]);
     const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
     // OPENCLAW_HOME takes precedence over HOME/USERPROFILE in resolveRawHomeDir,
@@ -64,21 +61,8 @@ describe("security audit exec surface findings", () => {
 
   afterEach(() => {
     saveExecApprovals({ version: 1, agents: {} });
-    if (previousOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = previousOpenClawHome;
-    }
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   afterAll(async () => {

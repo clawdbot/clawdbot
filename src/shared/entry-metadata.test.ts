@@ -1,3 +1,4 @@
+// Entry metadata tests cover display metadata resolution for agents and jobs.
 import { describe, expect, it } from "vitest";
 import { resolveEmojiAndHomepage } from "./entry-metadata.js";
 

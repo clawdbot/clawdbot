@@ -1,3 +1,4 @@
+// QA watchdog for shutting down orphaned gateway children and cleaning staged temp roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -48,6 +49,7 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
 }
 
 function resolveQaCleanupRoot(rawValue: string | undefined): string | null {
+  // Only cleanup roots with the QA prefix; env values are external to the child process.
   const raw = rawValue?.trim();
   if (!raw) {
     return null;

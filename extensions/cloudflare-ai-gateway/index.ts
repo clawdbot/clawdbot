@@ -1,3 +1,7 @@
+/**
+ * Bundled provider plugin entry for Cloudflare AI Gateway setup, catalog
+ * discovery, failover classification, and stream wrapping.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -96,6 +100,8 @@ export default definePluginEntry({
             let capturedSecretInput: Parameters<typeof buildApiKeyCredential>[1] = "";
             let capturedCredential = false;
             let capturedMode: "plaintext" | "ref" | undefined;
+            // Capture through the shared provider auth helper so plaintext,
+            // env refs, and secret refs keep the same validation path.
             await ensureApiKeyFromOptionEnvOrPrompt({
               token: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayApiKey),
               tokenProvider: "cloudflare-ai-gateway",
@@ -178,6 +184,8 @@ export default definePluginEntry({
               return null;
             }
             if (resolved.source !== "profile") {
+              // Persist newly supplied credentials with Gateway metadata; a
+              // profile-sourced key already owns its existing auth-store record.
               const credential = ctx.toApiKeyCredential({
                 provider: PROVIDER_ID,
                 resolved,

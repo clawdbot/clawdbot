@@ -1,3 +1,4 @@
+// Embedded run entry helpers serialize runtime skill metadata for agent run records.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";

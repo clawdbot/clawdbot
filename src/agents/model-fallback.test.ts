@@ -1,3 +1,4 @@
+// Covers model fallback ordering, error classification, and auth cooldown behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,6 +63,8 @@ const authSourceCheckMock = vi.hoisted(() => ({
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
 
 const authRuntimeMock = vi.hoisted(() => {
+  // In-memory auth runtime mirrors cooldown/disabled semantics without writing
+  // real profile stores during fallback unit tests.
   const stores = new Map<string, AuthProfileStore>();
   const keyFor = (agentDir?: string) => agentDir ?? "__main__";
   const now = () => Date.now();
@@ -192,6 +195,8 @@ afterAll(() => {
 });
 
 function resetModelFallbackTestState(): void {
+  // Fallback state has process-level caches for skip markers, harnesses, auth,
+  // and plugin normalization. Reset every surface between tests.
   resetFallbackSkipCacheForTest();
   clearAgentHarnesses();
   authRuntimeMock.clear();
@@ -214,6 +219,8 @@ function createModelNormalizerSnapshot(params: {
   manifestHash: string;
   prefix: string;
 }): PluginMetadataSnapshot {
+  // Builds a process-stable plugin metadata snapshot with one model normalizer
+  // so fallback can prove manifest-policy cache invalidation.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   const index: InstalledPluginIndex = {
     version: 1,

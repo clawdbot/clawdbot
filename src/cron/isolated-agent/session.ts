@@ -1,3 +1,4 @@
+/** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";

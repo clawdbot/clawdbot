@@ -1,3 +1,4 @@
+// Vitest unit-fast config tests validate fast unit test project setup.
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";

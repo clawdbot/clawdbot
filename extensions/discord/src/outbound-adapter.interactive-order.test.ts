@@ -1,3 +1,4 @@
+// Discord tests cover outbound adapter.interactive order plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,

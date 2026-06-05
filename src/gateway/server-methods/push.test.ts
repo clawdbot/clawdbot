@@ -1,3 +1,5 @@
+// Push method tests cover APNs direct/relay registrations, alert delivery,
+// stale registration cleanup, config resolution, and error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { pushHandlers } from "./push.js";

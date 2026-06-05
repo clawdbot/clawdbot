@@ -1,3 +1,8 @@
+/**
+ * Manifest capability availability checks.
+ *
+ * Combines plugin contracts, availability, config signals, auth profiles, env candidates, and base URL guards.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
@@ -14,12 +19,6 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runt
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
-/**
- * Manifest capability availability checks for media/web-style tools.
- *
- * These helpers combine plugin contracts, plugin availability, config signals,
- * auth profiles, env candidates, and provider base URL guards.
- */
 /** Manifest contract keys that represent provider-backed tool capabilities. */
 export type CapabilityContractKey =
   | "imageGenerationProviders"

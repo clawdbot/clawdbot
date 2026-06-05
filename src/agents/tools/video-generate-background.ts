@@ -1,3 +1,8 @@
+/**
+ * Video-generation background task lifecycle adapters.
+ *
+ * Specializes the shared media background runner with video status text and completion metadata.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
@@ -6,9 +11,6 @@ import {
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
 
-/**
- * Video-generation task lifecycle adapters over the shared media background runner.
- */
 export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
 /** Shared lifecycle configured with video-specific status text and event metadata. */

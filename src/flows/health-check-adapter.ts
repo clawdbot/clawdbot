@@ -1,3 +1,4 @@
+// Health check adapter converts plugin health checks into doctor check records.
 import type {
   HealthCheckInput,
   HealthCheckRunResult,

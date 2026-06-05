@@ -1,3 +1,4 @@
+// Test helper extension boundary tests enforce helper import boundaries.
 import { describe, expect, it } from "vitest";
 import {
   collectTestHelperExtensionImportBoundaryInventory,

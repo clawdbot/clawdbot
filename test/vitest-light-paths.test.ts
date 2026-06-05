@@ -1,3 +1,4 @@
+// Vitest light path tests validate light test include path generation.
 import { describe, expect, it } from "vitest";
 import {
   isCommandsLightTarget,

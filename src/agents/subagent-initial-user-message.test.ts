@@ -1,3 +1,5 @@
+// Subagent initial-user-message tests ensure the delegated task appears once in
+// the first user turn instead of being duplicated into the system prompt.
 import { describe, expect, it } from "vitest";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";

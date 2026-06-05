@@ -1,3 +1,5 @@
+// Deterministic fuzz coverage for shared Gateway HTTP helpers and disconnect
+// handling without adding a property-test dependency.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";

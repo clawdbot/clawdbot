@@ -1,3 +1,4 @@
+// Coverage for replay-safe Codex app-server recovery retries.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -16,6 +17,8 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 function codexClientClosedAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  // Stdio client-close failures can be replay-safe when Codex reports that the
+  // turn ended before completion and no user-visible side effect escaped.
   return makeAttemptResult({
     assistantTexts: [],
     promptError: new Error("codex app-server client closed before turn completed"),
@@ -34,6 +37,8 @@ function codexClientClosedAttempt(
 function codexTurnCompletionIdleTimeoutAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  // Completion-watch idle timeouts are retried separately from progress timeouts
+  // because only the former indicates Codex may have lost the final event.
   return makeAttemptResult({
     assistantTexts: [],
     aborted: true,
@@ -106,6 +111,8 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   });
 
   it("suppresses duplicate user persistence when retrying after the inbound message was persisted", async () => {
+    // If the first attempt already persisted the inbound message, the retry must
+    // not mirror it again into the transcript.
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (attemptParams) => {
         (

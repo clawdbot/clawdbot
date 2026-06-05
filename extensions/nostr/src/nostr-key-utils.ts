@@ -1,3 +1,4 @@
+// Nostr helper module supports nostr key utils behavior.
 import { getPublicKey, nip19 } from "nostr-tools";
 
 /**

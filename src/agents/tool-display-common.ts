@@ -1,3 +1,8 @@
+/**
+ * Shared compact tool-call display helpers.
+ * Redacts and summarizes arguments into short labels/details for chat and UI
+ * tool update streams.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -7,13 +12,12 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
-// Shared formatting helpers for compact tool-call display labels. Display text
-// is redacted and summarized so tool updates stay readable in chat/UI streams.
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
 
+/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -21,6 +25,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
+/** Normalized display target for code/search bridge tools. */
 export type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;

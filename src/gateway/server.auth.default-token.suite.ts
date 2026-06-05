@@ -1,3 +1,5 @@
+// Default token auth suite covers gateway handshake auth, nonce validation,
+// protocol version checks, and token-backed operator/node clients.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {

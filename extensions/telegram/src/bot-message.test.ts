@@ -1,3 +1,4 @@
+// Telegram tests cover bot message plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 

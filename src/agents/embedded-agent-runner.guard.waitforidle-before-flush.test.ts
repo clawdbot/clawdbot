@@ -1,3 +1,4 @@
+// Covers delayed flushing of pending tool results after agent idle.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,8 @@ function toolResult(id: string, text: string): AgentMessage {
 }
 
 function deferred<T>() {
+  // Tests control when waitForIdle resolves so real tool results can race the
+  // synthetic flush path deterministically.
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((r) => {
     resolve = r;
@@ -46,6 +49,8 @@ describe("flushPendingToolResultsAfterIdle", () => {
   });
 
   it("waits for idle so real tool results can land before flush", async () => {
+    // Waiting gives the tool runner a chance to persist its real output before
+    // the guard synthesizes a missing result.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     const idle = deferred<void>();
@@ -146,6 +151,8 @@ describe("flushPendingToolResultsAfterIdle", () => {
   });
 
   it("clamps oversized idle wait timeouts before scheduling", async () => {
+    // JavaScript timers overflow above the platform max; clamp to keep huge
+    // configs from firing immediately.
     const sm = guardSessionManager(SessionManager.inMemory());
     const idle = deferred<void>();
     const agent = { waitForIdle: () => idle.promise };
@@ -166,6 +173,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
   });
 
   it("immediately flushes pending tool results without waiting when timeoutMs is 0 or less", async () => {
+    // Non-positive timeouts are an explicit "do not wait" policy.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 

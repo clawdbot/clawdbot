@@ -1,3 +1,4 @@
+// Provider family plugin tests cover grouped provider-family contract cases.
 import fs from "node:fs";
 import { basename, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";

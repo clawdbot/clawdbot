@@ -1,3 +1,5 @@
+// Command-explainer formatting converts parsed executable spans into approval
+// UI highlight ranges, omitting shells whose parsing semantics differ.
 import type { ExecApprovalCommandSpan } from "../exec-approvals.js";
 import { normalizeExecutableToken } from "../exec-wrapper-tokens.js";
 import {

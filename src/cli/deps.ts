@@ -1,3 +1,4 @@
+// Default CLI dependency surface with lazy outbound channel send adapters.
 import { normalizeChannelId } from "../channels/registry.js";
 import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
@@ -76,6 +77,7 @@ function createLazySender(
 }
 
 export function createDefaultDeps(): CliDeps {
+  // Proxy lookup preserves the historic deps.channelName shape without eagerly importing plugins.
   const deps: CliDeps = {};
   const resolveSender = (channelId: string) =>
     createLazySender(channelId, async () => {

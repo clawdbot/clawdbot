@@ -1,3 +1,6 @@
+/**
+ * Caches and prewarms session managers used by embedded-agent runs.
+ */
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import {

@@ -1,3 +1,4 @@
+/** Validates persisted cron job records before loading them from disk/state. */
 import { parseAbsoluteTimeMs } from "./parse.js";
 
 /** Structural rejection code for persisted cron jobs that cannot be loaded safely. */

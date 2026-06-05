@@ -1,3 +1,7 @@
+/**
+ * Correlates Codex app-server notifications with the active thread/turn so
+ * projectors can ignore global or stale events without losing diagnostics.
+ */
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -5,6 +9,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/** Debug-friendly correlation summary for a Codex app-server notification. */
 export type CodexNotificationCorrelation = {
   method: string;
   paramsKeys?: string[];
@@ -20,6 +25,7 @@ export type CodexNotificationCorrelation = {
   matchesActiveTurn?: boolean;
 };
 
+/** Returns true when a notification payload belongs to the exact active thread and turn. */
 export function isCodexNotificationForTurn(
   value: JsonValue | undefined,
   threadId: string,
@@ -34,14 +40,17 @@ export function isCodexNotificationForTurn(
   );
 }
 
+/** Reads a thread id from either top-level notification params or nested turn payloads. */
 export function readCodexNotificationThreadId(record: JsonObject): string | undefined {
   return readNestedTurnThreadId(record) ?? readString(record, "threadId");
 }
 
+/** Reads a turn id from either top-level notification params or nested turn payloads. */
 export function readCodexNotificationTurnId(record: JsonObject): string | undefined {
   return readNestedTurnId(record) ?? readString(record, "turnId");
 }
 
+/** Builds structured correlation details for logs when notification routing is ambiguous. */
 export function describeCodexNotificationCorrelation(
   notification: CodexServerNotification,
   active: { threadId: string; turnId?: string },

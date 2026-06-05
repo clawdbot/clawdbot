@@ -1,3 +1,4 @@
+// Profiles Vitest main or runner processes and writes CPU/heap artifacts.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +7,9 @@ import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
+/**
+ * Parses Vitest profiler mode, output directory, and forwarded Vitest args.
+ */
 export function parseArgs(argv) {
   const args = {
     mode: "",
@@ -44,6 +48,9 @@ export function parseArgs(argv) {
   return args;
 }
 
+/**
+ * Resolves or creates the directory used for profiler artifacts.
+ */
 export function resolveVitestProfileDir({ mode, outputDir }) {
   if (outputDir && outputDir.trim()) {
     return path.resolve(outputDir);
@@ -52,10 +59,16 @@ export function resolveVitestProfileDir({ mode, outputDir }) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-vitest-${mode}-profile-`));
 }
 
+/**
+ * Builds a profiler command without additional Vitest args.
+ */
 export function buildVitestProfileCommand({ mode, outputDir }) {
   return buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs: [] });
 }
 
+/**
+ * Builds the profiler command for either Vitest main or worker-runner profiling.
+ */
 export function buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs }) {
   if (mode === "main") {
     return {
@@ -90,6 +103,9 @@ export function buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs 
   };
 }
 
+/**
+ * Converts a profiler plan into a spawn spec, routing pnpm through the wrapper.
+ */
 export function buildVitestProfileSpawnSpec(plan, runnerOptions = {}) {
   if (plan.command === "pnpm") {
     return createPnpmRunnerSpawnSpec({

@@ -1,3 +1,4 @@
+// Coverage for timeout-triggered compaction and retry routing.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
@@ -17,6 +18,8 @@ import {
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 const useTwoAuthProfiles = () => {
+  // Auth rotation assertions need deterministic profile order and API key
+  // resolution across timeout compaction retries.
   mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
   mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
     apiKey: `test-key-${profileId ?? "profile-a"}`,
@@ -79,6 +82,8 @@ type HookContext = {
 };
 
 function compactCallAt(index: number): CompactParams {
+  // Timeout compaction tests inspect exact compactDirect params for routing,
+  // prompt-cache, and token-budget context.
   const call = mockedCompactDirect.mock.calls[index];
   if (!call) {
     throw new Error(`expected compact call ${index + 1}`);
@@ -116,7 +121,8 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
-    // First attempt: timeout with high prompt usage (150k / 200k = 75%)
+    // Timeout recovery only compacts when prompt usage indicates the next retry
+    // has a realistic chance of fitting after compaction.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,

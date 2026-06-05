@@ -1,3 +1,4 @@
+// Console capture tests cover intercepting and restoring console output.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {

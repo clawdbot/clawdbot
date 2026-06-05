@@ -1,3 +1,4 @@
+// Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -20,6 +21,8 @@ type TestGooglePromptCacheSessionManager = {
 };
 
 function makeSessionManager(entries: SessionCustomEntry[] = []) {
+  // Prompt-cache metadata is persisted as custom session entries, so the test
+  // manager preserves append order and timestamps like SessionManager does.
   let counter = 0;
   return {
     appendCustomEntry(customType: string, data: unknown) {
@@ -66,6 +69,8 @@ function createCacheFetchMock(params: { name: string; expireTime: string }) {
 }
 
 function createCapturingStreamFn(result = "stream") {
+  // The wrapper mutates payloads through onPayload before calling the real
+  // stream; capture that final payload instead of mocking Google responses.
   let capturedPayload: Record<string, unknown> | undefined;
   const streamFn = vi.fn(
     (
@@ -125,6 +130,8 @@ function preparePromptCacheStream(params: {
   sessionManager: TestGooglePromptCacheSessionManager;
   streamFn: StreamFn;
 }) {
+  // Keep provider/model/cache-retention constants centralized so individual
+  // tests can focus on cache lifecycle behavior.
   return prepareGooglePromptCacheStreamFn(
     {
       apiKey: "gemini-api-key",
@@ -145,6 +152,8 @@ function preparePromptCacheStream(params: {
 
 describe("google prompt cache", () => {
   it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
+    // Cached system prompts should move out of live request context and into the
+    // cachedContent option to avoid paying prompt tokens repeatedly.
     const now = 1_000_000;
     const expireTime = new Date(now + 3_600_000).toISOString();
     const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");

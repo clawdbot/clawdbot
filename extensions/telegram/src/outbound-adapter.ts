@@ -1,3 +1,4 @@
+// Telegram plugin module implements outbound adapter behavior.
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,

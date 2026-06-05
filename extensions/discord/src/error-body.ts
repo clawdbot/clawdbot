@@ -1,3 +1,4 @@
+// Discord plugin module implements error body behavior.
 const DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS = 240;
 
 export function summarizeDiscordResponseBody(

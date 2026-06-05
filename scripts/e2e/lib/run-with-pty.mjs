@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs an E2E command under a pseudo-terminal.
 import fs from "node:fs";
 import process from "node:process";
 import { spawn } from "@lydell/node-pty";

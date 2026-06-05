@@ -1,3 +1,6 @@
+/**
+ * Rewrites transcript entries in session managers, states, and files.
+ */
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,

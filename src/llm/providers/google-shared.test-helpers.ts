@@ -1,3 +1,4 @@
+// Google provider test helpers assert converted message and stream payloads.
 import { expect } from "vitest";
 import type { Model } from "../types.js";
 

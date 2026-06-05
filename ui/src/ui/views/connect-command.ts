@@ -1,3 +1,4 @@
+// Control UI view renders connect command screen content.
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import { renderCopyButton } from "../chat/copy-as-markdown.ts";

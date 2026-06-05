@@ -1,3 +1,7 @@
+/**
+ * Browser CLI element interaction commands such as click, type, hover, drag,
+ * select, screenshots, and input files.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -14,6 +18,7 @@ import {
   resolveBrowserActionContext,
 } from "./shared.js";
 
+/** Registers element-centric Browser action commands. */
 export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

@@ -1,3 +1,8 @@
+/**
+ * External CLI auth discovery mode helpers.
+ * Converts provider/config lookup contexts into scoped discovery options for
+ * auth profile store loading.
+ */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -25,8 +30,6 @@ export type ExternalCliAuthDiscovery =
       profileIds?: Iterable<string>;
     };
 
-// External CLI auth discovery is scoped to avoid keychain prompts or broad CLI
-// probing unless the caller is explicitly resolving a provider/profile set.
 type ProviderAuthDiscoveryParams = {
   cfg?: OpenClawConfig;
   provider: string;

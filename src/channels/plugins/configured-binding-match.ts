@@ -1,3 +1,8 @@
+/**
+ * Configured binding matching helpers.
+ *
+ * Matches compiled binding rules against inbound conversations and materializes targets.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,10 +18,6 @@ import type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
 } from "./types.adapters.js";
-
-/**
- * Matching helpers for configured channel binding rules.
- */
 
 /**
  * Ranks account pattern matches for configured binding rules.

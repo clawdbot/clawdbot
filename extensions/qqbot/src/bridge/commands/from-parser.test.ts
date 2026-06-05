@@ -1,3 +1,4 @@
+// Qqbot tests cover from parser plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseQQBotFrom } from "./from-parser.js";
 

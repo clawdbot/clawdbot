@@ -1,3 +1,5 @@
+// Control-plane rate limiting bounds write-side RPC attempts per device/IP and
+// caps bucket growth against unique-key memory pressure.
 import type { GatewayClient } from "./server-methods/types.js";
 
 const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;

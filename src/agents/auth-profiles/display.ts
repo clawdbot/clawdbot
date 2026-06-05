@@ -1,3 +1,7 @@
+/**
+ * Auth profile display labels.
+ * Combines profile ids with configured human metadata for CLI/status output.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAuthProfileMetadata } from "./identity.js";
 import type { AuthProfileStore } from "./types.js";

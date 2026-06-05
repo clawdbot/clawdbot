@@ -1,3 +1,4 @@
+// Msteams tests cover messenger plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";

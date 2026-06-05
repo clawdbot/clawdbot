@@ -1,3 +1,5 @@
+// History image prune tests keep provider replay compact by replacing stale
+// image bytes and media references while preserving recent user context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -62,6 +64,8 @@ function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: str
 }
 
 function oldEnoughTail(): AgentMessage[] {
+  // Four assistant turns makes the first message old enough to prune while
+  // keeping each test focused on content rewriting instead of turn counting.
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
   return [
@@ -100,6 +104,8 @@ describe("pruneProcessedHistoryImages", () => {
   });
 
   it("scrubs old media attachment markers from text blocks", () => {
+    // Text references are scrubbed alongside image blocks so old paths and
+    // media URIs cannot rehydrate stale images on a later replay.
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
@@ -224,6 +230,8 @@ describe("pruneProcessedHistoryImages", () => {
   });
 
   it("does not count multiple assistant messages from one tool loop as separate turns", () => {
+    // Tool-call assistant messages belong to one model turn; counting each
+    // message separately would prune images too aggressively inside tool loops.
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
@@ -337,6 +345,8 @@ describe("installHistoryImagePruneContextTransform", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
 
   it("prunes the provider replay view after an existing context transform", async () => {
+    // The transform wrapper prunes only the replay view returned to providers,
+    // leaving upstream transform output and restore behavior intact.
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "fresh prompt" }),
       ...oldEnoughTail(),

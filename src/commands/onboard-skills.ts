@@ -1,3 +1,9 @@
+/**
+ * Interactive skill dependency setup for onboarding.
+ *
+ * It reports workspace skill readiness, offers safe dependency installs, and
+ * records per-skill API keys entered during setup.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
@@ -44,6 +50,7 @@ function isBrewOnlyInstallableSkill(skill: {
   );
 }
 
+/** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
   cfg: OpenClawConfig,
   workspaceDir: string,
@@ -83,12 +90,16 @@ export async function setupSkills(
   );
   let brewAvailable: boolean | undefined;
   const detectBrewOnce = async () => {
+    // Brew detection can shell out; cache it for the whole skills step because
+    // install filtering and prompts both need the same answer.
     brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
     return brewAvailable;
   };
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
   if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+    // Linux containers without brew cannot use brew-only recipes reliably; hide
+    // them from install selection and leave manual instructions in the note.
     const hiddenBrewOnly = baseInstallable.filter(isBrewOnlyInstallableSkill);
     installable = baseInstallable.filter((skill) => !isBrewOnlyInstallableSkill(skill));
     if (hiddenBrewOnly.length > 0) {
@@ -165,6 +176,8 @@ export async function setupSkills(
       skill.install.some((option) => option.kind === "node"),
     );
     if (needsNodeManagerPrompt) {
+      // Persist the package manager before invoking installers so node recipes
+      // and later skill lifecycle commands agree on the selected tool.
       const nodeManager = (await prompter.select({
         message: t("wizard.skills.nodeManager"),
         options: resolveNodeManagerOptions(),
@@ -190,6 +203,8 @@ export async function setupSkills(
       if (!installId) {
         continue;
       }
+      // Onboarding installs the primary recipe only; alternative recipes remain
+      // visible through `openclaw skills list --verbose`.
       const spin = prompter.progress(t("wizard.skills.installing", { name }));
       const result = await installSkill({
         workspaceDir,
@@ -233,6 +248,8 @@ export async function setupSkills(
     if (!skill.primaryEnv || skill.missing.env.length === 0) {
       continue;
     }
+    // API keys entered here patch the skill entry, not process.env, so future
+    // agent sessions can resolve the same skill configuration.
     const wantsKey = await prompter.confirm({
       message: t("wizard.skills.setEnv", { env: skill.primaryEnv, name: skill.name }),
       initialValue: false,

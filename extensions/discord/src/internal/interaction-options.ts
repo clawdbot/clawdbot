@@ -1,3 +1,4 @@
+// Discord plugin module implements interaction options behavior.
 import type {
   APIApplicationCommandInteractionDataBasicOption,
   APIApplicationCommandInteractionDataOption,

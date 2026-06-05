@@ -1,3 +1,5 @@
+// Package manager tests cover resource discovery boundaries for package,
+// project, and npm-declared agent resources.
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +21,8 @@ afterEach(async () => {
 
 describe("DefaultPackageManager", () => {
   it("keeps manifest resource entries inside the package root", async () => {
+    // Manifest globs are package-owned; path traversal or symlink hops must not
+    // expose arbitrary host files as skills.
     const root = await makeTempDir("openclaw-package-manager-");
     const packageRoot = join(root, "package");
     const outsideRoot = join(root, "outside");
@@ -121,6 +125,8 @@ describe("DefaultPackageManager", () => {
   });
 
   it("keeps auto-discovered project resources inside their resource roots", async () => {
+    // Project resources may be auto-discovered, but each resource type remains
+    // confined to its expected root.
     const root = await makeTempDir("openclaw-package-manager-");
     const configRoot = join(root, ".openclaw");
     const outsideRoot = join(root, "outside");

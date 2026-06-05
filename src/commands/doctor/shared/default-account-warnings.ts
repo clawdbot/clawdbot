@@ -1,3 +1,4 @@
+// Doctor warnings for multi-account channels missing explicit default account routing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -65,6 +66,7 @@ function collectChannelsMissingDefaultAccount(
   return contexts;
 }
 
+/** Warn when account-scoped route bindings do not cover channels without accounts.default. */
 export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
   const bindings = listRouteBindings(cfg);
   const warnings: string[] = [];
@@ -130,6 +132,7 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
+/** Warn when multi-account channels omit or misconfigure an explicit default account. */
 export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(

@@ -1,3 +1,4 @@
+// Xai tests cover tool config shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   coerceXaiToolConfig,

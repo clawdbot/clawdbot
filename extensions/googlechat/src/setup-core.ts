@@ -1,3 +1,4 @@
+// Googlechat plugin module implements setup core behavior.
 import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,

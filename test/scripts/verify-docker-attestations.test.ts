@@ -1,3 +1,4 @@
+// Verify Docker Attestations tests cover verify docker attestations script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectDockerAttestationErrors,

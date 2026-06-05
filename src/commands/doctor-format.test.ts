@@ -1,3 +1,4 @@
+// Doctor format tests cover doctor output formatting and issue display helpers.
 import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 

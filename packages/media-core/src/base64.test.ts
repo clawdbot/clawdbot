@@ -1,3 +1,4 @@
+// Media Core tests cover base64 behavior.
 import { describe, expect, it } from "vitest";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 

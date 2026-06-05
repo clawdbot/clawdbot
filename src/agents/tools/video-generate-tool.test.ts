@@ -1,3 +1,5 @@
+// video_generate tool tests cover provider/model selection, plugin metadata,
+// background task handling, input media, and saved video output.
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -141,6 +143,8 @@ function createVideoProviderSnapshot(params: {
   referenceAudioInputs?: boolean;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
+  // Plugin-backed provider snapshots are synthesized here so tool behavior can
+  // be tested without loading plugin manifests from disk.
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
   const plugin: PluginManifestRecord = {
     id: params.id,

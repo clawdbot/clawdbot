@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+/**
+ * Release preflight helper that verifies required provider API keys can reach
+ * their model-list endpoints without printing secret values.
+ */
 import process from "node:process";
 
 const args = new Map();

@@ -1,3 +1,4 @@
+// Copies bundled plugin metadata into generated runtime locations.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,6 +31,9 @@ function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 }
 
+/**
+ * Rewrites package extension entries for bundled metadata output.
+ */
 export function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
     return undefined;
@@ -233,6 +237,9 @@ function copyDeclaredPluginSkillPaths(params) {
  *   repoRoot?: string;
  *   env?: NodeJS.ProcessEnv;
  * }} [params]
+ */
+/**
+ * Copies bundled plugin metadata and package extension files.
  */
 export function copyBundledPluginMetadata(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();

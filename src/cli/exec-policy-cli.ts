@@ -1,3 +1,4 @@
+// CLI for showing and applying exec policy presets across config and approvals.
 import crypto from "node:crypto";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -128,6 +129,7 @@ function sanitizeExecPolicyMessage(value: unknown): string {
 }
 
 function hashExecApprovalsFile(file: ExecApprovalsFile): string {
+  // Match the persisted formatting hash so restore/set operations can detect drift.
   const raw = `${JSON.stringify(file, null, 2)}\n`;
   return crypto.createHash("sha256").update(raw).digest("hex");
 }

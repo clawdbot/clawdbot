@@ -1,3 +1,4 @@
+// Voice Call tests cover stale call reaper plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startStaleCallReaper } from "./stale-call-reaper.js";
 

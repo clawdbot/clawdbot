@@ -1,3 +1,4 @@
+// Daemon CLI compatibility tests cover legacy daemon command aliases and output.
 import { describe, expect, it } from "vitest";
 import {
   resolveLegacyDaemonCliAccessors,

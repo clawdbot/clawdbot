@@ -1,3 +1,4 @@
+// Minimax provider module implements model/runtime integration.
 import type {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,

@@ -1,3 +1,4 @@
+// Qa Matrix tests cover run config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeQaProviderMode } from "./run-config.js";
 

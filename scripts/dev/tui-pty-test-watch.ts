@@ -1,3 +1,4 @@
+// Tui Pty Test Watch script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";

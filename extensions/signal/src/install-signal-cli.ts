@@ -1,3 +1,4 @@
+// Signal plugin module implements install signal cli behavior.
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

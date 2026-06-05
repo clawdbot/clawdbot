@@ -1,3 +1,4 @@
+/** Extension that safeguards compaction with structured summaries and quality repair. */
 import fs from "node:fs";
 import path from "node:path";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
@@ -875,6 +876,7 @@ async function readWorkspaceContextForSummary(
   }
 }
 
+/** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;

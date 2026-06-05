@@ -1,3 +1,2 @@
-// Public package facade for plugin SDK testing helpers.
-
+// Plugin SDK module implements testing behavior.
 export * from "../../../src/plugin-sdk/testing.js";

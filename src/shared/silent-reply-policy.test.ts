@@ -1,3 +1,4 @@
+// Silent reply policy tests cover reply suppression decision rules.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SILENT_REPLY_POLICY,

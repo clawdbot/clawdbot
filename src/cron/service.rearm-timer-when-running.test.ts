@@ -1,3 +1,4 @@
+// Cron rearm tests cover timer rearming while scheduled jobs are already running.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Filterable select list tests cover keyboard filtering and cursor behavior.
 import { describe, expect, it } from "vitest";
 import {
   FilterableSelectList,

@@ -1,3 +1,4 @@
+// Admin Http Rpc tests cover index plugin behavior.
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };

@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register basic behavior.
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { getPluginVersionString, resolveRuntimeServiceVersion } from "./state.js";
 

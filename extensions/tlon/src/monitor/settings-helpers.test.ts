@@ -1,3 +1,4 @@
+// Tlon tests cover settings helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { TlonResolvedAccount } from "../types.js";
 import {

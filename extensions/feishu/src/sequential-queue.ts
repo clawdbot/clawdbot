@@ -1,3 +1,4 @@
+// Feishu plugin module implements sequential queue behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 /**

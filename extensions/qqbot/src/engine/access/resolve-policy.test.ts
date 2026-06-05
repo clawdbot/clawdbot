@@ -1,3 +1,4 @@
+// Qqbot tests cover resolve policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQQBotEffectivePolicies } from "./resolve-policy.js";
 

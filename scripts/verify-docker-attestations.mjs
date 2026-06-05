@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Verifies Docker image attestations cover required platforms and predicates.
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 
@@ -7,6 +8,9 @@ const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
 const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
 
+/**
+ * Rewrites an image reference to use the provided digest.
+ */
 export function imageRefForDigest(imageRef, digest) {
   const atIndex = imageRef.indexOf("@");
   if (atIndex >= 0) {
@@ -18,6 +22,9 @@ export function imageRefForDigest(imageRef, digest) {
   return `${base}@${digest}`;
 }
 
+/**
+ * Parses os/architecture[/variant] platform strings.
+ */
 export function parsePlatform(value) {
   const [os, architecture, variant] = value.split("/");
   if (!os || !architecture || value.split("/").length > 3) {
@@ -49,6 +56,9 @@ function parseJson(raw, label) {
   }
 }
 
+/**
+ * Collects missing/mismatched attestation errors for required image platforms.
+ */
 export function collectDockerAttestationErrors(params) {
   const {
     imageRef,

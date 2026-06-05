@@ -1,3 +1,4 @@
+// Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetIMessageShortIdState } from "./monitor-reply-cache.js";

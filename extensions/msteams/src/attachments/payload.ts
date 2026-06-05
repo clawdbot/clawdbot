@@ -1,3 +1,4 @@
+// Msteams plugin module implements payload behavior.
 import { buildMediaPayload } from "../../runtime-api.js";
 
 export function buildMSTeamsMediaPayload(

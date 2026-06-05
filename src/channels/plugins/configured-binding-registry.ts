@@ -1,3 +1,8 @@
+/**
+ * Configured binding registry.
+ *
+ * Primes, counts, and resolves compiled binding records from config and conversation facts.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type {

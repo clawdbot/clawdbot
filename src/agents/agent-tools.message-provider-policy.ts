@@ -1,8 +1,10 @@
+/**
+ * Message-provider tool filtering.
+ * Channels can restrict tool names after runtime assembly when the active
+ * transport cannot safely render or execute a class of tools.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
-// Message providers can narrow the tool surface when a channel cannot safely
-// render or execute a tool class. The policy is name-based because channel
-// delivery happens after tools are already assembled.
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   "discord-voice": ["tts"],
   voice: ["tts"],

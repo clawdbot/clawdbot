@@ -1,3 +1,4 @@
+// Doctor cron index tests cover cron doctor checks and repair entrypoints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

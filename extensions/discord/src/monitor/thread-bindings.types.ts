@@ -1,3 +1,4 @@
+// Discord type declarations define plugin contracts.
 export type ThreadBindingTargetKind = "subagent" | "acp";
 
 export type ThreadBindingRecord = {

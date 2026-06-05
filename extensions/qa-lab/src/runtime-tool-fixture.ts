@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements runtime tool fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRuntimeToolCoverageMetadata } from "./runtime-tool-metadata.js";

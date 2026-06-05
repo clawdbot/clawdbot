@@ -1,3 +1,4 @@
+// Voice Call plugin module implements webhook behavior.
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

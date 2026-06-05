@@ -1,3 +1,4 @@
+// Provider-runtime mock used by model resolution tests.
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
@@ -58,6 +59,8 @@ function findTemplate(
   provider: string,
   templateIds: readonly string[],
 ) {
+  // Forward-compat fallbacks clone the nearest known catalog row from the
+  // registry before patching the requested id/provider.
   for (const templateId of templateIds) {
     const template = ctx.modelRegistry.find(provider, templateId) as ResolvedModelLike | null;
     if (template) {
@@ -104,6 +107,8 @@ function normalizeOpenRouterBaseUrl(baseUrl?: string): string | undefined {
 }
 
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
+  // This mock mirrors provider-owned normalization contracts that model tests
+  // need without loading real plugin runtimes.
   if (params.provider === "openrouter") {
     const baseUrl =
       typeof params.model.baseUrl === "string"
@@ -149,6 +154,8 @@ function normalizeTransport(params: {
   provider: string;
   context: { api?: string | null; baseUrl?: string };
 }): NormalizedTransportLike | undefined {
+  // Transport normalization proves provider hooks can upgrade legacy endpoints
+  // and API names before resolved models are returned to callers.
   const isNativeOpenAiTransport =
     params.context.api === "openai-completions" &&
     (params.context.baseUrl === OPENAI_BASE_URL ||

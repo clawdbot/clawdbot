@@ -1,3 +1,4 @@
+// Telegram tests cover sticker cacheescribe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { describeStickerImage } from "./sticker-cache.js";
 

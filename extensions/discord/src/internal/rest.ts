@@ -1,3 +1,4 @@
+// Discord plugin module implements rest behavior.
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import {

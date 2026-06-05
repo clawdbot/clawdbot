@@ -1,3 +1,4 @@
+// Control UI view renders overview hints screen content.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,

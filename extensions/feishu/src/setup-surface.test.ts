@@ -1,3 +1,4 @@
+// Feishu tests cover setup surface plugin behavior.
 import {
   createNonExitingRuntimeEnv,
   createPluginSetupWizardConfigure,

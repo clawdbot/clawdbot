@@ -1,3 +1,4 @@
+// Firecrawl API module exposes the plugin public contract.
 import {
   enablePluginInConfig,
   type WebFetchProviderPlugin,

@@ -1,3 +1,4 @@
+// Covers bootstrap context rendering, truncation, and transcript header setup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,8 @@ const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
 
 describe("ensureSessionHeader", () => {
   it("creates transcript files with restrictive permissions", async () => {
+    // Session transcripts can contain private prompts and tool outputs, so both
+    // the directory and file need restrictive permissions from creation.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-header-"));
     try {
       const sessionFile = path.join(tempDir, "nested", "session.jsonl");
@@ -100,6 +103,8 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
   it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
+    // AGENTS.md truncation keeps scoped-policy signals from the middle so model
+    // prompts do not lose routing instructions just because head/tail are large.
     const requiredScopedInstruction =
       "- Required scoped instruction: read scoped AGENTS.md before editing subtree work.";
     const content = [
@@ -159,6 +164,8 @@ describe("buildBootstrapContextFiles", () => {
   });
 
   it("keeps total injected bootstrap characters under the new default total cap", () => {
+    // Total caps bound prompt growth across multiple bootstrap files, not only
+    // per-file truncation.
     const files = createLargeBootstrapFiles();
     const result = buildBootstrapContextFiles(files);
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
@@ -190,6 +197,8 @@ describe("buildBootstrapContextFiles", () => {
   });
 
   it("skips bootstrap injection when remaining total budget is too small", () => {
+    // Tiny remaining budgets are worse than useless for full files; skip them
+    // instead of adding misleading partial context.
     const files = [makeFile({ name: "AGENTS.md", content: "a".repeat(1_000) })];
     const result = buildBootstrapContextFiles(files, {
       maxChars: 200,

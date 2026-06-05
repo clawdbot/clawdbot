@@ -1,3 +1,4 @@
+// Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";

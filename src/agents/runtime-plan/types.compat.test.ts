@@ -1,3 +1,5 @@
+// Runtime plan type-compat tests keep copied structural aliases aligned with
+// their source runtime contracts without importing those sources in production.
 import { describe, expectTypeOf, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";

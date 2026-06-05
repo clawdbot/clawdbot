@@ -1,3 +1,4 @@
+// Covers assistant error formatting for streaming, sandbox, and context errors.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,6 +31,8 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     });
 
   it("suppresses transport-classified malformed streaming fragments", () => {
+    // Transport JSON fragmentation is not user-authored content and should get
+    // stable retry copy instead of raw parser text.
     const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM streaming response contained a malformed fragment. Please try again.",
@@ -55,6 +58,8 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
   });
 
   it("audits a sandbox tool-policy block once per assistant error", () => {
+    // Formatting may be called multiple times for the same error; audit logs
+    // should stay deduplicated per blocked assistant error.
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {

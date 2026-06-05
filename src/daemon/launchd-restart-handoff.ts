@@ -1,3 +1,4 @@
+/** Detached macOS launchd restart handoff for restarting from inside the service. */
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,8 @@ function buildLaunchdRestartScript(
   mode: LaunchdRestartHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
 ): string {
+  // The detached shell waits for the caller before touching launchd so the
+  // current gateway process can exit cleanly after scheduling the handoff.
   const waitForCallerPid = `wait_pid="$4"
 label="$5"
 ${renderPosixRestartLogSetup(restartLogEnv)}

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario media fixtures behavior.
 export const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
 
 type MatrixQaMediaTypeCoverageCase = {

@@ -1,3 +1,7 @@
+/**
+ * Projects OpenClaw context-engine assemblies into Codex prompt text while
+ * preserving safety boundaries and redacting tool payloads.
+ */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
@@ -19,13 +23,12 @@ const MAX_RENDERED_CONTEXT_CHARS = 1_000_000;
 const DEFAULT_TEXT_PART_CHARS = 6_000;
 const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
+/** Default token reserve kept out of rendered context-engine prompt text. */
 export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
-/**
- * Project assembled OpenClaw context-engine messages into Codex prompt inputs.
- */
+/** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
   originalHistoryMessages: AgentMessage[];
@@ -65,6 +68,7 @@ export function projectContextEngineAssemblyForCodex(params: {
   };
 }
 
+/** Resolves rendered context size from a token budget and reserve. */
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
   reserveTokens?: number;
@@ -84,6 +88,7 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
+/** Reads Codex projection reserve tokens from compaction config. */
 export function resolveCodexContextEngineProjectionReserveTokens(params: {
   config?: unknown;
 }): number | undefined {

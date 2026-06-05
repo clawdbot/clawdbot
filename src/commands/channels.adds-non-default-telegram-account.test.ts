@@ -1,3 +1,4 @@
+// Channels account tests cover non-default Telegram account setup, status, removal, and binding behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPatchedAccountSetupAdapter } from "../channels/plugins/setup-helpers.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.core.js";

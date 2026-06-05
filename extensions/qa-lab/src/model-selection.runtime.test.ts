@@ -1,3 +1,4 @@
+// Qa Lab tests cover model selection plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveEnvApiKey, loadAuthProfileStoreForRuntime, listProfilesForProvider } = vi.hoisted(

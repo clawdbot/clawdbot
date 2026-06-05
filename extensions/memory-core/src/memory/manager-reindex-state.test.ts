@@ -1,3 +1,4 @@
+// Memory Core tests cover manager reindex state plugin behavior.
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {

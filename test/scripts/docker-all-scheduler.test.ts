@@ -1,3 +1,4 @@
+// Docker All Scheduler tests cover docker all scheduler script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -279,6 +280,10 @@ describe("scripts/test-docker-all scheduler", () => {
 
   it("serializes live OpenAI Docker lanes by default", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
+  });
+
+  it("caps npm-heavy Docker lanes below full parallelism by default", () => {
+    expect(DEFAULT_RESOURCE_LIMITS.npm).toBe(5);
   });
 
   it("cleans stale stopped containers from all named Docker E2E lanes", () => {

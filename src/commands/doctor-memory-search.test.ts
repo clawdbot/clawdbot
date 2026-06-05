@@ -1,3 +1,4 @@
+// Doctor memory-search tests cover QMD availability, memory config, and doctor prompt behavior.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

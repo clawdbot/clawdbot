@@ -1,3 +1,4 @@
+// Doctor deprecated CLI profile tests cover legacy auth profile migration and warnings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";

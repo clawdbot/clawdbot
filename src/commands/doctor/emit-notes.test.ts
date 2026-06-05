@@ -1,3 +1,4 @@
+// Doctor emit-note tests cover terminal note output and doctor issue formatting.
 import { describe, expect, it, vi } from "vitest";
 import { emitDoctorNotes } from "./emit-notes.js";
 

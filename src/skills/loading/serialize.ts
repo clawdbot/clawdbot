@@ -1,3 +1,4 @@
+// Skill serialization helpers compact skill metadata and coordinate sync queue updates.
 const SKILLS_SYNC_QUEUE = new Map<string, Promise<unknown>>();
 
 /** Serializes async work by key so repeated skill loads do not race on shared files. */

@@ -1,3 +1,4 @@
+// Verifies sessions_history visibility defaults and sandbox clamps.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 
@@ -29,6 +30,7 @@ function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
 function mockGatewayWithHistory(
   extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
 ) {
+  // Most visibility tests need chat.history plus optional session resolution/listing.
   callGatewayMock.mockClear();
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const req = opts as { method?: string; params?: Record<string, unknown> };

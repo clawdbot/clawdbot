@@ -1,8 +1,11 @@
+/**
+ * Explicit tool allowlist guard.
+ *
+ * Collects operator/user allowlist sources and explains when no callable tools remain.
+ */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
-// Guardrails for explicit tool allowlists. They collect user/operator sources and
-// explain when allowlist resolution leaves no callable tools.
 type ExplicitToolAllowlistSource = {
   label: string;
   entries: string[];

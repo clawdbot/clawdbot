@@ -1,3 +1,4 @@
+// Legacy config write ownership tests cover doctor ownership boundaries for migrations.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

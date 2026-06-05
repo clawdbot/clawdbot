@@ -1,3 +1,4 @@
+// Entry points for the full configure wizard and section-limited runs.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,6 +17,7 @@ async function configureCommandWithSections(
   await runConfigureWizard({ command: "configure", sections }, runtime);
 }
 
+/** Parse `--section` input and run the requested configure wizard sections. */
 export async function configureCommandFromSectionsArg(
   rawSections: unknown,
   runtime: RuntimeEnv = defaultRuntime,

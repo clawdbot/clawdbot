@@ -1,3 +1,4 @@
+// Discord tests cover setup entry plugin behavior.
 import { describe, expect, it } from "vitest";
 import setupEntry from "./setup-entry.js";
 

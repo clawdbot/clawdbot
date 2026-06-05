@@ -1,3 +1,4 @@
+// Control UI view renders channels.shared screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";

@@ -1,3 +1,4 @@
+// Imessage helper module supports config accessors behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIMessageAccount } from "./accounts.js";
 

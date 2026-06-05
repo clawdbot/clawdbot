@@ -1,3 +1,4 @@
+// Discord tests cover mentions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   resetDiscordDirectoryCacheForTest,

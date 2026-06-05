@@ -1,3 +1,6 @@
+// Runtime helpers for building status summaries.
+// Kept behind a lazy surface because status summary imports model/session/runtime metadata helpers.
+
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -27,6 +30,7 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
+    // Bare model names may be aliases from agents.defaults.models before falling back to default provider.
     const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
@@ -60,6 +64,7 @@ function resolveConfiguredStatusModelRef(params: {
       )
     : undefined;
   if (agentRawModel) {
+    // Agent-specific primary model wins over global defaults for session status rows.
     const parsed = resolveStatusModelRefFromRaw({
       cfg: params.cfg,
       rawModel: agentRawModel,
@@ -141,6 +146,7 @@ function resolveSessionModelRef(
     agentId,
   });
   return (
+    // Persisted selected model or overrides describe the active session, not just current config.
     resolvePersistedSelectedModelRef({
       defaultProvider: resolved.provider || DEFAULT_PROVIDER,
       runtimeProvider: entry?.modelProvider,
@@ -178,6 +184,7 @@ function resolveSessionRuntimeLabel(params: {
     acpBackend: acpMeta?.backend,
   });
   const id = normalizeOptionalLowercaseString(runtime.id);
+  // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
   const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return resolveAgentRuntimeLabel({
     config: params.cfg,
@@ -196,6 +203,7 @@ function resolveContextTokensForModel(params: {
   allowAsyncLoad?: boolean;
 }): number | undefined {
   void params.allowAsyncLoad;
+  // Status summaries are synchronous/read-only; caller passes allowAsyncLoad for interface parity only.
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
   }

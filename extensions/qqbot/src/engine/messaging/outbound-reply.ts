@@ -1,3 +1,4 @@
+// Qqbot plugin module implements outbound reply behavior.
 import { debugLog } from "../utils/log.js";
 import { ReplyLimiter, type ReplyLimitResult } from "./reply-limiter.js";
 

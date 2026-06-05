@@ -1,3 +1,6 @@
+/**
+ * Registry for native agent harness implementations and lifecycle cleanup.
+ */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentHarness, AgentHarnessResetParams, RegisteredAgentHarness } from "./types.js";
 

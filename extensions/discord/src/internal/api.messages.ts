@@ -1,3 +1,4 @@
+// Discord plugin module implements api.messages behavior.
 import { Routes, type APIChannel, type APIMessage } from "discord-api-types/v10";
 import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient, RequestData } from "./rest.js";

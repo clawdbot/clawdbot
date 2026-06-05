@@ -1,3 +1,4 @@
+// Slack plugin module implements slash dispatch behavior.
 import {
   recordInboundSessionMetaSafe as recordInboundSessionMetaSafeImpl,
   resolveConversationLabel as resolveConversationLabelImpl,

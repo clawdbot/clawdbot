@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for gateway-backed agent run waiting.
+ * Exercises timeout normalization, reply snapshots, and dynamic drain loops.
+ */
 import {
   addTimerTimeoutGraceMs,
   MAX_DATE_TIMESTAMP_MS,

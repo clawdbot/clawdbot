@@ -1,3 +1,4 @@
+// Slack tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";

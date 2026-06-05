@@ -1,3 +1,8 @@
+/**
+ * Session suspension and lane auto-resume helpers.
+ *
+ * Records quota/manual/circuit suspensions and temporarily lowers command-lane concurrency.
+ */
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";

@@ -1,3 +1,4 @@
+// OpenClaw launcher E2E tests validate launcher process behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";

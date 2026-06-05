@@ -1,3 +1,4 @@
+// Update progress tests cover progress event formatting for update operations.
 import { describe, expect, it } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { inferUpdateFailureHints } from "./progress.js";

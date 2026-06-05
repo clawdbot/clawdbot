@@ -1,3 +1,4 @@
+// Prints the slowest test files from a Vitest JSON report.
 import {
   formatMs,
   loadVitestReportFromArgs,

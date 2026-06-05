@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic Messages transport streaming.
+ * Covers request construction, SSE parsing, aborts, tool calls, usage, and
+ * provider transport hooks.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";

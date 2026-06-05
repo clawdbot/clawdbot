@@ -1,8 +1,12 @@
+// Failover policy tests cover the embedded run decision table for retry,
+// profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
   it("escalates retry-limit exhaustion for replay-safe failover reasons", () => {
+    // Retry-limit exhaustion is only a model-fallback signal when the carried
+    // reason is known to be safe to replay against a different model.
     expect(
       resolveRunFailoverDecision({
         stage: "retry_limit",
@@ -28,6 +32,8 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("prefers prompt-side profile rotation before fallback", () => {
+    // Prompt construction can fail before any model output exists, so rotate
+    // the current provider profile before spending the configured fallback.
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -97,6 +103,8 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("ignores stale classified assistant-side 429 text without error stopReason", () => {
+    // Classifiers may see old assistant text in the transcript. Without an
+    // actual failure signal, stale billing/rate-limit text is not failover.
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
@@ -299,6 +307,8 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("does not rotate harness-owned assistant timeouts", () => {
+    // Harness-owned transports already implement their own retry envelope;
+    // core failover should not double-rotate on those synthetic timeouts.
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",

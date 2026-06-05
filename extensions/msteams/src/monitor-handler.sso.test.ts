@@ -1,3 +1,4 @@
+// Msteams tests cover monitor handler.sso plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
 import {

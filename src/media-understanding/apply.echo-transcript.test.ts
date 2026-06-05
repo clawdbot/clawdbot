@@ -1,3 +1,5 @@
+// Apply echo-transcript tests cover integrated audio media understanding with
+// best-effort transcript delivery.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

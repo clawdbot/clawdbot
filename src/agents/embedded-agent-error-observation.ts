@@ -1,3 +1,6 @@
+/**
+ * Builds structured observations for embedded-agent API/text failures.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";

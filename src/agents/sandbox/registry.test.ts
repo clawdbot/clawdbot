@@ -1,3 +1,5 @@
+// Sandbox registry tests cover sharded registry migration, locking, ordering,
+// and race-safety for container/browser runtime records.
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +53,8 @@ vi.mock("../../infra/json-files.js", async () => {
       value: unknown,
       options?: Parameters<typeof actual.writeJson>[2],
     ) => {
+      // Gate selected writes to model a concurrent update/remove interleave at
+      // the JSON-file boundary.
       const payload = JSON.stringify(value);
       const gate = writeGateState.active;
       if (
@@ -212,6 +216,8 @@ function requireMigrationResult(
 
 describe("registry race safety", () => {
   it("does not migrate legacy registry files from runtime reads", async () => {
+    // Runtime reads should ignore old monolithic files; explicit doctor/repair
+    // owns migration so normal startup cannot mutate registry layout.
     await seedContainerRegistry([containerEntry({ containerName: "legacy-container" })]);
 
     await expect(readRegistry()).resolves.toEqual({ entries: [] });
@@ -341,6 +347,8 @@ describe("registry race safety", () => {
   });
 
   it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
+    // Delete wins over an in-flight stale update so prune/remove cannot be
+    // undone by a delayed writer.
     await updateRegistry(containerEntry({ containerName: "container-x" }));
     const writeGate = installWriteGate(null, "container-x");
 

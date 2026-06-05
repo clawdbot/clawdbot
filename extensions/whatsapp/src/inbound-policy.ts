@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements inbound policy behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,

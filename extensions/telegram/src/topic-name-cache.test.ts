@@ -1,3 +1,4 @@
+// Telegram tests cover topic name cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearTopicNameCache,

@@ -1,3 +1,4 @@
+// Skill install test mocks centralize mocked lifecycle dependencies for tests.
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 

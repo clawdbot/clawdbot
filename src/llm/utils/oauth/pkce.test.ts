@@ -1,3 +1,4 @@
+// PKCE tests cover verifier and challenge generation for OAuth flows.
 import { describe, expect, it } from "vitest";
 import { generateOAuthState, generatePKCE } from "./pkce.js";
 

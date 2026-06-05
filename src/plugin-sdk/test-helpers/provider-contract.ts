@@ -1,3 +1,4 @@
+// Provider contract helpers expose reusable provider plugin contract test setup.
 import { describe, expect, it } from "vitest";
 import {
   providerContractLoadError,

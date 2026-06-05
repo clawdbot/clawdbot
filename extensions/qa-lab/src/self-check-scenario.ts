@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements self check scenario behavior.
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import type { QaScenarioDefinition } from "./scenario.js";
 

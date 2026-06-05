@@ -1,3 +1,7 @@
+/**
+ * Sanitizes inline image payloads mirrored through Codex history so invalid
+ * base64 data becomes readable text instead of poisoning replayed transcripts.
+ */
 import {
   INLINE_IMAGE_DATA_URL_PREFIX,
   sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl,
@@ -6,10 +10,12 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
+/** Validates and normalizes an inline image data URL for Codex history payloads. */
 export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
   return sanitizeSharedInlineImageDataUrl(imageUrl);
 }
 
+/** Builds the replacement text inserted when an inline image payload is invalid. */
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;
 }
@@ -47,6 +53,7 @@ function sanitizeImageContentRecord(
   return undefined;
 }
 
+/** Recursively sanitizes all Codex history image shapes while preserving unknown structure. */
 export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T {
   if (Array.isArray(value)) {
     return value.map((entry) => sanitizeCodexHistoryImagePayloads(entry, label)) as T;

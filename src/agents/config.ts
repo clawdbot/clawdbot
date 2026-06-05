@@ -1,3 +1,8 @@
+/**
+ * Resolves package assets and per-user agent directories for the CLI/runtime.
+ *
+ * These helpers must work from source, dist, and Bun single-file binaries.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";

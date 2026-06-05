@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync yield plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";

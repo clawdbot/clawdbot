@@ -1,3 +1,5 @@
+// Native PDF provider tests cover direct Anthropic and Gemini request shapes,
+// base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
@@ -129,6 +131,8 @@ describe("native PDF provider API calls", () => {
   });
 
   it("bounds large Anthropic API error bodies", async () => {
+    // Provider errors can contain large or sensitive payloads; surface a compact
+    // diagnostic and cancel the stream once the cap is reached.
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -205,6 +209,8 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf sends correct request shape", async () => {
+    // Gemini API keys belong in headers here, not query strings that are more
+    // likely to leak through logs and URL diagnostics.
     const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({

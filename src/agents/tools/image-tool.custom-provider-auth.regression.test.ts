@@ -1,3 +1,5 @@
+// Regression tests for custom image providers whose credentials live in
+// models.json rather than environment variables or auth profiles.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -147,6 +149,8 @@ describe("image custom provider auth regression", () => {
   });
 
   it("executes deferred image tool discovery with config-backed auth and runtime key resolution", async () => {
+    // This covers the production deferred-discovery path: registration can
+    // avoid auth work, but execution still resolves the config-backed key.
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
       const auth = await getApiKeyForModel({

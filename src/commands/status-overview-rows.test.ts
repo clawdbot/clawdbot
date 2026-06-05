@@ -1,3 +1,4 @@
+// Status overview row tests cover status-all overview values, update metadata, and display rows.
 import { describe, expect, it } from "vitest";
 import { VERSION } from "../version.js";
 import {

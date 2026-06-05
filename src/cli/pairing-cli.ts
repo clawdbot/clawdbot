@@ -1,3 +1,4 @@
+// Pairing CLI for listing and approving channel DM pairing requests.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -60,6 +61,7 @@ async function maybeBootstrapCommandOwnerFromPairing(params: {
   channel: PairingChannel;
   id: string;
 }): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
+  // First approved pairing can seed ownerAllowFrom so command access is not left open-ended.
   const ownerEntry = formatCommandOwnerFromChannelSender(params);
   if (!ownerEntry) {
     return { ownerEntry: null, bootstrapped: false };

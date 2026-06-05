@@ -1,3 +1,8 @@
+/**
+ * Shared provider/model reference normalization for static catalogs,
+ * allowlists, and display paths. Manifest policies are optional so tests can
+ * isolate built-in normalization behavior.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -9,8 +14,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 
-// Shared provider/model ref normalization for static catalogs, allowlists, and
-// display paths. Manifest policies are optional so tests can isolate built-ins.
 type StaticModelRef = {
   provider: string;
   model: string;

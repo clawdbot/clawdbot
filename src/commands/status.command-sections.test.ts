@@ -1,3 +1,4 @@
+// Status command section tests cover footer, health, and report section rendering.
 import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "./health.js";
 import {

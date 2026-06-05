@@ -1,3 +1,5 @@
+// Gateway call tests cover connection detail resolution, local/remote URL choice,
+// auth token assembly, device identity, and client command metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

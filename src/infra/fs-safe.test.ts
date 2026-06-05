@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
@@ -22,7 +23,6 @@ const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
 
@@ -339,14 +339,13 @@ describe("fs-safe", () => {
   });
 
   it("rejects setting fs-safe test hooks outside test mode", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("VITEST", undefined);
-
-    expect(() =>
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: () => {},
-      }),
-    ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
+    withEnv({ NODE_ENV: "production", VITEST: undefined }, () => {
+      expect(() =>
+        __setFsSafeTestHooksForTest({
+          afterPreOpenLstat: () => {},
+        }),
+      ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
+    });
   });
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
@@ -630,23 +629,15 @@ describe("fs-safe", () => {
 describe("tilde expansion in file tools", () => {
   it("keeps tilde expansion behavior aligned", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
-    const originalHome = process.env.HOME;
-    const originalOpenClawHome = process.env.OPENCLAW_HOME;
     const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
-    process.env.HOME = fakeHome;
-    process.env.OPENCLAW_HOME = fakeHome;
-    try {
+
+    withEnv({ HOME: fakeHome, OPENCLAW_HOME: fakeHome }, () => {
       const result = expandHomePrefix("~/file.txt");
       expect(path.normalize(result)).toBe(path.join(fakeHome, "file.txt"));
-    } finally {
-      process.env.HOME = originalHome;
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
+    });
 
     const root = await tempDirs.make("openclaw-tilde-test-");
-    process.env.HOME = root;
-    process.env.OPENCLAW_HOME = root;
-    try {
+    await withEnvAsync({ HOME: root, OPENCLAW_HOME: root }, async () => {
       await fs.writeFile(path.join(root, "hello.txt"), "tilde-works");
       const rootFs = await openRoot(root);
       const result = await rootFs.open("~/hello.txt");
@@ -658,10 +649,7 @@ describe("tilde expansion in file tools", () => {
       await rootFs.write("~/output.txt", "tilde-write-works");
       const content = await fs.readFile(path.join(root, "output.txt"), "utf8");
       expect(content).toBe("tilde-write-works");
-    } finally {
-      process.env.HOME = originalHome;
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
+    });
 
     const outsideRoot = await tempDirs.make("openclaw-tilde-outside-");
     await expectRejectCode(

@@ -1,3 +1,4 @@
+// Verifies managed local provider services start, lease, probe, and stop safely.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -14,6 +15,7 @@ import {
 } from "./provider-local-service.js";
 
 async function freePort(): Promise<number> {
+  // Allocate a real loopback port to exercise child process health probes.
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
@@ -31,6 +33,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
+  // Idle-stop assertions wait until the local service no longer responds.
   try {
     await expect
       .poll(

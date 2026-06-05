@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live gateway behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   startQaGatewayChild,

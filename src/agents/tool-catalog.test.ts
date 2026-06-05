@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for core tool catalog profile defaults.
+ * Verifies built-in profile allowlists include expected core tool groups.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveCoreToolProfilePolicy } from "./tool-catalog.js";
 

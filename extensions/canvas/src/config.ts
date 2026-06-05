@@ -1,3 +1,6 @@
+/**
+ * Canvas plugin config parsing, enablement, and schema metadata.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizePluginsConfig,
@@ -11,6 +14,7 @@ import {
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+/** Host-server configuration for Canvas and A2UI assets. */
 export type CanvasHostConfig = {
   enabled?: boolean;
   root?: string;
@@ -18,6 +22,7 @@ export type CanvasHostConfig = {
   liveReload?: boolean;
 };
 
+/** Canvas plugin configuration shape. */
 export type CanvasPluginConfig = {
   host?: CanvasHostConfig;
 };
@@ -47,6 +52,7 @@ function parseCanvasHostConfig(value: unknown): CanvasHostConfig | undefined {
   };
 }
 
+/** Parses raw Canvas plugin config into a typed, normalized shape. */
 export function parseCanvasPluginConfig(value: unknown): CanvasPluginConfig {
   if (!isRecord(value)) {
     return {};
@@ -55,6 +61,7 @@ export function parseCanvasPluginConfig(value: unknown): CanvasPluginConfig {
   return host ? { host } : {};
 }
 
+/** Returns whether the bundled Canvas plugin is effectively enabled. */
 export function isCanvasPluginEnabled(config?: OpenClawConfig): boolean {
   if (!config) {
     return true;
@@ -68,6 +75,7 @@ export function isCanvasPluginEnabled(config?: OpenClawConfig): boolean {
   }).enabled;
 }
 
+/** Resolves Canvas host config from plugin config or root config. */
 export function resolveCanvasHostConfig(params: {
   config?: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
@@ -78,6 +86,7 @@ export function resolveCanvasHostConfig(params: {
   return parsedPluginConfig.host ?? {};
 }
 
+/** Returns whether the Canvas hosted route/server surface should be active. */
 export function isCanvasHostEnabled(config?: OpenClawConfig): boolean {
   if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_CANVAS_HOST)) {
     return false;
@@ -88,6 +97,7 @@ export function isCanvasHostEnabled(config?: OpenClawConfig): boolean {
   return resolveCanvasHostConfig({ config }).enabled !== false;
 }
 
+/** Config schema metadata for Canvas plugin settings. */
 export const canvasConfigSchema: CanvasPluginConfigSchema = {
   parse: parseCanvasPluginConfig,
   uiHints: {

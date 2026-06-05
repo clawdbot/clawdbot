@@ -1,3 +1,4 @@
+// Upload store tests cover staged skill archive persistence and cleanup.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

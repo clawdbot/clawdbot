@@ -1,3 +1,4 @@
+// Browser subpath tests cover plugin SDK browser subpath exports and lazy boundaries.
 import { describe, expect, it } from "vitest";
 import { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
 import { resolveBrowserControlAuth } from "./browser-control-auth.js";

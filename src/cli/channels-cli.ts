@@ -1,3 +1,4 @@
+// Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -54,6 +55,7 @@ function shouldRegisterChannelSetupOptions(
   argv: string[] = process.argv,
   options: RegisterChannelsCliOptions = {},
 ): boolean {
+  // Channel-specific setup flags are expensive to load and only needed on `channels add`.
   if (options.includeSetupOptions) {
     return true;
   }

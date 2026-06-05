@@ -1,3 +1,4 @@
+// Channel login/logout command helpers for local config and gateway reconciliation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -152,6 +153,7 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   accountId: string;
   runtime: RuntimeEnv;
 }) {
+  // Local auth writes are durable even when the gateway restart hook is unavailable or remote.
   if (!params.plugin.gateway?.startAccount) {
     return;
   }

@@ -1,3 +1,5 @@
+// Sandbox filesystem path tests cover bind parsing, host/container path mapping,
+// and writable-root detection.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -64,6 +66,8 @@ describe("parseSandboxBindMount", () => {
   });
 
   it("omits writable bind roots that contain read-only host shadows", () => {
+    // A writable parent with a read-only child is unsafe for generic host writes;
+    // callers must route through mount-aware path resolution instead.
     expect(
       resolveWritableSandboxBindHostRoots([
         "/tmp/data:/tmp/data:rw",
@@ -176,6 +180,8 @@ describe("resolveSandboxFsPathWithMounts", () => {
   });
 
   it("includes container workspace hint without exposing a full home workspace root", () => {
+    // Error messages should guide users toward container paths without printing
+    // the host home directory.
     const workspaceDir = path.join(os.homedir(), "workspace-coder");
     const sandbox = createSandbox({
       workspaceDir,

@@ -1,3 +1,4 @@
+// Verifies provider request transport config normalization and sanitization.
 import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
@@ -15,6 +16,7 @@ import {
 
 describe("provider request config", () => {
   it("merges discovered, provider, and model headers in precedence order", () => {
+    // Later scopes override earlier scopes: discovery < provider < model.
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",
       api: "openai-responses",
@@ -143,6 +145,7 @@ describe("provider request config", () => {
   });
 
   it("drops legacy Authorization when a custom auth header override is configured", () => {
+    // Custom auth headers replace stale Authorization to avoid double auth.
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",
       api: "openai-responses",

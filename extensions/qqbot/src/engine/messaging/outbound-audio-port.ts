@@ -1,3 +1,4 @@
+// Qqbot plugin module implements outbound audio port behavior.
 import type { OutboundAudioPort } from "../adapter/audio.port.js";
 
 let outboundAudioPort: OutboundAudioPort | null = null;

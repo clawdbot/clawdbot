@@ -1,3 +1,5 @@
+// Attachment normalization converts message context media fields into typed
+// attachment records and classifies media kind from MIME or filename.
 import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -44,6 +46,8 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   };
 
   if (pathsFromArray && pathsFromArray.length > 0) {
+    // Array fields are authoritative for multi-attachment messages; the legacy
+    // single URL remains a per-item fallback for older channel payloads.
     const count = pathsFromArray.length;
     const urls = urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
     return pathsFromArray

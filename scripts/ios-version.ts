@@ -1,3 +1,4 @@
+// Ios Version script supports OpenClaw repository automation.
 import path from "node:path";
 import { resolveIosVersion } from "./lib/ios-version.ts";
 

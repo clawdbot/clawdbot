@@ -1,3 +1,4 @@
+// Workboard plugin module implements card lookup behavior.
 import type { WorkboardCard } from "./types.js";
 
 export type WorkboardCardLookupResult =

@@ -1,3 +1,4 @@
+// Loader contract tests cover plugin loader behavior, registry setup, and reset boundaries.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";

@@ -1,3 +1,4 @@
+// Bundled health check tests cover built-in doctor checks and repair advice.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

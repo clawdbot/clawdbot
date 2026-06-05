@@ -1,3 +1,4 @@
+// Markdown Core tests cover render aware chunking behavior.
 import { describe, expect, it } from "vitest";
 import type { MarkdownIR } from "./ir.js";
 import { markdownToIR } from "./ir.js";

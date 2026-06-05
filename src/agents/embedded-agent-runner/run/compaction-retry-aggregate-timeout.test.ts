@@ -1,3 +1,4 @@
+// Coverage for aggregate timeout handling while waiting on compaction retry.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
@@ -7,6 +8,8 @@ type TimeoutCallback = NonNullable<AggregateTimeoutParams["onTimeout"]>;
 type TimeoutCallbackMock = ReturnType<typeof vi.fn<TimeoutCallback>>;
 
 async function withFakeTimers(run: () => Promise<void>) {
+  // Ensure timer state is fully drained between cases because aggregate timeout
+  // races can otherwise leak scheduled callbacks.
   vi.useFakeTimers();
   vi.clearAllTimers();
   try {
@@ -31,6 +34,8 @@ function buildAggregateTimeoutParams(
   overrides: Partial<AggregateTimeoutParams> &
     Pick<AggregateTimeoutParams, "waitForCompactionRetry">,
 ): AggregateTimeoutParams & { onTimeout: TimeoutCallbackMock } {
+  // Defaults model the normal wait path; tests override only the timeout or
+  // in-flight signal under review.
   const onTimeout =
     (overrides.onTimeout as TimeoutCallbackMock | undefined) ?? vi.fn<TimeoutCallback>();
   return {
@@ -59,6 +64,8 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
   });
 
   it("keeps waiting while compaction remains in flight", async () => {
+    // The aggregate timer should not cut off active compaction work; timeout
+    // starts once compaction is no longer in flight.
     await withFakeTimers(async () => {
       let compactionInFlight = true;
       const waitForCompactionRetry = vi.fn(

@@ -1,3 +1,4 @@
+// Test routing roots and globs for core channel tests and channel plugin tests.
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "../../scripts/lib/bundled-plugin-paths.mjs";
 import { splitChannelExtensionTestRoots } from "./vitest.extension-channel-split-paths.mjs";

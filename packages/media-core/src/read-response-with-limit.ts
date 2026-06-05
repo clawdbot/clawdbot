@@ -1,3 +1,4 @@
+// Media Core module implements read response with limit behavior.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 async function readChunkWithIdleTimeout(

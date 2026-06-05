@@ -1,3 +1,6 @@
+/**
+ * Worker-thread entrypoint for serializable compaction planning requests.
+ */
 import { parentPort, workerData } from "node:worker_threads";
 import {
   buildHistoryPrunePlan,
@@ -11,8 +14,7 @@ import {
 } from "./compaction-planning.js";
 import type { AgentMessage } from "./runtime/index.js";
 
-// Worker entry point for CPU-heavy compaction planning. Inputs are validated
-// before delegating to pure planning helpers so failures serialize cleanly.
+/** Serializable request accepted by the compaction planning worker. */
 export type CompactionPlanningWorkerInput =
   | {
       kind: "summaryChunks";
@@ -46,6 +48,7 @@ export type CompactionPlanningWorkerInput =
       contextWindow: number;
     };
 
+/** Serializable successful value returned by the compaction planning worker. */
 export type CompactionPlanningWorkerValue =
   | {
       kind: "summaryChunks";
@@ -65,6 +68,7 @@ export type CompactionPlanningWorkerValue =
       ratio: number;
     };
 
+/** Serializable success/failure envelope posted by the worker. */
 export type CompactionPlanningWorkerResult =
   | {
       status: "ok";

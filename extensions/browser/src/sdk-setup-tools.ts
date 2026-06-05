@@ -1,3 +1,6 @@
+/**
+ * Browser-local SDK setup/tooling bridge for CLI, media, and action helpers.
+ */
 export {
   callGatewayTool,
   listNodes,

@@ -1,3 +1,4 @@
+// Exercises core model selection, aliases, thinking defaults, and visibility policy.
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -175,6 +176,8 @@ const CLAUDE_CLI_OPUS_48_CATALOG = [
 ];
 
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  // Helper keeps thinking-default assertions focused on config differences
+  // while using the same catalog metadata shape as production selection.
   return resolveThinkingDefault({
     cfg,
     provider: "anthropic",
@@ -224,6 +227,7 @@ function createAgentFallbackConfig(params: {
   fallbacks?: string[];
   agentFallbacks?: string[];
 }) {
+  // Compact fixture for primary/fallback allowlist tests.
   return {
     agents: {
       defaults: {

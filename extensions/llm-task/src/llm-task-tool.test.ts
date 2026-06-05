@@ -1,3 +1,4 @@
+// Llm Task tests cover llm task tool plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api.js", async () => {

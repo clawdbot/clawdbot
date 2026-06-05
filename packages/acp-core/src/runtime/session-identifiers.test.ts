@@ -1,3 +1,4 @@
+// ACP Core tests cover session identifiers behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveAcpSessionCwd,

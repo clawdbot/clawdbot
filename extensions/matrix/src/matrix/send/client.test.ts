@@ -1,3 +1,4 @@
+// Matrix tests cover client plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,

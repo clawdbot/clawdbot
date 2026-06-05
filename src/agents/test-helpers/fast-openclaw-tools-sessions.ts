@@ -1,9 +1,12 @@
+/**
+ * Fast OpenClaw sessions-tool mocks.
+ *
+ * Stubs unrelated tool factories so sessions/subagent registration tests import cheaply.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import { stubTool } from "./fast-tool-stubs.js";
 
-// Sessions-tool tests only exercise sessions/subagent registrations.
-// Stub the unrelated tool factories so importing openclaw-tools stays cheap.
 vi.mock("../tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => stubTool("agents_list"),
 }));

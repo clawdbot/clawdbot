@@ -1,3 +1,4 @@
+// OpenClaw agent database stores agent-scoped persisted runtime state.
 import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";

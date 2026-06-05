@@ -1,3 +1,4 @@
+// Legacy config migration validation tests cover schema validation after doctor migrations.
 import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 

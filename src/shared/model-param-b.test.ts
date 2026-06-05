@@ -1,3 +1,4 @@
+// Model parameter B tests cover reasoning budget normalization and aliases.
 import { describe, expect, it } from "vitest";
 import { inferParamBFromIdOrName } from "./model-param-b.js";
 

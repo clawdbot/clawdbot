@@ -1,3 +1,4 @@
+// Slack plugin module implements home behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { HomeView } from "@slack/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

@@ -1,3 +1,4 @@
+/** Tests diagnostic cache-trace event writing, redaction, and stream wrapping. */
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -7,6 +8,8 @@ import { createCacheTrace } from "./cache-trace.js";
 describe("createCacheTrace", () => {
   function createMemoryTraceForTest() {
     const lines: string[] = [];
+    // In-memory writer keeps cache trace assertions deterministic without
+    // touching real diagnostic log paths.
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -266,7 +269,8 @@ describe("createCacheTrace", () => {
 
     const parent: Record<string, unknown> = { role: "user", content: "hello" };
     const child: Record<string, unknown> = { ref: parent };
-    parent.child = child; // circular reference
+    // Cache tracing must fingerprint cyclic prompt payloads instead of recursing forever.
+    parent.child = child;
 
     trace?.recordStage("prompt:images", {
       messages: [parent] as unknown as [],

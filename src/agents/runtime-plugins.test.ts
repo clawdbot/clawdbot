@@ -1,3 +1,4 @@
+// Verifies runtime plugin loading scope, disablement, and gateway-bindable mode.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ describe("ensureRuntimePluginsLoaded", () => {
   let ensureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
 
   beforeEach(async () => {
+    // Reset modules so each case sees fresh mocked runtime-plugin dependencies.
     hoisted.getCurrentPluginMetadataSnapshot.mockReset();
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     hoisted.ensureStandaloneRuntimePluginRegistryLoaded.mockReset();
@@ -85,6 +87,7 @@ describe("ensureRuntimePluginsLoaded", () => {
   });
 
   it("scopes runtime plugin loading to the current gateway startup plan", () => {
+    // Startup metadata narrows runtime loading to plugins already planned for gateway startup.
     const config = {} as never;
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
       startup: {

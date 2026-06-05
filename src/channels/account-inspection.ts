@@ -1,3 +1,8 @@
+/**
+ * Channel account inspection helpers.
+ *
+ * Combines plugin inspection hooks, read-only fallbacks, and configured credential status.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasConfiguredUnavailableCredentialStatus,

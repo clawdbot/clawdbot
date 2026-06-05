@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 

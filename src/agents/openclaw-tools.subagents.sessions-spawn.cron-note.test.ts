@@ -1,3 +1,4 @@
+// Verifies cron-isolated sessions suppress run-mode subagent acceptance notes.
 import { describe, expect, it } from "vitest";
 import {
   resolveSubagentSpawnAcceptedNote,
@@ -25,6 +26,7 @@ describe("sessions_spawn: cron isolated session note suppression", () => {
   });
 
   it("keeps regular run guidance push-based without recommending sessions_yield", () => {
+    // Run-mode children announce completion asynchronously, not through polling.
     expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Auto-announce is push-based");
     expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Continue any independent work");
     expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain(

@@ -1,3 +1,8 @@
+/**
+ * Path extraction for the apply_patch envelope grammar.
+ * Used by pre-execution policy hooks that only need destination paths, not the
+ * full strict patch parser.
+ */
 import path from "node:path";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";

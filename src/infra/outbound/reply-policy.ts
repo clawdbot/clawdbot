@@ -1,3 +1,5 @@
+// Reply policy coordinates explicit and implicit reply-to ids across chunked or
+// multi-payload outbound delivery.
 import { isSingleUseReplyToMode } from "../../auto-reply/reply/reply-reference.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/types.js";

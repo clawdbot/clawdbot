@@ -1,3 +1,6 @@
+/**
+ * Builds scoped message-action discovery inputs for embedded-agent tool setup.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /**
@@ -6,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
  * Discovery expects absent optional fields as `undefined`; preserving nulls would create
  * different cache/input shapes for the same missing runtime fact.
  */
+/** Collect the current sender/channel hints used to discover message actions. */
 export function buildEmbeddedMessageActionDiscoveryInput(params: {
   cfg?: OpenClawConfig;
   channel: string;

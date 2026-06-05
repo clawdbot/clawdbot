@@ -1,3 +1,5 @@
+// Gateway pending node-work queue.
+// Stores short-lived per-node prompts until connected nodes drain/ack them.
 import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
@@ -69,6 +71,8 @@ function getOrCreateState(nodeId: string): NodePendingWorkState {
 }
 
 function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
+  // Expiry pruning bumps revision so polling nodes can observe that work changed
+  // even when no explicit acknowledge call happened.
   const validNowMs = asDateTimestampMs(nowMs);
   if (validNowMs === undefined) {
     return false;

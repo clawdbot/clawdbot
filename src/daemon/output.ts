@@ -1,3 +1,4 @@
+/** Shared terminal output formatting helpers for daemon install/control commands. */
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 
 /** Normalizes Windows separators for command output paths. */
@@ -14,6 +15,7 @@ export function writeFormattedLines(
   lines: Array<{ label: string; value: string }>,
   opts?: { leadingBlankLine?: boolean },
 ): void {
+  // Keep daemon command output line-oriented so shell callers can parse labels.
   if (opts?.leadingBlankLine) {
     stdout.write("\n");
   }

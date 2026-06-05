@@ -1,3 +1,4 @@
+// Msteams tests cover welcome card plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";

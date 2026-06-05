@@ -1,3 +1,4 @@
+// Irc plugin module implements secret contract behavior.
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,

@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway rate limit behavior.
 const GATEWAY_SEND_LIMIT = 120;
 const GATEWAY_SEND_WINDOW_MS = 60_000;
 

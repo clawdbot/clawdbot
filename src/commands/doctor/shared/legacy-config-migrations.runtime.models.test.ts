@@ -1,3 +1,4 @@
+// Runtime model migration tests cover doctor legacy config migrations for model runtime shape.
 import { describe, it, expect } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 

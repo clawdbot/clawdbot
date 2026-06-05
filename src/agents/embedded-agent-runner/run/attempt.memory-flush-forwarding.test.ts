@@ -1,3 +1,4 @@
+// Coverage for forwarding memory-flush metadata into attempt tools.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,8 @@ import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.j
 const MEMORY_RELATIVE_PATH = "memory/2026-03-24.md";
 
 function createAttemptParams(workspaceDir: string) {
+  // Memory-triggered attempts carry the append-only target path into tool
+  // construction so writes cannot escape the flush file.
   return {
     sessionId: "session-memory-flush",
     sessionKey: "agent:main",
@@ -58,6 +61,8 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
   });
 
   it("activates the memory flush append-only write wrapper", async () => {
+    // The wrapper appends directly to the allowed path and rejects any other
+    // write target without delegating to the normal write tool.
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
     const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);
 

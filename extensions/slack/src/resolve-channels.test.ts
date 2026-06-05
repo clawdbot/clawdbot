@@ -1,3 +1,4 @@
+// Slack tests cover resolve channels plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 

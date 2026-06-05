@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for live model sweep filtering.
+ * Verifies provider exclusions, explicit filters, and high-signal model caps.
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveHighSignalLiveModelLimit,

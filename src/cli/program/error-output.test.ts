@@ -1,3 +1,4 @@
+// Error output tests cover program-level error display and exit messaging.
 import { describe, expect, it } from "vitest";
 import { formatCliParseErrorOutput } from "./error-output.js";
 

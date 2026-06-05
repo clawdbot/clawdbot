@@ -1,8 +1,11 @@
+/**
+ * Runtime group-policy contract suite installer.
+ *
+ * Verifies open-provider channels fail closed when provider config is missing.
+ */
 import { expect, it } from "vitest";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../config/runtime-group-policy.js";
 
-// Shared runtime group-policy contract for open-provider channels. Missing
-// provider config must fail closed to allowlist regardless of open defaults.
 export type RuntimeGroupPolicyResolver = (
   params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
 ) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;

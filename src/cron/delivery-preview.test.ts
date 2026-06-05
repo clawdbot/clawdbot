@@ -1,3 +1,4 @@
+// Delivery preview tests cover dry-run delivery plan output for cron jobs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
 

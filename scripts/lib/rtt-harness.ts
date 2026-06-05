@@ -1,3 +1,4 @@
+// Rtt Harness script supports OpenClaw repository automation.
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Slack tests cover channel type plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetSlackChannelTypeCacheForTest,

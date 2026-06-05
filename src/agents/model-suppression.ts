@@ -1,11 +1,16 @@
+/**
+ * Built-in model suppression helpers.
+ * Resolves plugin manifest suppression rules with process-local caching so
+ * built-in catalog entries can be hidden or blocked consistently.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 
 type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
 
@@ -21,14 +26,13 @@ type CachedManifestSuppressionResolver = {
 
 let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
 
+/** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
 export function clearModelSuppressionResolverCacheForTest(): void {
   cachedManifestSuppressionResolver = undefined;
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCacheForTest);
 
-// Manifest suppressions come from plugin metadata snapshots. Keep one process-local
-// resolver per active config/workspace and clear it with the metadata lifecycle.
 function resolveCachedManifestSuppressionResolver(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -117,6 +121,7 @@ function resolveBuiltInModelSuppression(params: {
   return undefined;
 }
 
+/** Return true when plugin manifest metadata suppresses a built-in model entry. */
 export function shouldSuppressBuiltInModelFromManifest(params: {
   provider?: string | null;
   id?: string | null;
@@ -126,6 +131,7 @@ export function shouldSuppressBuiltInModelFromManifest(params: {
   return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
 }
 
+/** Return true when any built-in suppression rule applies to a model entry. */
 export function shouldSuppressBuiltInModel(params: {
   provider?: string | null;
   id?: string | null;
@@ -136,9 +142,11 @@ export function shouldSuppressBuiltInModel(params: {
   return resolveBuiltInModelSuppression(params)?.suppress ?? false;
 }
 
-// Checks only unconditional suppressions (no `when` clause). Used for inline
-// model entries where user configuration may override conditional suppressions
-// (e.g. custom endpoint overrides) but not absolute provider capability blocks.
+/**
+ * Return true only for unconditional manifest suppressions.
+ * Inline model entries may override conditional suppressions, but not absolute
+ * provider capability blocks.
+ */
 export function shouldUnconditionallySuppress(params: {
   provider?: string | null;
   id?: string | null;
@@ -151,6 +159,7 @@ export function shouldUnconditionallySuppress(params: {
   );
 }
 
+/** Resolve the user-facing suppression error message for a built-in model. */
 export function buildSuppressedBuiltInModelError(params: {
   provider?: string | null;
   id?: string | null;
@@ -161,6 +170,7 @@ export function buildSuppressedBuiltInModelError(params: {
   return resolveBuiltInModelSuppression(params)?.errorMessage;
 }
 
+/** Build a reusable suppression predicate for repeated catalog filtering. */
 export function buildShouldSuppressBuiltInModel(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

@@ -1,3 +1,4 @@
+// Diagnostic log capture helpers collect emitted diagnostic logs for tests.
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,

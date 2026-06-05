@@ -1,3 +1,4 @@
+// Cron run log tests cover persisted run log entries and summaries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

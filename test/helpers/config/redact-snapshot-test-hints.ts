@@ -1,3 +1,4 @@
+// Redaction snapshot hints list config UI hints used by redaction tests.
 import type { ConfigUiHints } from "../../../src/config/schema.js";
 
 // Keep this fixture minimal so redaction tests exercise the hint-matching

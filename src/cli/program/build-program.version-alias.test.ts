@@ -1,3 +1,4 @@
+// Build program version alias tests cover version flag aliases on the root program.
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";

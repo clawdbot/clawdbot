@@ -1,3 +1,4 @@
+// Vitest extension media config wires the extension media test shard.
 import { mediaExtensionTestRoots } from "./vitest.extension-media-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

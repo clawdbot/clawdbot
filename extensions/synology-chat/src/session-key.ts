@@ -1,3 +1,4 @@
+// Synology Chat plugin module implements session key behavior.
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 
 const CHANNEL_ID = "synology-chat";

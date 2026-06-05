@@ -1,8 +1,10 @@
+// Shared registration assertions for optional media-generation OpenClaw tools.
 import { describe, expect, it } from "vitest";
 import { collectPresentOpenClawTools } from "./openclaw-tools.registration.js";
 import { textResult, type AnyAgentTool } from "./tools/common.js";
 
 function stubAgentTool(name: string): AnyAgentTool {
+  // Registration tests only need a structurally valid tool.
   return {
     label: name,
     name,

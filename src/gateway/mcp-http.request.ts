@@ -1,3 +1,5 @@
+// MCP loopback HTTP request helpers.
+// Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -176,6 +178,8 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
     let received = 0;
     let settled = false;
+    // Remove listeners on every terminal path; oversized bodies keep the error
+    // listener briefly so Node can deliver the pause/error safely.
     const cleanup = (options?: { keepErrorListener?: boolean }) => {
       req.off("data", onData);
       req.off("end", onEnd);

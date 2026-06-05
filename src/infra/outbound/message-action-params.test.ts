@@ -1,3 +1,5 @@
+// Covers message-action media param collection, sandbox normalization, base64
+// hydration, structured attachments, JSON params, and plugin alias gating.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

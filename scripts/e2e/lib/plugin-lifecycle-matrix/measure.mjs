@@ -1,3 +1,4 @@
+// Measures plugin lifecycle matrix E2E command timings.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -224,11 +225,14 @@ function handleParentSignal(signal) {
     terminateChildGroup("SIGKILL");
     rethrowParentSignal(signal);
   }, timeoutKillGraceMs);
-  parentSignalPollTimer = setInterval(() => {
-    if (!childGroupExists()) {
-      rethrowParentSignal(signal);
-    }
-  }, Math.min(50, timeoutKillGraceMs));
+  parentSignalPollTimer = setInterval(
+    () => {
+      if (!childGroupExists()) {
+        rethrowParentSignal(signal);
+      }
+    },
+    Math.min(50, timeoutKillGraceMs),
+  );
 }
 
 for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {

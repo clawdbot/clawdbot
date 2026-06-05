@@ -1,3 +1,4 @@
+// Isolated agent helper tests cover low-level cron agent utilities.
 import { describe, expect, it } from "vitest";
 import {
   isHeartbeatOnlyResponse,

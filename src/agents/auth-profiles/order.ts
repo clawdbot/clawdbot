@@ -1,3 +1,8 @@
+/**
+ * Auth profile ordering and eligibility.
+ * Resolves configured/stored auth order, provider aliases, cooldowns, and
+ * profile compatibility for provider auth selection.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -235,6 +240,7 @@ export function resolveAuthProfileEligibility(params: {
 }
 
 /** Resolves ordered auth profile candidates for a provider. */
+/** Resolve ordered usable auth profile ids for a provider. */
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;

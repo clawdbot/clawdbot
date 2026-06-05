@@ -1,3 +1,4 @@
+// Auto-linked file ref helpers detect file references that can be linked in UI text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const FILE_REF_EXTENSIONS = ["md", "go", "py", "pl", "sh", "am", "at", "be", "cc"] as const;

@@ -1,3 +1,8 @@
+/**
+ * Shared sandbox naming and scope helpers.
+ *
+ * Produces stable session slugs, workspace directories, and registry scope keys.
+ */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -5,9 +10,6 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { hashTextSha256 } from "./hash.js";
 
-/**
- * Shared sandbox naming and scope helpers used by runtime, registry, and CLI management code.
- */
 /** Converts an arbitrary session key into a bounded filesystem/container-safe slug. */
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";

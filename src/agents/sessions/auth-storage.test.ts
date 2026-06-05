@@ -1,3 +1,5 @@
+// Auth storage tests cover durable credential persistence and file permission
+// contracts for agent model authentication.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -102,6 +104,8 @@ describe("auth-storage survives an interrupted write during persist (atomic writ
   });
 
   it("preserves existing auth directory permissions while replacing the file", () => {
+    // The auth file itself is secret material, but callers may place it in a
+    // directory with broader traversal permissions that must not be tightened.
     tmpDir = fs.mkdtempSync(join(tmpdir(), "auth-dir-mode-"));
     fs.chmodSync(tmpDir, 0o755);
     const authPath = join(tmpDir, "auth.json");

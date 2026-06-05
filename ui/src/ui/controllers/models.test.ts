@@ -1,3 +1,4 @@
+// Control UI tests cover models behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { loadModels } from "./models.ts";

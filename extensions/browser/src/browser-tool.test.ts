@@ -1,3 +1,4 @@
+// Browser tests cover browser tool plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({

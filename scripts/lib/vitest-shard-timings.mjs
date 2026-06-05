@@ -1,3 +1,4 @@
+// Persists per-shard Vitest timing samples for later scheduling.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +26,9 @@ function resolveShardTimingsPath(cwd = process.cwd(), env = process.env) {
   return env[TIMINGS_FILE_ENV_KEY] || path.join(cwd, ".artifacts", "vitest-shard-timings.json");
 }
 
+/**
+ * Resolves the stable timing key for a Vitest shard specification.
+ */
 export function resolveShardTimingKey(spec) {
   if (!Array.isArray(spec.includePatterns) || spec.includePatterns.length === 0) {
     return spec.config;
@@ -40,6 +44,9 @@ export function resolveShardTimingKey(spec) {
   )}`;
 }
 
+/**
+ * Creates a timing sample for completed non-watch Vitest shard runs.
+ */
 export function createShardTimingSample(spec, durationMs) {
   if (spec.watchMode || !Number.isFinite(durationMs) || durationMs <= 0) {
     return null;
@@ -54,6 +61,9 @@ export function createShardTimingSample(spec, durationMs) {
   };
 }
 
+/**
+ * Reads persisted shard timing averages, returning an empty map when disabled.
+ */
 export function readShardTimings(cwd = process.cwd(), env = process.env) {
   if (!shouldUseShardTimings(env)) {
     return new Map();
@@ -78,6 +88,9 @@ export function readShardTimings(cwd = process.cwd(), env = process.env) {
   }
 }
 
+/**
+ * Merges new shard timing samples into the persisted local timing artifact.
+ */
 export function writeShardTimings(samples, cwd = process.cwd(), env = process.env) {
   if (!shouldUseShardTimings(env) || samples.length === 0) {
     return;

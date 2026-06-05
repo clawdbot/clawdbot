@@ -1,3 +1,4 @@
+// Nextcloud Talk helper module supports normalize behavior.
 export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {

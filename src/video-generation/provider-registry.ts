@@ -1,3 +1,4 @@
+// Video provider registry stores video generation provider factories by id.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";

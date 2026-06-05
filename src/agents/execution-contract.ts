@@ -1,3 +1,6 @@
+/**
+ * Resolves strict agentic execution contracts for provider/model pairs.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";

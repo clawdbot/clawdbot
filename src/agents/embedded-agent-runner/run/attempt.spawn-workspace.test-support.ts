@@ -1,3 +1,4 @@
+// Shared harness and mocks for embedded attempt spawn-workspace tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +46,8 @@ type BootstrapContext = {
 };
 
 function normalizeMockProviderId(providerId?: string): string {
+  // Provider ids in mocked model routing follow the same lowercase normalization
+  // as production helpers.
   return normalizeLowercaseStringOrEmpty(providerId);
 }
 
@@ -96,6 +99,8 @@ type AttemptSpawnWorkspaceHoisted = {
 };
 
 export function createSubscriptionMock(): SubscriptionMock {
+  // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
+  // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
@@ -131,6 +136,8 @@ export function createSubscriptionMock(): SubscriptionMock {
 }
 
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
+  // Hoisted mocks must exist before the runner module graph is imported, because
+  // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();

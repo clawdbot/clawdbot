@@ -1,3 +1,5 @@
+// Operator approval runtime token.
+// Provides a process-local loopback token for approval helper clients.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
 let approvalRuntimeToken: string | null = null;

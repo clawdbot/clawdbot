@@ -1,3 +1,8 @@
+/**
+ * Active subagent prompt context builder.
+ *
+ * Renders sanitized runtime-owned subagent state into system prompt additions.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { listControlledSubagentRuns } from "./subagent-control.js";

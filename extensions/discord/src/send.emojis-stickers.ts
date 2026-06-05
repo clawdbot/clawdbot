@@ -1,3 +1,4 @@
+// Discord plugin module implements send.emojis stickers behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,

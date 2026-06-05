@@ -1,3 +1,4 @@
+// Googlechat plugin module implements google auth behavior.
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";

@@ -1,3 +1,6 @@
+// Combines task and task-flow audit findings for CLI output.
+// The combined shape lets list/json commands filter and sort both registries together.
+
 import type {
   TaskFlowAuditCode,
   TaskFlowAuditFinding,
@@ -44,6 +47,7 @@ function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSys
   );
 }
 
+/** Builds combined task/task-flow audit findings with optional severity/code filtering. */
 export function buildTaskSystemAuditFindings(params: {
   taskFindings: TaskAuditFinding[];
   flowFindings: TaskFlowAuditFinding[];
@@ -83,6 +87,7 @@ export function buildTaskSystemAuditFindings(params: {
       return true;
     })
     .toSorted(compareSystemAuditFindings);
+  // Keep summary counts based on the full sorted set; filters only affect displayed findings.
   const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
   return {
     allFindings: sortedAllFindings,

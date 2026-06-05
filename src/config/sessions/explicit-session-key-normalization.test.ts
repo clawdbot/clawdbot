@@ -1,3 +1,4 @@
+// Explicit session key tests cover normalization of caller-provided session keys.
 import { describe, expect, it } from "vitest";
 import { normalizeExplicitSessionKey } from "./explicit-session-key-normalization.js";
 import { installDiscordSessionKeyNormalizerFixture, makeCtx } from "./session-key.test-helpers.js";

@@ -1,3 +1,5 @@
+// Runner entry guard tests cover malformed decision data formatting without
+// depending on provider execution.
 import { describe, expect, it } from "vitest";
 import { formatDecisionSummary } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";

@@ -1,3 +1,4 @@
+// Qa Matrix tests cover cli plugin behavior.
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Msteams plugin module implements polls store memory behavior.
 import {
   type MSTeamsPoll,
   type MSTeamsPollStore,

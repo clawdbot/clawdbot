@@ -1,3 +1,4 @@
+// Canvas tests cover documents plugin behavior.
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

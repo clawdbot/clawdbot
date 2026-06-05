@@ -1,3 +1,4 @@
+// Static payload checks for installed plugins after a core update swaps package files.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";

@@ -1,3 +1,4 @@
+// Diagnostic support export tests cover support bundle generation and contents.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

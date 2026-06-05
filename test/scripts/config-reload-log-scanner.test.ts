@@ -1,3 +1,4 @@
+// Config Reload Log Scanner tests cover config reload log scanner script behavior.
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

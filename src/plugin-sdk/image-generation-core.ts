@@ -33,6 +33,7 @@ export { parseImageGenerationModelRef } from "../image-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+/** Default OpenAI image model used when image-generation provider config omits one. */
 export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 type ImageGenerationCoreAuthRuntimeModule =
@@ -47,6 +48,7 @@ async function loadImageGenerationCoreAuthRuntime(): Promise<ImageGenerationCore
   return imageGenerationCoreAuthRuntimePromise;
 }
 
+/** Resolve image-generation provider API keys through the lazy auth runtime helper. */
 export async function resolveApiKeyForProvider(
   ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>
 ): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {

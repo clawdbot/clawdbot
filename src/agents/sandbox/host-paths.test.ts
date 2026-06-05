@@ -1,3 +1,5 @@
+// Sandbox host path tests cover cross-platform path normalization and symlink
+// resolution used before Docker bind mounts are constructed.
 import { mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +50,8 @@ describe("resolveSandboxHostPathViaExistingAncestor", () => {
   });
 
   it("normalizes Windows paths without resolving them through POSIX cwd on non-Windows hosts", () => {
+    // Cross-platform config can carry Windows paths on macOS/Linux; treating
+    // them as POSIX relatives would corrupt the mount policy key.
     if (process.platform === "win32") {
       return;
     }
@@ -58,6 +62,8 @@ describe("resolveSandboxHostPathViaExistingAncestor", () => {
   });
 
   it("resolves symlink parents when the final leaf does not exist", () => {
+    // Mount checks need the real parent path even when Docker will create the
+    // final missing leaf later.
     if (process.platform === "win32") {
       return;
     }

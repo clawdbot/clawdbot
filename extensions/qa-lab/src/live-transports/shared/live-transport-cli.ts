@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live transport cli behavior.
 import {
   createLiveTransportQaCliRegistration as createSharedLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistrationOptions,

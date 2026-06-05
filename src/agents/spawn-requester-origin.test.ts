@@ -1,3 +1,5 @@
+// Spawn requester-origin tests prove child agents inherit the right channel,
+// account, and target peer from the parent request context.
 import { describe, expect, it } from "vitest";
 import type { AgentBindingMatch } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -193,6 +195,8 @@ describe("resolveRequesterOriginForChild", () => {
       bindings: [routeBinding({ channel: "matrix", accountId: "bot-alpha-default" })],
     },
   ] as const)("selects target account: $name", (scenario) => {
+    // Binding priority is user-visible routing policy: peer and role scoped
+    // matches must beat broad channel defaults without losing same-agent calls.
     expect(
       resolveAccount({
         cfg: { bindings: [...scenario.bindings] } as OpenClawConfig,
@@ -330,6 +334,8 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     } as OpenClawConfig;
 
+    // Some channel adapters prefix both channel id and peer kind; the resolver
+    // has to strip wrappers without treating canonical colon ids as wrappers.
     expectOrigin(
       resolveRequesterOriginForChild({
         cfg,

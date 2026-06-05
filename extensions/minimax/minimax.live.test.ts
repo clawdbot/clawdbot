@@ -1,3 +1,4 @@
+// Minimax tests cover minimax plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

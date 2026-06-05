@@ -1,3 +1,4 @@
+// Extracts progress markers from Parallels package E2E logs.
 import fs from "node:fs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 

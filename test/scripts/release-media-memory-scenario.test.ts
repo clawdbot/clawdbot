@@ -1,3 +1,4 @@
+// Release Media Memory Scenario tests cover release media memory scenario script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

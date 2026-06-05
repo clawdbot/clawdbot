@@ -1,3 +1,4 @@
+// Bundled A2UI runtime resource embedded by OpenClawKit.
 var __defProp$1 = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
 	let target = {};

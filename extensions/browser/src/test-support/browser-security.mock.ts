@@ -1,3 +1,6 @@
+/**
+ * Test mocks that pin Browser SSRF DNS lookups to a public example address.
+ */
 import { vi } from "vitest";
 
 const lookupFn = vi.hoisted(() => async (_hostname: string, options?: { all?: boolean }) => {

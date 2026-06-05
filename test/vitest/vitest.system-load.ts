@@ -1,3 +1,4 @@
+// Vitest system load helper probes host load before expensive test lanes.
 import { spawnSync } from "node:child_process";
 
 type EnvMap = Record<string, string | undefined>;

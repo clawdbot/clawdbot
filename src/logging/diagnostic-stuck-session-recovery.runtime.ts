@@ -1,3 +1,4 @@
+// Stuck session recovery runtime helpers inspect embedded sessions for recovery.
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   abortAndDrainEmbeddedAgentRun,

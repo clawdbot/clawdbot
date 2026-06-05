@@ -1,3 +1,9 @@
+/**
+ * Browser agent action routes for download handling.
+ *
+ * Registers endpoints that wait for a pending download or trigger a referenced
+ * page download while keeping files scoped to the configured downloads root.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
@@ -22,6 +28,7 @@ function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: n
   };
 }
 
+/** Register download action endpoints on the browser control server. */
 export function registerBrowserAgentActDownloadRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

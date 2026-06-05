@@ -1,3 +1,4 @@
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   CacheControlEphemeral,
@@ -40,6 +41,8 @@ import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
+
+const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 
 /**
  * Resolve cache retention preference.
@@ -939,27 +942,38 @@ function buildParams(
   options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
+  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
+  const compat = context.tools?.length ? getAnthropicCompat(model) : undefined;
+  const tools =
+    context.tools && compat
+      ? convertTools(
+          context.tools,
+          isOAuthTokenResult,
+          compat.supportsEagerToolInputStreaming,
+          compat.supportsCacheControlOnTools ? cacheControl : undefined,
+        )
+      : undefined;
+  const systemCacheControlCount = countNativeCacheControlMarkers(system);
+  const toolCacheControlCount = countNativeCacheControlMarkers(tools);
+  const messageCacheControlLimit = Math.max(
+    0,
+    ANTHROPIC_CACHE_CONTROL_LIMIT - systemCacheControlCount - toolCacheControlCount,
+  );
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(context.messages, model, isOAuthTokenResult, cacheControl),
+    messages: convertMessages(
+      context.messages,
+      model,
+      isOAuthTokenResult,
+      cacheControl,
+      messageCacheControlLimit,
+    ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
   };
 
-  // For OAuth tokens, we MUST include Claude Code identity
-  if (isOAuthTokenResult) {
-    params.system = [
-      {
-        type: "text",
-        text: "You are Claude Code, Anthropic's official CLI for Claude.",
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      },
-    ];
-    if (context.systemPrompt) {
-      params.system.push(...buildSystemPromptBlocks(context.systemPrompt, cacheControl));
-    }
-  } else if (context.systemPrompt) {
-    params.system = buildSystemPromptBlocks(context.systemPrompt, cacheControl);
+  if (system) {
+    params.system = system;
   }
 
   // Temperature is incompatible with extended thinking (adaptive or budget-based).
@@ -971,14 +985,8 @@ function buildParams(
     params.stop_sequences = options.stop;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    const compat = getAnthropicCompat(model);
-    params.tools = convertTools(
-      context.tools,
-      isOAuthTokenResult,
-      compat.supportsEagerToolInputStreaming,
-      compat.supportsCacheControlOnTools ? cacheControl : undefined,
-    );
+  if (tools && tools.length > 0) {
+    params.tools = tools;
   }
 
   // Configure thinking mode: adaptive (Opus 4.6+ and Sonnet 4.6),
@@ -1041,6 +1049,7 @@ function convertMessages(
   model: Model<"anthropic-messages">,
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
+  messageCacheControlLimit = 4,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
@@ -1151,8 +1160,6 @@ function convertMessages(
     } else if (msg.role === "toolResult") {
       // Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
       const toolResults: ContentBlockParam[] = [];
-
-      // Add the current tool result
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
@@ -1160,10 +1167,9 @@ function convertMessages(
         is_error: msg.isError,
       });
 
-      // Look ahead for consecutive toolResult messages
       let j = i + 1;
       while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
+        const nextMsg = transformedMessages[j] as ToolResultMessage;
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1173,10 +1179,7 @@ function convertMessages(
         j++;
       }
 
-      // Skip the messages we've already processed
       i = j - 1;
-
-      // Add a single user message with all tool results
       params.push({
         role: "user",
         content: toolResults,
@@ -1184,34 +1187,88 @@ function convertMessages(
     }
   }
 
-  // Add cache_control to the last user message to cache conversation history
-  if (cacheControl && params.length > 0) {
-    const lastMessage = params[params.length - 1];
-    if (lastMessage.role === "user") {
-      if (Array.isArray(lastMessage.content)) {
-        const lastBlock = lastMessage.content[lastMessage.content.length - 1];
-        if (
-          lastBlock &&
-          (lastBlock.type === "text" ||
-            lastBlock.type === "image" ||
-            lastBlock.type === "tool_result")
-        ) {
-          (lastBlock as typeof lastBlock & { cache_control?: typeof cacheControl }).cache_control =
-            cacheControl;
+  if (cacheControl && params.length > 0 && messageCacheControlLimit > 0) {
+    let fallbackToolResult: ContentBlockParam | undefined;
+
+    for (let i = params.length - 1; i >= 0; i--) {
+      const message = params[i];
+      if (message.role !== "user") {
+        continue;
+      }
+
+      if (Array.isArray(message.content)) {
+        for (let j = message.content.length - 1; j >= 0; j--) {
+          const block = message.content[j];
+          if (block.type === "text" || block.type === "image") {
+            if (fallbackToolResult && messageCacheControlLimit === 1) {
+              applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+              return params;
+            }
+            applyContentBlockCacheControl(block, cacheControl);
+            if (fallbackToolResult && messageCacheControlLimit > 1) {
+              applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+            }
+            return params;
+          }
+          if (block.type === "tool_result" && fallbackToolResult === undefined) {
+            fallbackToolResult = block;
+          }
         }
-      } else if (typeof lastMessage.content === "string") {
-        lastMessage.content = [
+        continue;
+      }
+
+      if (typeof message.content === "string") {
+        if (fallbackToolResult && messageCacheControlLimit === 1) {
+          applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+          return params;
+        }
+        message.content = [
           {
             type: "text",
-            text: lastMessage.content,
+            text: message.content,
             cache_control: cacheControl,
           },
         ] as ContentBlockParam[];
+        if (fallbackToolResult && messageCacheControlLimit > 1) {
+          applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+        }
+        return params;
       }
+    }
+
+    if (fallbackToolResult) {
+      applyContentBlockCacheControl(fallbackToolResult, cacheControl);
     }
   }
 
   return params;
+}
+
+function applyContentBlockCacheControl(
+  block: ContentBlockParam,
+  cacheControl: CacheControlEphemeral,
+): void {
+  (block as ContentBlockParam & { cache_control?: CacheControlEphemeral }).cache_control =
+    cacheControl;
+}
+
+function buildAnthropicSystemBlocks(
+  systemPrompt: string | undefined,
+  isOAuthTokenResult: boolean,
+  cacheControl: CacheControlEphemeral | undefined,
+): TextBlockParam[] | undefined {
+  const blocks: TextBlockParam[] = [];
+  if (isOAuthTokenResult) {
+    blocks.push({
+      type: "text",
+      text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      ...(cacheControl ? { cache_control: cacheControl } : {}),
+    });
+  }
+  if (systemPrompt) {
+    blocks.push(...buildSystemPromptBlocks(systemPrompt, cacheControl));
+  }
+  return blocks.length > 0 ? blocks : undefined;
 }
 
 function buildSystemPromptBlocks(
@@ -1247,6 +1304,20 @@ function buildSystemPromptBlocks(
     blocks.push({ type: "text", text: sanitizeSurrogates(split.dynamicSuffix) });
   }
   return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
+}
+
+function countNativeCacheControlMarkers(blocks: unknown): number {
+  if (!Array.isArray(blocks)) {
+    return 0;
+  }
+
+  let count = 0;
+  for (const block of blocks) {
+    if (block && typeof block === "object" && "cache_control" in block) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function shouldUseFineGrainedToolStreamingBeta(

@@ -1,3 +1,4 @@
+// Covers prompt-facing sandbox metadata and full-access availability rules.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { buildEmbeddedSandboxInfo } from "./embedded-agent-runner.js";
@@ -8,6 +9,8 @@ import {
 import type { SandboxContext } from "./sandbox.js";
 
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
+  // Mirrors the sandbox runtime shape enough for prompt-info tests without
+  // starting Docker or browser sidecars.
   const base = {
     enabled: true,
     backendId: "docker",
@@ -99,6 +102,8 @@ describe("buildEmbeddedSandboxInfo", () => {
   });
 
   it("keeps full-access unavailability truth when provided", () => {
+    // Runtime-level blocks are authoritative and must not be overwritten by
+    // host exec policy that appears permissive.
     const sandbox = createSandboxContext();
 
     expect(
@@ -233,6 +238,8 @@ describe("buildEmbeddedSandboxInfo", () => {
   });
 
   it("marks full access unavailable when host approval floors still require review", () => {
+    // Full access is prompt-advertised only when both security level and ask
+    // policy allow execution without review.
     const sandbox = createSandboxContext();
 
     expect(

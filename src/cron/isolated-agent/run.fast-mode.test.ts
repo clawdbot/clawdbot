@@ -1,3 +1,4 @@
+// Fast mode tests cover isolated cron run behavior in fast execution mode.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,

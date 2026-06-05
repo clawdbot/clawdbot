@@ -1,3 +1,4 @@
+// Agent talkback runtime tests cover agent response playback into talk sessions.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRealtimeVoiceAgentTalkbackQueue } from "./agent-talkback-runtime.js";
 

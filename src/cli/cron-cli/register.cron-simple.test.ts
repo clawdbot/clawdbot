@@ -1,3 +1,4 @@
+// Cron simple register tests cover basic cron command registration and execution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";

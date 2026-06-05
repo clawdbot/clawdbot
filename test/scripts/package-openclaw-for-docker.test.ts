@@ -1,3 +1,4 @@
+// Package Openclaw For Docker tests cover package openclaw for docker script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -1,3 +1,9 @@
+/**
+ * Shared browser action enums and parsers.
+ *
+ * Keeps route normalization, schema tests, and action dispatch using the same
+ * action names, mouse buttons, and keyboard modifier vocabulary.
+ */
 const ACT_KINDS = [
   "batch",
   "click",
@@ -17,6 +23,7 @@ const ACT_KINDS = [
 
 export type ActKind = (typeof ACT_KINDS)[number];
 
+/** Return true when a raw value names a supported browser action kind. */
 export function isActKind(value: unknown): value is ActKind {
   if (typeof value !== "string") {
     return false;
@@ -35,6 +42,7 @@ const ALLOWED_CLICK_MODIFIERS = new Set<ClickModifier>([
   "Shift",
 ]);
 
+/** Parse a model/client mouse button string into the supported click button set. */
 export function parseClickButton(raw: string): ClickButton | undefined {
   if (raw === "left" || raw === "right" || raw === "middle") {
     return raw;
@@ -42,6 +50,7 @@ export function parseClickButton(raw: string): ClickButton | undefined {
   return undefined;
 }
 
+/** Parse and validate click modifier names accepted by Playwright actions. */
 export function parseClickModifiers(raw: string[]): {
   modifiers?: ClickModifier[];
   error?: string;

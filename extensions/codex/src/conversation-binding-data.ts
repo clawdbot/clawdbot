@@ -1,3 +1,4 @@
+// Codex plugin module implements conversation binding data behavior.
 import process from "node:process";
 import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

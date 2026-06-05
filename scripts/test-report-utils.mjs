@@ -1,3 +1,4 @@
+// Shared helpers for running Vitest JSON reports and reading duration data.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +7,9 @@ import path from "node:path";
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const repoRoot = path.resolve(process.cwd());
 
+/**
+ * Normalizes absolute or relative file names to repo-relative POSIX paths.
+ */
 export function normalizeTrackedRepoPath(value) {
   const normalizedValue = typeof value === "string" ? value : String(value ?? "");
   const repoRelative = path.isAbsolute(normalizedValue)
@@ -17,10 +21,16 @@ export function normalizeTrackedRepoPath(value) {
   return normalizeRepoPath(repoRelative);
 }
 
+/**
+ * Reads and parses a JSON file.
+ */
 export function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+/**
+ * Reads a JSON file or returns the provided fallback on failure.
+ */
 export function tryReadJsonFile(filePath, fallback) {
   try {
     return readJsonFile(filePath);
@@ -29,6 +39,9 @@ export function tryReadJsonFile(filePath, fallback) {
   }
 }
 
+/**
+ * Runs Vitest with the JSON reporter unless an existing report was supplied.
+ */
 export function runVitestJsonReport({
   config,
   reportPath = "",
@@ -63,6 +76,9 @@ export function runVitestJsonReport({
   return resolvedReportPath;
 }
 
+/**
+ * Extracts per-file durations from a Vitest JSON report.
+ */
 export function collectVitestFileDurations(report, normalizeFile = (value) => value) {
   return (report.testResults ?? [])
     .map((result) => {
@@ -79,6 +95,9 @@ export function collectVitestFileDurations(report, normalizeFile = (value) => va
     .filter((entry) => entry.file.length > 0 && entry.durationMs > 0);
 }
 
+/**
+ * Extracts per-assertion durations from a Vitest JSON report.
+ */
 export function collectVitestAssertionDurations(report, normalizeFile = (value) => value) {
   return (report.testResults ?? []).flatMap((result) => {
     const file = typeof result.name === "string" ? normalizeFile(result.name) : "";

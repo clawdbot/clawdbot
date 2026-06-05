@@ -1,3 +1,4 @@
+// Text report tests cover mixed raw, line, and table section rendering order for status-all output.
 import { describe, expect, it } from "vitest";
 import { appendStatusReportSections } from "./text-report.js";
 

@@ -1,3 +1,4 @@
+// Types script supports OpenClaw repository automation.
 export type Provider = "openai" | "anthropic" | "minimax";
 export type Mode = "fresh" | "upgrade" | "both";
 export type Platform = "macos" | "windows" | "linux";

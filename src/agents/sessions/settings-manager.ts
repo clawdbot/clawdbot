@@ -1,3 +1,8 @@
+/**
+ * Session settings manager.
+ *
+ * Loads and persists user/session defaults for models, transports, retry policy, UI, packages, and telemetry.
+ */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

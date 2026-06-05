@@ -1,3 +1,4 @@
+// Isolated auth session flag tests cover auth isolation for scheduled agent sessions.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,

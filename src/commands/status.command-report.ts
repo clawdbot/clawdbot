@@ -1,3 +1,6 @@
+// Renders the standard `openclaw status` report from prebuilt section data.
+// Report data assembly stays separate so tests can validate rows without terminal formatting.
+
 import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import {
   buildStatusChannelsTableSection,
@@ -9,6 +12,7 @@ import {
 } from "./status-all/report-sections.js";
 import { appendStatusReportSections } from "./status-all/text-report.js";
 
+/** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
   heading: (text: string) => string;
   muted: (text: string) => string;
@@ -53,6 +57,7 @@ export async function buildStatusCommandReportLines(params: {
           params.showTaskMaintenanceHint || params.retainedLostTaskLine
             ? [
                 "",
+                // Raw section keeps maintenance hints directly below the overview table.
                 ...(params.showTaskMaintenanceHint
                   ? [params.muted(params.taskMaintenanceHint)]
                   : []),

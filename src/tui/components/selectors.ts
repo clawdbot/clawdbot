@@ -1,3 +1,4 @@
+// Selector components adapt Pi TUI list controls for OpenClaw settings.
 import { type SelectItem, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import {
   filterableSelectListTheme,

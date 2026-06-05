@@ -1,3 +1,8 @@
+/**
+ * External CLI auth discovery scope extraction from config.
+ * Collects provider/profile ids from configured models, runtimes, auth order,
+ * and agent defaults to limit CLI credential probing.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,

@@ -1,3 +1,8 @@
+/**
+ * Resolves model catalog entries visible to browse/UI surfaces. Visibility
+ * combines explicit policy, configured models, defaults, and runtime
+ * auth-backed availability.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
@@ -8,8 +13,6 @@ import {
   createModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 
-// Model catalog visibility resolver for browse/UI surfaces. It combines explicit
-// visibility policy with configured models and auth-backed runtime availability.
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";

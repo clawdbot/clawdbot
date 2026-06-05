@@ -1,14 +1,13 @@
+/**
+ * Subagent spawn planning helpers.
+ *
+ * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
+ */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
-/**
- * Builds the model, thinking, and timeout plan for sessions_spawn calls.
- *
- * This file keeps spawn argument normalization separate from the tool executor
- * so tests can cover policy/default resolution without launching sessions.
- */
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
   if (!ref) {

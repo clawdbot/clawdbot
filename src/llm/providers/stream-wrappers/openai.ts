@@ -1,3 +1,4 @@
+// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,

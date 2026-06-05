@@ -1,3 +1,4 @@
+// Control Ui I18N tests cover control ui i18n script behavior.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

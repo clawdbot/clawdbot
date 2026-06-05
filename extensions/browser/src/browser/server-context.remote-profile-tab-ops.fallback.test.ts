@@ -1,3 +1,4 @@
+// Browser tests cover server context.remote profile tab ops.fallback plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import {

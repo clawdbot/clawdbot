@@ -1,3 +1,4 @@
+// Vitest contracts channel session config wires the contracts channel session test shard.
 import {
   channelSessionContractPatterns,
   createContractsVitestConfig,

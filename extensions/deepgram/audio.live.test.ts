@@ -1,3 +1,4 @@
+// Deepgram tests cover audio plugin behavior.
 import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,

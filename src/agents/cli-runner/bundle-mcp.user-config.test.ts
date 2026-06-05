@@ -1,3 +1,4 @@
+/** Tests merging user OpenClaw MCP server config into Claude bundle-MCP overlays. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -135,6 +136,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
   });
 
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
+    // The OpenClaw loopback server is generated runtime state and must win over
+    // user config with the same server name.
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-loopback-",
     );

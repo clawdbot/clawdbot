@@ -1,3 +1,8 @@
+/**
+ * Direct text/media outbound adapter helpers.
+ *
+ * Builds lightweight SDK-backed send adapters with chunking, sanitization, and media limits.
+ */
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -6,10 +11,6 @@ import { sanitizeForPlainText } from "../../../infra/outbound/sanitize-text.js";
 import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.adapters.js";
-
-/**
- * Shared direct text/media outbound adapter factory for SDK-backed channels.
- */
 
 type DirectSendOptions = {
   cfg: OpenClawConfig;

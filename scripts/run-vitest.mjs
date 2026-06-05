@@ -1,3 +1,5 @@
+// Runs Vitest through repo project selection, local scheduling policy, output
+// watchdogs, and process-group cleanup.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -17,16 +19,21 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+/** Default watchdog timeout for Vitest runs that stop producing output. */
 export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
+/** Default heartbeat interval while waiting on silent Vitest output. */
 export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 60_000;
+/** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
+  GATEWAY_VITEST_CONFIG,
   "test/vitest/vitest.ui-e2e.config.ts",
   "test/vitest/vitest.full-agentic.config.ts",
   "test/vitest/vitest.full-core-contracts.config.ts",
@@ -105,6 +112,9 @@ function parsePositiveInt(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Resolves default Node flags for Vitest, including the local Maglev opt-in.
+ */
 export function resolveVitestNodeArgs(env = process.env) {
   if (isTruthyEnvValue(env.OPENCLAW_VITEST_ENABLE_MAGLEV)) {
     return [];
@@ -121,6 +131,9 @@ function isMissingVitestResolveError(error) {
   );
 }
 
+/**
+ * Builds the actionable dependency-install message when Vitest is unavailable.
+ */
 export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl = fs) {
   const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
   const reason = hasNodeModules
@@ -197,6 +210,9 @@ function resolveHydratedVitestCliEntry({ baseDir, env, fsImpl, platform }) {
   return path.join(nodeModulesPath, "vitest", "vitest.mjs");
 }
 
+/**
+ * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
+ */
 export function resolveVitestCliEntry({
   baseDir = repoRoot,
   env = process.env,
@@ -228,10 +244,16 @@ export function resolveVitestCliEntry({
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 }
 
+/**
+ * Reads the explicit no-output watchdog timeout, if configured.
+ */
 export function resolveVitestNoOutputTimeoutMs(env = process.env) {
   return parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
 }
 
+/**
+ * Reads the explicit no-output heartbeat interval, if configured.
+ */
 export function resolveVitestNoOutputHeartbeatMs(env = process.env) {
   return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
 }
@@ -307,6 +329,9 @@ function resolveExplicitVitestMode(argv) {
   return mode;
 }
 
+/**
+ * Adds default watchdog env for non-watch Vitest runs.
+ */
 export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
@@ -330,6 +355,9 @@ export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
   };
 }
 
+/**
+ * Chooses the default watchdog timeout from the selected Vitest config.
+ */
 export function resolveDefaultVitestNoOutputTimeoutMs(argv = []) {
   const config = resolveVitestConfigArg(argv);
   if (config !== null && isLongRunningVitestConfig(config)) {
@@ -364,6 +392,9 @@ function isLongRunningVitestConfig(config) {
   return false;
 }
 
+/**
+ * Builds spawn options for the primary Vitest child process.
+ */
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
   return {
     env: resolveVitestSpawnEnv(env),
@@ -372,6 +403,9 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
   };
 }
 
+/**
+ * Applies local Vitest scheduling and native worker budget env.
+ */
 export function resolveVitestSpawnEnv(env = process.env) {
   const nextEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(nextEnv)) {
@@ -403,6 +437,9 @@ function resolveExplicitVitestWorkerBudget(env) {
   return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
 }
 
+/**
+ * Filters known noisy Vitest stderr lines after stripping ANSI escapes.
+ */
 export function shouldSuppressVitestStderrLine(line) {
   const normalizedLine = line
     .split(ANSI_CSI_PREFIX)
@@ -411,6 +448,9 @@ export function shouldSuppressVitestStderrLine(line) {
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
+/**
+ * Detects pnpm exec node invocations so the wrapper can spawn Node directly.
+ */
 export function resolveDirectNodeVitestArgs(pnpmArgs) {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
@@ -471,6 +511,9 @@ function collectExplicitTestFileArgs(argv) {
   return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
 }
 
+/**
+ * Forces explicit test-file targets to fail when Vitest finds no matching tests.
+ */
 export function resolveExplicitTestFileNoPassArgs(argv) {
   if (collectExplicitTestFileArgs(argv).length === 0) {
     return argv;
@@ -582,6 +625,9 @@ function hasNonRunVitestSubcommand(argv) {
   return false;
 }
 
+/**
+ * Delegates default or explicit-file runs to the repo test-projects runner.
+ */
 export function resolveTestProjectsDelegationArgs(argv) {
   if (
     hasExplicitVitestConfigArg(argv) ||
@@ -598,6 +644,9 @@ export function resolveTestProjectsDelegationArgs(argv) {
   return stripRunSubcommand(argv);
 }
 
+/**
+ * Lists explicit test file targets missing from the current checkout.
+ */
 export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImpl = fs) {
   if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
     return [];
@@ -628,6 +677,9 @@ function isToolingTestTarget(target) {
   );
 }
 
+/**
+ * Resolves config defaults and explicit-file handling for wrapper-inferred runs.
+ */
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
@@ -661,6 +713,9 @@ function spawnVitestProcess({ pnpmArgs, spawnParams }) {
   });
 }
 
+/**
+ * Installs the no-output watchdog for long-running Vitest children.
+ */
 export function installVitestNoOutputWatchdog(params) {
   const timeoutMs = params.timeoutMs;
   if (!timeoutMs || timeoutMs <= 0) {
@@ -782,6 +837,9 @@ export function installVitestNoOutputWatchdog(params) {
   };
 }
 
+/**
+ * Forwards child output while optionally suppressing complete stderr lines.
+ */
 export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
@@ -810,6 +868,9 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
   });
 }
 
+/**
+ * Spawns Vitest with output forwarding, watchdogs, and process-group cleanup.
+ */
 export function spawnWatchedVitestProcess({
   pnpmArgs,
   spawnParams,
@@ -858,10 +919,16 @@ export function spawnWatchedVitestProcess({
   };
 }
 
+/**
+ * Builds env for the delegated test-projects runner.
+ */
 export function resolveTestProjectsRunnerEnv(env) {
   return resolveVitestSpawnEnv(env);
 }
 
+/**
+ * Builds spawn options for the delegated test-projects runner.
+ */
 export function resolveTestProjectsRunnerSpawnParams(env, platform = process.platform) {
   return {
     env: resolveTestProjectsRunnerEnv(env),

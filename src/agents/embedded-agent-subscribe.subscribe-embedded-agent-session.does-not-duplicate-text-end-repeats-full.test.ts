@@ -1,3 +1,5 @@
+// Text-end repeat tests ensure repeated full snapshots do not duplicate block
+// replies or assistantTexts.
 import { describe, expect, it, vi } from "vitest";
 import {
   createTextEndBlockReplyHarness,
@@ -21,6 +23,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual(["Good morning!"]);
   });
   it("does not duplicate block chunks when text_end repeats full content", async () => {
+    // Chunked deltas may already flush all visible text before text_end repeats
+    // the same content; the snapshot must be ignored.
     const onBlockReply = vi.fn();
     const { emit } = createTextEndBlockReplyHarness({
       onBlockReply,

@@ -1,3 +1,4 @@
+// Vitest extensions config tests validate bundled extension test configuration.
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";

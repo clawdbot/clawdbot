@@ -1,3 +1,4 @@
+// Inbound debounce policy tests cover channel message coalescing and delay decisions.
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelInboundDebouncer,

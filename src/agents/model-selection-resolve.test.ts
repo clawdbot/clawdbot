@@ -1,9 +1,12 @@
+// Verifies configured model ref resolution and OpenRouter compatibility aliases.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveAllowedModelRef, resolveConfiguredModelRef } from "./model-selection-resolve.js";
 
 describe("model-selection-resolve OpenRouter compat aliases", () => {
   it("preserves exact configured proxy provider ids for cron-style aliases", () => {
+    // Proxy providers can intentionally own short ids like "cron"; keep the
+    // configured provider scope instead of treating the id as a global alias.
     const cfg = {
       agents: {
         defaults: {
@@ -38,6 +41,7 @@ describe("model-selection-resolve OpenRouter compat aliases", () => {
   });
 
   it("resolves openrouter:auto through the canonical OpenRouter auto model", () => {
+    // Colon syntax is a legacy operator shortcut for OpenRouter's auto route.
     const cfg = {
       agents: {
         defaults: {

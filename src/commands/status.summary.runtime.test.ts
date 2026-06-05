@@ -1,3 +1,4 @@
+// Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 

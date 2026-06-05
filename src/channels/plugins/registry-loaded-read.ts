@@ -1,12 +1,13 @@
+/**
+ * Hot-path loaded channel plugin reader.
+ *
+ * Reads active runtime channel state without materializing the full registry view.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Minimal loaded-plugin reader for hot outbound/read paths.
- */
 
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,

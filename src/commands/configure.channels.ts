@@ -1,3 +1,4 @@
+// Configure wizard helper for removing channel config sections safely.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listChatChannels } from "../channels/chat-meta.js";
@@ -66,6 +67,7 @@ function compareChannelRemovalChoices(
   );
 }
 
+/** Prompt for configured channel sections to remove from openclaw.json. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,

@@ -1,3 +1,8 @@
+/**
+ * Channel config schema helpers.
+ *
+ * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
+ */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";

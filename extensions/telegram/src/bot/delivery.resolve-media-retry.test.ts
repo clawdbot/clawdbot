@@ -1,3 +1,4 @@
+// Telegram tests cover delivery.resolve media retry plugin behavior.
 import type { Message } from "grammy/types";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

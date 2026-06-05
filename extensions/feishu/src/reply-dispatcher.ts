@@ -1,3 +1,4 @@
+// Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";

@@ -1,3 +1,6 @@
+/**
+ * Chutes provider plugin entrypoint with OAuth and API-key auth methods.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveOAuthApiKeyMarker,

@@ -1,3 +1,4 @@
+/** Shared Vitest harness mocks and helpers for doctor command e2e-style tests. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -493,6 +494,7 @@ vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
   runChannelPluginStartupMaintenance,
 }));
 
+/** Configures the mocked doctor config snapshot with a partial snapshot override. */
 export function mockDoctorConfigSnapshot(
   params: {
     config?: Record<string, unknown>;
@@ -512,6 +514,7 @@ export function mockDoctorConfigSnapshot(
   });
 }
 
+/** Creates a runtime mock that captures doctor command output and exits. */
 export function createDoctorRuntime() {
   return {
     log: vi.fn() as unknown as MockFn,
@@ -520,6 +523,7 @@ export function createDoctorRuntime() {
   };
 }
 
+/** Sets up temporary legacy state paths and mocked config for migration tests. */
 export async function arrangeLegacyStateMigrationTest(): Promise<{
   doctorCommand: unknown;
   runtime: { log: MockFn; error: MockFn; exit: MockFn };

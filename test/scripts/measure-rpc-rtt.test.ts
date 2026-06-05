@@ -1,3 +1,4 @@
+// Measure Rpc Rtt tests cover measure rpc rtt script behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {

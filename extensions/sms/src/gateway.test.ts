@@ -1,3 +1,4 @@
+// Sms tests cover gateway plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSmsWebhookRoute } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";

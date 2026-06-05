@@ -1,3 +1,4 @@
+// Legacy config migration bridge for channel doctor compatibility contracts.
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -52,6 +53,7 @@ function collectPluginDoctorCompatibilityIds(params: {
   ].toSorted();
 }
 
+/** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
   next: Record<string, unknown>;
   changes: string[];

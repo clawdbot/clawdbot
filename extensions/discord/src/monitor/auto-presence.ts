@@ -1,3 +1,4 @@
+// Discord plugin module implements auto presence behavior.
 import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,

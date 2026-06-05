@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements login qr runtime behavior.
 type StartWebLoginWithQr = typeof import("./src/login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./src/login-qr.js").waitForWebLogin;
 

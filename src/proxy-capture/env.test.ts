@@ -1,3 +1,4 @@
+// Proxy capture env tests cover environment variable generation for capture sessions.
 import { describe, expect, it } from "vitest";
 import {
   OPENCLAW_DEBUG_PROXY_ENABLED,

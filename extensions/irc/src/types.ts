@@ -1,3 +1,4 @@
+// Irc type declarations define plugin contracts.
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,

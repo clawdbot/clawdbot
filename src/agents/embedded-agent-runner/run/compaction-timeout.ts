@@ -1,3 +1,6 @@
+/**
+ * Computes run timeout behavior while compaction is in progress.
+ */
 import type { AgentMessage } from "../../runtime/index.js";
 
 /** Timeout state used to distinguish normal run deadlines from compaction stalls. */

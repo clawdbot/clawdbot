@@ -1,3 +1,5 @@
+// Gateway test assertion helpers narrow unknown protocol payloads to records
+// and assert selected fields with useful labels.
 import { expect } from "vitest";
 
 /**

@@ -1,3 +1,4 @@
+// Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

@@ -1,3 +1,4 @@
+// Telegram tests cover message cache plugin behavior.
 import { rm, writeFile } from "node:fs/promises";
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Msteams plugin module implements message handler mock support support behavior.
 import { vi } from "vitest";
 
 const runtimeApiMockState = vi.hoisted(() => ({

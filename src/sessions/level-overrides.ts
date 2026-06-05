@@ -1,3 +1,4 @@
+// Session level override helpers normalize per-session logging and behavior levels.
 import {
   normalizeTraceLevel,
   normalizeVerboseLevel,

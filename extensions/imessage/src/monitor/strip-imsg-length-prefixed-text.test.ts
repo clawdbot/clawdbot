@@ -1,3 +1,4 @@
+// Imessage tests cover strip imsg length prefixed text plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   stripImessageLengthPrefixedUtf8Text,

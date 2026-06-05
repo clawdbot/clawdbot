@@ -1,3 +1,4 @@
+// Webchat Auto Tts Live Proof tests cover webchat auto tts live proof script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

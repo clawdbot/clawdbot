@@ -1,3 +1,4 @@
+// Ci Node Test Plan tests cover ci node test plan script behavior.
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";

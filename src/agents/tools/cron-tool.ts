@@ -1,3 +1,8 @@
+/**
+ * cron built-in tool.
+ *
+ * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -34,8 +39,8 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// We spell out job/patch properties so that LLMs know what fields to send.
-// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
+// Spell out job/patch properties for model-facing schema; runtime validation
+// still happens in normalizeCronJob* to avoid nested union schemas.
 
 const CRON_ACTIONS = [
   "status",

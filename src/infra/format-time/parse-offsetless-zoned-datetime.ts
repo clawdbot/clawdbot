@@ -1,3 +1,5 @@
+// Offsetless zoned datetime parsing interprets local wall-clock ISO strings in
+// an explicit IANA time zone and rejects impossible DST times.
 const OFFSETLESS_ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
 const OFFSETLESS_ISO_DATETIME_PARTS_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/;

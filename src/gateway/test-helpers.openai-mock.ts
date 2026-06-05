@@ -1,3 +1,5 @@
+// OpenAI mock helpers provide deterministic fake Responses API streams for
+// gateway OpenAI-compatible HTTP tests.
 type OpenAIResponsesParams = {
   input?: unknown[];
 };

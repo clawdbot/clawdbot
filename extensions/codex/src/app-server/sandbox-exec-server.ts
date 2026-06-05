@@ -1,3 +1,7 @@
+/**
+ * Hosts the local OpenClaw sandbox exec-server that Codex app-server native
+ * execution can register as an external environment.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
@@ -37,6 +41,7 @@ import type {
 } from "./sandbox-exec-server/types.js";
 import { MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION } from "./version.js";
 
+/** Codex environment metadata registered for one sandbox exec-server lease. */
 export type CodexSandboxExecEnvironment = {
   environmentId: string;
   cwd: string;
@@ -44,6 +49,7 @@ export type CodexSandboxExecEnvironment = {
 
 const SANDBOX_EXEC_SERVERS = new Map<string, Promise<OpenClawExecServer>>();
 
+/** Closes all cached sandbox exec-server instances for deterministic tests. */
 export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   const servers = await Promise.allSettled(SANDBOX_EXEC_SERVERS.values());
   SANDBOX_EXEC_SERVERS.clear();
@@ -57,6 +63,7 @@ export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   );
 }
 
+/** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
   client: CodexAppServerClient;
   sandbox: SandboxContext | null;
@@ -99,6 +106,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   };
 }
 
+/** Releases the sandbox exec-server lease associated with a sandbox runtime. */
 export async function releaseCodexSandboxExecServerEnvironment(
   sandbox: SandboxContext | null | undefined,
 ): Promise<void> {

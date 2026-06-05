@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type MemoryEmbeddingTextPart = {

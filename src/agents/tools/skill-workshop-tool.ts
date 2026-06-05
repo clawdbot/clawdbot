@@ -1,3 +1,8 @@
+/**
+ * Skill Workshop built-in tool.
+ *
+ * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
+ */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -28,9 +33,6 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
-// Agent tool wrapper around Skill Workshop proposal lifecycle. The service owns
-// storage and scan semantics; this file handles schema, parameter coercion, and
-// compact model-facing output.
 const SKILL_WORKSHOP_ACTIONS = [
   "create",
   "update",

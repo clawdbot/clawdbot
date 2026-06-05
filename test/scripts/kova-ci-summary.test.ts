@@ -1,3 +1,4 @@
+// Kova Ci Summary tests cover kova ci summary script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 

@@ -1,3 +1,8 @@
+/**
+ * Built-in grep session tool.
+ *
+ * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
+ */
 import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";

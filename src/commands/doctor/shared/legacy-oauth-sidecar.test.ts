@@ -1,3 +1,4 @@
+// Legacy OAuth sidecar tests cover doctor repair and warnings for old OAuth sidecar state.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { loggingState } from "../../../logging/state.js";

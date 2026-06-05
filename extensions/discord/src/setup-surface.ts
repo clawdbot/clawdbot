@@ -1,3 +1,4 @@
+// Discord plugin module implements setup surface behavior.
 import {
   createSetupTranslator,
   type ChannelSetupWizard,

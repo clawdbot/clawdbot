@@ -1,3 +1,7 @@
+/**
+ * Memory embedding adapter for Amazon Bedrock. It exposes Bedrock embeddings to
+ * the memory-core engine and verifies AWS credentials before auto-selection.
+ */
 import {
   isMissingEmbeddingApiKeyError,
   type MemoryEmbeddingProviderAdapter,
@@ -8,6 +12,7 @@ import {
   hasAwsCredentials,
 } from "./embedding-provider.js";
 
+/** Memory-core adapter descriptor for Bedrock embeddings. */
 export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "bedrock",
   defaultModel: DEFAULT_BEDROCK_EMBEDDING_MODEL,

@@ -1,3 +1,4 @@
+// Daemon service audit tests cover installed service inspection and warnings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Console logging helpers format and write messages to console streams.
 import util from "node:util";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";

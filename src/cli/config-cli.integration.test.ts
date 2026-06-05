@@ -1,3 +1,4 @@
+// Config CLI integration tests cover end-to-end config command reads and writes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

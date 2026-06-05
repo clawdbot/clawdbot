@@ -1,3 +1,8 @@
+/**
+ * update_plan built-in tool.
+ *
+ * Validates structured model work plans and stores them in tool details for UI/transcript consumers.
+ */
 import { Type } from "typebox";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -6,12 +11,6 @@ import {
 } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
 
-/**
- * Factory and validation helpers for the model-facing update_plan tool.
- *
- * The tool records a structured work plan in tool details; it does not mutate
- * repo state and enforces one active in-progress step.
- */
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 const UpdatePlanToolSchema = Type.Object({

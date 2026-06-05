@@ -1,8 +1,9 @@
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-
 /**
- * Shared DM access helpers for channel config, doctor migration, and SDK facade exports.
+ * Channel DM access helpers.
+ *
+ * Reads, writes, migrates, and normalizes direct-message policy and allowFrom fields.
  */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /**
  * Selects whether canonical DM fields live at the top level or under `dm`.

@@ -1,3 +1,4 @@
+// Browser tests cover basic.existing session plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 

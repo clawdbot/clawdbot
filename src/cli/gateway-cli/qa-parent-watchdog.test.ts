@@ -1,3 +1,4 @@
+// Gateway QA parent watchdog tests cover parent-process watchdog shutdown behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   installQaParentWatchdog,

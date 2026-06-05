@@ -1,3 +1,4 @@
+// Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
 import {
   HELP_TEXT,

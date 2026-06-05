@@ -1,3 +1,4 @@
+// Session Log Mentions tests cover session log mentions script behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";

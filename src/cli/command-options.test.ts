@@ -1,3 +1,4 @@
+// Command option tests cover shared CLI option registration and parsing.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { inheritOptionFromParent } from "./command-options.js";

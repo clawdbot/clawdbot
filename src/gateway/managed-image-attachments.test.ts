@@ -1,3 +1,5 @@
+// Managed image attachment tests cover storage, HTTP serving, cleanup, and
+// operator authorization for generated image artifacts attached to gateway replies.
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -10,6 +12,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -461,13 +464,11 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("rewrites local image sources into managed display blocks without leaking the source path", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
-    try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const blocks = await createManagedOutgoingImageBlocks({
         stateDir,
         sessionKey: "agent:main:main",
@@ -493,18 +494,10 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(record.original.filename).toMatch(/\.png$/);
       expect(record.original.path).not.toBe(sourcePath);
       expect(record.original.path).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-    } finally {
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
+    });
   });
 
   it("ingests external image URLs into managed storage instead of hotlinking them", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const imageBuffer = Buffer.from(TINY_PNG_BASE64, "base64");
     const upstream = http.createServer((req, res) => {
       expect(req.url).toBe("/remote-cat.png?sig=secret");
@@ -526,89 +519,84 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
 
     try {
-      const sourceUrl = `http://127.0.0.1:${address.port}/remote-cat.png?sig=secret`;
-      const blocks = await createManagedOutgoingImageBlocks({
-        stateDir,
-        sessionKey: "agent:main:main",
-        mediaUrls: [sourceUrl],
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sourceUrl = `http://127.0.0.1:${address.port}/remote-cat.png?sig=secret`;
+        const blocks = await createManagedOutgoingImageBlocks({
+          stateDir,
+          sessionKey: "agent:main:main",
+          mediaUrls: [sourceUrl],
+        });
+
+        expect(blocks).toHaveLength(1);
+        const block = requireBlock(blocks);
+        expect(block.alt).toBe("remote-cat.png");
+        expect(block.type).toBe("image");
+        expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+        expect(block.openUrl).toContain("/full");
+        expect(block.url).toBe(block.openUrl);
+        expect(JSON.stringify(block)).not.toContain("127.0.0.1");
+        expect(JSON.stringify(block)).not.toContain("sig=secret");
+
+        const attachmentId = requireAttachmentIdFromUrl(block.url);
+        const record = JSON.parse(
+          await fs.readFile(
+            path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
+            "utf-8",
+          ),
+        ) as { original: { path: string } };
+        expect(record.original.path).toContain(
+          path.join(stateDir, "media", "outgoing", "originals"),
+        );
+        expect(JSON.stringify(record)).not.toContain("127.0.0.1");
+        expect(JSON.stringify(record)).not.toContain("sig=secret");
+        expect(await fs.readFile(record.original.path)).toEqual(imageBuffer);
       });
-
-      expect(blocks).toHaveLength(1);
-      const block = requireBlock(blocks);
-      expect(block.alt).toBe("remote-cat.png");
-      expect(block.type).toBe("image");
-      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-      expect(block.openUrl).toContain("/full");
-      expect(block.url).toBe(block.openUrl);
-      expect(JSON.stringify(block)).not.toContain("127.0.0.1");
-      expect(JSON.stringify(block)).not.toContain("sig=secret");
-
-      const attachmentId = requireAttachmentIdFromUrl(block.url);
-      const record = JSON.parse(
-        await fs.readFile(
-          path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
-          "utf-8",
-        ),
-      ) as { original: { path: string } };
-      expect(record.original.path).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-      expect(JSON.stringify(record)).not.toContain("127.0.0.1");
-      expect(JSON.stringify(record)).not.toContain("sig=secret");
-      expect(await fs.readFile(record.original.path)).toEqual(imageBuffer);
     } finally {
       setMediaStoreNetworkDepsForTest();
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
       });
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
     }
   });
 
   it("keeps managed originals under the state-dir media root when config path differs", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const externalConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-image-config-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_CONFIG_PATH = path.join(externalConfigDir, "config.json");
     const sourcePath = path.join(stateDir, "workspace", "fixtures", "dot.png");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
     try {
-      const blocks = await createManagedOutgoingImageBlocks({
-        stateDir,
-        sessionKey: "agent:main:main",
-        mediaUrls: [sourcePath],
-        localRoots: [path.join(stateDir, "workspace")],
-      });
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: path.join(externalConfigDir, "config.json"),
+          OPENCLAW_STATE_DIR: stateDir,
+        },
+        async () => {
+          const blocks = await createManagedOutgoingImageBlocks({
+            stateDir,
+            sessionKey: "agent:main:main",
+            mediaUrls: [sourcePath],
+            localRoots: [path.join(stateDir, "workspace")],
+          });
 
-      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+          const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
 
-      const record = JSON.parse(
-        await fs.readFile(
-          path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
-          "utf-8",
-        ),
-      ) as { original: { path: string } };
+          const record = JSON.parse(
+            await fs.readFile(
+              path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
+              "utf-8",
+            ),
+          ) as { original: { path: string } };
 
-      expect(record.original.path).toContain(path.join(stateDir, "media", "outgoing", "originals"));
-      expect(record.original.path).not.toContain(externalConfigDir);
-      await expect(fs.access(record.original.path)).resolves.toBeUndefined();
+          expect(record.original.path).toContain(
+            path.join(stateDir, "media", "outgoing", "originals"),
+          );
+          expect(record.original.path).not.toContain(externalConfigDir);
+          await expect(fs.access(record.original.path)).resolves.toBeUndefined();
+        },
+      );
     } finally {
       await fs.rm(externalConfigDir, { recursive: true, force: true });
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      if (previousConfigPath == null) {
-        delete process.env.OPENCLAW_CONFIG_PATH;
-      } else {
-        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-      }
     }
   });
 
@@ -672,8 +660,6 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("accepts URL images up to the configured managed-image byte limit", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
     const imageBuffer = await createNoisyPngBuffer(1600, 1200);
     expect(imageBuffer.byteLength).toBeGreaterThan(5 * 1024 * 1024);
     expect(imageBuffer.byteLength).toBeLessThan(DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxBytes);
@@ -696,24 +682,21 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
 
     try {
-      const blocks = await createManagedOutgoingImageBlocks({
-        sessionKey: "agent:main:main",
-        mediaUrls: [`http://127.0.0.1:${address.port}/large-image.png`],
-        stateDir,
-      });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const blocks = await createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [`http://127.0.0.1:${address.port}/large-image.png`],
+          stateDir,
+        });
 
-      expect(blocks).toHaveLength(1);
-      expect(requireBlock(blocks).type).toBe("image");
+        expect(blocks).toHaveLength(1);
+        expect(requireBlock(blocks).type).toBe("image");
+      });
     } finally {
       setMediaStoreNetworkDepsForTest();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
     }
   });
 

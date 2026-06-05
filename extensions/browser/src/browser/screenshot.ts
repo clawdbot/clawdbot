@@ -1,3 +1,7 @@
+/**
+ * Browser screenshot normalization helpers that bound screenshots for media
+ * transport and model input.
+ */
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -9,6 +13,7 @@ import {
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
+/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {

@@ -1,3 +1,4 @@
+// Verifies harness lifecycle capability checks, diagnostics, and trace scoping.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -75,6 +76,8 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
 }
 
 function createContextEngineRequiringAssembly(): ContextEngine {
+  // Requires the harness to advertise assemble-before-prompt. Tests use this
+  // to prove context-engine capabilities are enforced before runAttempt.
   return {
     info: {
       id: "lossless-claw",
@@ -212,6 +215,8 @@ describe("AgentHarness lifecycle runner", () => {
       diagnostics.unsubscribe();
     }
 
+    // Harness diagnostics are internal lifecycle facts, so metadata must stay
+    // trusted while the payload preserves enough fields for downstream traces.
     expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
       "harness.run.started",
       "harness.run.completed",

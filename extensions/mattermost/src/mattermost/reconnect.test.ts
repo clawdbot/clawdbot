@@ -1,3 +1,4 @@
+// Mattermost tests cover reconnect plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithReconnect } from "./reconnect.js";
 

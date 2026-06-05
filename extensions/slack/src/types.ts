@@ -1,3 +1,4 @@
+// Slack type declarations define plugin contracts.
 export type SlackFile = {
   id?: string;
   name?: string;

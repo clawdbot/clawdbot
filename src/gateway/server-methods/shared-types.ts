@@ -1,3 +1,5 @@
+// Shared server-method types define the client, context, response, and handler
+// contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
   ErrorShape,

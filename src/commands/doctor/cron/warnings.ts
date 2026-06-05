@@ -1,3 +1,4 @@
+// Doctor cron warnings for model overrides and stale WhatsApp crontab health scripts.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
@@ -61,6 +62,7 @@ function formatProviderCounts(counts: Map<string, number>): string {
     .join(", ");
 }
 
+/** Emit a note when cron jobs pin models instead of inheriting the default model. */
 export function noteCronModelOverrides(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
@@ -151,6 +153,7 @@ function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
     .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
 }
 
+/** Return a warning when the user's crontab still runs the old WhatsApp health script. */
 export async function collectLegacyWhatsAppCrontabHealthWarning(
   params: {
     platform?: NodeJS.Platform;
@@ -181,6 +184,7 @@ export async function collectLegacyWhatsAppCrontabHealthWarning(
   ].join("\n");
 }
 
+/** Emit the legacy WhatsApp crontab warning when present. */
 export async function noteLegacyWhatsAppCrontabHealthCheck(
   params: {
     platform?: NodeJS.Platform;

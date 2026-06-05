@@ -1,7 +1,11 @@
+/**
+ * Playwright trace lifecycle helpers for Browser plugin diagnostics.
+ */
 import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_TRACE_DIR } from "./paths.js";
 import { ensureContextState, getPageForTargetId } from "./pw-session.js";
 
+/** Starts Playwright tracing for the target page context. */
 export async function traceStartViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -23,6 +27,7 @@ export async function traceStartViaPlaywright(opts: {
   ctxState.traceActive = true;
 }
 
+/** Stops Playwright tracing and writes the trace zip atomically under trace output. */
 export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

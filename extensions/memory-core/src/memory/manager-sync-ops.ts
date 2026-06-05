@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager sync ops behavior.
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";

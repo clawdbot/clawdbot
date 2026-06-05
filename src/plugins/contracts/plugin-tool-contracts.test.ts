@@ -1,3 +1,4 @@
+// Plugin tool contract tests cover bundled plugin tool schemas and invocation contracts.
 import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Sms plugin module implements gateway behavior.
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedSmsAccount } from "./types.js";

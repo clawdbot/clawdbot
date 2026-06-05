@@ -1,3 +1,4 @@
+/** Live Gemini CLI smoke for generated MCP system settings. */
 import { execFile } from "node:child_process";
 import http from "node:http";
 import { promisify } from "node:util";
@@ -24,6 +25,8 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
+  // Real local MCP endpoint verifies Gemini consumes the generated settings
+  // rather than just checking file shape.
   const mcpServer = new McpServer({ name: "openclaw-gemini-live-probe", version: "1.0.0" });
   mcpServer.tool("openclaw_live_probe", "OpenClaw Gemini MCP live probe", async () => ({
     content: [{ type: "text", text: "ok" }],

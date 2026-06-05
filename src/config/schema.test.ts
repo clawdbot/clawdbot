@@ -5,7 +5,11 @@ import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
+import {
+  DiscordConfigSchema,
+  SlackConfigSchema,
+  TelegramConfigSchema,
+} from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -125,6 +129,19 @@ describe("config schema", () => {
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
+  });
+
+  it("accepts qmd query rerank override", () => {
+    const result = OpenClawSchema.safeParse({
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          rerank: false,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -286,6 +303,7 @@ describe("config schema", () => {
     expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("discord")).toHaveProperty("commentary");
+    expect(progressPropsFor("slack")).toHaveProperty("commentary");
     expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
@@ -460,7 +478,7 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts progress commentary for Discord and Telegram streaming config", () => {
+  it("accepts progress commentary for shared progress streaming config", () => {
     expect(
       DiscordConfigSchema.safeParse({
         streaming: {
@@ -472,6 +490,15 @@ describe("config schema", () => {
 
     expect(
       TelegramConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      SlackConfigSchema.safeParse({
         streaming: {
           mode: "progress",
           progress: { commentary: true },

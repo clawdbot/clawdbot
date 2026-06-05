@@ -1,3 +1,6 @@
+/**
+ * Orchestrates one embedded-agent attempt from prompt setup through stream result.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";

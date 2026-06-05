@@ -1,3 +1,4 @@
+// Moonshot tests cover moonshot plugin behavior.
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";

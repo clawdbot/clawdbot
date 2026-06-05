@@ -1,3 +1,4 @@
+// Imessage plugin module implements approval handler behavior.
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,

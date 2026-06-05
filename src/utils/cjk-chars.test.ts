@@ -1,3 +1,4 @@
+// CJK character tests cover detection and width handling for CJK text.
 import { describe, expect, it } from "vitest";
 import {
   CHARS_PER_TOKEN_ESTIMATE,

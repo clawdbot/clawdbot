@@ -1,3 +1,5 @@
+// Edit tool tests cover exact-match diagnostics, post-write recovery, newline
+// preservation, and preview rendering for custom operations.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +44,8 @@ describe("edit tool", () => {
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {
+    // Some backends throw after flushing content; a readback match is the
+    // contract that lets the tool report success without duplicating edits.
     const filePath = await createTempFile('const value = "foo";\r\n');
     const operations: EditOperations = {
       access: async (absolutePath) => {
@@ -134,6 +138,8 @@ describe("edit tool", () => {
   });
 
   it("renders previews through custom edit operations", async () => {
+    // Preview rendering must use injected operations so remote/sandbox files are
+    // shown without accidentally reading from the host filesystem.
     const readFile = vi.fn(async () => Buffer.from("remote original\n"));
     const operations: EditOperations = {
       access: async () => {},

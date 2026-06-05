@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reproduces memory-search file descriptor retention with a synthetic workspace.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -26,8 +27,17 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+/**
+ * Maximum gateway-ready output tail retained while waiting for startup.
+ */
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+/**
+ * Maximum bytes read from the memory_search HTTP response.
+ */
 export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+/**
+ * Probe query expected to hit the synthetic top-level memory file.
+ */
 export const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
@@ -88,6 +98,9 @@ function stripPackageManagerSeparatorForKnownFlags(argv) {
     : argv;
 }
 
+/**
+ * Parses a safe non-negative integer option.
+ */
 export function readNumber(value, label) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
@@ -100,6 +113,9 @@ export function readNumber(value, label) {
   return parsed;
 }
 
+/**
+ * Parses a safe positive integer option.
+ */
 export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
@@ -118,6 +134,9 @@ function readPositiveNumberEnv(name, fallback) {
   return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
 }
 
+/**
+ * Parses memory FD repro CLI arguments and environment fallbacks.
+ */
 export function parseArgs(argv) {
   const args = stripPackageManagerSeparatorForKnownFlags(argv);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -278,6 +297,9 @@ function writeSyntheticWorkspace(workspaceDir, fileCount) {
   }
 }
 
+/**
+ * Writes isolated OpenClaw config for the synthetic memory workspace.
+ */
 export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
@@ -352,6 +374,9 @@ function preindexSyntheticMemory(env) {
   logStep("preindex complete");
 }
 
+/**
+ * Updates bounded gateway-ready output state from a stdout/stderr chunk.
+ */
 export function updateGatewayReadyOutputState(
   state,
   chunk,
@@ -431,10 +456,16 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
+/**
+ * Reports whether a spawned child has already exited.
+ */
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+/**
+ * Waits until gateway output and listener state both indicate readiness.
+ */
 export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
   let outputState = { tail: "", readySeen: false };
@@ -458,6 +489,9 @@ export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
+/**
+ * Stops the gateway child using the default process/runtime hooks.
+ */
 export async function stopGateway({ child, port }) {
   return stopGatewayWithRuntime({
     child,
@@ -467,6 +501,9 @@ export async function stopGateway({ child, port }) {
   });
 }
 
+/**
+ * Stops the gateway child and any remaining listener process.
+ */
 export async function stopGatewayWithRuntime({
   child,
   childExitPollIntervalMs = 100,
@@ -499,6 +536,9 @@ export async function stopGatewayWithRuntime({
   }
 }
 
+/**
+ * Reads an HTTP response body up to a configured byte limit.
+ */
 export { readBoundedResponseText };
 
 function signalChild(child, signal) {
@@ -549,6 +589,9 @@ function parseToolTextContent(result) {
   return null;
 }
 
+/**
+ * Classifies the memory_search HTTP response into success/error details.
+ */
 export function classifyMemorySearchInvokeResponse({ httpOk, status, bodyText }) {
   const parsedBody = parseJsonValue(bodyText);
   const body = asRecord(parsedBody);

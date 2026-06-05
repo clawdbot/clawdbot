@@ -1,3 +1,4 @@
+// Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {

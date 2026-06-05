@@ -1,3 +1,4 @@
+/** Reads and enables systemd user linger for headless daemon sessions. */
 import os from "node:os";
 import {
   normalizeOptionalLowercaseString,
@@ -60,6 +61,8 @@ export async function enableSystemdUserLinger(params: {
     return { ok: false, stdout: "", stderr: "Missing user", code: 1 };
   }
   const needsSudo = typeof process.getuid === "function" ? process.getuid() !== 0 : true;
+  // Non-root callers need sudo for loginctl, but tests and automation can force
+  // non-interactive sudo to avoid hanging on password prompts.
   const sudoArgs =
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]

@@ -1,3 +1,4 @@
+// Slack tests cover actions.blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createSlackEditTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 

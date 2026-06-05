@@ -1,3 +1,4 @@
+// ACP Core module implements meta behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 function readMetaValue<T>(

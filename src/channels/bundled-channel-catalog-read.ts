@@ -1,3 +1,8 @@
+/**
+ * Bundled channel catalog reader.
+ *
+ * Loads channel metadata from generated package catalogs and bundled plugin package manifests.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";

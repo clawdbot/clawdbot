@@ -1,3 +1,4 @@
+/** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
@@ -42,6 +43,8 @@ type NormalizedCronFailureSignal = CronFailureSignal & {
 function normalizeCronFailureSignal(
   signal: CronFailureSignal | undefined,
 ): NormalizedCronFailureSignal | undefined {
+  // Only explicit fatal signals become cron failures; ordinary tool warnings
+  // still need payload/output evidence before failing the run.
   const message = normalizeOptionalString(signal?.message);
   if (signal?.fatalForCron !== true || !message) {
     return undefined;
@@ -291,6 +294,8 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // Structured error payloads are fatal unless later successful output or a
+  // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&

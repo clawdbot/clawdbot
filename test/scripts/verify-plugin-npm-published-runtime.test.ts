@@ -1,3 +1,4 @@
+// Verify Plugin Npm Published Runtime tests cover verify plugin npm published runtime script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,

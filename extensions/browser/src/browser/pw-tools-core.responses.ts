@@ -1,8 +1,12 @@
+/**
+ * Response-body retrieval for Playwright-backed browser tools.
+ */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
+/** Waits for a response URL pattern and returns a bounded text body. */
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

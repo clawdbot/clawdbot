@@ -1,3 +1,4 @@
+// Guest Transports script supports OpenClaw repository automation.
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";

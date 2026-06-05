@@ -1,3 +1,4 @@
+// Slack plugin module implements token behavior.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 export function resolveSlackBotToken(

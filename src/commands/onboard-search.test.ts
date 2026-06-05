@@ -1,3 +1,4 @@
+// Onboard search tests cover provider options, credential handling, and search setup config mutation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";

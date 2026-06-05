@@ -1,3 +1,4 @@
+// Browser tests cover cdp plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";

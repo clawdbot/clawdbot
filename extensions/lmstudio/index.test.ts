@@ -1,3 +1,4 @@
+// Lmstudio tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";

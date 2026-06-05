@@ -1,3 +1,8 @@
+/**
+ * Live channel message state and preview finalization helpers.
+ *
+ * Tracks draft previews and converts them into finalized message receipts when possible.
+ */
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
 export type { LiveMessagePhase, LiveMessageState } from "./types.js";
 

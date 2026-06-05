@@ -1,10 +1,11 @@
+/**
+ * Lazy channel registry value loader.
+ *
+ * Resolves plugin sub-surfaces from active channel or full plugin registry state.
+ */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ChannelId } from "./channel-id.types.js";
-
-/**
- * Generic channel registry loader for lazily resolved plugin sub-surfaces.
- */
 
 type ChannelRegistryValueResolver<TValue> = (
   entry: PluginChannelRegistration,

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements creds files behavior.
 import path from "node:path";
 import {
   assertNoSymlinkParents,

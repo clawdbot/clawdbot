@@ -1,3 +1,4 @@
+// OC Path tests cover sentinel guard plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { parseMd } from "../../parse.js";

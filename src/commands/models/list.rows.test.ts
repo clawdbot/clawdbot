@@ -1,3 +1,4 @@
+// Model list row tests cover rendered row construction for model listing output.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelRow } from "./list.types.js";
 

@@ -1,3 +1,4 @@
+// Matrix plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,

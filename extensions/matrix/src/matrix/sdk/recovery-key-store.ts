@@ -1,3 +1,4 @@
+// Matrix plugin module implements recovery key store behavior.
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";

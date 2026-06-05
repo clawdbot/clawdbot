@@ -1,3 +1,4 @@
+// Config boundary guard tests cover plugin config ownership and forbidden core reads.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

@@ -1,3 +1,4 @@
+// Config writer for OpenAI chat tools E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 

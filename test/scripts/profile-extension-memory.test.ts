@@ -1,3 +1,4 @@
+// Profile Extension Memory tests cover profile extension memory script behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

@@ -1,3 +1,4 @@
+// Verifies models.json writes, plugin catalog writes, and ready-cache serialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
+  // Minimal process snapshot used to prove when metadata may be reused.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
   return {
     policyHash,
@@ -72,6 +74,7 @@ function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnaps
 }
 
 async function expectMissingPath(operation: Promise<unknown>) {
+  // Filesystem deletion assertions should fail on the errno, not path text.
   let error: NodeJS.ErrnoException | undefined;
   try {
     await operation;
@@ -87,6 +90,7 @@ function planParamsAt(callIndex: number): {
   providerDiscoveryTimeoutMs?: number;
   workspaceDir?: string;
 } {
+  // Planner call shape is the contract between ensureOpenClawModelsJson and planning.
   const call = planOpenClawModelsJsonMock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected models planner call #${callIndex + 1}`);
@@ -397,6 +401,7 @@ describe("models-config write serialization", () => {
       let modelsWriteCount = 0;
       writePrivateStoreTextWriteMock.mockImplementation(
         async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
+          // Hold both writes at the store boundary to prove the outer serializer works.
           const isModelsWrite = path.basename(params.filePath) === "models.json";
           if (isModelsWrite) {
             modelsWriteCount += 1;

@@ -1,3 +1,4 @@
+// Gateway E2E harness tests cover helper server and probe behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { postJson } from "./gateway-e2e-harness.js";

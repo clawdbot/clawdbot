@@ -1,3 +1,4 @@
+// Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";

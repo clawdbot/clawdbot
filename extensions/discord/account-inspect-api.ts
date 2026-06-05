@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccount } from "./src/account-inspect.js";
 

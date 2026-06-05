@@ -1,3 +1,4 @@
+// Control UI chat module implements deleted messages behavior.
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const PREFIX = "openclaw:deleted:";

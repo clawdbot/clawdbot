@@ -1,3 +1,4 @@
+// Plugins search command tests cover plugin search command registration and results.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

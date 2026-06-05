@@ -1,3 +1,4 @@
+// Gmail setup utility tests cover setup file generation and config handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

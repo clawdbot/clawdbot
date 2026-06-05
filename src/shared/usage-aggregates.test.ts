@@ -1,3 +1,4 @@
+// Usage aggregate tests cover token, cost, and latency accumulation.
 import { describe, expect, it } from "vitest";
 import {
   buildUsageAggregateTail,

@@ -1,3 +1,4 @@
+// Non-interactive daemon install tests cover gateway service planning, token resolution, and systemd handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { installGatewayDaemonNonInteractive } from "./daemon-install.js";

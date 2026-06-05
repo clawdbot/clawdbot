@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements gateway child behavior.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, type WriteStream } from "node:fs";

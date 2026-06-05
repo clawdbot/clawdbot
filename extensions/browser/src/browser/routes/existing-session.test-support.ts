@@ -1,3 +1,9 @@
+/**
+ * Test support for existing-session browser route modules.
+ *
+ * Supplies mocked agent.shared helpers and mutable tab/profile state for route
+ * tests that exercise Chrome MCP branches without launching Chrome.
+ */
 import { vi } from "vitest";
 import {
   assertBrowserNavigationResultAllowed,
@@ -6,6 +12,7 @@ import {
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
+/** Mutable profile/tab state consumed by existing-session route mocks. */
 export const existingSessionRouteState = {
   profileCtx: {
     profile: {
@@ -29,6 +36,7 @@ export const existingSessionRouteState = {
   },
 };
 
+/** Create a vi mock module for routes that import agent.shared helpers. */
 export function createExistingSessionAgentSharedModule() {
   return {
     browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>

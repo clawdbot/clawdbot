@@ -1,3 +1,7 @@
+/**
+ * Registers the `/codex` plugin command and lazy-loads the app-server command
+ * handler implementation.
+ */
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -21,6 +25,7 @@ type CodexCommandInternalOptions = CodexCommandOptions & {
   loadSubcommandHandler?: () => Promise<CodexSubcommandHandler>;
 };
 
+/** Creates the reserved `/codex` command definition exposed by the plugin. */
 export function createCodexCommand(options: CodexCommandOptions): OpenClawPluginCommandDefinition {
   return {
     name: "codex",
@@ -42,6 +47,7 @@ export function createCodexCommand(options: CodexCommandOptions): OpenClawPlugin
   };
 }
 
+/** Dispatches a `/codex` command to the subcommand handler and formats failures for chat. */
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
   options: CodexCommandInternalOptions = {},

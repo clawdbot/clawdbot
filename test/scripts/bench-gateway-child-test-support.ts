@@ -1,3 +1,4 @@
+// Gateway benchmark child test support simulates child process behavior for script tests.
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
 

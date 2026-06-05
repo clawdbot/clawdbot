@@ -1,3 +1,4 @@
+// Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

@@ -1,3 +1,4 @@
+// Transcript mirroring turns outbound text/media notifications into compact transcript text.
 import path from "node:path";
 
 // Media transcript mirrors use stable filenames instead of raw URLs with tokens/query strings.
@@ -19,6 +20,7 @@ function extractFileNameFromMediaUrl(value: string): string | null {
       return null;
     }
     try {
+      // Decode display names when possible, but tolerate malformed percent escapes from providers.
       return decodeURIComponent(base);
     } catch {
       return base;

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime e2ee behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";

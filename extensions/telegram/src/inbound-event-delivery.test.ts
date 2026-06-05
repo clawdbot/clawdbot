@@ -1,3 +1,4 @@
+// Telegram tests cover inbound event delivery plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   beginTelegramInboundEventDeliveryCorrelation,

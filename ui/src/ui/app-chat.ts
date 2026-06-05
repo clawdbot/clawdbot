@@ -1,3 +1,4 @@
+// Control UI module implements app chat behavior.
 import type { CommandsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";

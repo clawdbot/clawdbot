@@ -1,3 +1,4 @@
+// Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";

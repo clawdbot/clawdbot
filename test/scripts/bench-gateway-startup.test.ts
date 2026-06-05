@@ -1,3 +1,4 @@
+// Bench Gateway Startup tests cover bench gateway startup script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";

@@ -1,3 +1,4 @@
+// Builds CI node/Vitest shard plans from the full suite configuration.
 import { relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
@@ -862,6 +863,7 @@ function formatNodeTestShardCheckName(shardName) {
   return `checks-node-${normalizedShardName}`;
 }
 
+/** Create node test shard descriptors for CI, optionally excluding release-only plugin shards. */
 export function createNodeTestShards(options = {}) {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
 

@@ -1,3 +1,4 @@
+// Host Command script supports OpenClaw repository automation.
 import { spawn, spawnSync, type SpawnOptions, type SpawnSyncReturns } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";

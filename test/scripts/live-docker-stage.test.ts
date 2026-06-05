@@ -1,3 +1,4 @@
+// Live Docker Stage tests cover live docker stage script behavior.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

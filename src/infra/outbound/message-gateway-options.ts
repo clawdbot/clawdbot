@@ -1,3 +1,5 @@
+// Gateway option normalization hides transport URL details for backend/managed
+// gateway clients and clamps timeout values.
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   GATEWAY_CLIENT_MODES,

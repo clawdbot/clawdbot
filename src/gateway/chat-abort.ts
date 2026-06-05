@@ -1,3 +1,5 @@
+// Gateway chat/agent abort tracking.
+// Registers active run abort controllers and projects in-flight chat state.
 import {
   asDateTimestampMs,
   resolveDateTimestampMs,
@@ -133,6 +135,8 @@ export function registerChatAbortController(params: {
   };
 
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
+    // Duplicate run ids keep their fresh controller for caller cancellation, but
+    // do not replace the registered entry that owns active-run projection.
     return { controller, registered: false, cleanup };
   }
 

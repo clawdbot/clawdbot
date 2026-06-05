@@ -1,3 +1,4 @@
+// Prompt resolution tests cover skill prompt lookup and active skill selection.
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";

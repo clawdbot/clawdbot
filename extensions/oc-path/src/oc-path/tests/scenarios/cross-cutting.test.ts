@@ -1,3 +1,4 @@
+// OC Path tests cover cross cutting plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
 import { formatOcPath, parseOcPath } from "../../oc-path.js";

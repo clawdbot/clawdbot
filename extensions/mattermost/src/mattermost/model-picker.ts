@@ -1,3 +1,4 @@
+// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
 import {
   resolveStoredModelOverride,

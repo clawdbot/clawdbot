@@ -1,3 +1,4 @@
+// Telegram tests cover bot.command menu plugin behavior.
 import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,

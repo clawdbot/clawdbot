@@ -1,3 +1,5 @@
+// Shared auth suite helpers provide WebSocket clients, signed device payloads,
+// pairing utilities, and gateway harness setup for auth-mode tests.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";

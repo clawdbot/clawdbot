@@ -1,3 +1,4 @@
+// Package manager config tests validate workspace package manager settings.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";

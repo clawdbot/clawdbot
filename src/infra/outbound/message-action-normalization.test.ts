@@ -1,3 +1,5 @@
+// Covers channel/target inference, legacy target rewrite, target validation,
+// and plugin alias-aware message-action normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 

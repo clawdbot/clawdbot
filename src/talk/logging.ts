@@ -1,3 +1,4 @@
+// Talk logging helpers write voice session logs and diagnostic entries.
 import { getChildLogger } from "../logging/logger.js";
 import { firstFiniteTalkEventNumber, talkEventPayloadRecord } from "./event-metrics.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";

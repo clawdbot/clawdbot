@@ -1,3 +1,8 @@
+/**
+ * Channel allowlist resolution helpers.
+ *
+ * Dedupes allowFrom entries and canonicalizes user lookups into stable id additions.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

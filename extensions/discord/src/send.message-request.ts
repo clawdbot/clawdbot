@@ -1,3 +1,4 @@
+// Discord plugin module implements send.message request behavior.
 import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
 import {
   Embed,

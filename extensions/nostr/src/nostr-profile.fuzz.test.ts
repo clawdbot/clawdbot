@@ -1,3 +1,4 @@
+// Nostr tests cover nostr profile.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import {

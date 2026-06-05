@@ -1,3 +1,4 @@
+// Vitest Local Scheduling tests cover vitest local scheduling script behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveLocalVitestEnv,

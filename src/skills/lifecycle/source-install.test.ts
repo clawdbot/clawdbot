@@ -1,3 +1,4 @@
+// Source install tests cover installing skill sources from local and remote inputs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

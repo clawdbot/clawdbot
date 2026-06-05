@@ -1,3 +1,4 @@
+// Matrix plugin module implements draft stream behavior.
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";

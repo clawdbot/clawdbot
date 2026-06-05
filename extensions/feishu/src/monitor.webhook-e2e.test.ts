@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";

@@ -1,3 +1,4 @@
+// Plugin install plan tests cover install planning for local, registry, and bundled plugins.
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";

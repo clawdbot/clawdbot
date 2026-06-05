@@ -1,3 +1,4 @@
+// Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
 import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
 

@@ -1,3 +1,4 @@
+// Writes a marketplace fixture for release scenario E2E tests.
 import fs from "node:fs";
 import path from "node:path";
 

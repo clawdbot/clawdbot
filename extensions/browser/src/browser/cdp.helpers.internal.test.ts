@@ -1,3 +1,4 @@
+// Browser tests cover cdp.helpers.internal plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";

@@ -1,7 +1,27 @@
+// Qqbot tests cover channel.message adapter plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
+
+describe("qqbot outbound sanitizeText", () => {
+  it("strips reasoning/thinking tags before delivery", () => {
+    const sanitize = qqbotPlugin.outbound?.sanitizeText;
+    expect(sanitize).toBeDefined();
+    if (!sanitize) {
+      return;
+    }
+
+    const input1 = "<thinking>internal reasoning</thinking>final answer";
+    expect(sanitize({ text: input1, payload: { text: input1 } })).toBe("final answer");
+
+    const input2 = "<think>step by step</think>result";
+    expect(sanitize({ text: input2, payload: { text: input2 } })).toBe("result");
+
+    const input3 = "plain text without tags";
+    expect(sanitize({ text: input3, payload: { text: input3 } })).toBe("plain text without tags");
+  });
+});
 
 const sendTextMock = vi.hoisted(() => vi.fn());
 const sendMediaMock = vi.hoisted(() => vi.fn());

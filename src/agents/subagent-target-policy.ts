@@ -1,11 +1,13 @@
+/**
+ * Subagent spawn target policy. Requesters can self-spawn by default, or opt
+ * into a configured allowlist that is still intersected with known agents.
+ */
 import {
   normalizeUniqueStringEntries,
   sortUniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-// Subagent spawn target policy. Requesters can self-spawn by default, or opt
-// into a configured allowlist that is still intersected with known agents.
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
 function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {

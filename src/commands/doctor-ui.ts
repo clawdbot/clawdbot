@@ -1,3 +1,4 @@
+/** Doctor checks and repairs for Control UI assets after gateway protocol changes. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -26,6 +27,7 @@ export type UiProtocolFreshnessIssue =
       readonly canBuild: boolean;
     };
 
+/** Detects missing or stale Control UI build artifacts relative to protocol schema changes. */
 export async function detectUiProtocolFreshnessIssues(
   opts: {
     readonly root?: string;
@@ -117,6 +119,7 @@ async function collectProtocolSchemaChangesSince(
   return gitLog.stdout.trim().split("\n");
 }
 
+/** Converts a UI protocol freshness issue into a doctor lint health finding. */
 export function uiProtocolFreshnessIssueToHealthFinding(
   issue: UiProtocolFreshnessIssue,
 ): HealthFinding {
@@ -133,6 +136,7 @@ export function uiProtocolFreshnessIssueToHealthFinding(
   };
 }
 
+/** Converts a UI freshness issue into the process repair effect used by lint dry runs. */
 export function uiProtocolFreshnessIssueToRepairEffects(
   issue: UiProtocolFreshnessIssue,
 ): readonly HealthRepairEffect[] {
@@ -162,6 +166,7 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
     .join("\n")}`;
 }
 
+/** Prompts to build or rebuild Control UI assets when doctor detects missing or stale output. */
 export async function maybeRepairUiProtocolFreshness(
   _runtime: RuntimeEnv,
   prompter: DoctorPrompter,

@@ -1,3 +1,4 @@
+// Channel run-state tracker used to publish busy/activity status.
 type RunStateStatusPatch = {
   busy?: boolean;
   activeRuns?: number;

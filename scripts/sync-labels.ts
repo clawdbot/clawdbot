@@ -1,3 +1,4 @@
+// Sync Labels script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";

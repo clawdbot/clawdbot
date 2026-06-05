@@ -1,3 +1,4 @@
+// Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
 import {
   adaptMessagePresentationForChannel,

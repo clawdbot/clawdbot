@@ -1,3 +1,4 @@
+// Session store writes are serialized per store path to avoid lost updates.
 import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import { WRITER_QUEUES } from "./store-writer-state.js";
 

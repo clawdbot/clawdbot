@@ -1,6 +1,13 @@
+/**
+ * Output helpers for non-interactive onboarding.
+ *
+ * JSON success/failure payloads and human-readable gateway health diagnostics
+ * are kept here so local and remote setup report failures consistently.
+ */
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
+/** Structured daemon/service details attached to gateway health failures. */
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
@@ -16,6 +23,7 @@ export type GatewayHealthFailureDiagnostics = {
   inspectError?: string;
 };
 
+/** Coarse recovery category for gateway health failures. */
 export type GatewayHealthFailureClassification =
   | "not-listening"
   | "auth-mismatch"
@@ -24,6 +32,7 @@ export type GatewayHealthFailureClassification =
   | "startup-blocked"
   | "module-missing";
 
+/** Emits the JSON success payload for non-interactive onboarding when requested. */
 export function logNonInteractiveOnboardingJson(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -97,6 +106,8 @@ function classifyGatewayHealthFailure(params: {
   const detail = params.detail ?? "";
   const lastGatewayError = params.diagnostics?.lastGatewayError ?? "";
   const combined = `${detail}\n${lastGatewayError}`;
+  // Classify from both the active probe and the daemon's last error so a fast
+  // restart failure still gets the same recovery hint as a direct probe error.
   if (
     /\b(?:unauthorized|forbidden|invalid token|invalid password|auth mismatch)\b/i.test(combined)
   ) {
@@ -151,6 +162,7 @@ function recoveryHintForGatewayHealthFailure(
   }
 }
 
+/** Emits JSON or human-readable failure output for non-interactive onboarding. */
 export function logNonInteractiveOnboardingFailure(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;

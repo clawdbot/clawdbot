@@ -1,3 +1,4 @@
+/** Tests LSP server spawning with Windows shim and sanitized env handling. */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { spawnLspServerProcess } from "./agent-bundle-lsp-runtime.js";
 

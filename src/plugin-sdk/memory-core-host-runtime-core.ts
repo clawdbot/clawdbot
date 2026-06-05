@@ -1,3 +1,4 @@
+// Memory core host runtime exports bridge memory host runtime-core APIs into the SDK.
 export * from "../../packages/memory-host-sdk/src/runtime-core.js";
 export {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,

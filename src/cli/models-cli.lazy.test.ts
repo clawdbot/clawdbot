@@ -1,3 +1,4 @@
+// Models CLI lazy tests cover lazy model command imports and registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

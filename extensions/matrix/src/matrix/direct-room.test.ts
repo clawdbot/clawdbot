@@ -1,3 +1,4 @@
+// Matrix tests cover direct room plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { inspectMatrixDirectRoomEvidence } from "./direct-room.js";
 import type { MatrixClient } from "./sdk.js";

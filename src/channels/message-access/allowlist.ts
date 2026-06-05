@@ -1,3 +1,8 @@
+/**
+ * Channel ingress allowlist diagnostics.
+ *
+ * Merges allowlists, applies mutable identifier policy, and redacts access-graph facts.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   ChannelIngressPolicyInput,

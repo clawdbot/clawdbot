@@ -1,3 +1,4 @@
+// Local media root helpers normalize and match allowed local media roots.
 import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

@@ -1,3 +1,4 @@
+// Discord plugin module implements handle action behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readPositiveIntegerParam,

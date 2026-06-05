@@ -1,3 +1,4 @@
+// Discovers bundled plugin source entries, package artifacts, and root excludes for builds.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+/** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
@@ -66,6 +68,7 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   );
 }
 
+/** Collect plugin source entry files declared by package export metadata. */
 export function collectPluginSourceEntries(packageJson) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
@@ -83,6 +86,7 @@ export function collectPluginSourceEntries(packageJson) {
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
 }
 
+/** Collect top-level public plugin surface files that should be built. */
 export function collectTopLevelPublicSurfaceEntries(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
     return [];
@@ -183,6 +187,7 @@ function collectBundledPluginCandidates(cwd, extensionsRoot) {
     });
 }
 
+/** Collect all bundled plugin build entries for the current checkout. */
 export function collectBundledPluginBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ?? process.env;
@@ -248,6 +253,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
 }
 
+/** Return buildable bundled plugin entries with optional CLI filtering applied. */
 export function listBundledPluginBuildEntries(params = {}) {
   return Object.fromEntries(
     collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
@@ -260,6 +266,7 @@ export function listBundledPluginBuildEntries(params = {}) {
   );
 }
 
+/** Collect bundled extension dirs that root package builds should exclude. */
 export function collectRootPackageExcludedExtensionDirs(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const packageJsonPath = path.join(cwd, "package.json");
@@ -281,6 +288,7 @@ export function collectRootPackageExcludedExtensionDirs(params = {}) {
   return excluded;
 }
 
+/** List package artifact files generated for bundled plugins. */
 export function listBundledPluginPackArtifacts(params = {}) {
   const excludedPackageDirs =
     params.includeRootPackageExcludedDirs === true

@@ -1,3 +1,8 @@
+/**
+ * Agent session SDK factory.
+ *
+ * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
+ */
 import { join } from "node:path";
 import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";

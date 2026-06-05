@@ -1,3 +1,4 @@
+// Qa Lab helper module supports suite test helpers behavior.
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];

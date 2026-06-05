@@ -1,3 +1,4 @@
+// Whatsapp tests cover ack emoji plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";

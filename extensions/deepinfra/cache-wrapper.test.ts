@@ -1,3 +1,4 @@
+// Deepinfra tests cover cache wrapper plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
 

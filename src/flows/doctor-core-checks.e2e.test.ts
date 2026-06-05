@@ -1,3 +1,4 @@
+// Doctor core check E2E tests cover doctor checks in filesystem-backed scenarios.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

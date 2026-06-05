@@ -1,3 +1,4 @@
+// OC Path module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerOcPathCli } from "./cli-registration.js";
 

@@ -1,3 +1,4 @@
+// Deepinfra tests cover speech provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
@@ -7,18 +8,18 @@ const {
   readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
-      return new Uint8Array(await response.arrayBuffer());
-    }),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
+    return new Uint8Array(await response.arrayBuffer());
+  }),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,

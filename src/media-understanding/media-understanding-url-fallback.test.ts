@@ -1,3 +1,5 @@
+// Attachment URL fallback tests cover blocked local paths falling back to
+// remote media fetches and temp-file materialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

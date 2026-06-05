@@ -1,3 +1,4 @@
+// Doctor repair for dmPolicy allowlists whose sender entries only exist in pairing stores.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
@@ -9,6 +10,7 @@ import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 import { asObjectRecord } from "./object.js";
 
+/** Restore missing allowFrom entries for allowlist DM policies from persisted pairing stores. */
 export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];

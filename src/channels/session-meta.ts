@@ -1,3 +1,4 @@
+// Best-effort inbound session metadata recorder for channel plugin command handlers.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

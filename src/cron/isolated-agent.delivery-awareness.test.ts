@@ -1,3 +1,4 @@
+// Delivery awareness tests cover isolated agent knowledge of cron delivery targets.
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./isolated-agent.mocks.js";

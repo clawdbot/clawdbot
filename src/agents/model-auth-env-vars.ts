@@ -1,3 +1,8 @@
+/**
+ * Provider auth env/evidence lookup facade for agent auth code. It keeps
+ * provider-env-var source paths centralized while exposing API-key oriented
+ * helper names to model/auth modules.
+ */
 import {
   listKnownProviderAuthEnvVarNames,
   resolveProviderAuthEvidence,

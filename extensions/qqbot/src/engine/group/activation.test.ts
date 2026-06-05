@@ -1,3 +1,4 @@
+// Qqbot tests cover activation plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveGroupActivation, type SessionStoreReader } from "./activation.js";
 

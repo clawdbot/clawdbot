@@ -1,3 +1,10 @@
+/**
+ * Existing-session browser capability-limit messages.
+ *
+ * Centralizes unsupported-operation text so route responses and tests stay
+ * stable while Chrome MCP support grows incrementally.
+ */
+/** User-facing messages for existing-session route limitations. */
 export const EXISTING_SESSION_LIMITS = {
   act: {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",

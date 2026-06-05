@@ -1,3 +1,4 @@
+// Setup plugin config helpers build plugin config from onboarding answers.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";

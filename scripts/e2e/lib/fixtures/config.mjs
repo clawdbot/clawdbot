@@ -1,3 +1,4 @@
+// Config fixture writer commands for E2E scenarios.
 import path from "node:path";
 import { requireArg, writeJson } from "./common.mjs";
 

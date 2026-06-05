@@ -1,3 +1,4 @@
+// Metadata registry loader tests cover metadata-only plugin registry assembly.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLoadOptions } from "../loader.js";
 

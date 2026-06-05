@@ -1,3 +1,4 @@
+// Session transcript hit tests cover transcript match formatting and path resolution.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {

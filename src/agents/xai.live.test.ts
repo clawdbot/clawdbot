@@ -1,3 +1,5 @@
+// xAI live tests verify Grok completions, tool payload wrapping, and Grok web
+// search against the real provider when live credentials are enabled.
 import { completeSimple, type Model, streamSimple } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
@@ -65,6 +67,8 @@ function requireLiveValue<T>(value: T | null | undefined, label: string): T {
 }
 
 async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
+  // Live provider behavior can drift on billing/capacity; those environment
+  // failures are skipped while real contract failures still throw.
   try {
     await run();
   } catch (error) {

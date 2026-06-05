@@ -1,3 +1,4 @@
+// Slack tests cover threading plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackThreadContext, resolveSlackThreadTargets } from "./threading.js";
 

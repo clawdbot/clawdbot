@@ -1,3 +1,4 @@
+// Memory Core tests cover index plugin behavior.
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

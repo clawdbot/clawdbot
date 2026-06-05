@@ -1,3 +1,5 @@
+// Message handler tests cover assistant stream payloads, partial replies,
+// block replies, directives, media, and message-tool reply suppression.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -33,6 +35,8 @@ function createMessageUpdateContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
+  // Update context fixture wires the partial-reply path through the same
+  // directive accumulator used by streaming runtime events.
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
   const onPartialReply = params.onPartialReply as ((event: unknown) => void) | undefined;
@@ -108,6 +112,8 @@ function createMessageEndContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
+  // Message-end context starts with buffered assistant text so tests can assert
+  // final flushing, directive consumption, and source-reply behavior.
   const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
   return {
     params: {
@@ -181,6 +187,8 @@ function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): un
 }
 
 function createMessageToolEnvelope(message: string, args: Record<string, unknown> = {}): string {
+  // Messaging tool envelopes mimic provider tool-call JSON used by fallback
+  // reply extraction when the assistant otherwise says NO_REPLY.
   return JSON.stringify({
     name: "message",
     arguments: {

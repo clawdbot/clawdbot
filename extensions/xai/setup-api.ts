@@ -1,3 +1,4 @@
+// Xai API module exposes the plugin public contract.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "./src/tool-config-shared.js";
 

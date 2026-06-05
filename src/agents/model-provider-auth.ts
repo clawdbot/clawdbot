@@ -1,3 +1,8 @@
+/**
+ * Warms and queries provider-auth availability for model catalogs. The module
+ * keeps per-agent auth snapshots process-current so model listing can avoid
+ * repeated env/profile/plugin discovery on hot paths.
+ */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";

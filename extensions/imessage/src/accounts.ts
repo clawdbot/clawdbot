@@ -1,3 +1,4 @@
+// Imessage plugin module implements accounts behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   createAccountListHelpers,

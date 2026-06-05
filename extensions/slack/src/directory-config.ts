@@ -1,3 +1,4 @@
+// Slack helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   createResolvedDirectoryEntriesLister,

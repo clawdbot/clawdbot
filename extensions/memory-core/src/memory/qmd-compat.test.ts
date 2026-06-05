@@ -1,3 +1,4 @@
+// Memory Core tests cover qmd compat plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQmdCollectionPatternFlags } from "./qmd-compat.js";
 

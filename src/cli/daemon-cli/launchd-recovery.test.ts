@@ -1,3 +1,4 @@
+// Launchd recovery tests cover daemon recovery behavior for macOS launchd services.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const launchAgentPlistExists = vi.hoisted(() => vi.fn());

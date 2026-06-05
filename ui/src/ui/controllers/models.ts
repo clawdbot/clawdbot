@@ -1,3 +1,4 @@
+// Control UI controller manages models gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 

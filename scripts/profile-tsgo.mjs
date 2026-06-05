@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Profiles selected tsgo graphs and writes diagnostics/trace artifacts for
+// TypeScript graph size and performance investigations.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

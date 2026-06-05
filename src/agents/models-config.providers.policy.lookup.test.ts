@@ -1,3 +1,4 @@
+// Verifies custom providers route to the correct provider-policy plugin key.
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 
@@ -51,6 +52,7 @@ describe("resolveProviderPluginLookupKey", () => {
   });
 
   it("falls through when runtime provider models is an object map", () => {
+    // Runtime object maps are not catalog arrays, so model-level API sniffing must not run.
     expect(
       resolveProviderPluginLookupKey("openrouter", {
         baseUrl: "https://openrouter.ai/api/v1",

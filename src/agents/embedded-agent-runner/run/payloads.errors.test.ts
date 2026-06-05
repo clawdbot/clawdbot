@@ -1,3 +1,5 @@
+// Error payload tests ensure embedded runs convert provider/tool failures into
+// concise user-facing replies without leaking raw provider bodies or secrets.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
@@ -24,6 +26,8 @@ describe("buildEmbeddedRunPayloads", () => {
   "request_id": "req_011CX7DwS7tSvggaNHmefwWg"
 }`;
   const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
+    // Default to an overloaded provider error so each test can override only
+    // the assistant fields relevant to user-visible payload sanitization.
     makeAssistantMessageFixture({
       errorMessage: errorJson,
       content: [{ type: "text", text: errorJson }],
@@ -37,6 +41,8 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
   const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
+    // Overloaded JSON is normalized into stable copy rather than replayed as a
+    // raw provider object.
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
@@ -157,6 +163,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses raw assistant error messages in user-facing reply payloads", () => {
+    // Canary text proves raw provider error strings do not escape into channel
+    // replies when the assistant stopped in an error state.
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "error",
@@ -338,6 +346,8 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
+    // Some providers leave stale errorMessage fields on otherwise successful
+    // assistant messages; stopReason/content decide user-facing output.
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "stop",

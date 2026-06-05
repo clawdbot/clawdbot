@@ -1,3 +1,4 @@
+// Voice Call plugin module implements realtime handler behavior.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";

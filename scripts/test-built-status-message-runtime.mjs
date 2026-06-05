@@ -1,3 +1,4 @@
+// Smoke-tests that the built status-message runtime bundle is discoverable and loadable.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -7,16 +8,18 @@ import { parsePackageRootArg } from "./lib/package-root-args.mjs";
 
 const STATUS_MESSAGE_RUNTIME_RE = /^status-message\.runtime(?:-[A-Za-z0-9_-]+)?\.js$/u;
 
+/**
+ * Finds the preferred built status-message runtime bundle under dist.
+ */
 export function findBuiltStatusMessageRuntimePath(distDir) {
-  const candidates = listBuiltStatusMessageRuntimeFiles(distDir)
-    .toSorted((left, right) => {
-      const leftHasHash = left !== "status-message.runtime.js";
-      const rightHasHash = right !== "status-message.runtime.js";
-      if (leftHasHash !== rightHasHash) {
-        return leftHasHash ? -1 : 1;
-      }
-      return left.localeCompare(right);
-    });
+  const candidates = listBuiltStatusMessageRuntimeFiles(distDir).toSorted((left, right) => {
+    const leftHasHash = left !== "status-message.runtime.js";
+    const rightHasHash = right !== "status-message.runtime.js";
+    if (leftHasHash !== rightHasHash) {
+      return leftHasHash ? -1 : 1;
+    }
+    return left.localeCompare(right);
+  });
 
   assert.ok(candidates.length > 0, `missing built status-message runtime bundle under ${distDir}`);
 

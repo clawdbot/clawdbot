@@ -1,3 +1,5 @@
+// Server runtime-state test helper builds minimal gateway runtime state with a
+// configurable plugin registry.
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 

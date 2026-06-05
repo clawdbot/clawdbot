@@ -1,3 +1,9 @@
+/**
+ * Top-level `openclaw onboard` command entrypoint.
+ *
+ * It validates global setup flags, performs optional reset handling, and then
+ * routes to interactive or non-interactive onboarding.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
@@ -17,6 +23,7 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
+/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -27,6 +34,8 @@ export async function setupWizardCommand(
     env: process.env,
   });
   if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    // Non-interactive output must be deterministic; reject deprecated aliases
+    // instead of printing prompts or compatibility guidance mid-flow.
     runtime.error(
       formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
         env: process.env,
@@ -66,6 +75,8 @@ export async function setupWizardCommand(
   }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
+    // Non-interactive setup can write credentials and daemon config without a
+    // prompt, so the operator must acknowledge the security docs explicitly.
     runtime.error(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
@@ -78,6 +89,8 @@ export async function setupWizardCommand(
   }
 
   if (normalizedOpts.reset) {
+    // Reset runs before setup mode dispatch so both interactive and
+    // non-interactive setup start from the same cleaned state.
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const workspaceDefault =

@@ -1,3 +1,4 @@
+// Registry retry tests cover plugin registry retry behavior after transient failures.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 

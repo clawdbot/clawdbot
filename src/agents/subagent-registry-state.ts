@@ -1,3 +1,8 @@
+/**
+ * Subagent registry state persistence bridge.
+ *
+ * Merges process-local active runs with persisted SQLite state for cross-process readers.
+ */
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,

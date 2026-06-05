@@ -1,3 +1,7 @@
+/**
+ * Logging tests for auth profile failure state observation.
+ * Keeps console-facing output sanitized while structured fields remain useful.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";

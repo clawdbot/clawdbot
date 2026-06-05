@@ -1,3 +1,4 @@
+// File context tests cover readable context generation for media references.
 import { describe, expect, it } from "vitest";
 import { renderFileContextBlock } from "./file-context.js";
 

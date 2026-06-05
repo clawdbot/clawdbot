@@ -1,3 +1,4 @@
+// Control UI module implements connect error behavior.
 import {
   ConnectErrorDetailCodes,
   describePairingConnectRequirement,

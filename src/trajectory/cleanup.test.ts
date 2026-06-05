@@ -1,3 +1,4 @@
+// Trajectory cleanup tests cover retention pruning of trajectory artifacts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

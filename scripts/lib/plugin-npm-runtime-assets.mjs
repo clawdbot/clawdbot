@@ -1,3 +1,4 @@
+// Builds and validates static assets needed by package-local plugin runtime output.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,7 @@ function resolvePackageAssetBuildCommand(packageJson) {
   return typeof command === "string" && command.trim() ? command.trim() : null;
 }
 
+/** Run a package-local static asset build command when the plugin declares one. */
 export function runPackageAssetBuild(plan) {
   const command = resolvePackageAssetBuildCommand(plan.packageJson);
   if (!command) {
@@ -26,6 +28,7 @@ export function runPackageAssetBuild(plan) {
   return command;
 }
 
+/** List static asset source paths referenced by a package but missing from disk. */
 export function listMissingPackageStaticAssetSources(plan) {
   const packagePrefix = `extensions/${plan.pluginDir}/`;
   return discoverStaticExtensionAssets({ rootDir: plan.repoRoot })

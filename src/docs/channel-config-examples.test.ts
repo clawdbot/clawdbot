@@ -1,3 +1,4 @@
+// Channel config example tests validate channel configuration snippets in docs.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

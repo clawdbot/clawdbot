@@ -1,3 +1,5 @@
+// Z.ai live tests verify GLM completions against the real provider when live
+// credentials and live-test flags are enabled.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {

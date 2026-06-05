@@ -1,3 +1,4 @@
+// Discord plugin module implements command behavior.
 import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,

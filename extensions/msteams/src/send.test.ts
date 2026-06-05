@@ -1,3 +1,4 @@
+// Msteams tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";

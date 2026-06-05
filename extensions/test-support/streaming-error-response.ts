@@ -1,3 +1,4 @@
+// Test Support plugin module implements streaming error response behavior.
 export function createStreamingErrorResponse(params: {
   status: number;
   chunkCount: number;

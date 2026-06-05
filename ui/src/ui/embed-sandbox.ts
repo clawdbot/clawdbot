@@ -1,3 +1,4 @@
+// Control UI module implements embed sandbox behavior.
 import type { ControlUiEmbedSandboxMode } from "../../../src/gateway/control-ui-contract.js";
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;

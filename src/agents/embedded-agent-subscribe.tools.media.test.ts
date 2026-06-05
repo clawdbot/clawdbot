@@ -1,3 +1,5 @@
+// Tool media extraction tests cover structured media payloads, image fallbacks,
+// trust decisions, and filtering of local/remote media URLs.
 import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
@@ -137,6 +139,8 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("falls back to details.path when image content exists", () => {
+    // Embedded read image results omit structured media but include details.path,
+    // so image content is the guard that makes that path media.
     // Embedded read tool doesn't include structured media but OpenClaw
     // imageResult sets details.path as fallback.
     const result = {
@@ -175,6 +179,8 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("ignores details.path when no image content exists", () => {
+    // Plain file paths in details are not media unless the content proves an
+    // image/audio/video artifact was produced.
     // details.path without image content is not media.
     const result = {
       content: [{ type: "text", text: "File saved" }],

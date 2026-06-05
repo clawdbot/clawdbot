@@ -1,3 +1,4 @@
+// Migrate Claude plugin module implements plan behavior.
 import { createMigrationItem, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import type {
   MigrationItem,

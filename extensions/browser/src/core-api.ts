@@ -1,3 +1,7 @@
+/**
+ * Browser plugin internal barrel that gathers runtime, SDK, CLI, and gateway
+ * APIs for modules that need a stable local import surface.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_UPLOAD_DIR,

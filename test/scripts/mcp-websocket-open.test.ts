@@ -1,3 +1,4 @@
+// Mcp Websocket Open tests cover mcp websocket open script behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForWebSocketOpen } from "../../scripts/e2e/mcp-websocket-open.ts";

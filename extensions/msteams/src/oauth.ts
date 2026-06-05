@@ -1,3 +1,4 @@
+// Msteams plugin module implements oauth behavior.
 import {
   buildMSTeamsAuthUrl,
   generateOAuthState,

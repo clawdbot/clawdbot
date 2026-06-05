@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";

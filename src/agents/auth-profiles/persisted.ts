@@ -1,3 +1,8 @@
+/**
+ * Persisted auth profile store loading and migration.
+ * Normalizes legacy JSON stores, SQLite/raw payloads, runtime state metadata,
+ * legacy OAuth files, and merged main/agent stores.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";

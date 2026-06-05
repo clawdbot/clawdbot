@@ -1,3 +1,5 @@
+// Gateway boot tests cover BOOT.md execution, boot-session store updates, channel
+// delivery hooks, and echo-guard context seeded for the runtime.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

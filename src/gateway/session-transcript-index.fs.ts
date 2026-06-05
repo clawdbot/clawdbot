@@ -1,12 +1,8 @@
+// Filesystem transcript indexer.
+// Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
-/**
- * Streaming JSONL transcript index used by gateway history reads.
- *
- * The index keeps byte offsets for visible entries so callers can page large
- * transcripts without decoding every message body into memory.
- */
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES = 256;
 const MAX_TRANSCRIPT_INDEX_PARSE_LINE_BYTES = 256 * 1024;

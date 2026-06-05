@@ -1,3 +1,6 @@
+/**
+ * Bridges native harness hook events through registered relay processes.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,

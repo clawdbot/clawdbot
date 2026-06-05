@@ -1,3 +1,8 @@
+/**
+ * Subagent run manager.
+ *
+ * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";

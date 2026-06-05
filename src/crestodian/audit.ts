@@ -1,3 +1,4 @@
+// Crestodian audit helpers append JSONL records for approved local-state changes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -38,6 +39,7 @@ export async function appendCrestodianAuditEntry(
     timestamp: new Date().toISOString(),
     ...entry,
   } satisfies CrestodianAuditEntry);
+  // Audit writes reject symlinked parents so approval records cannot be redirected silently.
   await appendRegularFile({
     filePath: auditPath,
     content: `${line}\n`,

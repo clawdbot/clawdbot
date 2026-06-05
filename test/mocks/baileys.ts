@@ -1,3 +1,4 @@
+// Baileys mock provides a lightweight WhatsApp socket facade for tests.
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 

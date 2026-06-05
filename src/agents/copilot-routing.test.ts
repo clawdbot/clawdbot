@@ -1,3 +1,4 @@
+// Covers when model selection should install the Copilot runtime plugin.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "./copilot-routing.js";
@@ -81,6 +82,8 @@ describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
   });
 
   it("model-scope override takes precedence over provider scope", () => {
+    // A model override can intentionally opt out even when the provider default
+    // opts into the Copilot runtime plugin.
     const cfg = {
       models: {
         providers: {

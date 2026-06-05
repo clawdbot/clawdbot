@@ -1,3 +1,4 @@
+// Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -57,6 +58,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
   throw new Error("Unsupported backup asset kind");
 }
 
+/** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
 export function formatBackupArchiveTimestamp(
   nowMs = Date.now(),
   offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
@@ -77,14 +79,17 @@ export function formatBackupArchiveTimestamp(
   return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
 }
 
+/** Build the root directory name stored inside a backup tarball. */
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
   return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
+/** Build the default `.tar.gz` filename for a backup archive. */
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
 }
 
+/** Encode an absolute or relative source path into a traversal-safe archive payload path. */
 export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
@@ -99,10 +104,12 @@ export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
+/** Build the archive-relative payload path for one source path. */
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
+/** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */
 export async function resolveBackupPlanFromPaths(params: {
   stateDir: string;
   configPath: string;
@@ -263,6 +270,7 @@ async function canonicalizeExistingPath(targetPath: string): Promise<string> {
   }
 }
 
+/** Resolve the backup plan from the current OpenClaw state/config/workspace paths on disk. */
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;

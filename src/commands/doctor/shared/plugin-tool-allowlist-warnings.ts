@@ -1,3 +1,4 @@
+// Doctor warnings for plugin allowlists that make configured tool policies ineffective.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -573,6 +574,7 @@ function addIssue(issues: Map<string, Set<string>>, key: string, sourceLabel: st
   issues.set(key, sources);
 }
 
+/** Collect warnings when plugin allowlists block tools referenced by active tool policies. */
 export function collectPluginToolAllowlistWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

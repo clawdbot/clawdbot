@@ -1,3 +1,4 @@
+// Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";

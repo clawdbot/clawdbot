@@ -1,3 +1,7 @@
+/**
+ * Cleanup helper for subagent sessions. It deletes child session state through
+ * the gateway and preserves lifecycle-hook behavior for session-mode spawns.
+ */
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 

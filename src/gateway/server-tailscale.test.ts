@@ -1,3 +1,5 @@
+// Tailscale exposure tests cover serve/funnel enablement, preserve-funnel mode,
+// hostname discovery, cleanup handles, and warning paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

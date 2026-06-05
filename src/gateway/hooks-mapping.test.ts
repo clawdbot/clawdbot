@@ -1,3 +1,5 @@
+// Hook mapping tests protect webhook path matching, templated agent actions,
+// transform results, skipped mappings, and file-backed mapping config.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Live checks for Anthropic replay transcript sanitization and tool-call history.
 import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt.tool-call-normalization.js";
@@ -18,6 +19,8 @@ const ANTHROPIC_TIMEOUT_MS = 120_000;
 const TOOL_OUTPUT_SENTINEL = "TOOL-RESULT-LIVE-MAGENTA";
 
 function shouldSkipEmptyAnthropicReplayResult(label: string, text: string): boolean {
+  // Some live Anthropic responses can be empty despite accepting the transcript;
+  // treat that as provider drift instead of failing replay-shape validation.
   if (text.trim().length > 0) {
     return false;
   }
@@ -29,6 +32,8 @@ function buildLiveAnthropicModel(): {
   apiKey: string;
   model: Model<"anthropic-messages">;
 } {
+  // Keep the live model configurable while defaulting to the stable replay model
+  // used by cache/live validation.
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("missing ANTHROPIC_API_KEY");
@@ -178,6 +183,8 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
       ];
 
       const baseFn = vi.fn((_model: unknown, context: unknown) => ({ context }));
+      // First prove local sanitizer output is unchanged, then send the exact
+      // sanitized transcript to the live API.
       const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["noop"]), {
         validateGeminiTurns: false,
         validateAnthropicTurns: true,

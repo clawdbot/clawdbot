@@ -1,3 +1,4 @@
+// Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {

@@ -1,3 +1,4 @@
+/** Reusable turn-level fixtures for isolated cron agent regression tests. */
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { expect, vi } from "vitest";
@@ -12,7 +13,6 @@ import {
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 
-// Reusable turn-level fixtures for isolated cron agent regression tests.
 export { withTempHome };
 
 export function makeDeps(): CliDeps {

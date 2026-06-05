@@ -1,3 +1,5 @@
+// MCP loopback HTTP server.
+// Exposes Gateway-scoped tools to local MCP clients over bearer-auth loopback.
 import crypto from "node:crypto";
 import {
   createServer as createHttpServer,
@@ -207,6 +209,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
+  // Register tokens only after the TCP listener is live so clients never learn
+  // a bearer token for a server that failed to bind.
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 

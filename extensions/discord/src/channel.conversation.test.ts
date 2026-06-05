@@ -1,3 +1,4 @@
+// Discord tests cover channel.conversation plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   matchDiscordAcpConversation,

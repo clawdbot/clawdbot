@@ -1,3 +1,6 @@
+/**
+ * Detects Codex app-server failures that should retry with recovery.
+ */
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 /**

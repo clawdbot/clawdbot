@@ -1,3 +1,4 @@
+// Agent Core module implements kill tree behavior.
 import { spawn } from "node:child_process";
 
 const DEFAULT_GRACE_MS = 3000;

@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,

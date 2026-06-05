@@ -1,3 +1,4 @@
+// Release Workflow Matrix Plan tests cover release workflow matrix plan script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";

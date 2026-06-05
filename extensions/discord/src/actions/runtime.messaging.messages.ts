@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,

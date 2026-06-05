@@ -1,3 +1,5 @@
+// Web readability tests cover plugin extractor dispatch, per-config resolver
+// caching, and loader/extractor failure fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePluginWebContentExtractorsMock } = vi.hoisted(() => ({
@@ -40,6 +42,8 @@ describe("web fetch readability", () => {
   });
 
   it("reuses extractor resolution for repeated calls with the same config object", async () => {
+    // Extractor manifests are process-stable for a config snapshot; repeated
+    // reads should not re-run plugin discovery on the fetch hot path.
     const config = {};
     resolvePluginWebContentExtractorsMock.mockReturnValue([
       {

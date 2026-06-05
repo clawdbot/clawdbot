@@ -1,3 +1,4 @@
+// Clawdock Helpers tests cover clawdock helpers script behavior.
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

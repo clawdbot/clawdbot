@@ -1,3 +1,9 @@
+/**
+ * Browser client action helpers.
+ *
+ * Wraps browser-control action endpoints for navigation, dialog/file hooks,
+ * screenshots, and element actions used by the Browser agent tool.
+ */
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
@@ -51,6 +57,7 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
   return Math.max(...candidateTimeouts);
 }
 
+/** Navigate a browser tab through the control server. */
 export async function browserNavigate(
   baseUrl: string | undefined,
   opts: {
@@ -68,6 +75,7 @@ export async function browserNavigate(
   });
 }
 
+/** Arm a one-shot browser dialog handler. */
 export async function browserArmDialog(
   baseUrl: string | undefined,
   opts: {
@@ -94,6 +102,7 @@ export async function browserArmDialog(
   });
 }
 
+/** Arm or execute a browser file chooser upload. */
 export async function browserArmFileChooser(
   baseUrl: string | undefined,
   opts: {
@@ -122,6 +131,7 @@ export async function browserArmFileChooser(
   });
 }
 
+/** Execute one normalized browser action request. */
 export async function browserAct(
   baseUrl: string | undefined,
   req: BrowserActRequest,
@@ -136,6 +146,7 @@ export async function browserAct(
   });
 }
 
+/** Capture a screenshot through the browser control server. */
 export async function browserScreenshotAction(
   baseUrl: string | undefined,
   opts: {

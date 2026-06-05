@@ -1,3 +1,6 @@
+/**
+ * Hardens manual compaction transcript boundaries after explicit `/compact`.
+ */
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/index.js";
 import {
@@ -69,6 +72,7 @@ function hasMessagesToSummarizeBeforeKeptTail(params: {
     .some((entry) => entryCreatesCompactionInputMessage(entry));
 }
 
+/** Rewrite the latest manual compaction leaf so replay starts from its summary. */
 export async function hardenManualCompactionBoundary(params: {
   sessionFile: string;
   preserveRecentTail?: boolean;

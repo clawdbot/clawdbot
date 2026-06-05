@@ -1,3 +1,5 @@
+// Env deprecation tests ensure legacy prefixed variables warn once without
+// leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetLegacyOpenClawEnvWarningForTest,

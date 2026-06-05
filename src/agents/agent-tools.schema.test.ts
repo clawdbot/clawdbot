@@ -1,3 +1,8 @@
+/**
+ * Tests provider-compatible tool schema normalization.
+ * Protects caching, ref inlining, OpenAPI keyword cleanup, and no-parameter
+ * tool behavior used by model providers.
+ */
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";

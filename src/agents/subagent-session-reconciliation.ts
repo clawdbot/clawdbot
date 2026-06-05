@@ -1,3 +1,8 @@
+/**
+ * Subagent session-store reconciliation.
+ *
+ * Infers child completion from persisted session entries when registry updates arrive late.
+ */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -15,8 +20,6 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 
-// Reconcile subagent lifecycle events with persisted session store state. This
-// lets parent sessions announce completion even if registry updates arrive late.
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
 
 /** Completion inferred from the child session store. */

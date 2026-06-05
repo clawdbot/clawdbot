@@ -19,7 +19,9 @@ export type {
   MigrationSummary,
 };
 
+/** Shared migration failure reason when an item lacks required paths. */
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
+/** Shared migration conflict reason when a target already exists. */
 export const MIGRATION_REASON_TARGET_EXISTS = "target exists";
 
 /** Creates a migration item, defaulting new provider output to the planned state. */
@@ -98,6 +100,7 @@ function isSecretKey(key: string): boolean {
   return SECRET_KEY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/** Structured config patch details stored on migration items. */
 export type MigrationConfigPatchDetails = {
   /** Config object path where the patch should be merged. */
   path: string[];

@@ -1,3 +1,4 @@
+// Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
 
 // Shared guarded JSON API client for voice-call providers.

@@ -1,3 +1,4 @@
+// Isolated agent model override tests cover scheduled run model selection.
 import "./isolated-agent.mocks.js";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

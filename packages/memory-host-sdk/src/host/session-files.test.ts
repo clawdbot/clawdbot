@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";

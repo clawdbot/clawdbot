@@ -1,3 +1,6 @@
+/**
+ * Applies provider plugin policy to configured model provider settings.
+ */
 import {
   applyProviderNativeStreamingUsagePolicy,
   normalizeProviderConfigPolicy,

@@ -1,6 +1,9 @@
+// Coverage for resolving models through provider hooks while discovery is skipped.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  // Discovery mocks throw/assert by call count so skipAgentDiscovery can prove it
+  // only invokes the target provider's dynamic hooks.
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
   applyProviderResolvedTransportWithPlugin: vi.fn(() => {
@@ -48,6 +51,8 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
 
 function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
+  // Workspace must be present both at the hook call level and inside the context
+  // object because plugin runtimes read either shape.
   expect(mock.mock.calls).toHaveLength(1);
   const [arg] = mock.mock.calls.at(0) ?? [];
   if (!arg || typeof arg !== "object") {

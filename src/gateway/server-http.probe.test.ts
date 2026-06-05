@@ -1,3 +1,5 @@
+// Server HTTP probe tests cover readiness, health, disabled compat routes, and
+// auth handling through the in-memory HTTP harness.
 import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
@@ -13,10 +15,7 @@ import { withTempConfig } from "./test-temp-config.js";
 type GatewayServerHarness = Parameters<typeof dispatchRequest>[0];
 type GatewayRequestOptions = Parameters<typeof createRequest>[0];
 
-async function sendGatewayRequest(
-  server: GatewayServerHarness,
-  options: GatewayRequestOptions,
-) {
+async function sendGatewayRequest(server: GatewayServerHarness, options: GatewayRequestOptions) {
   const req = createRequest(options);
   const { res, getBody } = createResponse();
   await dispatchRequest(server, req, res);

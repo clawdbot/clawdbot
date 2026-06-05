@@ -1,3 +1,4 @@
+// Non-interactive gateway health auth tests cover SecretRef and password resolution for setup probes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

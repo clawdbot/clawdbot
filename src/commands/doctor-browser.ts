@@ -1,3 +1,4 @@
+/** Facade-backed doctor checks and cleanup for bundled browser plugin state. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -27,6 +28,7 @@ export type BrowserDoctorRepairDeps = {
   movePathToTrash?: (targetPath: string) => Promise<string>;
 };
 
+/** Legacy browser profile paths detected before cleanup moves them aside. */
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
   legacyUserDataDir: string;
@@ -64,6 +66,7 @@ function mayHaveLegacyClawdBrowserProfileResidue(deps?: BrowserDoctorRepairDeps)
   }
 }
 
+/** Emits browser readiness notes through the bundled browser plugin doctor surface. */
 export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: BrowserDoctorDeps) {
   try {
     await loadBrowserDoctorSurface().noteChromeMcpBrowserReadiness(cfg, deps);
@@ -74,6 +77,7 @@ export async function noteChromeMcpBrowserReadiness(cfg: OpenClawConfig, deps?: 
   }
 }
 
+/** Detects old clawd browser profile residue without loading plugin cleanup when paths are absent. */
 export async function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorRepairDeps,
@@ -88,6 +92,7 @@ export async function detectLegacyClawdBrowserProfileResidue(
   return detect(cfg, deps);
 }
 
+/** Archives legacy clawd browser profile residue through the browser plugin repair hook. */
 export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorRepairDeps,

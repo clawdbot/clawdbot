@@ -1,3 +1,4 @@
+// Signal plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import type { ResolvedSignalAccount } from "./accounts.js";
 import { signalSetupAdapter } from "./setup-core.js";

@@ -1,3 +1,5 @@
+// Session manager tests cover JSONL recovery behavior for interrupted or
+// corrupted transcript writes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +22,8 @@ describe("SessionManager.open", () => {
   });
 
   it("recovers a corrupted first-line header without truncating later messages", async () => {
+    // A damaged header should be repairable without treating valid later
+    // message entries as disposable transcript state.
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
     const originalHeader = {
@@ -63,6 +67,7 @@ describe("SessionManager.open", () => {
 
     const backupFiles = (await fs.readdir(dir)).filter((file) => file.includes(".corrupt-"));
     expect(backupFiles).toHaveLength(1);
+    // Keep an exact backup for audit/debugging before rewriting the live file.
     await expect(fs.readFile(path.join(dir, backupFiles[0] ?? ""), "utf8")).resolves.toBe(
       originalTranscript,
     );

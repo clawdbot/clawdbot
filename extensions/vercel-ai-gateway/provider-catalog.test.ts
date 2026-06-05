@@ -1,3 +1,4 @@
+// Vercel Ai Gateway tests cover provider catalog plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

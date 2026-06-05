@@ -1,3 +1,4 @@
+// ACP binding tests cover channel plugin ACP target binding and stateful driver behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";

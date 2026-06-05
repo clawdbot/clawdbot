@@ -1,3 +1,4 @@
+// Firecrawl provider module implements model/runtime integration.
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch";
 import { enablePluginInConfig } from "openclaw/plugin-sdk/provider-web-fetch";

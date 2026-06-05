@@ -1,3 +1,7 @@
+/**
+ * Auth-profile source probes for runtime and persisted stores.
+ * These checks intentionally avoid loading secret-bearing credential payloads.
+ */
 import fs from "node:fs";
 import {
   resolveAuthStatePath,

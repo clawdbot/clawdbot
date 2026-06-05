@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Coordinates release-candidate validation runs and emits the publish command
+// only after required local, CI, npm, plugin, and E2E evidence is green.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -50,6 +52,9 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
+/**
+ * Parses release-candidate validation options and enforces publish-scope policy.
+ */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
@@ -201,6 +206,9 @@ function githubApiTimedOut(error) {
   );
 }
 
+/**
+ * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
+ */
 export async function githubApi(path, options = {}) {
   const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
@@ -254,6 +262,9 @@ async function runArtifacts(repo, runId) {
   }));
 }
 
+/**
+ * Chooses the expected artifact name, allowing one same-prefix fallback per run.
+ */
 export function resolveArtifactName(artifacts, preferredName, prefix) {
   const available = artifacts
     .filter((artifact) => artifact.expired !== true)
@@ -312,6 +323,9 @@ function runLocalGeneratedCheckIfNeeded(options) {
   return { status: "passed", command: "pnpm release:generated:check" };
 }
 
+/**
+ * Extracts a GitHub Actions run id from gh workflow dispatch output.
+ */
 export function parseRunIdFromDispatchOutput(output) {
   return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
 }
@@ -498,6 +512,9 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/gu, "'\\''")}'`;
 }
 
+/**
+ * Builds the final release publish workflow command once validation evidence is ready.
+ */
 export function buildPublishCommand(options) {
   const fields = [
     ["tag", options.tag],

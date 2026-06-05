@@ -1,3 +1,4 @@
+// Kitchen Sink Plugin Assertions tests cover kitchen sink plugin assertions script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,

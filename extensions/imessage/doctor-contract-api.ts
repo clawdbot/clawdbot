@@ -1,3 +1,4 @@
+// Imessage API module exposes the plugin public contract.
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 
 // iMessage does not expose doctor legacy rules today. Keep that empty answer on

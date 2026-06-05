@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";

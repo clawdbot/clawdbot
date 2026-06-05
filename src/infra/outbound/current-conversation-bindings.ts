@@ -1,3 +1,5 @@
+// Generic current-conversation bindings persist lightweight conversation ->
+// session links for plugin channels without a custom binding adapter.
 import fs from "node:fs";
 import path from "node:path";
 import {

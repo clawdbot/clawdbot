@@ -1,3 +1,7 @@
+/**
+ * Resolves Codex filesystem sandbox policy payloads into OpenClaw path/glob
+ * checks for sandbox exec-server filesystem operations.
+ */
 import { posix as pathPosix } from "node:path";
 import type { JsonObject } from "../protocol.js";
 import { requireObject, requireString } from "./json-rpc.js";
@@ -8,6 +12,7 @@ import type {
   ResolvedFsSandboxPolicy,
 } from "./types.js";
 
+/** Resolves request-local sandbox policy and asserts each requested path has the needed access. */
 export function assertFsSandboxAccess(
   execServer: OpenClawExecServer,
   record: JsonObject,
@@ -16,6 +21,7 @@ export function assertFsSandboxAccess(
   assertResolvedFsSandboxAccess(resolveFsSandboxPolicy(execServer, record), requests);
 }
 
+/** Parses a Codex managed filesystem sandbox context into normalized access entries. */
 export function resolveFsSandboxPolicy(
   execServer: OpenClawExecServer,
   record: JsonObject,
@@ -140,6 +146,7 @@ function resolveFsSpecialPath(value: JsonObject, cwd: string): string {
   throw new Error(`Unsupported Codex fs sandbox special path: ${kind}`);
 }
 
+/** Asserts access against an already resolved filesystem sandbox policy. */
 export function assertResolvedFsSandboxAccess(
   policy: ResolvedFsSandboxPolicy | undefined,
   requests: Array<{ path: string; access: "read" | "write" }>,
@@ -183,6 +190,7 @@ function resolveFsAccess(policy: ResolvedFsSandboxPolicy, rawPath: string): FsAc
   return selected?.access ?? "none";
 }
 
+/** Rejects recursive writes/removes that would cross protected read-only descendants. */
 export function assertNoReadOnlyDescendant(
   policy: ResolvedFsSandboxPolicy | undefined,
   rawPath: string,
@@ -211,6 +219,7 @@ export function assertNoReadOnlyDescendant(
   }
 }
 
+/** Normalizes and validates an absolute POSIX path inside the sandbox namespace. */
 export function normalizeSandboxAbsolutePath(rawPath: string, label: string): string {
   if (!rawPath || rawPath.includes("\0") || !rawPath.startsWith("/")) {
     throw new Error(`${label} must be an absolute sandbox path.`);
@@ -219,6 +228,7 @@ export function normalizeSandboxAbsolutePath(rawPath: string, label: string): st
   return normalized === "//" ? "/" : normalized;
 }
 
+/** Returns true when target is root itself or a descendant of root. */
 export function pathContains(root: string, target: string): boolean {
   return root === "/" || target === root || target.startsWith(`${root}/`);
 }
@@ -263,6 +273,9 @@ function normalizeSandboxGlobPattern(pattern: string): string {
 }
 
 function compileSandboxGlobPattern(pattern: string): RegExp {
+  // Codex sends POSIX-style sandbox globs. Compile only the supported subset so
+  // access decisions stay deterministic and path separators cannot be matched
+  // by single-segment wildcards.
   let source = "^";
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index];
@@ -338,6 +351,7 @@ function sandboxGlobLiteralPrefix(pattern: string): string {
   return normalizeSandboxAbsolutePath(prefix.slice(0, slash), "fs sandbox glob prefix");
 }
 
+/** Safely joins a single directory entry name onto a sandbox parent path. */
 export function joinSandboxChildPath(parent: string, child: string): string {
   if (!child || child === "." || child === ".." || child.includes("/") || child.includes("\0")) {
     throw new Error(`Invalid sandbox directory entry name: ${child}`);

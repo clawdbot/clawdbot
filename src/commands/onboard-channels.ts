@@ -1,3 +1,4 @@
+/** Re-export seam for channel onboarding flow helpers. */
 export {
   createChannelOnboardingPostWriteHook,
   createChannelOnboardingPostWriteHookCollector,

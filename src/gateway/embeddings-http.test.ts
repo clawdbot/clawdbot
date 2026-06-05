@@ -1,3 +1,5 @@
+// Embeddings HTTP tests cover OpenAI-compatible embedding routes, provider
+// adapters, agent-scoped config, auth scopes, and disabled-surface behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";

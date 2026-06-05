@@ -1,3 +1,8 @@
+/**
+ * Model-facing thread goal tools.
+ *
+ * Provides create/get/update goal operations scoped to the current session store.
+ */
 import { Type } from "typebox";
 import {
   createSessionGoal,
@@ -17,12 +22,6 @@ import {
   readStringParam,
 } from "./common.js";
 
-/**
- * Model-facing thread goal tools.
- *
- * Goal state is scoped to the current session store so agents can inspect,
- * create, or close a persistent objective without direct store access.
- */
 type GoalToolOptions = {
   agentSessionKey?: string;
   runSessionKey?: string;

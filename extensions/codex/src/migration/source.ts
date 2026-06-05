@@ -1,3 +1,4 @@
+// Codex plugin module implements source behavior.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

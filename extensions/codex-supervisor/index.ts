@@ -1,3 +1,7 @@
+/**
+ * Bundled plugin entry that exposes Codex app-server supervisor tools to
+ * OpenClaw agents.
+ */
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CodexSupervisorPluginConfigSchema,

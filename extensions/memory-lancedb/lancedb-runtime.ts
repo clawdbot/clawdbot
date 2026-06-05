@@ -1,3 +1,4 @@
+// Memory Lancedb plugin module implements lancedb runtime behavior.
 type LanceDbModule = typeof import("@lancedb/lancedb");
 
 export type LanceDbRuntimeLogger = {

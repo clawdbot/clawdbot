@@ -1,3 +1,4 @@
+// Prepare Git Hooks tests cover prepare git hooks script behavior.
 import { describe, expect, it, vi } from "vitest";
 import { configurePrepareGitHooks } from "../../scripts/prepare-git-hooks.mjs";
 

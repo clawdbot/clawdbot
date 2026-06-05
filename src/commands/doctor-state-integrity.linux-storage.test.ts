@@ -1,3 +1,4 @@
+// Doctor Linux storage tests cover SD-card-backed state directory detection.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

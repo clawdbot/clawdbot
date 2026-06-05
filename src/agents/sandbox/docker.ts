@@ -1,3 +1,8 @@
+/**
+ * Low-level Docker command helpers for sandbox runtimes.
+ *
+ * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
+ */
 import { spawn } from "node:child_process";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {

@@ -1,3 +1,4 @@
+// Verifies MCP transport config normalization and startup-safety filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -48,6 +49,8 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("drops dangerous env overrides from stdio config", () => {
+    // Stdio env is executable process input. Block loader/shell hook variables
+    // while preserving ordinary provider tokens and scalar env values.
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
@@ -152,6 +155,8 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("keeps HTTP header parsing unchanged for env-like names", () => {
+    // Header names are not process environment keys, so env safety filtering
+    // must not rewrite or drop them.
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/sse",
       headers: {

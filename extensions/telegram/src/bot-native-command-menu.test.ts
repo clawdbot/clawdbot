@@ -1,3 +1,4 @@
+// Telegram tests cover bot native command menu plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,

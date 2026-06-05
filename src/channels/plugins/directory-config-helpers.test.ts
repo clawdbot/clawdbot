@@ -1,3 +1,4 @@
+// Directory config helper tests cover config helpers for channel directory integrations.
 import { describe, expect, it } from "vitest";
 import {
   createInspectedDirectoryEntriesLister,

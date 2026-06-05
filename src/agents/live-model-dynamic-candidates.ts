@@ -1,3 +1,8 @@
+/**
+ * Dynamic live-model candidate expansion.
+ * Adds prioritized plugin-discovered live models to static catalog candidates
+ * while keeping the hot catalog path provider-agnostic.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -13,9 +18,6 @@ import type { ProviderResolveDynamicModelContext } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { listPrioritizedHighSignalLiveModelRefs } from "./live-model-filter.js";
 
-// Adds provider-discovered live models to the static catalog candidates. This
-// keeps the hot catalog path provider-agnostic while still honoring plugin
-// dynamic model hooks for high-signal refs.
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;

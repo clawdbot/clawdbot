@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth refresh failure hints.
+ * Verifies typed and message-based classification plus sanitized login command
+ * generation.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildOAuthRefreshFailureLoginCommand,

@@ -1,3 +1,8 @@
+/**
+ * Tests auth health rollups.
+ * Covers OAuth/API-key status classification, external CLI bootstrap, provider
+ * auth ordering, and prompt-free credential checks.
+ */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";

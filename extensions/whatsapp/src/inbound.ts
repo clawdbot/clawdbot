@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements inbound behavior.
 export { resetWebInboundDedupe } from "./inbound/dedupe.js";
 export {
   extractContactContext,

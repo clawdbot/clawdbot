@@ -1,3 +1,4 @@
+// Media Core tests cover read response with limit behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";

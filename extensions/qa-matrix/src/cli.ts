@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

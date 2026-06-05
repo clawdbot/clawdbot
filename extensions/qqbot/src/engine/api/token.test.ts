@@ -1,3 +1,4 @@
+// Qqbot tests cover token plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 

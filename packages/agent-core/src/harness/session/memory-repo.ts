@@ -1,3 +1,4 @@
+// Agent Core module implements memory repo behavior.
 import { type Session, SessionError, type SessionMetadata, type SessionRepo } from "../types.js";
 import { InMemorySessionStorage } from "./memory-storage.js";
 import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.js";

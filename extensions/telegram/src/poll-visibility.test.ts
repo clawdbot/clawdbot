@@ -1,3 +1,4 @@
+// Telegram tests cover poll visibility plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 

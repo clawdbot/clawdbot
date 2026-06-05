@@ -1,3 +1,6 @@
+/**
+ * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

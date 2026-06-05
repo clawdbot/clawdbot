@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live transport cli behavior.
 import path from "node:path";
 import { resolveRepoRelativeOutputDir } from "../../cli-paths.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";

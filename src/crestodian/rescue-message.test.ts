@@ -1,13 +1,14 @@
+// Crestodian rescue message tests cover generated rescue message content.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 let tempRoot = "";
 let tempDirId = 0;
 
@@ -111,6 +112,14 @@ async function makeStateDir(prefix: string): Promise<string> {
   return dir;
 }
 
+async function withRescueStateDir(
+  prefix: string,
+  run: (stateDir: string) => Promise<void>,
+): Promise<void> {
+  const stateDir = await makeStateDir(prefix);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
+}
+
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
     surface: "whatsapp",
@@ -158,14 +167,6 @@ describe("Crestodian rescue message", () => {
 
   beforeEach(() => {
     mockConfig.reset();
-  });
-
-  afterEach(() => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
   });
 
   afterAll(async () => {
@@ -248,148 +249,147 @@ describe("Crestodian rescue message", () => {
   });
 
   it("queues and applies persistent writes through conversational approval", async () => {
-    const tempDir = await makeStateDir("models-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    await withRescueStateDir("models-", async (tempDir) => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      await expect(
+        runRescue("/crestodian set default model openai/gpt-5.2", cfg),
+      ).resolves.toContain("Reply /crestodian yes to apply");
+      await expect(runRescue("/crestodian yes", cfg)).resolves.toContain(
+        "Default model: openai/gpt-5.2",
+      );
 
-    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
-    await expect(runRescue("/crestodian set default model openai/gpt-5.2", cfg)).resolves.toContain(
-      "Reply /crestodian yes to apply",
-    );
-    await expect(runRescue("/crestodian yes", cfg)).resolves.toContain(
-      "Default model: openai/gpt-5.2",
-    );
-
-    const currentConfig = mockConfig.currentConfig() as {
-      agents?: { defaults?: { model?: { primary?: string } } };
-    };
-    expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
-    expect(audit.details?.rescue).toBe(true);
-    expect(audit.details?.channel).toBe("whatsapp");
-    expect(audit.details?.senderId).toBe("user:owner");
+      const currentConfig = mockConfig.currentConfig() as {
+        agents?: { defaults?: { model?: { primary?: string } } };
+      };
+      expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
+      const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+        details?: { rescue?: boolean; channel?: string; senderId?: string };
+      };
+      expect(audit.details?.rescue).toBe(true);
+      expect(audit.details?.channel).toBe("whatsapp");
+      expect(audit.details?.senderId).toBe("user:owner");
+    });
   });
 
   it("queues and applies gateway restart through conversational approval", async () => {
-    const tempDir = await makeStateDir("gateway-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
-    const deps = { runGatewayRestart: vi.fn(async () => {}) };
+    await withRescueStateDir("gateway-", async (tempDir) => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = { runGatewayRestart: vi.fn(async () => {}) };
 
-    await expect(
-      runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
-    ).resolves.toBe("Plan: restart the Gateway. Reply /crestodian yes to apply.");
-    await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
-      "[crestodian] done: gateway.restart",
-    );
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+      ).resolves.toBe("Plan: restart the Gateway. Reply /crestodian yes to apply.");
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
+        "[crestodian] done: gateway.restart",
+      );
 
-    expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
-      operation?: string;
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
-    expect(audit.operation).toBe("gateway.restart");
-    expect(audit.details?.rescue).toBe(true);
-    expect(audit.details?.channel).toBe("whatsapp");
-    expect(audit.details?.senderId).toBe("user:owner");
+      expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
+      const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+        operation?: string;
+        details?: { rescue?: boolean; channel?: string; senderId?: string };
+      };
+      expect(audit.operation).toBe("gateway.restart");
+      expect(audit.details?.rescue).toBe(true);
+      expect(audit.details?.channel).toBe("whatsapp");
+      expect(audit.details?.senderId).toBe("user:owner");
+    });
   });
 
   it("does not queue persistent rescue approval when expiry would exceed the Date range", async () => {
-    const tempDir = await makeStateDir("overflow-expiry-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    await withRescueStateDir("overflow-expiry-", async (tempDir) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+      try {
+        const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
 
-      await expect(
-        runRescue("/crestodian restart gateway", cfg, commandContext()),
-      ).resolves.toContain("expiry clock is invalid");
+        await expect(
+          runRescue("/crestodian restart gateway", cfg, commandContext()),
+        ).resolves.toContain("expiry clock is invalid");
 
-      await expect(fs.readdir(path.join(tempDir, "crestodian", "rescue-pending"))).rejects.toThrow(
-        /ENOENT/,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+        await expect(
+          fs.readdir(path.join(tempDir, "crestodian", "rescue-pending")),
+        ).rejects.toThrow(/ENOENT/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("rejects pending rescue approvals with invalid persisted expiry", async () => {
-    const tempDir = await makeStateDir("invalid-expiry-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
-    const deps = { runGatewayRestart: vi.fn(async () => {}) };
+    await withRescueStateDir("invalid-expiry-", async (tempDir) => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = { runGatewayRestart: vi.fn(async () => {}) };
 
-    await expect(
-      runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
-    ).resolves.toContain("Reply /crestodian yes to apply");
-    const pendingDir = path.join(tempDir, "crestodian", "rescue-pending");
-    const [pendingFile] = await fs.readdir(pendingDir);
-    if (!pendingFile) {
-      throw new Error("expected pending rescue file");
-    }
-    const pendingPath = path.join(pendingDir, pendingFile);
-    const pending = JSON.parse(await fs.readFile(pendingPath, "utf8")) as { expiresAt?: string };
-    pending.expiresAt = "not-a-date";
-    await fs.writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, "utf8");
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+      ).resolves.toContain("Reply /crestodian yes to apply");
+      const pendingDir = path.join(tempDir, "crestodian", "rescue-pending");
+      const [pendingFile] = await fs.readdir(pendingDir);
+      if (!pendingFile) {
+        throw new Error("expected pending rescue file");
+      }
+      const pendingPath = path.join(pendingDir, pendingFile);
+      const pending = JSON.parse(await fs.readFile(pendingPath, "utf8")) as { expiresAt?: string };
+      pending.expiresAt = "not-a-date";
+      await fs.writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, "utf8");
 
-    await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
-      "No pending Crestodian rescue change is waiting for approval.",
-    );
-    expect(deps.runGatewayRestart).not.toHaveBeenCalled();
-    await expect(fs.stat(pendingPath)).rejects.toThrow(/ENOENT/);
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
+        "No pending Crestodian rescue change is waiting for approval.",
+      );
+      expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+      await expect(fs.stat(pendingPath)).rejects.toThrow(/ENOENT/);
+    });
   });
 
   it("queues and applies agent creation through conversational approval", async () => {
-    const tempDir = await makeStateDir("agent-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
-    const deps = { runAgentsAdd: vi.fn(async () => {}) };
+    await withRescueStateDir("agent-", async (tempDir) => {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = { runAgentsAdd: vi.fn(async () => {}) };
 
-    await expect(
-      runRescue("/crestodian create agent work workspace /tmp/work", cfg, commandContext(), deps),
-    ).resolves.toBe(
-      "Plan: create agent work with workspace /tmp/work. Reply /crestodian yes to apply.",
-    );
-    await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
-      "[crestodian] done: agents.create",
-    );
+      await expect(
+        runRescue("/crestodian create agent work workspace /tmp/work", cfg, commandContext(), deps),
+      ).resolves.toBe(
+        "Plan: create agent work with workspace /tmp/work. Reply /crestodian yes to apply.",
+      );
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
+        "[crestodian] done: agents.create",
+      );
 
-    expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
-    const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
-      deps.runAgentsAdd,
-      "agents add",
-    ) as unknown as [
-      { name: string; workspace: string; nonInteractive: boolean },
-      object,
-      { hasFlags: boolean },
-    ];
-    expect(agentParams).toEqual({
-      name: "work",
-      workspace: "/tmp/work",
-      nonInteractive: true,
-    });
-    expect(agentRuntime).toBeTypeOf("object");
-    expect(agentOptions).toEqual({ hasFlags: true });
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
-      operation?: string;
-      details?: {
-        rescue?: boolean;
-        channel?: string;
-        senderId?: string;
-        agentId?: string;
-        workspace?: string;
+      expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
+      const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
+        deps.runAgentsAdd,
+        "agents add",
+      ) as unknown as [
+        { name: string; workspace: string; nonInteractive: boolean },
+        object,
+        { hasFlags: boolean },
+      ];
+      expect(agentParams).toEqual({
+        name: "work",
+        workspace: "/tmp/work",
+        nonInteractive: true,
+      });
+      expect(agentRuntime).toBeTypeOf("object");
+      expect(agentOptions).toEqual({ hasFlags: true });
+      const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+        operation?: string;
+        details?: {
+          rescue?: boolean;
+          channel?: string;
+          senderId?: string;
+          agentId?: string;
+          workspace?: string;
+        };
       };
-    };
-    expect(audit.operation).toBe("agents.create");
-    expect(audit.details?.rescue).toBe(true);
-    expect(audit.details?.channel).toBe("whatsapp");
-    expect(audit.details?.senderId).toBe("user:owner");
-    expect(audit.details?.agentId).toBe("work");
-    expect(audit.details?.workspace).toBe("/tmp/work");
+      expect(audit.operation).toBe("agents.create");
+      expect(audit.details?.rescue).toBe(true);
+      expect(audit.details?.channel).toBe("whatsapp");
+      expect(audit.details?.senderId).toBe("user:owner");
+      expect(audit.details?.agentId).toBe("work");
+      expect(audit.details?.workspace).toBe("/tmp/work");
+    });
   });
 });

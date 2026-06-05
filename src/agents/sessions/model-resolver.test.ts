@@ -1,3 +1,5 @@
+// Model resolver tests pin the startup fallback order for fresh and restored
+// agent sessions.
 import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -41,6 +43,8 @@ describe("model resolver fallback selection", () => {
   });
 
   it("falls back to registry order instead of core provider defaults", async () => {
+    // Restored sessions can reference removed models; choose an authenticated
+    // registry model rather than reviving a hard-coded provider default.
     const firstAvailable = model("anthropic", "claude-haiku");
     const result = await restoreModelFromSession(
       "openai",

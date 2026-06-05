@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs secret-provider integration E2E checks with fixture processes.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";

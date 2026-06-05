@@ -1,3 +1,4 @@
+// Discord tests cover interaction dispatch plugin behavior.
 import {
   ApplicationCommandOptionType,
   InteractionResponseType,

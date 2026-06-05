@@ -1,3 +1,5 @@
+// Gateway hot-reload handlers.
+// Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
@@ -102,6 +104,8 @@ async function disposeMcpRuntimesWithTimeout(params: {
   onWarn: (message: string) => void;
   label: string;
 }) {
+  // MCP runtime disposal may need async provider cleanup. Bound it so config
+  // reload can proceed and report the stale runtime risk.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const disposePromise = params.dispose().catch((error: unknown) => {
     params.onWarn(`${params.label} failed: ${String(error)}`);

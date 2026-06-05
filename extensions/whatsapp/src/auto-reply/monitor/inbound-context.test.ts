@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound context plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import {

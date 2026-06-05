@@ -1,3 +1,4 @@
+// Imessage tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { IMessageConfigSchema } from "../config-api.js";
 

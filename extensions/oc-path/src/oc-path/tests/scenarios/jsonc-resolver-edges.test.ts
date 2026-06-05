@@ -1,3 +1,4 @@
+// OC Path tests cover jsonc resolver edges plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { resolveJsoncOcPath } from "../../jsonc/resolve.js";

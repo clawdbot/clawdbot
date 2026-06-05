@@ -1,3 +1,4 @@
+// Codex tests cover native subagent task mirror plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,

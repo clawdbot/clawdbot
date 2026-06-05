@@ -1,3 +1,4 @@
+// Status-all report table tests cover agent, channel detail, and overview row construction.
 import { describe, expect, it } from "vitest";
 import {
   buildStatusAgentTableRows,

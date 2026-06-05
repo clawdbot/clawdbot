@@ -1,3 +1,7 @@
+/**
+ * Public ClickClack runtime API barrel used by plugin tests, docs, and
+ * integration code that should not reach into src internals.
+ */
 export {
   DEFAULT_ACCOUNT_ID,
   listClickClackAccountIds,

@@ -1,3 +1,4 @@
+// Verifies runtime channel capabilities derived from channel account config.
 import { describe, expect, it } from "vitest";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 

@@ -1,3 +1,5 @@
+// Configures this checkout's Git hooks path during package prepare when git
+// and the hooks directory are available.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,6 +23,9 @@ function runGit(spawn, gitBin, args, cwd, stdio) {
   });
 }
 
+/**
+ * Installs the repo-local hooks path and returns a structured reason if skipped.
+ */
 export function configurePrepareGitHooks(params = {}) {
   const cwd = params.cwd ?? DEFAULT_PACKAGE_ROOT;
   const exists = params.existsSync ?? existsSync;
@@ -32,13 +37,11 @@ export function configurePrepareGitHooks(params = {}) {
     return { configured: false, reason: "missing-hooks-dir" };
   }
 
-  const worktree = runGit(
-    spawn,
-    gitBin,
-    ["rev-parse", "--is-inside-work-tree"],
-    cwd,
-    ["ignore", "pipe", "ignore"],
-  );
+  const worktree = runGit(spawn, gitBin, ["rev-parse", "--is-inside-work-tree"], cwd, [
+    "ignore",
+    "pipe",
+    "ignore",
+  ]);
   const missingGitReason = getMissingGitReason(worktree.error);
   if (missingGitReason) {
     return { configured: false, reason: missingGitReason };
@@ -47,13 +50,11 @@ export function configurePrepareGitHooks(params = {}) {
     return { configured: false, reason: "not-worktree" };
   }
 
-  const configured = runGit(
-    spawn,
-    gitBin,
-    ["config", "core.hooksPath", "git-hooks"],
-    cwd,
-    ["ignore", "ignore", "pipe"],
-  );
+  const configured = runGit(spawn, gitBin, ["config", "core.hooksPath", "git-hooks"], cwd, [
+    "ignore",
+    "ignore",
+    "pipe",
+  ]);
   const configMissingGitReason = getMissingGitReason(configured.error);
   if (configMissingGitReason) {
     return { configured: false, reason: configMissingGitReason };

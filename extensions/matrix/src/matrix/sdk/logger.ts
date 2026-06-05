@@ -1,3 +1,4 @@
+// Matrix plugin module implements logger behavior.
 import { format } from "node:util";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";

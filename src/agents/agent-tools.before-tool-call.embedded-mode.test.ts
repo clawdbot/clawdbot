@@ -1,3 +1,8 @@
+/**
+ * Tests before_tool_call approval behavior in embedded mode.
+ * Ensures gateway approval requests use non-blocking semantics and preserve
+ * plugin hook decisions.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";

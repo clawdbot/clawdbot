@@ -1,3 +1,6 @@
+/**
+ * Manages context-engine lifecycle hooks for native agent harnesses.
+ */
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type {
   AssembleResult,

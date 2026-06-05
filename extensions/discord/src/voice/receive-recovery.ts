@@ -1,3 +1,4 @@
+// Discord plugin module implements receive recovery behavior.
 import { OpusError } from "libopus-wasm";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -96,8 +97,7 @@ function isOpusDecodeInvalidPacketError(err: unknown): boolean {
   const isDecodeOperation =
     maybeOpusError.operation === "decode" || maybeOpusError.operation === "decodeFloat";
   const isInvalidPacket =
-    maybeOpusError.code === OPUS_INVALID_PACKET_CODE ||
-    maybeOpusError.codeName === "InvalidPacket";
+    maybeOpusError.code === OPUS_INVALID_PACKET_CODE || maybeOpusError.codeName === "InvalidPacket";
   return (
     isDecodeOperation &&
     isInvalidPacket &&

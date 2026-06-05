@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound dispatch plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 

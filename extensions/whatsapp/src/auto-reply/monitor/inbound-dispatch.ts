@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements inbound dispatch behavior.
 import {
   DEFAULT_TIMING,
   type StatusReactionController,

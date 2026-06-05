@@ -1,3 +1,4 @@
+// Cron protocol schema tests cover runtime validation for cron protocol payloads.
 import { describe, expect, it } from "vitest";
 import { CronJobStateSchema } from "../../packages/gateway-protocol/src/schema.js";
 

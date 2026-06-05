@@ -1,3 +1,4 @@
+// Check Composite Action Input Interpolation tests cover check composite action input interpolation script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

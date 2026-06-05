@@ -1,3 +1,4 @@
+// Agents command tests cover agent config mutation, binding updates, and summary generation.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

@@ -1,16 +1,14 @@
+// OpenAI-compatible auth tests cover API key and base URL normalization.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import type { Context, Model } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 
-const previousOpenAIKey = process.env.OPENAI_API_KEY;
+const originalEnv = captureEnv(["OPENAI_API_KEY"]);
 
 afterEach(() => {
-  if (previousOpenAIKey === undefined) {
-    delete process.env.OPENAI_API_KEY;
-  } else {
-    process.env.OPENAI_API_KEY = previousOpenAIKey;
-  }
+  originalEnv.restore();
 });
 
 const context = {

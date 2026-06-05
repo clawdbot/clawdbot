@@ -1,3 +1,4 @@
+// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
 import {
   normalizeOptionalString,
@@ -117,6 +118,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
 }
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
+  // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = normalizeOptionalString(opts.batchJson);
   const batchFile = normalizeOptionalString(opts.batchFile);
   const hasInline = Boolean(batchJson);

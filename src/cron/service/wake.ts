@@ -1,3 +1,4 @@
+/** Manual cron wake helper for queueing system events into sessions. */
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import type { CronServiceState } from "./state.js";
 

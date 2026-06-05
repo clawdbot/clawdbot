@@ -1,3 +1,5 @@
+// Gateway config hot-reload watcher.
+// Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -126,6 +128,8 @@ export function startGatewayConfigReloader(opts: {
     if (stopped) {
       return;
     }
+    // Coalesce filesystem/write-listener bursts into one reload pass. Config
+    // writes often touch temp and final paths in quick succession.
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }

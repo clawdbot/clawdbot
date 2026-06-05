@@ -1,3 +1,4 @@
+// Matrix tests cover client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";

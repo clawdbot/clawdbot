@@ -1,3 +1,4 @@
+// Control UI module implements device identity behavior.
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 import { getSafeLocalStorage } from "../local-storage.ts";
 

@@ -1,3 +1,4 @@
+// Qqbot plugin module implements access stage behavior.
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { InboundContext, InboundPipelineDeps } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";

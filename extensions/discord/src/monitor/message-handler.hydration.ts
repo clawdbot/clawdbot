@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.hydration behavior.
 import type { APIMessage, APIUser } from "discord-api-types/v10";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";

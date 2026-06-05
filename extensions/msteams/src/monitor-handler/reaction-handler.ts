@@ -1,3 +1,4 @@
+// Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { getMSTeamsRuntime } from "../runtime.js";

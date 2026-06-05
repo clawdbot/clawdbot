@@ -1,3 +1,4 @@
+// Codex plugin module implements event projector behavior.
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,

@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements secrets behavior.
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthStorePathForDisplay,

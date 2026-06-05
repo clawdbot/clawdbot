@@ -1,3 +1,8 @@
+/**
+ * Bash process registry tests.
+ * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
+ * state for background exec sessions.
+ */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessSession } from "./bash-process-registry.js";

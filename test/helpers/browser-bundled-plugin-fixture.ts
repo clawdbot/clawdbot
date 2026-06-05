@@ -1,3 +1,4 @@
+// Browser bundled plugin fixtures build browser extension plugin layouts for tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

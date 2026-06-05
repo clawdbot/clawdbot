@@ -1,3 +1,4 @@
+// Run main tests cover CLI main entrypoint behavior and process error handling.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {

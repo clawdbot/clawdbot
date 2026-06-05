@@ -17,7 +17,9 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
+/** Ensure Matrix plugin runtime dependencies are available before Matrix setup/use. */
 export const ensureMatrixSdkInstalled: FacadeModule["ensureMatrixSdkInstalled"] = ((...args) =>
   loadFacadeModule().ensureMatrixSdkInstalled(...args)) as FacadeModule["ensureMatrixSdkInstalled"];
+/** Returns whether Matrix SDK dependencies are currently importable. */
 export const isMatrixSdkAvailable: FacadeModule["isMatrixSdkAvailable"] = ((...args) =>
   loadFacadeModule().isMatrixSdkAvailable(...args)) as FacadeModule["isMatrixSdkAvailable"];

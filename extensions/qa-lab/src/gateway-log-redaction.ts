@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements gateway log redaction behavior.
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,

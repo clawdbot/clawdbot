@@ -1,3 +1,4 @@
+// Live image generation runtime tests cover image provider runtime behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

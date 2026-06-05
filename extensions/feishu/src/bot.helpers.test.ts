@@ -1,3 +1,4 @@
+// Feishu tests cover bot.helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { parseMessageContent } from "./bot-content.js";

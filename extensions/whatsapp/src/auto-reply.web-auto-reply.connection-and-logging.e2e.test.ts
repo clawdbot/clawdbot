@@ -1,3 +1,4 @@
+// Whatsapp tests cover auto reply.web auto reply.connection and logging plugin behavior.
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -26,6 +27,7 @@ import {
   setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
+import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
   channel: string;
@@ -223,6 +225,33 @@ describe("web auto-reply connection", () => {
     expectErrorContaining(runtime.error, "status 428");
     expectErrorContaining(runtime.error, "Retry 1/2");
     expectErrorContaining(runtime.error, "2/2 attempts");
+  });
+
+  it("retries opening-phase connection wait timeouts through the reconnect policy", async () => {
+    vi.mocked(waitForWaConnection).mockRejectedValueOnce({ output: { statusCode: 408 } });
+    const listenerFactory = vi.fn(async () => createMockWebListener());
+    const sleep = vi.fn(async () => {});
+    const { runtime, controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    controller.abort();
+    await run;
+
+    expect(waitForWaConnection).toHaveBeenCalledTimes(2);
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalled();
+    expectErrorContaining(runtime.error, "status 408");
+    expectErrorContaining(runtime.error, "Retry 1/2");
   });
 
   it("keeps post-open Baileys 428 on the reconnect path", async () => {

@@ -1,3 +1,4 @@
+// Logging test helpers build temp log files and capture log output.
 import crypto from "node:crypto";
 import path from "node:path";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";

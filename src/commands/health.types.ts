@@ -1,3 +1,5 @@
+// Shared summary types returned by gateway health and rendered by the CLI.
+/** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = {
   accountId: string;
   configured?: boolean;
@@ -8,10 +10,12 @@ export type ChannelAccountHealthSummary = {
   [key: string]: unknown;
 };
 
+/** Channel-level health summary with optional per-account details. */
 export type ChannelHealthSummary = ChannelAccountHealthSummary & {
   accounts?: Record<string, ChannelAccountHealthSummary>;
 };
 
+/** Agent heartbeat and session-store health metadata. */
 export type AgentHealthSummary = {
   agentId: string;
   name?: string;
@@ -20,6 +24,7 @@ export type AgentHealthSummary = {
   sessions: HealthSummary["sessions"];
 };
 
+/** Plugin load error details safe for the health payload. */
 export type PluginHealthErrorSummary = {
   id: string;
   origin: string;
@@ -30,11 +35,13 @@ export type PluginHealthErrorSummary = {
   error: string;
 };
 
+/** Plugin registry health summary. */
 export type PluginHealthSummary = {
   loaded: string[];
   errors: PluginHealthErrorSummary[];
 };
 
+/** Context engine quarantine entry included in health output. */
 export type ContextEngineHealthQuarantineSummary = {
   engineId: string;
   owner?: string;
@@ -43,13 +50,16 @@ export type ContextEngineHealthQuarantineSummary = {
   failedAt: number;
 };
 
+/** Context engine health summary. */
 export type ContextEngineHealthSummary = {
   quarantined: ContextEngineHealthQuarantineSummary[];
 };
 
+/** Optional model pricing cache health reported by the gateway. */
 export type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
+/** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
   ok: true;
   ts: number;

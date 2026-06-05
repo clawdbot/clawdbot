@@ -1,3 +1,8 @@
+/**
+ * Tests agent-specific tool filtering and filesystem policy.
+ * Covers sandbox inheritance, group policies, and workspace-only behavior in
+ * createOpenClawCodingTools.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

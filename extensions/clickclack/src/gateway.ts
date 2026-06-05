@@ -1,3 +1,7 @@
+/**
+ * Gateway loop for polling ClickClack backlog events, opening the realtime
+ * websocket, and dispatching user messages into OpenClaw.
+ */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
@@ -27,6 +31,8 @@ async function resolveEventMessage(params: {
   }
   const directConversationId = payloadString(params.event, "direct_conversation_id");
   if (directConversationId && typeof params.event.seq === "number") {
+    // ClickClack event payloads carry ids and cursors; fetch a narrow window
+    // around the sequence so the message body/author fields stay authoritative.
     const messages = await params.client.directMessages(
       directConversationId,
       params.event.seq - 1,
@@ -143,6 +149,8 @@ export async function startClickClackGatewayAccount(
   while (!ctx.abortSignal.aborted) {
     const backlog = await client.events(workspaceId, afterCursor);
     if (!initialized) {
+      // First pass establishes the cursor without replaying historical backlog
+      // into fresh gateway sessions.
       for (const event of backlog) {
         afterCursor = event.cursor || afterCursor;
       }

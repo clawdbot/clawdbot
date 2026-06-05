@@ -1,3 +1,4 @@
+// File Transfer plugin module implements file write behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

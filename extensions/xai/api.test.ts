@@ -1,3 +1,4 @@
+// Xai tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isXaiModelHint, resolveXaiTransport } from "./api.js";
 

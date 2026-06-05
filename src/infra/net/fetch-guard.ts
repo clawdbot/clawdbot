@@ -1,3 +1,5 @@
+// Guarded fetch runtime enforces SSRF checks, DNS pinning, redirect policy, and
+// trusted proxy modes around provider/network requests.
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
@@ -143,6 +145,8 @@ export function withTrustedExplicitProxyGuardedFetchMode(
 }
 
 function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
+  // Legacy proxy flags map to the explicit trusted env-proxy mode; strict is the
+  // default for user-influenced URLs.
   if (params.mode) {
     return params.mode;
   }
@@ -212,6 +216,8 @@ async function assertExplicitProxyAllowed(
   lookupFn: LookupFn | undefined,
   policy: SsrFPolicy | undefined,
 ): Promise<void> {
+  // Explicit proxies are operator-configured, but the proxy host still needs
+  // basic URL and private-network validation before target validation proceeds.
   if (!dispatcherPolicy || dispatcherPolicy.mode !== "explicit-proxy") {
     return;
   }

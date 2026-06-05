@@ -1,3 +1,4 @@
+// Control UI module implements select options behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export type SelectOption = {

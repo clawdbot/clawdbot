@@ -1,3 +1,4 @@
+// Shell argv helpers quote and parse shell-style argument strings.
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
 
 // POSIX double quotes only consume the backslash before a small escape set;

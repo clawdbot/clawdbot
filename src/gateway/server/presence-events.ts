@@ -1,3 +1,4 @@
+// Presence event helpers broadcast system presence snapshots with synchronized gateway state versions.
 import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 

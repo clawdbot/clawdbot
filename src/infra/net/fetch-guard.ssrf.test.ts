@@ -1,3 +1,5 @@
+// Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
+// trusted proxy modes, and safe header retention.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,

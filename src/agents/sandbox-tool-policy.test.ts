@@ -1,3 +1,4 @@
+// Verifies sandbox tool allow/deny policy extraction and additive alsoAllow behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
@@ -33,6 +34,7 @@ describe("pickSandboxToolPolicy", () => {
   });
 
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
+    // Empty allow means allow-all; alsoAllow remains additive, not restrictive.
     expect(
       pickSandboxToolPolicy({
         allow: [],

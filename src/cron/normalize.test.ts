@@ -1,3 +1,4 @@
+// Cron normalization tests cover job config normalization and defaults.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,

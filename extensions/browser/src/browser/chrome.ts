@@ -1,3 +1,9 @@
+/**
+ * OpenClaw-managed Chrome lifecycle and CDP helpers.
+ *
+ * Builds launch args, starts/stops managed Chrome, probes CDP readiness, and
+ * resolves WebSocket endpoints for browser control.
+ */
 import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -143,6 +149,7 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
+/** Remove stale Chrome singleton lock files from a user-data-dir. */
 export function clearStaleChromeSingletonLocks(
   userDataDir: string,
   hostname = os.hostname(),
@@ -227,6 +234,7 @@ function chromeLaunchHints(params: {
   return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
 
+/** Running managed Chrome process and resolved control metadata. */
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -254,6 +262,7 @@ function resolveBrowserExecutable(
   );
 }
 
+/** Resolve the user-data-dir path for a managed OpenClaw Chrome profile. */
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
@@ -262,6 +271,7 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+/** Build Chrome launch arguments for the managed OpenClaw browser. */
 export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
@@ -330,6 +340,7 @@ async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean
   });
 }
 
+/** Return true when a Chrome CDP endpoint is reachable over HTTP. */
 export async function isChromeReachable(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -374,6 +385,7 @@ async function fetchChromeVersion(
   }
 }
 
+/** Resolve a usable Chrome DevTools WebSocket URL from a CDP endpoint. */
 export async function getChromeWebSocketUrl(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -409,6 +421,7 @@ export async function getChromeWebSocketUrl(
   return normalizedWsUrl;
 }
 
+/** Return true when a Chrome CDP endpoint has a healthy WebSocket command path. */
 export async function isChromeCdpReady(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -422,6 +435,7 @@ export async function isChromeCdpReady(
   return diagnostic.ok;
 }
 
+/** Launch or attach to the managed OpenClaw Chrome profile. */
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -662,6 +676,7 @@ export async function launchOpenClawChrome(
   return await launchOnceAndWait(true);
 }
 
+/** Stop a managed Chrome process and wait for shutdown. */
 export async function stopOpenClawChrome(
   running: RunningChrome,
   timeoutMs = CHROME_STOP_TIMEOUT_MS,

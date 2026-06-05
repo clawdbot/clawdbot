@@ -1,3 +1,4 @@
+/** Doctor repairs for legacy auth profile JSON stores and OpenAI provider-id migrations. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -311,6 +312,7 @@ function mergeImportedAuthProfileState(params: {
   state: AuthProfileState;
   existingState: AuthProfileState;
 }): AuthProfileStore {
+  // Preserve current SQLite state over imported JSON state; old files are backup-only after import.
   return {
     ...params.store,
     ...(params.state.order
@@ -470,6 +472,12 @@ function writeJsonFile(pathname: string, value: unknown): void {
   fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+/**
+ * Imports legacy auth profile JSON and state files into the per-agent SQLite store.
+ *
+ * JSON files are backed up and removed only after import. OAuth profiles that still depend on
+ * unresolved sidecar secrets are kept in JSON so the sidecar migration can run first.
+ */
 export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   cfg: OpenClawConfig;
   prompter: Pick<DoctorPrompter, "confirmAutoFix">;
@@ -528,6 +536,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           ? pickRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds)
           : null;
       if (unresolvedSidecarProfileIds.size > 0) {
+        // Sidecar-backed OAuth entries cannot move into SQLite until their secret material exists.
         pruneRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds);
         result.warnings.push(
           `Left ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} in ${shortenHomePath(candidate.authPath)}; rerun ${formatCliCommand("openclaw doctor --fix")} after sidecar migration or re-authenticate those profiles.`,
@@ -618,6 +627,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         ];
         saveAuthProfileStore(next, candidate.agentDir, {
           filterExternalAuthProfiles: false,
+          // Imported order/usage state may mention externally-backed profiles not in this store.
           preserveStateProfileIds: stateProfileIds,
           syncExternalCli: false,
         });
@@ -756,6 +766,12 @@ function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: st
   }
 }
 
+/**
+ * Rewrites pre-versioned flat auth profile JSON into canonical profile stores.
+ *
+ * Also lifts aws-sdk profile markers into config because those entries are routing metadata, not
+ * credentials, and the runtime no longer treats them as stored secrets.
+ */
 export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -901,6 +917,12 @@ function backupCanonicalApiKeyAlias(authPath: string, now: () => number): string
   return backupPath;
 }
 
+/**
+ * Repairs auth profile JSON that used the historical "api_key" credential field.
+ *
+ * Runtime parsing reads "key" or "keyRef"; doctor preserves the original file as a backup before
+ * moving the alias into the canonical key slot.
+ */
 export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -1037,6 +1059,7 @@ function canonicalizeOpenAIProfileEntries(
         : legacyId
           ? allocateOpenAIProfileId(profileId, new Set([...occupied, ...reservedMappedIds]))
           : profileId;
+    // Keep ids deterministic across config and store rewrites so references can be updated once.
     occupied.add(nextProfileId);
     const nextProfile = {
       ...rawProfile,
@@ -1209,6 +1232,12 @@ function canonicalizeOpenAILastGood(
   return changed;
 }
 
+/**
+ * Canonicalizes config references from the legacy OpenAI Codex provider id to OpenAI.
+ *
+ * The optional map lets config and store repairs share deterministic profile ids when both surfaces
+ * contain the same legacy profile.
+ */
 export function maybeRepairOpenAICodexAuthConfig(
   cfg: OpenClawConfig,
   options?: { profileIdMap?: ReadonlyMap<string, string> },
@@ -1286,6 +1315,7 @@ function resolveOpenAICodexAuthStoreRepair(
     : null;
 }
 
+/** Collects deterministic legacy-to-canonical OpenAI profile ids across all agent stores. */
 export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1322,6 +1352,9 @@ function backupOpenAIProviderUnification(authPath: string, now: () => number): s
   return backupPath;
 }
 
+/**
+ * Rewrites legacy OpenAI Codex auth profiles in JSON stores to the canonical OpenAI provider id.
+ */
 export async function maybeRepairOpenAICodexAuthProfileStores(params: {
   cfg: OpenClawConfig;
   now?: () => number;

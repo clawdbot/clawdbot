@@ -1,3 +1,4 @@
+// Browser tests cover browser proxy mode plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasChromeProxyControlArg,

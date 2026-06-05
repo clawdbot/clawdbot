@@ -1,3 +1,4 @@
+/** Kysely row types and table facade for the cron_jobs SQLite table. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";

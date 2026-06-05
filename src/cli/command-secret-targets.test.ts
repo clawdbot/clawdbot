@@ -1,3 +1,4 @@
+// Command secret target tests cover CLI secret target mapping and validation.
 import { describe, expect, it, vi } from "vitest";
 
 const REGISTRY_IDS = [

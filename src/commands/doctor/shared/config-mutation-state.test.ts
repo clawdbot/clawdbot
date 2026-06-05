@@ -1,3 +1,4 @@
+// Config mutation state tests cover doctor mutation tracking and final state reporting.
 import { describe, expect, it } from "vitest";
 import { applyDoctorConfigMutation } from "./config-mutation-state.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";

@@ -1,3 +1,4 @@
+// Argv invocation tests cover CLI argv normalization before command dispatch.
 import { describe, expect, it } from "vitest";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 

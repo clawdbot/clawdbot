@@ -1,11 +1,14 @@
+/**
+ * Structured logging for model fallback decisions. The log payload carries
+ * sanitized error observations plus step fields that make fallback chains
+ * auditable.
+ */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
 import type { FailoverReason } from "./embedded-agent-helpers.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 
-// Structured logging for model fallback decisions. The log payload carries
-// sanitized error observations plus step fields that make fallback chains auditable.
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
 
 /** Return whether fallback decision logging is enabled for warn-level events. */
@@ -36,6 +39,7 @@ function buildErrorObservationFields(error?: string): {
 
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
 
+/** Structured fields that describe one fallback-chain transition. */
 export type ModelFallbackStepFields = {
   fallbackStepType: "fallback_step";
   fallbackStepFromModel: string;
@@ -46,6 +50,7 @@ export type ModelFallbackStepFields = {
   fallbackStepFinalOutcome: FallbackStepOutcome;
 };
 
+/** Input payload for logging one model fallback decision. */
 export type ModelFallbackDecisionParams = {
   decision:
     | "skip_candidate"

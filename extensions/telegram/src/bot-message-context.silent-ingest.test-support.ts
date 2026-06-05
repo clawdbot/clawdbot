@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.silent ingest support behavior.
 import { describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 

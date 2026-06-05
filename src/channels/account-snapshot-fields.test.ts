@@ -1,3 +1,4 @@
+// Account snapshot field tests cover channel account snapshot serialization fields.
 import { describe, expect, it } from "vitest";
 import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fields.js";
 

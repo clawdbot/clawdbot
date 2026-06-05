@@ -1,3 +1,4 @@
+// Memory Core provider module implements model/runtime integration.
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,

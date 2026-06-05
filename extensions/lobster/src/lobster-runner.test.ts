@@ -1,3 +1,4 @@
+// Lobster tests cover lobster runner plugin behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";

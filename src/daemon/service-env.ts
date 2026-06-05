@@ -1,3 +1,4 @@
+/** Builds minimal, portable environment blocks for managed daemon services. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +66,8 @@ export const SERVICE_PROXY_ENV_KEYS = [
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
+  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
+  // generic shell proxy vars are audited but not frozen into services.
   const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
   return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
 }
@@ -90,6 +93,8 @@ function realpathServicePathDir(dir: string): string | undefined {
 function realpathExistingServicePathDir(dir: string): string | undefined {
   const parts: string[] = [];
   let current = dir;
+  // Resolve the nearest existing ancestor so future-created bin dirs can still
+  // be compared against the install workspace realpath.
   while (current && current !== path.posix.dirname(current)) {
     const realCurrent = realpathServicePathDir(current);
     if (realCurrent) {
@@ -333,6 +338,8 @@ function resolveLinuxUserBinDirs(
 export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
+    // Windows scheduled tasks inherit PATH from the task host; generated cmd
+    // launchers should not freeze install-time PATH snapshots.
     return [];
   }
 

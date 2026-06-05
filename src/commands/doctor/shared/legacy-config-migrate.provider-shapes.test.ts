@@ -1,3 +1,4 @@
+// Legacy provider-shape migration tests cover doctor repair of old provider config shapes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";

@@ -1,3 +1,4 @@
+// Channel catalog contract tests cover bundled and registry-backed channel catalog invariants.
 import {
   describeBundledMetadataOnlyChannelCatalogContract,
   describeChannelCatalogEntryContract,

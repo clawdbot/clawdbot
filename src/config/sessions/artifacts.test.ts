@@ -1,3 +1,4 @@
+// Session artifact tests cover artifact metadata persistence for sessions.
 import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,

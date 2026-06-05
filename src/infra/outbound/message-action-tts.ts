@@ -1,3 +1,5 @@
+// Message-action TTS helpers lazily apply session/config driven speech output
+// to send payloads without loading TTS providers for ordinary sends.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   loadSessionStore,

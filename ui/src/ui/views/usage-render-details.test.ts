@@ -1,3 +1,4 @@
+// Control UI tests cover usage render details behavior.
 import { render } from "lit";
 import { describe, it, expect } from "vitest";
 import {

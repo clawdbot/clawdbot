@@ -1,3 +1,4 @@
+// Implements commitment listing and dismissal commands for scheduled follow-up records.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -88,6 +89,7 @@ function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
   return lines;
 }
 
+/** List commitments with status/agent filters in text or JSON form. */
 export async function commitmentsListCommand(
   opts: { json?: boolean; status?: string; all?: boolean; agent?: string },
   runtime: RuntimeEnv,
@@ -135,6 +137,7 @@ export async function commitmentsListCommand(
   }
 }
 
+/** Mark one or more commitments as dismissed. */
 export async function commitmentsDismissCommand(
   opts: { ids: string[]; json?: boolean },
   runtime: RuntimeEnv,

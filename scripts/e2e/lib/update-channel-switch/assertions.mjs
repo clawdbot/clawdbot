@@ -1,3 +1,4 @@
+// Assertions for update-channel switch E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";

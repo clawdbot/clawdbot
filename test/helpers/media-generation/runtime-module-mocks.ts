@@ -1,3 +1,4 @@
+// Media generation runtime mocks install mocked runtime modules for tests.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ImageGenerationProvider } from "../../../src/image-generation/types.js";

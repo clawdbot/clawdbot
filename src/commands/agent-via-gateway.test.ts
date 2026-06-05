@@ -1,3 +1,4 @@
+// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

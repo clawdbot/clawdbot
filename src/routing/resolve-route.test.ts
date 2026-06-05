@@ -1,3 +1,4 @@
+// Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";

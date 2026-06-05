@@ -1,3 +1,4 @@
+// Vitest commands config wires the commands test shard.
 import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

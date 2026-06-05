@@ -1,3 +1,4 @@
+// Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {

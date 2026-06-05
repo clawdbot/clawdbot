@@ -1,3 +1,4 @@
+// Voice Call tests cover manager.inbound allowlist plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FakeProvider, createManagerHarness } from "./manager.test-harness.js";
 

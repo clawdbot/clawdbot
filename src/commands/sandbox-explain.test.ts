@@ -1,3 +1,4 @@
+// Sandbox explain tests cover command output for sandbox browser and container diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 

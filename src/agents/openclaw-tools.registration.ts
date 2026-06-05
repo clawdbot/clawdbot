@@ -1,3 +1,8 @@
+/**
+ * OpenClaw-owned tool registration filters.
+ *
+ * Keeps optional tool gating separate from tool construction so config and execution contracts decide exposure.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";

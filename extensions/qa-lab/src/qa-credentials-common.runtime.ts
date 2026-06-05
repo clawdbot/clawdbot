@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements qa credentials common behavior.
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch status behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveBatchCompletionFromStatus,

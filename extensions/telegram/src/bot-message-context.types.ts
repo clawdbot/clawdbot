@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {

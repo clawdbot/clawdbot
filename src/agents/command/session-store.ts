@@ -1,3 +1,6 @@
+/**
+ * Updates persisted session metadata after agent command runs.
+ */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -52,6 +55,7 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
+/** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -311,6 +315,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
 }
 
+/** Clears a stored CLI session binding after a failed or invalidated run. */
 export async function clearCliSessionInStore(params: {
   provider: string;
   sessionKey: string;
@@ -336,6 +341,7 @@ export async function clearCliSessionInStore(params: {
   return persisted;
 }
 
+/** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
   provider: string;
   sessionKey: string;

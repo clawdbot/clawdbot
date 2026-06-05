@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Rejects local wildcard re-exports in guarded extension API barrels.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,9 @@ async function listGuardedFiles(rootDir = repoRoot) {
   );
 }
 
+/**
+ * Finds local wildcard re-export lines in a barrel source string.
+ */
 export function findLocalWildcardReexports(source) {
   return source
     .split(/\r?\n/u)
@@ -45,6 +49,9 @@ export function findLocalWildcardReexports(source) {
     .filter(({ text }) => LOCAL_WILDCARD_REEXPORT_PATTERN.test(text));
 }
 
+/**
+ * Collects guarded extension API/runtime barrels that use wildcard re-exports.
+ */
 export async function collectExtensionWildcardReexports(rootDir = repoRoot) {
   const files = await listGuardedFiles(rootDir);
   const violations = [];
@@ -61,6 +68,9 @@ export async function collectExtensionWildcardReexports(rootDir = repoRoot) {
   return violations;
 }
 
+/**
+ * Runs the extension wildcard re-export guard.
+ */
 export async function main(argv = process.argv.slice(2), io = process) {
   const json = argv.includes("--json");
   const violations = await collectExtensionWildcardReexports();

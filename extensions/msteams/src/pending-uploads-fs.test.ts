@@ -1,3 +1,4 @@
+// Msteams tests cover pending uploads fs plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -212,58 +213,7 @@ describe("msteams pending uploads (fs-backed)", () => {
     expect(loaded?.consentCardActivityId).toBe("activity-xyz");
   });
 
-  it("ignores malformed or empty store files and returns undefined", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    await fs.promises.writeFile(storePath, "not valid json", "utf-8");
-
-    // Should not throw and should treat as empty
-    expect(await getPendingUploadFs("anything", { env })).toBeUndefined();
-    await expect(fs.promises.access(storePath)).rejects.toThrow();
-
-    const secondStateDir = await makeTempStateDir();
-    const secondEnv = makeEnv(secondStateDir);
-    const secondStorePath = path.join(secondStateDir, "msteams-pending-uploads.json");
-    await fs.promises.writeFile(
-      secondStorePath,
-      JSON.stringify({ version: 2, uploads: {} }),
-      "utf-8",
-    );
-    expect(await getPendingUploadFs("anything", { env: secondEnv })).toBeUndefined();
-    await expect(fs.promises.access(secondStorePath)).rejects.toThrow();
-  });
-
-  it("imports a legacy JSON file that appears after an empty migration marker", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-
-    expect(await getPendingUploadFs("upload-late", { env })).toBeUndefined();
-    await fs.promises.writeFile(
-      storePath,
-      `${JSON.stringify({
-        version: 1,
-        uploads: {
-          "upload-late": {
-            id: "upload-late",
-            bufferBase64: Buffer.from("late payload").toString("base64"),
-            filename: "late.txt",
-            conversationId: "19:conv@thread.v2",
-            createdAt: Date.now(),
-          },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    const loaded = await getPendingUploadFs("upload-late", { env });
-    expect(loaded?.filename).toBe("late.txt");
-    expect(loaded?.buffer.toString("utf8")).toBe("late payload");
-    await expect(fs.promises.access(storePath)).rejects.toThrow();
-  });
-
-  it("skips malformed legacy upload rows while importing valid rows", async () => {
+  it("ignores legacy pending-upload JSON cache files at runtime", async () => {
     const stateDir = await makeTempStateDir();
     const env = makeEnv(stateDir);
     const storePath = path.join(stateDir, "msteams-pending-uploads.json");
@@ -272,16 +222,10 @@ describe("msteams pending uploads (fs-backed)", () => {
       `${JSON.stringify({
         version: 1,
         uploads: {
-          broken: {
-            id: "broken",
-            filename: "broken.txt",
-            conversationId: "19:conv@thread.v2",
-            createdAt: Date.now(),
-          },
-          valid: {
-            id: "valid",
-            bufferBase64: Buffer.from("valid payload").toString("base64"),
-            filename: "valid.txt",
+          cached: {
+            id: "cached",
+            bufferBase64: Buffer.from("cached payload").toString("base64"),
+            filename: "cached.txt",
             conversationId: "19:conv@thread.v2",
             createdAt: Date.now(),
           },
@@ -290,9 +234,8 @@ describe("msteams pending uploads (fs-backed)", () => {
       "utf-8",
     );
 
-    expect(await getPendingUploadFs("broken", { env })).toBeUndefined();
-    const loaded = await getPendingUploadFs("valid", { env });
-    expect(loaded?.buffer.toString("utf8")).toBe("valid payload");
+    expect(await getPendingUploadFs("cached", { env })).toBeUndefined();
+    await expect(fs.promises.access(storePath)).resolves.toBeUndefined();
   });
 });
 

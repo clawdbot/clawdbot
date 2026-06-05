@@ -1,3 +1,4 @@
+// Mcp Code Mode Gateway Client tests cover mcp code mode gateway client script behavior.
 import { describe, expect, it } from "vitest";
 import {
   fetchJson,

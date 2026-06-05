@@ -1,3 +1,7 @@
+/**
+ * Node-host browser.proxy command implementation for delegated Browser control
+ * requests.
+ */
 import fsPromises from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -57,6 +61,7 @@ let browserControlReady: Promise<void> | null = null;
 
 // Keep the production singleton but give tests a cheap reset seam so they do
 // not need to reload the entire module graph between cases.
+/** Resets the cached Browser control startup promise for tests. */
 export function resetBrowserProxyCommandStateForTests(): void {
   browserControlReady = null;
 }
@@ -219,6 +224,7 @@ function formatBrowserProxyTimeoutMessage(params: {
   return parts.join("; ");
 }
 
+/** Executes a serialized browser.proxy command and returns a serialized result payload. */
 export async function runBrowserProxyCommand(paramsJSON?: string | null): Promise<string> {
   const params = decodeParams<BrowserProxyParams>(paramsJSON);
   const pathValue = typeof params.path === "string" ? params.path.trim() : "";

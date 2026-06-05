@@ -1,3 +1,4 @@
+// Codex runtime plugin auto-install/repair helpers for OpenAI model selections.
 import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -17,6 +18,7 @@ const CODEX_RUNTIME_PLUGIN_DESCRIPTOR = {
 
 export type CodexRuntimePluginInstallResult = RuntimePluginInstallResult;
 
+/** Return true when a selected model requires the Codex runtime plugin to be installed. */
 export function selectedModelShouldEnsureCodexRuntimePlugin(params: {
   cfg: OpenClawConfig;
   model?: string;

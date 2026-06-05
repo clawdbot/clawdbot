@@ -1,3 +1,4 @@
+/** Tests MCP server/tool name sanitization, truncation, and collision handling. */
 import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,

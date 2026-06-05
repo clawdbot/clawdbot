@@ -1,3 +1,4 @@
+// Channels resolve tests cover channel/account selection and command output for message routing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelsResolveCommand } from "./channels/resolve.js";
 

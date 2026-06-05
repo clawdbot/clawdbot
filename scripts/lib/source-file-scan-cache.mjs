@@ -1,3 +1,4 @@
+// Caches source file discovery and bounded-concurrency reads for guard scripts.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -42,6 +43,9 @@ function normalizeConcurrency(value) {
   return value;
 }
 
+/**
+ * Maps items with bounded worker concurrency while preserving input order.
+ */
 export async function mapWithConcurrency(items, concurrency, mapper) {
   const out = Array.from({ length: items.length });
   const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
@@ -62,6 +66,9 @@ export async function mapWithConcurrency(items, concurrency, mapper) {
   return out;
 }
 
+/**
+ * Collects sorted source files and cached contents for configured scan roots.
+ */
 export async function collectSourceFileContents(params) {
   const useCache = !params.readFile;
   const cacheKey = JSON.stringify({

@@ -1,3 +1,4 @@
+// File Transfer plugin module implements node invoke policy behavior.
 import { spawn } from "node:child_process";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {

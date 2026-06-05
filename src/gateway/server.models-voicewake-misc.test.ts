@@ -1,3 +1,5 @@
+// Server models and voicewake tests cover model catalog routes, outbound
+// delivery deps, voicewake triggers, config cache resets, and misc RPC behavior.
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";

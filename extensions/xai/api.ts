@@ -1,3 +1,4 @@
+// Xai API module exposes the plugin public contract.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeOptionalLowercaseString,

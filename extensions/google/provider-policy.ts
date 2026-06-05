@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -43,9 +44,7 @@ const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
 
 export function isGoogleVertexHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
-  return (
-    normalized === GOOGLE_VERTEX_HOST || normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX)
-  );
+  return normalized === GOOGLE_VERTEX_HOST || normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX);
 }
 
 export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {

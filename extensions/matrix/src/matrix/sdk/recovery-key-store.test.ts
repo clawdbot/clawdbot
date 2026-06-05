@@ -1,3 +1,4 @@
+// Matrix tests cover recovery key store plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Matrix plugin module implements outbound behavior.
 import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
 import {
   renderMessagePresentationFallbackText,

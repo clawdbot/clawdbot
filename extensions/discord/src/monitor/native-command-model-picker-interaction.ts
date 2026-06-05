@@ -1,3 +1,4 @@
+// Discord plugin module implements native command model picker interaction behavior.
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,

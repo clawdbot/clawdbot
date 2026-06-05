@@ -1,3 +1,5 @@
+// Gateway session-history projection state.
+// Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -108,6 +110,8 @@ function paginateSessionMessages(
   limit: number | undefined,
   cursor: string | undefined,
 ): PaginatedSessionHistory {
+  // Cursors point at transcript sequence watermarks. The returned page is the
+  // window before that cursor, matching "older messages" pagination.
   const cursorSeq = resolveCursorSeq(cursor);
   let endExclusive = messages.length;
   if (typeof cursorSeq === "number") {

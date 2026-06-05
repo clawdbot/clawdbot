@@ -1,3 +1,4 @@
+// Route argument tests cover program route argument parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
   parseAgentsListRouteArgs,

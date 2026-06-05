@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime dm behavior.
 import { randomUUID } from "node:crypto";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,

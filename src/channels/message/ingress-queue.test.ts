@@ -1,3 +1,4 @@
+// Ingress queue tests cover durable queueing for inbound channel messages.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

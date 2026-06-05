@@ -1,3 +1,4 @@
+// Doctor lint tests cover health-check registry integration and lint warning output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetCoreHealthChecksForTest } from "../flows/doctor-core-checks.js";

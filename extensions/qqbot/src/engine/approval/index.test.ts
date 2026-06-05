@@ -1,3 +1,4 @@
+// Qqbot tests cover index plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildApprovalKeyboard } from "./index.js";
 

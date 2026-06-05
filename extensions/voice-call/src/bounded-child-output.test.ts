@@ -1,3 +1,4 @@
+// Voice Call tests cover bounded child output plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedChildOutput,

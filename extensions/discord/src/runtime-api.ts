@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,

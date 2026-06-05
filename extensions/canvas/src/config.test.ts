@@ -1,3 +1,4 @@
+// Canvas tests cover config plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   isCanvasHostEnabled,

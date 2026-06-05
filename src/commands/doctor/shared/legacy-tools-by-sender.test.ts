@@ -1,3 +1,4 @@
+// Legacy tools-by-sender tests cover doctor migration of sender-scoped tool config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {

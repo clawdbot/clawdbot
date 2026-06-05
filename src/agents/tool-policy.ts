@@ -1,3 +1,8 @@
+/**
+ * Tool allow/deny policy helpers.
+ * Normalizes core and plugin tool groups, expands plugin entries, and extracts
+ * explicit operator allow/deny lists.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";

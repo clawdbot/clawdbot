@@ -1,3 +1,4 @@
+// Cron reschedule regression tests cover @schedule jobs after schedule changes.
 import { describe, expect, it } from "vitest";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronJob } from "./types.js";

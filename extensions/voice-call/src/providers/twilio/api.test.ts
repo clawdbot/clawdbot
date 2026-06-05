@@ -1,3 +1,4 @@
+// Voice Call tests cover api plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({

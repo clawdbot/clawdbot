@@ -1,3 +1,5 @@
+// Docker Windows invocation tests cover safe docker executable resolution
+// without shelling through wrapper scripts.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,6 +50,8 @@ describe("resolveDockerSpawnInvocation", () => {
   });
 
   it("rejects unresolved docker.cmd wrappers instead of shelling out", async () => {
+    // Shell fallback would reinterpret docker args on Windows; require a real
+    // executable or Node entrypoint instead.
     const dir = await createTempDir();
     const cmdPath = path.join(dir, "docker.cmd");
     await mkdir(path.dirname(cmdPath), { recursive: true });

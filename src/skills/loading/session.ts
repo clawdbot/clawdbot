@@ -1,3 +1,4 @@
+// Session skill helpers resolve skills attached to a session and its transcript state.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";

@@ -1,3 +1,4 @@
+// Whatsapp tests cover accounts plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {

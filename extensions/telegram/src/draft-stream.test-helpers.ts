@@ -1,3 +1,4 @@
+// Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
 
 type TestDraftStream = {

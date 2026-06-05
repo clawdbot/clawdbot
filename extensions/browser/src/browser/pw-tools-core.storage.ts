@@ -1,6 +1,10 @@
+/**
+ * Cookie and Web Storage helpers for Playwright-backed browser tools.
+ */
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
+/** Returns cookies visible to the target browser context. */
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -11,6 +15,7 @@ export async function cookiesGetViaPlaywright(opts: {
   return { cookies };
 }
 
+/** Adds or replaces a cookie in the target browser context. */
 export async function cookiesSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -44,6 +49,7 @@ export async function cookiesSetViaPlaywright(opts: {
   await page.context().addCookies([cookie]);
 }
 
+/** Clears cookies in the target browser context. */
 export async function cookiesClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -55,6 +61,7 @@ export async function cookiesClearViaPlaywright(opts: {
 
 type StorageKind = "local" | "session";
 
+/** Reads localStorage or sessionStorage values from the target page. */
 export async function storageGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -90,6 +97,7 @@ export async function storageGetViaPlaywright(opts: {
   return { values: values ?? {} };
 }
 
+/** Writes one localStorage or sessionStorage value on the target page. */
 export async function storageSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -112,6 +120,7 @@ export async function storageSetViaPlaywright(opts: {
   );
 }
 
+/** Clears localStorage or sessionStorage on the target page. */
 export async function storageClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

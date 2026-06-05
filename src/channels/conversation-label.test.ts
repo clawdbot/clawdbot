@@ -1,3 +1,4 @@
+// Conversation label tests cover user-facing labels for channel conversations and targets.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveConversationLabel } from "./conversation-label.js";

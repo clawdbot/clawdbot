@@ -1,3 +1,4 @@
+// Speech Core tests cover tts behavior.
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

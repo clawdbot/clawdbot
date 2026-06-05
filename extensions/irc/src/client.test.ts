@@ -1,3 +1,4 @@
+// Irc tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildIrcNickServCommands } from "./client.js";
 

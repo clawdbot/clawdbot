@@ -1,3 +1,4 @@
+// Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -62,6 +63,7 @@ function getErrnoCode(err: unknown): string | undefined {
 }
 
 function isRecoverableLsofError(err: unknown): boolean {
+  // Permission or missing-binary failures can fall back to fuser on Linux.
   const code = getErrnoCode(err);
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;

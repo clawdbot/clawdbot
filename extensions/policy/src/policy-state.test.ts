@@ -1,3 +1,4 @@
+// Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicyChannels, scanPolicyTools } from "./policy-state.js";
 

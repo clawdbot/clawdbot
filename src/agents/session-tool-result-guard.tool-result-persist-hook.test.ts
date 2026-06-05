@@ -1,3 +1,4 @@
+// Verifies persisted tool results are redacted/capped and can be transformed by hooks.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,7 @@ const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let tempDirs: string[] = [];
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
+  // Temp plugin manifests allow testing real hook loading without bundled plugins.
   const pluginDir = path.join(params.dir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
   const file = path.join(pluginDir, `${params.id}.mjs`);
@@ -99,6 +101,7 @@ function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManage
 }
 
 function expectPersistedToolResultDetailsCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
+  // Large details are summarized before persistence to keep transcript files bounded.
   const toolResult = requirePersistedToolResult(sm);
   const details = toolResult.details as Record<string, unknown>;
   expect(details.persistedDetailsTruncated).toBe(true);

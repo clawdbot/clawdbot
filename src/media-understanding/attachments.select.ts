@@ -1,3 +1,5 @@
+// Attachment selection applies per-capability filters, ordering preferences,
+// and max-count policy before provider execution.
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
 import {
   isAudioAttachment,
@@ -12,6 +14,8 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
+  // Ordering is stable and non-mutating so downstream decisions can still cite
+  // original attachment indexes.
   const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
   if (!prefer || prefer === "first") {
     return list;

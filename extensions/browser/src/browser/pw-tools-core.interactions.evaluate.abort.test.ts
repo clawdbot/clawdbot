@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.evaluate.abort plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: { evaluate: ReturnType<typeof vi.fn>; url: ReturnType<typeof vi.fn> } | null = null;

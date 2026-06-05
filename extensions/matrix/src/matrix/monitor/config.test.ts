@@ -1,3 +1,4 @@
+// Matrix tests cover config plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";

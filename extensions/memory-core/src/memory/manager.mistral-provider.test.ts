@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.mistral provider plugin behavior.
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,

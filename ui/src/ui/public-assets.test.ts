@@ -1,3 +1,4 @@
+// Control UI tests cover public assets behavior.
 import { describe, expect, it } from "vitest";
 import { controlUiPublicAssetPath, inferControlUiPublicAssetPath } from "./public-assets.ts";
 

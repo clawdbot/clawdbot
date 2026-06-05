@@ -1,3 +1,5 @@
+// Sandbox backend registry tests cover pluggable backend factory and manager
+// lifecycle hooks.
 import { describe, expect, it } from "vitest";
 import {
   getSandboxBackendFactory,
@@ -7,6 +9,8 @@ import {
 
 describe("sandbox backend registry", () => {
   it("registers and restores backend factories", () => {
+    // Tests and optional backends install process-local factories; restore must
+    // remove them so later suites see the default registry.
     const factory = async () => {
       throw new Error("not used");
     };

@@ -1,3 +1,4 @@
+// Binding target tests cover channel binding target extraction and validation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureConfiguredBindingTargetReady,

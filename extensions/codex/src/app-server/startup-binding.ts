@@ -1,3 +1,7 @@
+/**
+ * Guards Codex app-server thread reuse during startup by rotating bindings when
+ * native transcripts exceed byte or token budgets.
+ */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -320,6 +324,7 @@ function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThread
   return binding.contextEngine?.projection?.mode === "thread_bootstrap";
 }
 
+/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   sessionFile: string;
@@ -426,6 +431,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   return binding;
 }
 
+/** Internal sizing helpers exposed for startup-binding regression tests. */
 export const testing = {
   parseCodexAppServerByteLimit,
   readCodexAppServerRolloutTokenSnapshotLine,

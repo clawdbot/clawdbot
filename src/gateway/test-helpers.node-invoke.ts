@@ -1,3 +1,5 @@
+// Node invoke test helpers acknowledge forwarded node requests and discover the
+// connected node id through gateway RPCs.
 import { expect } from "vitest";
 import type { WebSocket } from "ws";
 import type { GatewayClient } from "./client.js";

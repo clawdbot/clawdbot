@@ -1,3 +1,4 @@
+// Browser tests cover cdp.screenshot params plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withCdpSocket } from "./cdp.helpers.js";
 import { captureScreenshot } from "./cdp.js";

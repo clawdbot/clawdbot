@@ -59,6 +59,11 @@ struct SettingsProTab: View {
     @State var notificationActionText = "Request Access"
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
+    @State var bottomOverlayInset: CGFloat = 0
+
+    var bottomScrollMargin: CGFloat {
+        max(0, self.bottomOverlayInset - SettingsLayout.rowHeight - SettingsLayout.bottomContentPadding)
+    }
 
     var body: some View {
         NavigationStack {
@@ -71,9 +76,13 @@ struct SettingsProTab: View {
                         self.gatewaySection
                         self.settingsListSection
                     }
-                    .padding(.vertical, 18)
+                    .padding(.top, 18)
+                    .padding(.bottom, SettingsLayout.bottomContentPadding)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+                .contentMargins(.bottom, self.bottomScrollMargin, for: .scrollContent)
+                SettingsBottomOverlayInsetReader(inset: self.$bottomOverlayInset)
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
             }
             .navigationBarHidden(true)
             .navigationDestination(for: SettingsRoute.self) { route in

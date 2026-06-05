@@ -1,3 +1,8 @@
+/**
+ * Built-in chat channel metadata builder.
+ *
+ * Converts bundled channel catalog entries into setup/status metadata records.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";

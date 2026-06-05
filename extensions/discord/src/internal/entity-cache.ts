@@ -1,3 +1,4 @@
+// Discord plugin module implements entity cache behavior.
 import { GatewayDispatchEvents } from "discord-api-types/v10";
 import {
   asDateTimestampMs,

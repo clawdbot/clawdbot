@@ -1,3 +1,4 @@
+// Markdown Core module implements frontmatter behavior.
 import YAML from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;

@@ -1,3 +1,4 @@
+// Model list forward-compat tests cover list command behavior with future catalog shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const OPENAI_CODEX_MODEL = {

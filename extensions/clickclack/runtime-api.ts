@@ -1,3 +1,6 @@
+/**
+ * Public runtime injection surface used by the bundled ClickClack entry.
+ */
 export {
   type ClickClackAccountConfig,
   type ClickClackEvent,

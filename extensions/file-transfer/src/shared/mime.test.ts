@@ -1,3 +1,4 @@
+// File Transfer tests cover mime plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   IMAGE_MIME_INLINE_SET,

@@ -1,3 +1,4 @@
+// Fish completion tests cover fish shell completion script generation.
 import { describe, expect, it } from "vitest";
 import {
   buildFishOptionCompletionLine,

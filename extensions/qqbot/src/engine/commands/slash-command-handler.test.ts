@@ -1,3 +1,4 @@
+// Qqbot tests cover slash command handler plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueuedMessage } from "../gateway/message-queue.js";

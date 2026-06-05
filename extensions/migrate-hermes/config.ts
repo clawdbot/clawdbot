@@ -1,3 +1,4 @@
+// Migrate Hermes helper module supports config behavior.
 import {
   applyMigrationConfigPatchItem,
   applyMigrationManualItem,

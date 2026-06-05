@@ -1,3 +1,4 @@
+// Discord plugin module implements preview streaming behavior.
 import {
   resolveChannelPreviewStreamMode,
   type StreamingMode,

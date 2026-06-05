@@ -1,3 +1,4 @@
+// Control UI tests cover assistant identity behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 

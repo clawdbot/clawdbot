@@ -1,3 +1,5 @@
+// Test helpers build minimal plugin registries for outbound session-route
+// scenarios without importing real channel implementations.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

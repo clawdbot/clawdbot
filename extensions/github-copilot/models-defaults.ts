@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements models defaults behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   resolveCopilotModelCompat,

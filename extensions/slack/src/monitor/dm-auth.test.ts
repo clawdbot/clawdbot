@@ -1,3 +1,4 @@
+// Slack tests cover dm auth plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";

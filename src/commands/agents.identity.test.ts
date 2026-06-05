@@ -1,3 +1,4 @@
+// Agent identity tests cover identity file creation, persistence, and command integration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Slack tests cover stream mode plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   applyAppendOnlyStreamUpdate,

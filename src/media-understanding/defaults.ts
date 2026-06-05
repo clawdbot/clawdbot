@@ -1,3 +1,5 @@
+// Media-understanding default model/provider selection from config, manifest
+// metadata, and capability declarations.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
@@ -29,6 +31,8 @@ function cacheConfigRegistry(
   key: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): Map<string, MediaUnderstandingProvider> {
+  // Config snapshots are process-stable enough for bounded reuse; cap entries so
+  // tests and multi-workspace runs cannot grow this cache without limit.
   if (
     !configRegistryCache.has(key) &&
     configRegistryCache.size >= MAX_CONFIG_REGISTRY_CACHE_ENTRIES

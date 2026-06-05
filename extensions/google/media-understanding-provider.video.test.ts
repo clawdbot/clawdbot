@@ -1,3 +1,4 @@
+// Google tests cover media understanding provider.video plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,

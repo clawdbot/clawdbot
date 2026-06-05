@@ -1,12 +1,12 @@
+// Transcript redaction tests cover structured and text transcript fields so
+// secrets do not persist in logs or replay artifacts.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
-/** Typed accessor for `content` on AgentMessage.
- * AgentMessage is a union that includes custom message types (e.g. BashExecutionMessage)
- * which have no `content` field. Direct `.content` access fails tsgo's strict union check.
- */
+// AgentMessage includes custom message types without content; this accessor
+// keeps strict union checks local to the redaction fixtures.
 function msgContent(msg: AgentMessage): unknown {
   return (msg as unknown as { content: unknown }).content;
 }
@@ -226,6 +226,8 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts circular structured payloads without throwing", () => {
+    // Redaction walks arbitrary tool payloads, so circular structures must be
+    // replaced instead of recursing forever or throwing.
     const details: Record<string, unknown> = {
       apiKey: "plainsecretvalue123",
     };

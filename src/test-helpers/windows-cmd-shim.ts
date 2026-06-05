@@ -1,3 +1,4 @@
+// Windows command shim helpers create test shims for Windows command execution.
 import fs from "node:fs/promises";
 import path from "node:path";
 

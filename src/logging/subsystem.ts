@@ -1,3 +1,4 @@
+// Subsystem logger helpers create scoped loggers with subsystem-specific filters.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";

@@ -1,3 +1,8 @@
+/**
+ * Image generation background task facade.
+ *
+ * Binds shared detached media-task lifecycle behavior to image_generate labels and completion messages.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { IMAGE_GENERATION_TASK_KIND } from "../image-generation-task-status.js";
@@ -6,12 +11,6 @@ import {
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
 
-/**
- * Image-generation-specific facade over the shared media generation task lifecycle.
- *
- * This binds shared detached-task behavior to image task labels, event source,
- * and completion wording used by image_generate.
- */
 /** Detached image generation task handle. */
 export type ImageGenerationTaskHandle = MediaGenerationTaskHandle;
 

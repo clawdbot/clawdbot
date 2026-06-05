@@ -1,3 +1,4 @@
+// Msteams plugin module implements doctor behavior.
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 
 function isMSTeamsMutableAllowEntry(raw: string): boolean {

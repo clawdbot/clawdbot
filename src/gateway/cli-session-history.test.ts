@@ -1,3 +1,5 @@
+// CLI session history tests protect imported Claude CLI transcript lookup,
+// fallback seeding, marker metadata, and merge ordering with local chat history.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

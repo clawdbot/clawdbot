@@ -1,3 +1,4 @@
+// Snapshots script supports OpenClaw repository automation.
 import { die, run } from "./host-command.ts";
 import type { SnapshotInfo } from "./types.ts";
 

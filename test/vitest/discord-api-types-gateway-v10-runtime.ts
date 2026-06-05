@@ -1,3 +1,4 @@
+// Discord gateway types runtime helper loads discord-api-types gateway v10 at runtime.
 import { createRequire } from "node:module";
 import type * as DiscordGatewayApiTypes from "discord-api-types/gateway/v10";
 

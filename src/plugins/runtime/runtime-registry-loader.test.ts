@@ -1,3 +1,4 @@
+// Runtime registry loader tests cover plugin runtime assembly and activation boundaries.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../registry.js";
 

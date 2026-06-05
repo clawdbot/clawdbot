@@ -1,3 +1,8 @@
+/**
+ * image_generate built-in tool.
+ *
+ * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

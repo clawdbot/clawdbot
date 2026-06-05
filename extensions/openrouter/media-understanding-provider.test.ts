@@ -1,3 +1,4 @@
+// Openrouter tests cover media understanding provider plugin behavior.
 import {
   describeImageWithModel,
   describeImagesWithModel,

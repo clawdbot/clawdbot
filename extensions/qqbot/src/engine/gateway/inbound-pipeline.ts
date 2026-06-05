@@ -1,3 +1,4 @@
+// Qqbot plugin module implements inbound pipeline behavior.
 import type { HistoryPort } from "../adapter/history.port.js";
 import type { HistoryEntry } from "../group/history.js";
 import { processAttachments } from "./inbound-attachments.js";

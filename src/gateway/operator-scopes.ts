@@ -1,3 +1,5 @@
+// Gateway operator scope constants.
+// Defines the closed set accepted by connection auth and method policy.
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;

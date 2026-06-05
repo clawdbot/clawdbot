@@ -1,3 +1,4 @@
+// Client helpers for Codex media-path E2E fixtures.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";

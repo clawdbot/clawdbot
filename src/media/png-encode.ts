@@ -1,3 +1,4 @@
+// PNG encode helpers build small PNG files without external image dependencies.
 import { deflateSync } from "node:zlib";
 
 const CRC_TABLE = (() => {

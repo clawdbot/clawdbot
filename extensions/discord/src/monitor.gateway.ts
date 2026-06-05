@@ -1,3 +1,4 @@
+// Discord plugin module implements monitor.gateway behavior.
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
 import { DiscordGatewayLifecycleError } from "./monitor/gateway-supervisor.js";
 import type {

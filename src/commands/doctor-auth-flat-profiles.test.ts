@@ -1,3 +1,4 @@
+// Doctor flat auth-profile tests cover legacy flat profile repair and persisted auth-profile loading.
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";

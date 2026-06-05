@@ -1,3 +1,9 @@
+/**
+ * Browser storage and context mutation routes.
+ *
+ * Parses and applies cookies, local/session storage, geolocation, permissions,
+ * and related browser-context mutations for the selected profile/tab.
+ */
 import {
   normalizeOptionalString,
   readStringValue,
@@ -36,6 +42,7 @@ type CookieSetOptions = {
   sameSite?: "Lax" | "None" | "Strict";
 };
 
+/** Parse the supported browser storage bucket names. */
 export function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
@@ -43,6 +50,7 @@ export function parseStorageKind(raw: string): StorageKind | null {
   return null;
 }
 
+/** Parse an optional storage mutation request from a route body. */
 export function parseStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
@@ -53,6 +61,7 @@ export function parseStorageMutationRequest(
   };
 }
 
+/** Parse a required storage mutation request and throw on invalid input. */
 export function parseRequiredStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
@@ -104,6 +113,7 @@ function assertRange(
   return value;
 }
 
+/** Parse cookie options accepted by browser storage mutation routes. */
 export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
@@ -121,6 +131,7 @@ export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSe
   };
 }
 
+/** Parse geolocation override options accepted by context mutation routes. */
 export function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
   const clear = toBoolean(body.clear) ?? false;
   const origin = toStringOrEmpty(body.origin) || undefined;
@@ -149,6 +160,7 @@ export function parseGeolocationOptions(body: Record<string, unknown>): Geolocat
   return { clear, latitude, longitude, accuracy, origin };
 }
 
+/** Register storage and browser-context mutation endpoints. */
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

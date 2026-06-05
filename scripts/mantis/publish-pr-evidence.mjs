@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Publishes evidence manifest artifacts and optional PR comments for Mantis proof.
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -86,6 +87,9 @@ function resolveArtifact(manifestDir, artifact) {
   };
 }
 
+/**
+ * Loads and validates an evidence manifest from disk.
+ */
 export function loadEvidenceManifest(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);

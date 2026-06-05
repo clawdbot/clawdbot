@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite merge patch plugin behavior.
 import { describe, expect, it } from "vitest";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 

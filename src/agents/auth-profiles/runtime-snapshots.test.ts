@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process-local auth profile snapshots.
+ * Verifies snapshots are cloned and isolated across agent-specific stores.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,

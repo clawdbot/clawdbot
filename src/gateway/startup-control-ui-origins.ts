@@ -1,3 +1,5 @@
+// Gateway startup Control UI origin seeding.
+// Adds runtime-only browser origins for non-loopback binds when safe.
 import {
   ensureControlUiAllowedOriginsForNonLoopbackBind,
   type GatewayNonLoopbackBindMode,
@@ -23,6 +25,8 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   if (!seeded.seededOrigins || !seeded.bind) {
     return { config: params.config, seededAllowedOrigins: false };
   }
+  // This changes only the runtime config object. Operators still need explicit
+  // config entries for additional browser origins.
   params.log.info(buildSeededOriginsInfoLog(seeded.seededOrigins, seeded.bind));
   return { config: seeded.config, seededAllowedOrigins: true };
 }

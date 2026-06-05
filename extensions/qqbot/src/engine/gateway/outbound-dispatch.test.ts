@@ -1,3 +1,4 @@
+// Qqbot tests cover outbound dispatch plugin behavior.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";

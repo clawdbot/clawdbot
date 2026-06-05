@@ -1,3 +1,5 @@
+// Plain-text sanitization strips internal runtime scaffolding and converts a
+// conservative subset of model-produced HTML into channel-friendly text.
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;

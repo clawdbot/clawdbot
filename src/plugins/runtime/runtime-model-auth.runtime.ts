@@ -1,3 +1,4 @@
+// Runtime model auth helpers expose provider auth resolution to plugin runtimes.
 import {
   getApiKeyForModel as resolveModelApiKey,
   resolveApiKeyForProvider as resolveProviderApiKey,

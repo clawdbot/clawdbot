@@ -1,3 +1,4 @@
+// Google Meet plugin entrypoint registers its OpenClaw integration.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,

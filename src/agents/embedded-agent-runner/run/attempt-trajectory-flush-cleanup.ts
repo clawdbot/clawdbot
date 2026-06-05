@@ -1,3 +1,6 @@
+/**
+ * Flushes attempt trajectory recorders during cleanup.
+ */
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 
 /** Minimal recorder surface needed to flush trajectory data during run cleanup. */

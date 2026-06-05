@@ -1,3 +1,4 @@
+// Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractText,

@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import {
   generatedImageAssetFromBase64,
   type GeneratedImageAsset,

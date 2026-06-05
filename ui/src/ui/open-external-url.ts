@@ -1,3 +1,4 @@
+// Control UI module implements open external url behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const DATA_URL_PREFIX = "data:";

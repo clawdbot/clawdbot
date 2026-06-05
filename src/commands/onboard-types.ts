@@ -1,8 +1,15 @@
+/**
+ * Shared onboarding option and choice types.
+ *
+ * These types model CLI flags plus plugin-defined dynamic auth options used by
+ * interactive and non-interactive setup.
+ */
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
+
 /**
  * Auth choices are plugin-owned contract ids plus a few legacy aliases that
  * are normalized elsewhere (for example `oauth` -> `setup-token`).
@@ -30,6 +37,7 @@ type OnboardDynamicProviderOptions = {
   [optionKey: string]: unknown;
 };
 
+/** Parsed options accepted by `openclaw onboard`. */
 export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */

@@ -1,3 +1,8 @@
+/**
+ * Live-test provider API-key discovery.
+ * Reads provider-specific and manifest-declared env names without logging or
+ * exposing secret values, with explicit single-key pins for flaky live lanes.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -6,8 +11,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-// Live-test credential discovery. Provider-specific env names take precedence,
-// then manifest-declared env vars fill in fallback API keys.
 const KEY_SPLIT_RE = /[\s,;]+/g;
 const GOOGLE_LIVE_SINGLE_KEY = "OPENCLAW_LIVE_GEMINI_KEY";
 

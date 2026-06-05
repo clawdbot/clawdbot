@@ -1,3 +1,4 @@
+// Discord helper module supports format behavior.
 import type { Guild, User } from "../internal/discord.js";
 
 export function resolveDiscordSystemLocation(params: {

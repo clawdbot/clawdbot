@@ -1,3 +1,4 @@
+// Control UI tests cover format behavior.
 import { describe, expect, it } from "vitest";
 import {
   formatDateTimeMs,

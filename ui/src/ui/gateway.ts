@@ -1,3 +1,4 @@
+// Control UI module implements gateway behavior.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,

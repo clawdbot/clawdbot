@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus.inbound plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startNostrBus } from "./nostr-bus.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";

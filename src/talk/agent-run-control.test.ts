@@ -1,3 +1,4 @@
+// Agent run control tests cover talk-driven agent pause and resume behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyRealtimeVoiceAgentControlText,

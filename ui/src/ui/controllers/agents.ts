@@ -1,3 +1,4 @@
+// Control UI controller manages agents gateway state.
 import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,

@@ -1,3 +1,4 @@
+// Skill filter tests cover allowlist and agent-scoped skill selection behavior.
 import { describe, expect, it } from "vitest";
 import {
   matchesSkillFilter,

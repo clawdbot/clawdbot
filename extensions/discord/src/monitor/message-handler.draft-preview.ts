@@ -1,3 +1,4 @@
+// Discord plugin module implements message handlerraft preview behavior.
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type ChannelProgressDraftLine,

@@ -1,3 +1,8 @@
+/**
+ * Session key resolution helpers.
+ *
+ * Normalizes display/internal/current-session aliases and resolves session-id inputs through Gateway.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,

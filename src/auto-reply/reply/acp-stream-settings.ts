@@ -144,20 +144,16 @@ export function resolveAcpStreamingConfig(params: {
   return resolved;
 }
 
-/** Returns whether an ACP session update tag should be projected. */
-export function isAcpTagVisible(
-  settings: AcpProjectionSettings,
-  tag: AcpSessionUpdateTag | undefined,
-): boolean {
+export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | undefined): boolean {
   if (!tag) {
     return true;
   }
-  const override = settings.tagVisibility[tag];
+  const override = settings.tagVisibility[tag as AcpSessionUpdateTag];
   if (typeof override === "boolean") {
     return override;
   }
   if (Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
-    return ACP_TAG_VISIBILITY_DEFAULTS[tag];
+    return ACP_TAG_VISIBILITY_DEFAULTS[tag as AcpSessionUpdateTag];
   }
   return true;
 }

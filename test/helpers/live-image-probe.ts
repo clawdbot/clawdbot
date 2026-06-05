@@ -1,3 +1,4 @@
+// Live image probe helpers build tiny image fixtures for live provider tests.
 import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
 
 const GLYPH_ROWS_5X7: Record<string, number[]> = {

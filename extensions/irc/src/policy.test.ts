@@ -1,3 +1,4 @@
+// Irc tests cover policy plugin behavior.
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { describe, expect, it } from "vitest";
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";

@@ -1,3 +1,4 @@
+// Compaction notifier hook sends notifications when session compaction occurs.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { HookHandler } from "../../hooks.js";
 

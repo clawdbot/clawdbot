@@ -1,3 +1,4 @@
+// Exercises agent avatar resolution, workspace containment, and public redaction.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,8 @@ async function expectLocalAvatarPath(
   expectedRelativePath: string,
   opts?: Parameters<typeof resolveAgentAvatar>[2],
 ) {
+  // Compare realpaths so symlinks or temp-dir normalization cannot hide an
+  // avatar escaping the configured workspace.
   const workspaceReal = await fs.realpath(workspace);
   const resolved = resolveAgentAvatar(cfg, "main", opts);
   expect(resolved.kind).toBe("local");
@@ -161,6 +164,8 @@ describe("resolveAgentAvatar", () => {
     expect(absolute.kind).toBe("none");
     expect(resolvePublicAgentAvatarSource(absolute)).toBeUndefined();
 
+    // Public status/UI surfaces may report remote/data origins, but local
+    // absolute paths and traversal attempts stay hidden.
     expect(
       resolvePublicAgentAvatarSource({
         kind: "remote",
@@ -247,7 +252,8 @@ describe("resolveAgentAvatar", () => {
   it("ui.assistant.avatar ignored without includeUiOverride (outbound callers)", async () => {
     const { cfg, workspace } = await setupUiAndConfigAvatarWorkspace();
 
-    // Without the opt-in, outbound callers get the per-agent identity avatar, not the UI override.
+    // Without the opt-in, outbound callers get the per-agent identity avatar,
+    // not the UI override.
     await expectLocalAvatarPath(cfg, workspace, "cfg-avatar.png");
   });
 

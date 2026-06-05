@@ -1,10 +1,13 @@
+/**
+ * Cached built-in chat channel metadata accessors.
+ *
+ * Provides ordered channel metadata for setup, status, and selection surfaces.
+ */
 import { buildChatChannelMetaById, type ChatChannelMeta } from "./chat-meta-shared.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 
 let chatChannelMetaCache: Record<ChatChannelId, ChatChannelMeta> | null = null;
 
-// Built-in channel metadata is process-stable generated/catalog data; cache it so hot setup
-// and status paths do not rebuild manifest-derived labels on every read.
 function getChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   chatChannelMetaCache ??= buildChatChannelMetaById();
   return chatChannelMetaCache;

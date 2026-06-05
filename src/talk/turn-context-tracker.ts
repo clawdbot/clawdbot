@@ -1,3 +1,4 @@
+// Turn context tracker keeps bounded recent context for realtime voice turns.
 const DEFAULT_REALTIME_VOICE_TURN_CONTEXT_LIMIT = 32;
 const DEFAULT_REALTIME_VOICE_IGNORED_CONTEXT_TTL_MS = 10_000;
 

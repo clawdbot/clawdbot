@@ -1,3 +1,4 @@
+// Telegram tests cover native quote plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramNativeQuoteCandidate } from "./native-quote.js";
 

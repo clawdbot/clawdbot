@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements auto reply harness behavior.
 import "./test-helpers.js";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";

@@ -1,3 +1,4 @@
+// Channel outbound contracts define plugin send results, media handling, and delivery metadata.
 import type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,

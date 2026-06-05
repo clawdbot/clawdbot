@@ -1,6 +1,8 @@
+// Top-level legacy config migration runner used before full config validation.
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
+/** Apply all legacy doctor migrations to raw config, returning null when nothing changed. */
 export function applyLegacyDoctorMigrations(raw: unknown): {
   next: Record<string, unknown> | null;
   changes: string[];

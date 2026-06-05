@@ -1,3 +1,4 @@
+// Detection helper for legacy `/models add` OpenAI Codex entries missing metadata markers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 
@@ -7,6 +8,7 @@ const LEGACY_MODELS_ADD_CODEX_APIS = new Set([
   "openai-chatgpt-responses",
 ]);
 
+/** Return true when a model entry matches the legacy Codex `/models add` default shape. */
 export function isLegacyModelsAddCodexMetadataModel(params: {
   provider: string;
   model: Partial<ModelDefinitionConfig> | undefined;

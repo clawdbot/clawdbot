@@ -1,3 +1,4 @@
+// Memory Core plugin module implements qmd compat behavior.
 export type QmdCollectionPatternFlag = "--glob" | "--mask";
 
 export function resolveQmdCollectionPatternFlags(

@@ -1,3 +1,8 @@
+/**
+ * Gateway-backed agent run wait helpers.
+ * Normalizes run wait responses, reads the latest assistant reply, and drains
+ * pending run sets for tools that need synchronous completion semantics.
+ */
 import {
   addTimerTimeoutGraceMs,
   asDateTimestampMs,
@@ -44,11 +49,13 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   );
 }
 
+/** Latest assistant reply plus a stable fingerprint for baseline comparisons. */
 export type AssistantReplySnapshot = {
   text?: string;
   fingerprint?: string;
 };
 
+/** Normalized terminal or pending state returned by `agent.wait`. */
 export type AgentWaitResult = {
   status: "ok" | "timeout" | "error" | "pending";
   error?: string;
@@ -62,6 +69,7 @@ export type AgentWaitResult = {
   providerStarted?: boolean;
 };
 
+/** Summary returned after waiting for a dynamic set of pending runs to drain. */
 export type AgentRunsDrainResult = {
   timedOut: boolean;
   pendingRunIds: string[];
@@ -128,6 +136,7 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/i,
 ];
 
+/** Return true for transient gateway/transport failures that callers may retry. */
 export function isRecoverableAgentWaitError(error: string | undefined): boolean {
   const message = error?.trim();
   if (!message) {
@@ -175,6 +184,7 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
   return {};
 }
 
+/** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
   limit?: number;
@@ -191,6 +201,7 @@ export async function readLatestAssistantReplySnapshot(params: {
   );
 }
 
+/** Read only the latest assistant text for call sites that do not need fingerprints. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   limit?: number;
@@ -205,6 +216,7 @@ export async function readLatestAssistantReply(params: {
   ).text;
 }
 
+/** Wait for one agent run through the gateway and normalize timeout/error states. */
 export async function waitForAgentRun(params: {
   runId: string;
   timeoutMs: number;
@@ -239,6 +251,7 @@ export async function waitForAgentRun(params: {
   }
 }
 
+/** Wait for a run and return a reply only when it differs from the supplied baseline. */
 export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   runId: string;
   sessionKey: string;
@@ -272,6 +285,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   };
 }
 
+/** Wait until the current and newly spawned pending run IDs are drained or timed out. */
 export async function waitForAgentRunsToDrain(params: {
   getPendingRunIds: () => Iterable<string>;
   initialPendingRunIds?: Iterable<string>;
@@ -307,6 +321,7 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
+/** Test-only dependency injection for gateway calls. */
 export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides

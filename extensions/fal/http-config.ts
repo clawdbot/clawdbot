@@ -1,3 +1,4 @@
+// Fal helper module supports http config behavior.
 import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {

@@ -1,3 +1,4 @@
+// Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,

@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for persisted session JSONL repair.
+ * Exercises malformed lines, blank turns, empty assistant errors, and missing tool results.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

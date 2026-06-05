@@ -1,3 +1,4 @@
+// Control UI tests cover control ui e2e behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolvePlaywrightChromiumExecutablePath,

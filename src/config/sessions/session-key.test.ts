@@ -1,3 +1,4 @@
+// Session key tests cover session key generation and normalization.
 import { describe, expect, it } from "vitest";
 import { resolveSessionKey } from "./session-key.js";
 import { installDiscordSessionKeyNormalizerFixture, makeCtx } from "./session-key.test-helpers.js";

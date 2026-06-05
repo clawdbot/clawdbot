@@ -1,3 +1,4 @@
+// Msteams tests cover message handler.thread parent plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";

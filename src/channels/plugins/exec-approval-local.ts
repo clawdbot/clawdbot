@@ -1,10 +1,13 @@
+/**
+ * Local exec approval prompt suppression.
+ *
+ * Lets channel plugins hide generic local prompts while native approval routes are active.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasActiveApprovalNativeRouteRuntime } from "../../infra/approval-native-route-coordinator.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
-// Lets channel plugins suppress the generic local exec approval prompt when a
-// native approval route is already active for the same channel/account.
 export function shouldSuppressLocalExecApprovalPrompt(params: {
   channel?: string | null;
   cfg: OpenClawConfig;

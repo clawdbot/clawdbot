@@ -1,3 +1,4 @@
+// Devices CLI runtime timeout tests cover device command timeout handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn(async () => ({ pending: [], paired: [] }));

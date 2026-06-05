@@ -1,3 +1,5 @@
+// Gateway restart timing trace helpers.
+// Emits opt-in restart handoff diagnostics with bounded metric formatting.
 import { performance } from "node:perf_hooks";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -41,6 +43,8 @@ function normalizeMetricEntries(
 }
 
 function formatMetricKey(key: string): string {
+  // Metric keys are log tokens, not structured JSON. Keep them compact and
+  // shell-friendly so trace lines remain grepable.
   const normalized = key.replace(/[^A-Za-z0-9]/gu, "");
   if (!normalized) {
     return "metric";
@@ -261,6 +265,8 @@ function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {
+  // Handoff values come from another process. Reject stale/future values so a
+  // reused shell environment cannot poison later restart measurements.
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
   }

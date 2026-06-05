@@ -1,3 +1,4 @@
+// Proxy capture SQLite store tests cover persisted capture reads and writes.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

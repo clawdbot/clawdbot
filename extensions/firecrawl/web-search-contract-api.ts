@@ -1,3 +1,4 @@
+// Firecrawl API module exposes the plugin public contract.
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { buildFirecrawlWebSearchProviderBase } from "./web-search-shared.js";
 

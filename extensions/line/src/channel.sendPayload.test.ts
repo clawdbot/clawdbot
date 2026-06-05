@@ -1,3 +1,4 @@
+// Line tests cover channel.sendPayload plugin behavior.
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,

@@ -1,3 +1,4 @@
+// Discord provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";

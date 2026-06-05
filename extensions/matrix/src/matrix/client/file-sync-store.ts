@@ -1,3 +1,4 @@
+// Matrix plugin module implements file sync store behavior.
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

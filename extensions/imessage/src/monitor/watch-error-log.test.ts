@@ -1,3 +1,4 @@
+// Imessage tests cover watch error log plugin behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 

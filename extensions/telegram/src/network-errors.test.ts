@@ -1,3 +1,4 @@
+// Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,

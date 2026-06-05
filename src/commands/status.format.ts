@@ -1,3 +1,6 @@
+// Formatting helpers for status tokens, durations, prompt-cache stats, and daemon runtime snippets.
+// These helpers are shared by report rows and command output surfaces.
+
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
@@ -5,9 +8,11 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
+/** Formats a token count in thousands for compact status rows. */
 export const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
+/** Formats a duration or returns `unknown` for missing/non-finite values. */
 export const formatDuration = (ms: number | null | undefined) => {
   if (ms == null || !Number.isFinite(ms)) {
     return "unknown";
@@ -15,6 +20,7 @@ export const formatDuration = (ms: number | null | undefined) => {
   return formatDurationPrecise(ms, { decimals: 1 });
 };
 
+/** Formats session token usage and prompt-cache hit rate for the sessions table. */
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
@@ -42,6 +48,7 @@ export const formatTokensCompact = (
   return result;
 };
 
+/** Formats prompt-cache details for verbose sessions table output. */
 export const formatPromptCacheCompact = (
   sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
 ) => {
@@ -98,6 +105,7 @@ function resolvePromptCacheStats(
   };
 }
 
+/** Formats daemon runtime status plus launchd/systemd details into one compact string. */
 export const formatDaemonRuntimeShort = (runtime?: {
   status?: string;
   pid?: number;
@@ -114,6 +122,7 @@ export const formatDaemonRuntimeShort = (runtime?: {
   const noisyLaunchctlDetail =
     runtime.missingUnit === true &&
     normalizeLowercaseStringOrEmpty(detail).includes("could not find service");
+  // launchctl reports missing units noisily; installed=false already carries that signal.
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }

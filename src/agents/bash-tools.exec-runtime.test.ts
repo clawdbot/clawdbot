@@ -1,3 +1,8 @@
+/**
+ * Exec runtime tests.
+ * Covers target resolution, cursor mode tracking, exit outcome classification,
+ * system events, and process lifecycle behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 

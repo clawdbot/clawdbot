@@ -1,3 +1,4 @@
+// Google Vertex provider wires Google shared streaming through Vertex credentials.
 import {
   type GenerateContentParameters,
   GoogleGenAI,

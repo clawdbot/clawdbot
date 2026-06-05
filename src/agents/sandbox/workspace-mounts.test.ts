@@ -1,3 +1,5 @@
+// Workspace mount tests cover Docker bind arguments for workspace access modes
+// and read-only skill overlays.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +82,8 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it("overlays workspace skills read-only when workspaceAccess is rw", () => {
+    // The writable workspace mount is followed by a narrower read-only skills
+    // overlay so sandboxed agents cannot mutate checked-in skill instructions.
     const agentWorkspaceDir = makeTempWorkspace();
     fs.mkdirSync(path.join(agentWorkspaceDir, "skills", "demo"), { recursive: true });
     fs.writeFileSync(path.join(agentWorkspaceDir, "skills", "demo", "SKILL.md"), "# Demo\n");
@@ -101,6 +105,8 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it.runIf(process.platform !== "win32")("does not overlay symlinked workspace skill roots", () => {
+    // Skill overlays must be real workspace directories; symlinks could expose
+    // arbitrary host paths read-only inside the sandbox.
     const agentWorkspaceDir = makeTempWorkspace();
     const outsideDir = makeTempWorkspace();
     fs.mkdirSync(path.join(outsideDir, "demo"), { recursive: true });

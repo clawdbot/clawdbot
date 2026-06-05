@@ -1,9 +1,10 @@
+/**
+ * Channel plugin startup maintenance runner.
+ *
+ * Invokes optional plugin lifecycle hooks without blocking unrelated channels.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listChannelPlugins } from "./registry.js";
-
-/**
- * Startup maintenance runner for optional channel plugin lifecycle hooks.
- */
 
 type ChannelStartupLogger = {
   info?: (message: string) => void;

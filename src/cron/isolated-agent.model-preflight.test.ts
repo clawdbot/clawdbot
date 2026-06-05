@@ -1,3 +1,4 @@
+// Isolated agent model preflight tests cover model readiness checks before cron runs.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   loadRunCronIsolatedAgentTurn,

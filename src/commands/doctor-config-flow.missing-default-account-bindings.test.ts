@@ -1,3 +1,4 @@
+// Doctor config-flow binding tests cover warnings for named channel accounts without usable default bindings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectMissingDefaultAccountBindingWarnings } from "./doctor/shared/default-account-warnings.js";

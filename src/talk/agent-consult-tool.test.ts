@@ -1,3 +1,4 @@
+// Agent consult tool tests cover tool payload validation for consult requests.
 import { describe, expect, it } from "vitest";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,

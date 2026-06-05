@@ -1,3 +1,4 @@
+// Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,

@@ -1,3 +1,4 @@
+// Discord plugin module implements threading behavior.
 export {
   maybeCreateDiscordAutoThread,
   resolveDiscordAutoThreadContext,

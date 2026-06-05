@@ -1,5 +1,7 @@
-// Browser screenshot descriptions piggyback on the existing media image
-// understanding contract. No browser-specific model registry lives here.
+/**
+ * Browser screenshot description helpers built on the shared media image
+ * understanding contract. No browser-specific model registry lives here.
+ */
 
 import { readFile } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -7,9 +9,11 @@ import type { describeImageFile as DescribeImageFileFn } from "openclaw/plugin-s
 import type { saveMediaBuffer as SaveMediaBufferFn } from "../sdk-setup-tools.js";
 import type { normalizeBrowserScreenshot as NormalizeBrowserScreenshotFn } from "./screenshot.js";
 
+/** Default prompt for turning browser screenshots into text-only page context. */
 export const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
+/** Input context for browser screenshot image understanding. */
 export type BrowserScreenshotDescriptionContext = {
   cfg: OpenClawConfig;
   filePath: string;
@@ -30,12 +34,14 @@ export type BrowserScreenshotDescriptionContext = {
   };
 };
 
+/** Dependencies injected so Browser tests can avoid loading media runtimes. */
 export type BrowserScreenshotDescriptionDeps = {
   describeImageFile: typeof DescribeImageFileFn;
   normalizeBrowserScreenshot: typeof NormalizeBrowserScreenshotFn;
   saveMediaBuffer: typeof SaveMediaBufferFn;
 };
 
+/** Result returned from browser screenshot description. */
 export type BrowserScreenshotDescriptionResult = {
   text: string;
   provider?: string;
@@ -78,6 +84,7 @@ async function resolveImageUnderstandingFilePath(
   return saved.path;
 }
 
+/** Produces a text description for a browser screenshot, or null when no text was produced. */
 export async function describeBrowserScreenshot(
   ctx: BrowserScreenshotDescriptionContext,
   deps: BrowserScreenshotDescriptionDeps,
@@ -104,6 +111,7 @@ export async function describeBrowserScreenshot(
   };
 }
 
+/** Neutralizes model-generated MEDIA directives before feeding text back to tools. */
 export function neutralizeMediaDirectives(text: string): string {
   if (!text || !/media:/i.test(text)) {
     return text;

@@ -1,17 +1,26 @@
+/**
+ * Planning helpers for transcript compaction. The module estimates sanitized
+ * token usage, chooses chunking strategy, and preserves active tool-use pairs
+ * while splitting history for summaries.
+ */
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 import { estimateTokens } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
+/** Default share of context window targeted for compaction chunks. */
 export const BASE_CHUNK_RATIO = 0.4;
+/** Lower bound for adaptive compaction chunk sizing. */
 export const MIN_CHUNK_RATIO = 0.15;
-export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
+/** Buffer for estimateTokens() inaccuracy. */
+export const SAFETY_MARGIN = 1.2;
 const DEFAULT_PARTS = 2;
 
-// Overhead reserved for summarization prompt, system prompt, previous summary,
-// and serialization wrappers (<conversation> tags, instructions, etc.).
-// generateSummary uses reasoning: "high" which also consumes context budget.
+/**
+ * Overhead reserved for summary prompt, system prompt, prior summary, wrapper
+ * tags, and high-reasoning summary generation.
+ */
 export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
 
 /** Decision for whether a summarization stage should run as one chunk or multiple chunks. */

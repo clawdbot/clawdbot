@@ -1,3 +1,4 @@
+// Memory Host SDK helper module supports fs utils behavior.
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
 // fs-safe facade with Python validation disabled by default for this package's
 // host-side memory file operations.

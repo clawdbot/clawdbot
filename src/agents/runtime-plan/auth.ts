@@ -1,3 +1,8 @@
+/**
+ * Builds auth forwarding decisions for prepared runtime plans. Provider aliases
+ * and harness auth owners are resolved before session auth profiles can be
+ * safely forwarded.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -15,8 +20,6 @@ const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
   plugins: [],
 } satisfies NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
 
-// Harness runtimes that authenticate through a different provider must be
-// resolved before session auth profiles can be forwarded.
 function resolveHarnessAuthProvider(params: {
   harnessId?: string;
   harnessRuntime?: string;

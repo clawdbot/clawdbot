@@ -1,3 +1,4 @@
+// Codex tests cover profiler flag plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 

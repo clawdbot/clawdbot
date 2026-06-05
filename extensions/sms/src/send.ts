@@ -1,3 +1,4 @@
+// Sms plugin module implements send behavior.
 import { chunkTextForOutbound, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { sendSmsViaTwilio } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";

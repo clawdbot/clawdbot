@@ -1,3 +1,4 @@
+// Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import {

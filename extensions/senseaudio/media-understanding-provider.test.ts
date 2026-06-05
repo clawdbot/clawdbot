@@ -1,3 +1,4 @@
+// Senseaudio tests cover media understanding provider plugin behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Imessage plugin module implements cli output behavior.
 export const IMESSAGE_CLI_STDOUT_MAX_CHARS = 8 * 1024 * 1024;
 export const IMESSAGE_CLI_STDERR_TAIL_CHARS = 64 * 1024;
 

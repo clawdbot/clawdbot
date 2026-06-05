@@ -1,3 +1,4 @@
+// Markdown Core tests cover ir.chunking behavior.
 import { describe, expect, it } from "vitest";
 import { chunkMarkdownIR, type MarkdownIR } from "./ir.js";
 

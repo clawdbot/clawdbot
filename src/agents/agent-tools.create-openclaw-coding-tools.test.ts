@@ -1,3 +1,8 @@
+/**
+ * Broad coverage for createOpenClawCodingTools.
+ * Verifies plugin tools, tool policy, schema cleanup, sandbox fs tools, and
+ * assembled tool allowlist behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

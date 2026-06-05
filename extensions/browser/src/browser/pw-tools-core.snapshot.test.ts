@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.snapshot plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();

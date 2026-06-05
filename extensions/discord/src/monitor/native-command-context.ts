@@ -1,3 +1,4 @@
+// Discord plugin module implements native command context behavior.
 import type { CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";

@@ -1,3 +1,4 @@
+// Doctor warnings and repairs for legacy OpenAI Codex model/provider routing.
 import fs from "node:fs";
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -44,9 +45,13 @@ type DisabledCodexPluginRouteHit = {
   canonicalModel: string;
 };
 export type DisabledCodexPluginRouteIssue = {
+  /** Config path that selects a model requiring the Codex plugin runtime. */
   path: string;
+  /** Original model reference from config. */
   modelRef: string;
+  /** Canonical OpenAI model reference that should remain after migration. */
   canonicalModel: string;
+  /** True when global/plugin allow policy blocks auto-enabling the Codex plugin. */
   blockedOutsideEntry: boolean;
 };
 type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;
@@ -1188,6 +1193,7 @@ function collectDisabledCodexPluginRouteHits(cfg: OpenClawConfig): DisabledCodex
   return hits;
 }
 
+/** Find Codex-routed model refs that require the Codex plugin while it is disabled. */
 export function collectDisabledCodexPluginRouteIssues(
   cfg: OpenClawConfig,
 ): DisabledCodexPluginRouteIssue[] {
@@ -2710,6 +2716,7 @@ function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+/** Collect doctor warnings for legacy Codex model refs, runtime pins, and compaction overrides. */
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2810,6 +2817,7 @@ export function collectCodexRouteWarnings(params: {
   return warnings;
 }
 
+/** Rewrite legacy Codex config routes to OpenAI refs and explicit runtime policy when allowed. */
 export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2953,6 +2961,7 @@ function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
   return true;
 }
 
+/** Rewrite stale Codex model/provider/session runtime fields inside one session store object. */
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
@@ -3012,6 +3021,7 @@ function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): strin
   });
 }
 
+/** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
 export async function maybeRepairCodexSessionRoutes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

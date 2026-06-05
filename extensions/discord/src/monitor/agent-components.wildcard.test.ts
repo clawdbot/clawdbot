@@ -1,3 +1,4 @@
+// Discord tests cover agent components.wildcard plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 
 let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;

@@ -1,3 +1,4 @@
+// Shared command-path matching helpers for CLI startup and registration policy.
 type StructuredCommandPathMatchRule = {
   pattern: readonly string[];
   exact?: boolean;

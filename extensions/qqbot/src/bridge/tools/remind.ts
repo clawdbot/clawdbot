@@ -1,3 +1,4 @@
+// Qqbot plugin module implements remind behavior.
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AnyAgentTool,

@@ -1,3 +1,4 @@
+// Matrix tests cover handler.body for agent plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";

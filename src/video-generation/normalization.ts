@@ -1,3 +1,4 @@
+// Video generation normalization helpers map user inputs to provider requests.
 import {
   hasMediaNormalizationEntry,
   resolveClosestAspectRatio,

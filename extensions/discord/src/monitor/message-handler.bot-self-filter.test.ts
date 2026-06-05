@@ -1,3 +1,4 @@
+// Discord tests cover message handler.bot self filter plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createDiscordMessageHandler,

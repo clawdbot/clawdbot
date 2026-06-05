@@ -1,7 +1,9 @@
+// Discovers bundled plugin source directories and reads optional metadata files.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+/** Read a UTF-8 file when it exists, returning null on missing/unreadable paths. */
 export function readIfExists(filePath) {
   try {
     return fs.readFileSync(filePath, "utf8");
@@ -78,6 +80,7 @@ function collectBundledPluginSourceCandidatesFromDirectory(repoRoot) {
     .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
+/** Collect bundled plugin manifests and package metadata from git or the extensions directory. */
 export function collectBundledPluginSources(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const requirePackageJson = params.requirePackageJson === true;

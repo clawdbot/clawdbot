@@ -1,3 +1,4 @@
+// Macos Discord script supports OpenClaw repository automation.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";

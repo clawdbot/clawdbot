@@ -1,3 +1,4 @@
+/** Tests internal model discovery imports avoid public SDK facade coupling. */
 import { describe, expect, it } from "vitest";
 
 describe("agent-model-discovery internal runtime", () => {

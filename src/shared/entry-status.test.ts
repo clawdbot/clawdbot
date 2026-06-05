@@ -1,3 +1,4 @@
+// Entry status tests cover normalized status labels and terminal-state behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {

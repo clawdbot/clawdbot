@@ -1,3 +1,4 @@
+// Coverage for normalizing tool calls before and during model replay.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -33,6 +34,7 @@ function createFakeStream(params: {
 }
 
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
+  // Drain streams to inspect generated tool-call events after wrapper mutation.
   const events: unknown[] = [];
   for await (const event of stream) {
     events.push(event);
@@ -62,6 +64,8 @@ function requireToolResultMessage(message: AgentMessage | undefined): ToolResult
 }
 
 function assistantToolUseSummaries(message: AgentMessage | undefined) {
+  // Replay sanitizer assertions compare stable id/name summaries instead of
+  // full provider-specific message payloads.
   const assistant = requireAssistantMessage(message);
   return assistant.content.map((content) => {
     const record = content as unknown as Record<string, unknown>;
@@ -90,6 +94,8 @@ function toolResultSummary(message: AgentMessage | undefined) {
 
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
   it("promotes standalone serialized parameter XML text to structured tool calls", async () => {
+    // Some providers emit tool calls as text blocks; promote only allowed tool
+    // names into structured toolCall content.
     const rawToolText = [
       "[tool:exec]",
       "<parameter=command>",

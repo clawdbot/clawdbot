@@ -1,3 +1,6 @@
+/**
+ * Browser-local SDK security bridge plus directory creation helper.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -35,6 +38,7 @@ export {
 } from "openclaw/plugin-sdk/security-runtime";
 export type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 
+/** Ensures an absolute directory exists without escaping its nearest existing ancestor. */
 export async function ensureAbsoluteDirectory(
   dirPath: string,
   options?: { scopeLabel?: string; mode?: number },

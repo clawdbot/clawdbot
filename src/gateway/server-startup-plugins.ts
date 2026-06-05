@@ -1,3 +1,5 @@
+// Gateway plugin startup bootstrap.
+// Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";

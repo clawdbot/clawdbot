@@ -1,3 +1,4 @@
+// Env Limits script supports OpenClaw repository automation.
 import { die } from "./host-command.ts";
 
 const positiveIntPattern = /^[1-9]\d*$/u;

@@ -1,3 +1,4 @@
+// Config assertions for onboard E2E scenarios.
 import fs from "node:fs";
 import JSON5 from "json5";
 

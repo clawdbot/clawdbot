@@ -1,3 +1,7 @@
+/**
+ * Browser plugin runtime lifecycle helpers for startup relay setup and shutdown
+ * cleanup.
+ */
 import type { Server } from "node:http";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
@@ -6,6 +10,7 @@ import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./ser
 import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
+/** Creates Browser server state and starts runtime-wide cleanup handlers. */
 export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
   port: number;
@@ -31,6 +36,7 @@ export async function createBrowserRuntimeState(params: {
   return state;
 }
 
+/** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */
 export async function stopBrowserRuntime(params: {
   current: BrowserServerState | null;
   getState: () => BrowserServerState | null;

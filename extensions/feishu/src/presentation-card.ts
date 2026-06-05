@@ -1,3 +1,4 @@
+// Feishu plugin module implements presentation card behavior.
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,

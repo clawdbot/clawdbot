@@ -1,3 +1,4 @@
+// Coverage for embedded extension factory selection and runtime wiring.
 import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +9,8 @@ import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
+  // Plugin-owned cache-TTL decisions are mocked out here; extension selection
+  // tests assert the core default wiring only.
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
 }));
@@ -17,6 +20,8 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
 }));
 
 function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+  // The safeguard runtime attaches to the session manager, so tests keep the
+  // same manager instance around for both factory construction and inspection.
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",

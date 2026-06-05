@@ -1,3 +1,4 @@
+// Codex plugin module implements auth behavior.
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,

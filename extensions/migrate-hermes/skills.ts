@@ -1,3 +1,4 @@
+// Migrate Hermes plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";

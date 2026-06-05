@@ -1,3 +1,4 @@
+// Doctor browser facade tests cover legacy browser residue detection and browser doctor repair wiring.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

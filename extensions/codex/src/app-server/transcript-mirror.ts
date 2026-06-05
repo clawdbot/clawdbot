@@ -1,3 +1,4 @@
+// Codex plugin module implements transcript mirror behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import {

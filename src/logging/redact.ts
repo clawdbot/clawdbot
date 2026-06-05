@@ -1,3 +1,4 @@
+// Redaction helpers scrub secrets and sensitive identifiers from log output.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";

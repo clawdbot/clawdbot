@@ -1,3 +1,4 @@
+// Model list source-plan tests cover catalog source selection and fallback planning.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

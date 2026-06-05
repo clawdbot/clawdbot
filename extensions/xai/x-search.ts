@@ -1,3 +1,4 @@
+// Xai plugin module implements x search behavior.
 import {
   jsonResult,
   readCache,

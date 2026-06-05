@@ -1,3 +1,4 @@
+// Document Extract plugin module implements document extractor behavior.
 import type { PdfDocument, PdfEngine, PdfImage } from "clawpdf";
 import type {
   DocumentExtractedImage,

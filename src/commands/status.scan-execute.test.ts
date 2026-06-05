@@ -1,3 +1,4 @@
+// Status scan execute tests cover overview-driven status probe execution and memory snapshot aggregation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";

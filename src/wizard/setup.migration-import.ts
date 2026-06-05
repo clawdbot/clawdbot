@@ -1,3 +1,4 @@
+// Setup migration import helpers read existing config during onboarding migration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OnboardOptions } from "../commands/onboard-types.js";

@@ -1,3 +1,4 @@
+// Systemd tests cover Linux service install, start, stop, and status behavior.
 import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

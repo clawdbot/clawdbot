@@ -1,3 +1,5 @@
+// Gateway HTTP request helpers.
+// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import {
@@ -14,9 +16,6 @@ import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
-// Shared HTTP helpers for OpenAI-compatible routes and gateway-specific JSON
-// endpoints. They own agent/model/session derivation so handler files do not
-// drift on header/model precedence.
 export {
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,

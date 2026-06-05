@@ -1,3 +1,4 @@
+// Legacy cron JSONL run-log migration into the SQLite cron run-log store.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -84,6 +85,7 @@ function archiveLegacyCronRunLogSync(filePath: string): void {
   }
 }
 
+/** Import legacy per-job JSONL run logs into SQLite and archive migrated files. */
 export async function migrateLegacyCronRunLogsToSqlite(
   storePath: string,
 ): Promise<{ importedFiles: number }> {
@@ -103,6 +105,7 @@ export async function migrateLegacyCronRunLogsToSqlite(
   return { importedFiles: jsonlFiles.length };
 }
 
+/** Return true when legacy cron JSONL run log files exist next to a store path. */
 export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");

@@ -1,3 +1,4 @@
+// Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,

@@ -1,3 +1,4 @@
+// Schema module supports OpenClaw QA credential workflows.
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 

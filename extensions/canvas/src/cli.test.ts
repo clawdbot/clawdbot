@@ -1,3 +1,4 @@
+// Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerNodesCanvasCommands, type CanvasCliDependencies } from "./cli.js";

@@ -1,3 +1,4 @@
+// Logger settings tests cover normalization of logger configuration values.
 import { describe, expect, it } from "vitest";
 import { testApi } from "./logger.js";
 

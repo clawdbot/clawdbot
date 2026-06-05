@@ -1,3 +1,4 @@
+// Control UI tests cover chat model select state behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveChatModelOverrideValue,

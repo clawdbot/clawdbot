@@ -1,3 +1,5 @@
+// CLI audio runner tests cover prompt/language templating and command execution
+// options for local transcription binaries.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";

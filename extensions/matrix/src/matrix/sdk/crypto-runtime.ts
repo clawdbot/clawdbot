@@ -1,3 +1,4 @@
+// Matrix plugin module implements crypto runtime behavior.
 import "fake-indexeddb/auto";
 
 export { MatrixCryptoBootstrapper } from "./crypto-bootstrap.js";

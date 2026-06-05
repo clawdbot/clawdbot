@@ -1,3 +1,4 @@
+// Browser tests cover server context.loopback direct ws plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import * as cdpModule from "./cdp.js";

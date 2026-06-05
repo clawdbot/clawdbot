@@ -1,3 +1,4 @@
+// Discord tests cover native command reply plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "../internal/discord.js";
 import {

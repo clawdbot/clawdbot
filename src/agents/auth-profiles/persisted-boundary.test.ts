@@ -1,3 +1,8 @@
+/**
+ * Tests persisted auth profile boundary normalization.
+ * Covers malformed credential coercion, state merging, legacy OAuth refs, and
+ * main/agent store drift repair.
+ */
 import { describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { coercePersistedAuthProfileStore, mergeAuthProfileStores } from "./persisted.js";

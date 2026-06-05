@@ -1,3 +1,4 @@
+// Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";

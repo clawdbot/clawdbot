@@ -1,3 +1,4 @@
+// Browser tests cover session tab cleanup plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isPrimaryTrackedBrowserSessionKey,

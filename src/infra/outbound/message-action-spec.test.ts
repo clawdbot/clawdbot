@@ -1,3 +1,5 @@
+// Verifies message-action target requirements and alias detection, including
+// plugin aliases only when non-standard params are present.
 import { describe, expect, it, vi } from "vitest";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 

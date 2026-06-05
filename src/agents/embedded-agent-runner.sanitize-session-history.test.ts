@@ -1,3 +1,4 @@
+// Behavior coverage for replay-history sanitization across provider policies.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type {
   AssistantMessage,
@@ -42,6 +43,8 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      // Provider-specific replay policies are injected through the hook runtime
+      // so core tests assert the contract without importing plugin internals.
       provider === "openrouter" || provider === "github-copilot"
         ? {
             buildReplayPolicy: (context?: { modelId?: string | null }) => {
@@ -94,6 +97,8 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           };
         };
       }) => {
+        // Google-style providers may need a synthetic user turn before replaying
+        // assistant-first history; the session marker prevents duplicate repair.
         if (
           provider &&
           provider.startsWith("google") &&
@@ -120,8 +125,8 @@ let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 
-// We don't mock session-transcript-repair.js as it is a pure function and complicates mocking.
-// We rely on the real implementation which should pass through our simple messages.
+// Keep session-transcript-repair real: it is a pure repair boundary, and these
+// tests should fail if the shared sanitizer stops passing simple messages.
 
 describe("sanitizeSessionHistory", () => {
   let mockSessionManager: ReturnType<typeof makeMockSessionManager>;
@@ -135,6 +140,8 @@ describe("sanitizeSessionHistory", () => {
     modelApi?: string;
     modelId?: string;
   }) =>
+    // Copilot routes through OpenAI-shaped APIs but can apply provider-owned
+    // replay policy such as dropping Claude thinking blocks.
     sanitizeSessionHistory({
       messages: params.messages,
       modelApi: params.modelApi ?? "openai-completions",
@@ -480,6 +487,8 @@ describe("sanitizeSessionHistory", () => {
   it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
     vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
 
+    // Historical usage before a compaction summary would double-count prompt
+    // budget if replayed as fresh model metadata.
     const messages = castAgentMessages([
       { role: "user", content: "old context" },
       makeAssistantUsageMessage({

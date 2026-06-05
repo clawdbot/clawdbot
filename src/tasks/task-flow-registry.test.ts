@@ -47,13 +47,13 @@ function createTaskFlowForTask(
   return flow;
 }
 
-async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
+async function withFlowRegistryTempDir<T>(run: () => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-task-flow-registry-" },
-    async (state) => {
+    async () => {
       resetTaskFlowRegistryForTests();
       try {
-        return await run(state.stateDir);
+        return await run();
       } finally {
         resetTaskFlowRegistryForTests();
       }
@@ -72,10 +72,7 @@ describe("task-flow-registry", () => {
   });
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
-
+    await withFlowRegistryTempDir(async () => {
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-controller",
@@ -183,10 +180,7 @@ describe("task-flow-registry", () => {
   });
 
   it("requires a controller for managed flows and rejects clearing it later", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
-
+    await withFlowRegistryTempDir(async () => {
       expect(() =>
         createFlowRecord({
           ownerKey: "agent:main:main",
@@ -373,10 +367,7 @@ describe("task-flow-registry", () => {
   });
 
   it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
-
+    await withFlowRegistryTempDir(async () => {
       const mirrored = createTaskFlowForTask({
         task: {
           ownerKey: "agent:main:main",
@@ -480,10 +471,7 @@ describe("task-flow-registry", () => {
   });
 
   it("preserves explicit json null in state and wait payloads", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
-
+    await withFlowRegistryTempDir(async () => {
       const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/null-state",

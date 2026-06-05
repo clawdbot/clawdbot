@@ -1,3 +1,4 @@
+// Codex tests cover transport websocket plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";

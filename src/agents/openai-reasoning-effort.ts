@@ -1,11 +1,14 @@
+/**
+ * OpenAI-compatible reasoning-effort normalization. Different GPT families
+ * expose different accepted effort enums, so callers map requested values here
+ * before constructing provider payloads.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
-// OpenAI-compatible reasoning-effort normalization. Different GPT families
-// expose different accepted effort enums, so callers map requested values here.
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});

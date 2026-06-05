@@ -1,3 +1,4 @@
+// Diagnostic phase helpers measure named phases and emit timing diagnostics.
 import { performance } from "node:perf_hooks";
 import {
   areDiagnosticsEnabledForProcess,

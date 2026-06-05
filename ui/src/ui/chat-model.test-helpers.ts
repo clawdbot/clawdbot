@@ -1,3 +1,4 @@
+// Control UI module implements chat model helpers behavior.
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,

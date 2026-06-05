@@ -1,3 +1,8 @@
+/**
+ * Auth profile store orchestration.
+ * Merges persisted stores, runtime snapshots, inherited main-agent OAuth
+ * profiles, and external CLI overlays while keeping save paths local.
+ */
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
@@ -43,9 +48,6 @@ import {
 } from "./state.js";
 import type { AuthProfileStore } from "./types.js";
 
-// Auth profile store orchestration. This module merges persisted stores,
-// runtime snapshots, inherited main-agent OAuth profiles, and external CLI
-// overlays while keeping save paths local and secret-safe.
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
@@ -783,6 +785,7 @@ function loadAuthProfileStoreForAgent(
   return synced.store;
 }
 
+/** Loads the effective runtime store for an agent, including inherited main profiles. */
 export function loadAuthProfileStoreForRuntime(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,

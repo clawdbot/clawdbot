@@ -1,3 +1,4 @@
+// Matrix type declarations define plugin contracts.
 import type {
   ChannelBotLoopProtectionConfig,
   MentionPatternsPolicyConfig,

@@ -1,3 +1,4 @@
+// Control UI module implements session display behavior.
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { SessionsListResult } from "./types.ts";
 

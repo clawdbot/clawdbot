@@ -1,3 +1,8 @@
+/**
+ * Built-in edit session tool.
+ *
+ * Applies exact targeted replacements with queued file mutation, diff previews, and TUI renderers.
+ */
 import { constants } from "node:fs";
 import {
   access as fsAccess,

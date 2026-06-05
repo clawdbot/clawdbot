@@ -1,3 +1,5 @@
+// Subagent registry SQLite store tests cover whole-snapshot persistence and
+// one-time import from the legacy JSON registry file.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +109,8 @@ describe("subagent registry sqlite store", () => {
   });
 
   it("imports the legacy json registry when sqlite has no runs", async () => {
+    // Import deletes the JSON source after the first successful migration so
+    // later loads treat SQLite as canonical state.
     const legacyRun = createRun({
       runId: "legacy-run",
       childSessionKey: "agent:main:subagent:legacy",

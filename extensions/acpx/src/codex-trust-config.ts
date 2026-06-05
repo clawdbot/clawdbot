@@ -1,3 +1,7 @@
+/**
+ * Builds isolated Codex config for ACPX sessions. It preserves safe inherited
+ * runtime options while rendering only trusted project entries for the session.
+ */
 import path from "node:path";
 
 function stripTomlComment(line: string): string {
@@ -114,6 +118,7 @@ function parseTrustedInlineProjectEntries(value: string): string[] {
   return trusted;
 }
 
+/** Extract trusted project paths from Codex TOML config. */
 export function extractTrustedCodexProjectPaths(configToml: string): string[] {
   const trusted = new Set<string>();
   let currentProjectPath: string | undefined;
@@ -261,6 +266,7 @@ function extractInheritedCodexRuntimeConfig(configToml: string): string {
   return inheritedLines.join("\n");
 }
 
+/** Render a session-local Codex config with inherited runtime settings and trust entries. */
 export function renderIsolatedCodexConfig(params: {
   sourceConfigToml?: string;
   projectPaths: string[];
@@ -292,6 +298,7 @@ export function renderIsolatedCodexConfig(params: {
     .join("\n");
 }
 
+/** Render only the project trust section for a session-local Codex config. */
 export function renderIsolatedCodexProjectTrustConfig(projectPaths: string[]): string {
   return renderIsolatedCodexConfig({ projectPaths });
 }

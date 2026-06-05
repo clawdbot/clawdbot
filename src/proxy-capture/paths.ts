@@ -1,3 +1,4 @@
+// Proxy capture path helpers resolve capture directories and database paths.
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 

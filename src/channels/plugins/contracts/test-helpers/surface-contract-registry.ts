@@ -1,8 +1,11 @@
+/**
+ * Channel surface contract registry selectors.
+ *
+ * Assigns bundled channels to surface, threading, and directory contract shards.
+ */
 import type { ChannelId } from "../../channel-id.types.js";
 import { listBundledChannelPluginIds } from "./bundled-channel-plugin-loader.js";
 
-// Registry selectors for bundled channel contract shards. Explicit allowlists
-// keep optional threading/directory suites off channels without that surface.
 type ThreadingContractRef = {
   id: ChannelId;
 };

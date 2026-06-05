@@ -1,3 +1,4 @@
+// Overflow helpers classify provider overflow errors and retryable responses.
 import type { AssistantMessage } from "../types.js";
 
 /**

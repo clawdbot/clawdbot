@@ -1,3 +1,4 @@
+// Tool plugin contracts describe plugin-provided tools, schemas, and invocation hooks.
 import { Type, type Static, type TSchema } from "typebox";
 import type { AgentToolResult, AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult, textResult } from "../agents/tools/common.js";
@@ -13,8 +14,10 @@ import {
 
 const EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA = Type.Object({}, { additionalProperties: false });
 
+/** Non-enumerable metadata symbol attached to entries created by `defineToolPlugin`. */
 export const toolPluginMetadataSymbol = Symbol.for("openclaw.plugin-sdk.tool-plugin.metadata");
 
+/** Runtime context supplied to a concrete tool plugin execution handler. */
 export type ToolPluginExecutionContext = {
   /** Plugin runtime API for tool implementations that need OpenClaw services. */
   api: OpenClawPluginApi;
@@ -34,6 +37,7 @@ type ToolPluginToolFactory<TConfig> = <TParamsSchema extends TSchema>(
   definition: ToolPluginToolDefinition<TConfig, TParamsSchema>,
 ) => DefinedToolPluginTool;
 
+/** Context passed to a tool factory that builds runtime-specific tool definitions. */
 export type ToolPluginFactoryContext<TConfig> = {
   /** Plugin runtime API passed to context-sensitive tool factories. */
   api: OpenClawPluginApi;
@@ -56,6 +60,7 @@ type ToolPluginToolDefinitionBase<TParamsSchema extends TSchema> = {
   optional?: boolean;
 };
 
+/** Static tool declaration accepted by the tool-plugin factory callback. */
 export type ToolPluginToolDefinition<
   TConfig,
   TParamsSchema extends TSchema,
@@ -91,6 +96,7 @@ type DefinedToolPluginTool = {
   ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 };
 
+/** Model-facing metadata extracted from each statically declared tool. */
 export type ToolPluginStaticToolMetadata = {
   name: string;
   label: string;
@@ -99,6 +105,7 @@ export type ToolPluginStaticToolMetadata = {
   optional?: boolean;
 };
 
+/** Metadata attached to a defined tool plugin for manifest/catalog generation. */
 export type ToolPluginMetadata = {
   id: string;
   name: string;
@@ -108,6 +115,7 @@ export type ToolPluginMetadata = {
   tools: ToolPluginStaticToolMetadata[];
 };
 
+/** Options for declaring a plugin whose primary surface is one or more tools. */
 export type DefineToolPluginOptions<TConfigSchema extends TSchema | undefined = undefined> = {
   /** Stable plugin id used in config, manifests, and generated metadata. */
   id: string;
@@ -125,6 +133,7 @@ export type DefineToolPluginOptions<TConfigSchema extends TSchema | undefined = 
   ) => readonly DefinedToolPluginTool[];
 };
 
+/** Plugin entry returned by `defineToolPlugin`, including hidden metadata. */
 export type DefinedToolPluginEntry = ReturnType<typeof definePluginEntry> & {
   [toolPluginMetadataSymbol]: ToolPluginMetadata;
 };
@@ -148,6 +157,7 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
   })) as ToolPluginToolFactory<TConfig>;
 }
 
+/** Define a tool-focused plugin entry and register its tools at plugin startup. */
 export function defineToolPlugin<TConfigSchema extends TSchema | undefined = undefined>(
   definition: DefineToolPluginOptions<TConfigSchema>,
 ): DefinedToolPluginEntry {
@@ -231,6 +241,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
   return entry;
 }
 
+/** Read tool-plugin metadata from an entry without exposing the symbol to callers. */
 export function getToolPluginMetadata(entry: unknown): ToolPluginMetadata | undefined {
   if (!entry || typeof entry !== "object") {
     return undefined;

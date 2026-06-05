@@ -1,3 +1,5 @@
+// Node version mismatch tests protect local node identity/version checks so the
+// gateway accepts matching node hosts and rejects incompatible local runtimes.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";

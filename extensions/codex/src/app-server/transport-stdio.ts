@@ -1,3 +1,7 @@
+/**
+ * Creates and configures stdio-backed Codex app-server transports, including
+ * Windows spawn normalization and environment filtering.
+ */
 import { spawn } from "node:child_process";
 import {
   materializeWindowsSpawnProgram,
@@ -20,6 +24,7 @@ const DEFAULT_SPAWN_RUNTIME: CodexAppServerSpawnRuntime = {
   execPath: process.execPath,
 };
 
+/** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
 export function resolveCodexAppServerSpawnInvocation(
   options: CodexAppServerStartOptions,
   runtime: CodexAppServerSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
@@ -43,6 +48,7 @@ export function resolveCodexAppServerSpawnInvocation(
   };
 }
 
+/** Merges app-server environment overrides while honoring clearEnv and unsafe key filtering. */
 export function resolveCodexAppServerSpawnEnv(
   options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
   baseEnv: NodeJS.ProcessEnv = process.env,
@@ -90,6 +96,7 @@ function copySafeEnvironmentEntries(
   }
 }
 
+/** Spawns the Codex app-server process and returns the shared transport interface. */
 export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
   const env = resolveCodexAppServerSpawnEnv(options);
   const invocation = resolveCodexAppServerSpawnInvocation(options, {

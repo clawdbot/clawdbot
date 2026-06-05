@@ -1,3 +1,4 @@
+// Setup wizard helper tests cover channel setup step formatting and config writes.
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,

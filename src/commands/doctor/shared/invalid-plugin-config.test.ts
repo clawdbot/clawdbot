@@ -1,3 +1,4 @@
+// Invalid plugin config tests cover doctor diagnostics for malformed plugin configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 

@@ -1,3 +1,4 @@
+// Legacy delivery tests cover cron doctor repair of old delivery state.
 import { describe, expect, it } from "vitest";
 import {
   buildDeliveryFromLegacyPayload,

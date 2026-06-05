@@ -1,3 +1,4 @@
+// Discord helper module supports secret config contract behavior.
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,

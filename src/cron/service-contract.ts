@@ -1,3 +1,4 @@
+/** Public cron service interface shared by callers and implementations. */
 import type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 import type {
   CronAddInput,

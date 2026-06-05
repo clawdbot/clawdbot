@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Audits patched dependency pins for exact versions and drift.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -106,10 +107,16 @@ function collectWorkspaceViolations(cwd) {
   return violations;
 }
 
+/**
+ * Collects dependency pin violations for the current workspace.
+ */
 export function collectDependencyPinViolations(cwd = process.cwd()) {
   return [...collectPackageJsonViolations(cwd), ...collectWorkspaceViolations(cwd)];
 }
 
+/**
+ * Builds the full dependency pin audit payload.
+ */
 export function collectDependencyPinAudit(cwd = process.cwd()) {
   const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
   let packageSpecCount = 0;
@@ -128,6 +135,9 @@ export function collectDependencyPinAudit(cwd = process.cwd()) {
   };
 }
 
+/**
+ * Runs the dependency pin check.
+ */
 export async function main() {
   const audit = collectDependencyPinAudit();
   const { violations } = audit;

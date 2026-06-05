@@ -1,3 +1,4 @@
+// Slack plugin module implements modal input summary behavior.
 export type ModalInputSummary = {
   blockId: string;
   actionId: string;

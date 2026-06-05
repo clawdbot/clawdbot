@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile ordering and provider compatibility.
+ * Covers manifest auth aliases, configured order, cooldown state, AWS SDK
+ * profiles, and OpenAI/Codex compatibility.
+ */
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

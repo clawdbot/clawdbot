@@ -1,3 +1,4 @@
+/** SQLite-backed cron run-log storage helpers. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable, SelectQueryBuilder } from "kysely";
 import {
@@ -48,6 +49,8 @@ function bindCronRunLogRow(params: {
   entry: CronRunLogEntry;
 }): CronRunLogInsert {
   const entry = params.entry;
+  // Store indexed columns for filtering and the original JSON payload for
+  // forward-compatible fields that are not yet indexed.
   return {
     store_key: params.storeKey,
     job_id: entry.jobId,

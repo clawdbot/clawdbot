@@ -1,3 +1,8 @@
+/**
+ * Bundled channel doctor contract loader.
+ *
+ * Loads public doctor hooks for channel-owned legacy config rules and compatibility repairs.
+ */
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";

@@ -1,3 +1,5 @@
+// Outbound target normalization trims user input, applies plugin normalizers,
+// and optionally resolves directory-backed destinations.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -114,6 +116,8 @@ export function looksLikeTargetId(params: {
   const lookup = resolveChannelPluginForTargetRead(params.channel)?.messaging?.targetResolver
     ?.looksLikeId;
   if (lookup) {
+    // Plugin heuristics win so provider-specific ids do not fall through to
+    // generic phone/mention checks.
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
   if (/^(channel|group|user):/i.test(params.raw)) {

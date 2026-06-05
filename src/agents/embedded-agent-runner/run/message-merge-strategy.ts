@@ -1,3 +1,6 @@
+/**
+ * Reconciles orphaned trailing user prompts before provider submission.
+ */
 import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 

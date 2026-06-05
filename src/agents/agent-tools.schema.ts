@@ -1,3 +1,8 @@
+/**
+ * Tool schema normalization wrappers.
+ * Applies provider-compatible parameter schema cleanup while preserving plugin
+ * and channel metadata on normalized tools.
+ */
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeToolParameterSchema,
@@ -59,6 +64,7 @@ function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unkno
   };
 }
 
+/** Normalize a tool's parameter schema for the selected provider/model. */
 export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,

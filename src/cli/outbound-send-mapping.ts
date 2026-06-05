@@ -1,3 +1,4 @@
+// Maps CLI send dependency sources into outbound send dependencies with legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChannelId } from "../channels/registry.js";
 import {
@@ -87,6 +88,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
   }
 
   const resolveFactoryValue = (key: string): unknown => {
+    // Proxy reads can come from legacy sendX keys or canonical channel ids.
     const candidate =
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
     const channelId = resolveKnownChannelId(candidate);

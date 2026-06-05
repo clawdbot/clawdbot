@@ -1,3 +1,4 @@
+// Config evaluation helpers load dynamic config modules with guarded evaluation.
 import fs from "node:fs";
 import path from "node:path";
 

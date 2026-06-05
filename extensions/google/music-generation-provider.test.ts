@@ -1,3 +1,4 @@
+// Google tests cover music generation provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, generateContentMock } = vi.hoisted(() => {

@@ -1,3 +1,4 @@
+// Deepinfra plugin module implements cache wrapper behavior.
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   streamWithPayloadPatch,

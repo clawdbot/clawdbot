@@ -1,3 +1,5 @@
+// Media-understanding scope helpers evaluate ordered channel/chat/session rules
+// before media providers process attachments.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
@@ -37,6 +39,8 @@ export function resolveMediaUnderstandingScope(params: {
   const sessionKey = normalizeOptionalLowercaseString(params.sessionKey) ?? "";
 
   for (const rule of scope.rules ?? []) {
+    // Rules are first-match-wins so operators can place specific denials before
+    // broader default allow rules.
     if (!rule) {
       continue;
     }

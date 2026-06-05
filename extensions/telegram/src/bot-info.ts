@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot info behavior.
 export type TelegramBotInfo = {
   id: number;
   is_bot: true;

@@ -1,3 +1,4 @@
+// Program helper tests cover shared command registration and help helpers.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {

@@ -1,3 +1,4 @@
+// Discord plugin module implements send.guild behavior.
 import type {
   APIGuild,
   APIGuildMember,

@@ -1,3 +1,4 @@
+// Slack tests cover outbound delivery plugin behavior.
 import {
   addTestHook,
   createEmptyPluginRegistry,

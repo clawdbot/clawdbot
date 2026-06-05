@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements env behavior.
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

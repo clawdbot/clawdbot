@@ -1,3 +1,4 @@
+// Xai type declarations define plugin contracts.
 export type OllamaEmbeddingClient = unknown;
 
 export const buildAssistantMessage: (...args: unknown[]) => unknown;

@@ -1,3 +1,4 @@
+// Telegram tests cover bot core.raw update log plugin behavior.
 import { describe, expect, it } from "vitest";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 

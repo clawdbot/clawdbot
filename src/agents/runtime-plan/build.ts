@@ -1,3 +1,8 @@
+/**
+ * Builds prepared runtime plans consumed by embedded agent runs. A plan
+ * centralizes provider hooks, auth, tool schema policy, transcript policy,
+ * transport params, delivery, and observability for one attempt.
+ */
 import type { TSchema } from "typebox";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -34,9 +39,6 @@ import type {
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
-// Builds the prepared runtime plan consumed by embedded agent runs. The plan
-// centralizes provider hooks, auth, tool schema policy, transcript policy, and
-// observability so hot paths reuse one resolved provider/runtime context.
 function formatResolvedRef(params: { provider: string; modelId: string }): string {
   return `${params.provider}/${params.modelId}`;
 }

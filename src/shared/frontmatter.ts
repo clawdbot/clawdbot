@@ -1,3 +1,4 @@
+// Shared frontmatter helpers parse Markdown frontmatter blocks and body text.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,

@@ -1,3 +1,4 @@
+// Msteams plugin module implements runtime behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";

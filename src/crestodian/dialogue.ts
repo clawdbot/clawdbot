@@ -1,3 +1,4 @@
+// Crestodian dialogue parses direct commands and optionally asks the assistant planner.
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianAssistantPlan, CrestodianAssistantPlanner } from "./assistant.js";
 import {

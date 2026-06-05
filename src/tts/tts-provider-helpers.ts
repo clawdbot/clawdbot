@@ -1,3 +1,4 @@
+// TTS provider helpers manage provider temp files and output cleanup.
 import { rmSync } from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 

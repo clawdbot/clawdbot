@@ -1,7 +1,6 @@
+// Sender display-label helpers shared by channel ingress and audit surfaces.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// Sender display helpers shared by channel ingress and audit surfaces. The
-// resolved label keeps a human-readable name plus stable id when both differ.
 export type SenderLabelParams = {
   name?: string;
   username?: string;

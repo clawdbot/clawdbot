@@ -1,3 +1,4 @@
+// Markdown Core module implements tables behavior.
 import { markdownToIRWithMeta } from "./ir.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 import type { MarkdownTableMode } from "./types.js";

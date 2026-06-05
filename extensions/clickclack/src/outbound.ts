@@ -1,9 +1,17 @@
+/**
+ * Outbound ClickClack delivery helpers for channel messages, thread replies,
+ * and direct messages.
+ */
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
 import type { CoreConfig } from "./types.js";
 
+/**
+ * Sends text to a normalized ClickClack target and returns the created message
+ * id for receipt/session tracking.
+ */
 export async function sendClickClackText(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -19,6 +27,8 @@ export async function sendClickClackText(params: {
   const explicitThreadId = params.threadId == null ? "" : String(params.threadId);
   const replyToId = params.replyToId == null ? "" : String(params.replyToId);
   if (explicitThreadId || replyToId || parsed.kind === "thread") {
+    // Explicit thread/reply context wins over the target kind so OpenClaw reply
+    // hooks keep conversations attached to the original ClickClack root.
     const rootId = explicitThreadId || replyToId || parsed.id;
     const message = await client.createThreadReply(rootId, params.text);
     return { to: params.to, messageId: message.id };

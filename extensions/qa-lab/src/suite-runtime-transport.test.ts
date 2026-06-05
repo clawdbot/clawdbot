@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime transport plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {

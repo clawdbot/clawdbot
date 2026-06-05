@@ -1,6 +1,8 @@
+// Collects runtime dependency specs from bundled plugin packages.
 import fs from "node:fs";
 import path from "node:path";
 
+/** Collect dependencies and optionalDependencies needed at plugin runtime. */
 export function collectRuntimeDependencySpecs(packageJson = {}) {
   return new Map(
     [
@@ -10,6 +12,7 @@ export function collectRuntimeDependencySpecs(packageJson = {}) {
   );
 }
 
+/** Extract an npm package name from a bare module specifier. */
 export function packageNameFromSpecifier(specifier) {
   if (
     typeof specifier !== "string" ||
@@ -27,6 +30,7 @@ export function packageNameFromSpecifier(specifier) {
   return first.startsWith("@") && second ? `${first}/${second}` : first;
 }
 
+/** Collect runtime dependency specs across bundled plugin packages and note conflicts. */
 export function collectBundledPluginPackageDependencySpecs(bundledPluginsDir) {
   const specs = new Map();
 

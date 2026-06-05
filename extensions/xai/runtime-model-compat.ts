@@ -1,3 +1,4 @@
+// Xai plugin module implements runtime model compat behavior.
 import { applyXaiModelCompat } from "./model-compat.js";
 
 type XaiRuntimeModelCompat = {

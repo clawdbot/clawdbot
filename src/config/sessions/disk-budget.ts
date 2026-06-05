@@ -1,3 +1,4 @@
+// Session disk-budget enforcement prunes orphaned artifacts before deleting store entries.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -144,6 +145,8 @@ function resolveSessionTranscriptPathForEntry(params: {
     const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
     const resolvedPath = canonicalizePathForComparison(resolved);
     const relative = path.relative(resolvedSessionsDir, resolvedPath);
+    // Cleanup only owns artifacts under the sessions directory; absolute/parent escapes are
+    // ignored even if a stale entry points there.
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       return null;
     }
@@ -373,6 +376,8 @@ async function removeFileForBudget(params: {
   const resolvedPath = path.resolve(params.filePath);
   const canonicalPath = params.canonicalPath ?? canonicalizePathForComparison(resolvedPath);
   if (params.dryRun) {
+    // Dry-run deletion is path-deduped so a transcript and pointer alias cannot count the same
+    // artifact twice against the simulated budget.
     if (params.simulatedRemovedPaths.has(canonicalPath)) {
       return 0;
     }
@@ -453,6 +458,8 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     sessionsDir,
     store: params.store,
   });
+  // Prompt refs are projected through the persistence layer so inline snapshots and externalized
+  // prompt blobs are judged against the bytes that would actually hit disk.
   const projectedPromptBlobRefCounts = buildProjectedPromptBlobRefCounts(
     projectSessionStoreForPersistence({
       storePath: params.storePath,
@@ -583,6 +590,8 @@ export async function enforceSessionDiskBudget(params: {
     (sum, bytes) => sum + bytes,
     0,
   );
+  // Budget starts from current files, then swaps in the projected store/prompt bytes that the next
+  // persistence pass will write.
   let total =
     [...files, ...promptBlobFiles].reduce((sum, file) => sum + file.size, 0) -
     (storeFile?.size ?? 0) +
@@ -642,6 +651,7 @@ export async function enforceSessionDiskBudget(params: {
       );
     })
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+  // Cheapest cleanup first: orphaned prompt blobs can relieve pressure without losing sessions.
   for (const file of unreferencedPromptBlobQueue) {
     if (total <= highWaterBytes) {
       break;
@@ -669,6 +679,7 @@ export async function enforceSessionDiskBudget(params: {
       isDiskBudgetRemovableSessionFile(file, referencedPaths, tempStaleCutoffMs, storeBasename),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+  // Then remove stale artifacts already detached from live entries.
   for (const file of removableFileQueue) {
     if (total <= highWaterBytes) {
       break;
@@ -698,6 +709,7 @@ export async function enforceSessionDiskBudget(params: {
       const bTime = getEntryUpdatedAt(params.store[b]);
       return aTime - bTime;
     });
+    // Last resort: delete oldest non-preserved sessions, then their now-unreferenced artifacts.
     for (const key of keys) {
       if (total <= highWaterBytes) {
         break;

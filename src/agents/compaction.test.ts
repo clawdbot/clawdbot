@@ -1,3 +1,4 @@
+// Covers compaction token splitting and history pruning helpers.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -36,6 +37,8 @@ function makeAssistantToolCall(
   text = "x".repeat(4000),
   stopReason: AssistantMessage["stopReason"] = "stop",
 ): AssistantMessage {
+  // Tool-call fixtures use real assistant message structure so split/prune
+  // helpers preserve tool-call/result adjacency like production transcripts.
   return makeAgentAssistantMessage({
     content: [
       { type: "text", text },
@@ -103,6 +106,8 @@ describe("splitMessagesByTokenShare", () => {
   });
 
   it("keeps tool_use and matching toolResult in the same chunk", () => {
+    // Splitting a tool call from its result creates invalid replay context for
+    // downstream summarization and provider transcript reuse.
     const messages: AgentMessage[] = [
       makeMessage(1, 4000),
       makeAssistantToolCall(2, "call_split"),
@@ -194,6 +199,8 @@ describe("splitMessagesByTokenShare", () => {
   });
 
   it("does not block splits after aborted tool-call assistants", () => {
+    // Aborted tool-use turns have no required result, so they should not pin
+    // later messages to the same chunk.
     const messages: AgentMessage[] = [
       makeAssistantToolCall(1, "call_abort", "y".repeat(4000), "aborted"),
       makeMessage(2, 4000),
@@ -291,6 +298,8 @@ describe("pruneHistoryForContextShare", () => {
   });
 
   it("removes orphaned tool_result messages when tool_use is dropped", () => {
+    // Pruning the assistant tool_use must also drop its result; orphaned
+    // toolResult messages are not meaningful model context.
     const messages: AgentMessage[] = [
       makeAssistantToolCall(1, "call_123"),
       makeToolResult(2, "call_123", "result".repeat(500)),

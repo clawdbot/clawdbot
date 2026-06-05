@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Test Live Media script supports OpenClaw repository automation.
 
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";

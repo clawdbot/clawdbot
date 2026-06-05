@@ -1,3 +1,4 @@
+/** Validates user-supplied one-shot cron timestamps before scheduling. */
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,

@@ -1,3 +1,4 @@
+// Session transcript hit helpers describe and load matched transcript snippets for plugins.
 import path from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
@@ -39,6 +40,7 @@ function normalizeQmdSessionStem(stem: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Canonical session identity parsed from a transcript search-hit path. */
 export type SessionTranscriptHitIdentity = {
   stem: string;
   liveStem?: string;
@@ -70,6 +72,7 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
 }
 
+/** Parse live/archive ownership metadata from a sessions-memory hit path. */
 export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {

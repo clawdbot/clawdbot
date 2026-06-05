@@ -1,3 +1,4 @@
+// OC Path tests cover cross kind properties plugin behavior.
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { setMdOcPath } from "../../edit.js";

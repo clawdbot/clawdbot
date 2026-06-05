@@ -1,3 +1,4 @@
+// Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
 import type { OpenClawConfig } from "../config/config.js";

@@ -1,3 +1,5 @@
+// Shared Gateway session projection types.
+// Keeps server methods and Control UI payloads aligned.
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,

@@ -1,3 +1,4 @@
+// Linux OOM score helpers adjust child process OOM priority when supported.
 import fs from "node:fs";
 
 /**

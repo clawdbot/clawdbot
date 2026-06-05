@@ -1,3 +1,4 @@
+// Whatsapp tests cover approval native plugin behavior.
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,

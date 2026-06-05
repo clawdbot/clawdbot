@@ -1,3 +1,4 @@
+// Auto-reply trigger harness builds trigger handling scenarios for tests.
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

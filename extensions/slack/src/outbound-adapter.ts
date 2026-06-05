@@ -1,3 +1,4 @@
+// Slack plugin module implements outbound adapter behavior.
 import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {

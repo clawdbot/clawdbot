@@ -1,3 +1,4 @@
+/** Agent Client Protocol bridge that translates ACP sessions/prompts to Gateway chat sessions. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -222,6 +223,7 @@ function hasExplicitSessionRouting(
   );
 }
 
+/** ACP Agent implementation backed by the OpenClaw Gateway and replay ledger. */
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;

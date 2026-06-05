@@ -1,3 +1,4 @@
+// Limits shared by Codex media-path E2E fixtures.
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const text = String(env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {

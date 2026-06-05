@@ -1,3 +1,5 @@
+// Server hooks tests cover HTTP hook auth, payload normalization, dedupe,
+// session targeting, system events, and cron-isolated hook dispatch.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Discord plugin module implements subagent hooks behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   formatThreadBindingDisabledError,

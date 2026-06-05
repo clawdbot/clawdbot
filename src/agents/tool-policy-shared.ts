@@ -1,3 +1,8 @@
+/**
+ * Shared runtime tool policy normalization.
+ *
+ * Keeps aliases, groups, profile expansion, and prefix matching consistent across allow/deny paths.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -6,12 +11,6 @@ import {
   type ToolProfileId,
 } from "./tool-catalog.js";
 
-/**
- * Shared normalization helpers for runtime tool policy.
- *
- * Aliases and groups live here so allowlist parsing, prefix matching, and
- * profile expansion resolve names consistently.
- */
 type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];

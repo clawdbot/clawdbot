@@ -1,3 +1,4 @@
+/** Tests transcript replay conversion into ACP session update chunks. */
 import { describe, expect, it } from "vitest";
 import { extractReplayChunks } from "./translator.replay.js";
 

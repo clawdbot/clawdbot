@@ -1,3 +1,7 @@
+/**
+ * ClickClack channel plugin definition: target parsing, account config, status,
+ * gateway startup, and outbound delivery wiring.
+ */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -68,6 +72,9 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+/**
+ * Channel plugin instance registered by the bundled ClickClack entry.
+ */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,

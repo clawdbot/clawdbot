@@ -1,3 +1,4 @@
+// Sub-CLI registry that lazily wires gateway, models, devices, plugins, and plugin commands.
 import type { Command } from "commander";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
@@ -53,6 +54,7 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
 }
 
 async function registerGatewayRunOnly(program: Command): Promise<void> {
+  // Hot path for `gateway run`: avoid loading the full gateway command tree.
   const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(

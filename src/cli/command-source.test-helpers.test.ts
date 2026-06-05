@@ -1,3 +1,4 @@
+// Command source test-helper tests cover fixture helpers for command source checks.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

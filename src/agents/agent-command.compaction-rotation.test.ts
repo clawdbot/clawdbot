@@ -1,3 +1,4 @@
+/** Tests agent command compaction rotation and persisted transcript/session updates. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

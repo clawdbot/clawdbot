@@ -1,3 +1,4 @@
+// Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -51,6 +52,7 @@ function formatRunLogMigrationNote(importedFiles: number): string {
     : "";
 }
 
+/** Inspect cron storage and optionally repair legacy JSON/SQLite/payload shapes. */
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;

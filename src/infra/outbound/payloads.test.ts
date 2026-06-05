@@ -1,3 +1,5 @@
+// Covers outbound payload normalization across text, media, presentation,
+// interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";

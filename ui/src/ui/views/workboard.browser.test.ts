@@ -1,3 +1,4 @@
+// Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it } from "vitest";
 import { getWorkboardState } from "../controllers/workboard.ts";

@@ -1,3 +1,9 @@
+/**
+ * Browser agent action hook routes.
+ *
+ * Handles file chooser and dialog interception for both Playwright-backed
+ * OpenClaw profiles and Chrome MCP existing-session profiles.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
@@ -20,6 +26,7 @@ import {
   toStringOrEmpty,
 } from "./utils.js";
 
+/** Register file chooser and dialog hook endpoints on the browser control server. */
 export function registerBrowserAgentActHookRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -150,6 +157,8 @@ export function registerBrowserAgentActHookRoutes(
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
               targetId: tab.targetId,
+              // Existing-session Chrome MCP has no dialog hook primitive. Patch
+              // one-shot window dialog functions in-page, then restore them.
               fn: `() => {
               const state = (window.__openclawDialogHook ??= {});
               if (!state.originals) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Applies GHSA patch payloads to advisory branches.
 import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";

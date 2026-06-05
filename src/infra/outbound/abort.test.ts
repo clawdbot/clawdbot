@@ -1,3 +1,4 @@
+// Covers AbortSignal guard behavior used by outbound delivery operations.
 import { describe, expect, it } from "vitest";
 import { throwIfAborted } from "./abort.js";
 

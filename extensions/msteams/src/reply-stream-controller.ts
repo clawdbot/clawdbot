@@ -1,3 +1,4 @@
+// Msteams plugin module implements reply stream controller behavior.
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,

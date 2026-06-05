@@ -1,3 +1,8 @@
+/**
+ * Tool Search catalog compaction.
+ *
+ * Presents large OpenClaw/MCP/client tool inventories through search, describe, call, and optional code-mode tools.
+ */
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -19,8 +24,6 @@ import type { ToolDefinition } from "./sessions/index.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-// Tool Search compacts large tool catalogs behind a small search/describe/call
-// surface, with an optional isolated code runner for multi-step catalog use.
 export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";

@@ -1,3 +1,4 @@
+// Resolve Openclaw Package Candidate Ip Bypass tests cover resolve openclaw package candidate ip bypass script behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

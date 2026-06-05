@@ -1,3 +1,5 @@
+// Models method tests cover slow catalog timeouts, configured/all views,
+// validation errors, and protocol response shapes.
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

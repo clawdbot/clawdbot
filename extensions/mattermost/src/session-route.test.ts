@@ -1,3 +1,4 @@
+// Mattermost tests cover session route plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 

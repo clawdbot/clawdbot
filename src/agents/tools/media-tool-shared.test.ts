@@ -1,3 +1,5 @@
+// Shared media tool tests cover root separation, provider availability, and
+// model-registry normalization for generation/understanding tools.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +87,8 @@ describe("resolveMediaToolLocalRoots", () => {
   });
 
   it("keeps channel inbound attachment roots separate from local roots", () => {
+    // Inbound channel roots may include broad chat attachment folders; keep them
+    // out of local filesystem allowlists unless the channel context asks.
     const accountRoot = path.join("/tmp", "openclaw-imessage-work");
     const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
     const cfg = {
@@ -150,6 +154,8 @@ describe("resolveModelFromRegistry", () => {
   });
 
   it("falls back to provider-prefixed custom model IDs", () => {
+    // Custom providers can store ids with provider prefixes; try both forms so
+    // callers can pass the short local model id.
     const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
     const { calls, registry } = createModelRegistryStub((_, modelId) =>
       modelId === "kimchi/claude-opus-4-6" ? foundModel : null,

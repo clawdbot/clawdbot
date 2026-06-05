@@ -1,3 +1,5 @@
+// Verifies lightweight command summaries stay independent from tree-sitter and
+// the rich command explainer dependency graph.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../command-explainer/extract.js", () => {

@@ -1,3 +1,4 @@
+// OpenAI ChatGPT OAuth tests cover login, token refresh, and auth persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoginOpenAICodexOAuth =

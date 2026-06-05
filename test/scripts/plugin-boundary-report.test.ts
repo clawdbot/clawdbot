@@ -1,3 +1,4 @@
+// Plugin Boundary Report tests cover plugin boundary report script behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginBoundaryReport,

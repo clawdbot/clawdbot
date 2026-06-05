@@ -1,3 +1,4 @@
+// Session metadata derives stable origin, group, and display fields from message context.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -137,6 +138,8 @@ export function deriveGroupSessionPatch(params: {
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
+  // Channel-looking subjects become `groupChannel` only for channel-capable providers; ordinary
+  // group chats keep the subject as human-readable metadata.
   const normalizedChannel =
     subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
   const isChannelProvider = Boolean(

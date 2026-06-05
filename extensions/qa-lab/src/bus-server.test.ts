@@ -1,3 +1,4 @@
+// Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";

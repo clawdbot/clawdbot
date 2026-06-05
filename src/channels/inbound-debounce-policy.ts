@@ -1,3 +1,8 @@
+/**
+ * Channel inbound debounce policy.
+ *
+ * Decides when text events can be delayed/merged before agent dispatch.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";

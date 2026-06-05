@@ -1,3 +1,4 @@
+// Update CLI test helpers provide shared fixtures and path helpers for update tests.
 import path from "node:path";
 
 function isPathInsideRoot(candidate: string, root: string): boolean {

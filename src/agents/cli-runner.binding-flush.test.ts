@@ -1,3 +1,4 @@
+/** Tests bounded transcript-flush probing before reusing CLI bindings. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isCliBindingFlushed,
@@ -65,6 +66,8 @@ describe("isCliBindingFlushed", () => {
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
     try {
+      // Fake timers enforce the retry contract without introducing wall-clock
+      // sleeps into this import-heavy agent test.
       const probe = vi.fn(async () => false);
       setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 

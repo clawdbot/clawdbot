@@ -1,3 +1,4 @@
+// Tool Call Repair module implements promote behavior.
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */

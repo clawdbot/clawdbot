@@ -1,3 +1,5 @@
+// Usage reporting tests cover run-level metadata attribution, runtime plugin
+// bootstrap inputs, and forwarding fields into embedded attempts.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -14,6 +16,8 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
 ): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  // Minimal assistant fixture lets tests override provider/model/usage without
+  // recreating the full attempt result shape.
   return {
     role: "assistant",
     api: "openai-responses",
@@ -28,6 +32,8 @@ function makeAssistantMessage(
 }
 
 function firstAttemptInput(): Record<string, unknown> {
+  // Harness calls are single-attempt in these tests; expose the first input so
+  // forwarding assertions stay readable.
   const call = mockedRunEmbeddedAttempt.mock.calls[0];
   if (!call) {
     throw new Error("Expected embedded attempt");
@@ -147,6 +153,8 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   it("reports total usage from the last turn instead of accumulated total", async () => {
+    // Billing metadata uses accumulated input/output but the reported total
+    // remains the final provider call total, matching last-turn usage contracts.
     // Simulate a multi-turn run result.
     // Turn 1: Input 100, Output 50. Total 150.
     // Turn 2: Input 150, Output 50. Total 200.

@@ -1,3 +1,4 @@
+// Cron status/list/add command registration and create-payload normalization.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -173,6 +174,7 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const payload = (() => {
+              // Main-session jobs use system events; isolated/current/session jobs use messages.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
               const optionMessage = normalizeOptionalString(opts.message);
               const positionalMessage = normalizeOptionalString(messageArg);

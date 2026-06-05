@@ -1,3 +1,4 @@
+// Node daemon install helper tests cover node daemon install plans and runtime warnings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

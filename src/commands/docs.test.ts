@@ -1,3 +1,4 @@
+// Docs command tests cover docs lookup, fetch handling, and runtime output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 

@@ -1,3 +1,4 @@
+// Moonshot provider module implements model/runtime integration.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildMoonshotProvider } from "./provider-catalog.js";
 

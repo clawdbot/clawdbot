@@ -1,3 +1,5 @@
+// Browser origin tests document same-origin, private-network, loopback, forwarded
+// host, and explicit allowlist decisions for gateway browser surfaces.
 import { describe, expect, it } from "vitest";
 import { checkBrowserOrigin } from "./origin-check.js";
 

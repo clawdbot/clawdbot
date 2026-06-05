@@ -1,3 +1,5 @@
+// Gateway chat integration tests cover dashboard chat requests, transcript
+// history limits, model overrides, inbound dispatch, and streaming event fanout.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

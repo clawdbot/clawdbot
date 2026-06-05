@@ -1,3 +1,4 @@
+// Channels logs tests cover gateway log path resolution and channel log tailing.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

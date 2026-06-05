@@ -1,3 +1,4 @@
+// Peer kind matching helpers compare channel peer kinds against chat targets.
 import type { ChatType } from "../channels/chat-type.js";
 
 // Routing treats group and channel peers as compatible because several chat

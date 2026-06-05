@@ -1,3 +1,4 @@
+// Feishu tests cover monitor.bot menu plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";

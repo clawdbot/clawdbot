@@ -1,3 +1,4 @@
+// Vitest Process Group tests cover vitest process group script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   forwardSignalToVitestProcessGroup,

@@ -1,3 +1,4 @@
+// Tlon helper module supports utils behavior.
 import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,

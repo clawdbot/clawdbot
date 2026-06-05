@@ -1,3 +1,4 @@
+// Cron edit command registration and patch construction for existing jobs.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -39,6 +40,7 @@ async function loadCronJobForEditSchedulePatch(
   opts: Record<string, unknown>,
   id: string,
 ): Promise<CronJob | undefined> {
+  // Schedule patches need the existing job; page defensively because gateway stores can be large.
   let offset = 0;
   for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
     const listed = (await callGatewayFromCli("cron.list", opts, {

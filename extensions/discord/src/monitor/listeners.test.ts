@@ -1,3 +1,4 @@
+// Discord tests cover listeners plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;

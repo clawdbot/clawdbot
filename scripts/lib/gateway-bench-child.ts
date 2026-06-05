@@ -1,3 +1,4 @@
+// Gateway Bench Child script supports OpenClaw repository automation.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 const TEARDOWN_GRACE_MS = 2_000;

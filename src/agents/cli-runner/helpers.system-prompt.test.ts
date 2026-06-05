@@ -1,3 +1,4 @@
+// Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
@@ -63,6 +64,8 @@ describe("buildCliAgentSystemPrompt", () => {
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
+    // Plugin command guidance is surface-filtered; CLI prompts must not leak
+    // OpenClaw-main command text into external CLI backends.
     registerPluginCommand("demo-plugin", {
       name: "demo_cli",
       description: "Demo CLI command",

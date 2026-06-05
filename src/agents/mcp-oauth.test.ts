@@ -1,3 +1,4 @@
+// Covers MCP OAuth token persistence, isolation, and noninteractive behavior.
 import fs from "node:fs/promises";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -18,6 +19,8 @@ describe("MCP OAuth provider", () => {
           token_type: "Bearer",
         });
 
+        // Token files live under state, not workspace config, and are mode
+        // 0600 because they contain bearer credentials.
         const tokenDir = `${home}/.openclaw/mcp-oauth`;
         const entries = await fs.readdir(tokenDir);
         expect(entries).toHaveLength(1);
@@ -64,6 +67,8 @@ describe("MCP OAuth provider", () => {
   });
 
   it("does not start hidden authorization flows without an authorization callback", async () => {
+    // Normal agent/tool execution must not open browser auth flows implicitly;
+    // operators use the explicit mcp login command instead.
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({

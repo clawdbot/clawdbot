@@ -1,3 +1,4 @@
+// Text formatter for plugin list rows and verbose plugin details.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginRecord } from "../plugins/registry.js";

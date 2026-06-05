@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager status state behavior.
 import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 

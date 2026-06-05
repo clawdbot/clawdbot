@@ -1,3 +1,4 @@
+// Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,8 +80,8 @@ describe("package-mac-app plist stamping", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "printf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$OPENCLAW_TEST_LOG\"",
-        "if [[ \"${1:-}\" == \"pnpm\" && \"${2:-}\" == \"--version\" ]]; then",
+        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
         "  echo '11.2.2'",
         "fi",
         "",

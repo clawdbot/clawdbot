@@ -1,3 +1,4 @@
+// Mattermost tests cover client plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,

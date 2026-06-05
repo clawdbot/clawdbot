@@ -1,3 +1,4 @@
+// Runtime import tests cover lazy runtime import caching and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   importRuntimeModule,

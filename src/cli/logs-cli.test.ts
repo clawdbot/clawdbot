@@ -1,3 +1,4 @@
+// Logs CLI tests cover log command routing and runtime log output behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";

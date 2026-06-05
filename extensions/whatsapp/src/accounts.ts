@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements accounts behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {

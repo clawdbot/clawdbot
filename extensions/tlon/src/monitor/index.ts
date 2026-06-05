@@ -1,3 +1,4 @@
+// Tlon plugin entrypoint registers its OpenClaw integration.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";

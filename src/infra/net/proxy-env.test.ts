@@ -1,3 +1,5 @@
+// Proxy environment tests cover env precedence, EnvHttpProxyAgent options, and
+// NO_PROXY host/port/CIDR matching.
 import { describe, expect, it } from "vitest";
 import {
   hasEnvHttpProxyConfigured,

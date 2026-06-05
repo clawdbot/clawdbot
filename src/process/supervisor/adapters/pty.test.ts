@@ -1,3 +1,4 @@
+// PTY adapter tests cover PTY lifecycle and termination behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectRealExitWinsOverSigkillFallback,

@@ -1,3 +1,4 @@
+// Reasoning tag partitioner tests cover splitting reasoning and visible text segments.
 import { describe, expect, it } from "vitest";
 import { createReasoningTagTextPartitioner } from "./reasoning-tag-text-partitioner.js";
 

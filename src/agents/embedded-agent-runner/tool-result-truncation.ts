@@ -1,3 +1,6 @@
+/**
+ * Truncates oversized tool-result content in messages and transcripts.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";

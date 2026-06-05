@@ -1,3 +1,4 @@
+// Control UI view renders dreaming screen content.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";

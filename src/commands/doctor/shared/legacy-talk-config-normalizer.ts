@@ -1,3 +1,4 @@
+// Legacy Talk config normalizer for provider scalar fields and realtime aliases.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTalkSection } from "../../../config/talk.js";
@@ -40,6 +41,7 @@ function buildLegacyRealtimeTalkCompat(
   return normalizeTalkSection({ realtime: compat } as OpenClawConfig["talk"])?.realtime;
 }
 
+/** Normalize legacy Talk provider/realtime fields into current talk.providers and talk.realtime. */
 export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const rawTalk = cfg.talk;
   if (!isRecord(rawTalk)) {

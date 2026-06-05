@@ -1,3 +1,4 @@
+// Line helper module supports account helpers behavior.
 type LineCredentialAccount = {
   channelAccessToken?: string;
   channelSecret?: string;

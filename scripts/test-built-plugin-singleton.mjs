@@ -1,3 +1,4 @@
+// Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";

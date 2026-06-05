@@ -1,3 +1,4 @@
+// Z.ai stream wrapper normalizes Z.ai provider stream chunks.
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import { streamSimple } from "../../stream.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";

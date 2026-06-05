@@ -1,3 +1,4 @@
+// Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

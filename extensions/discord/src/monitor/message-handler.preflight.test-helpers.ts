@@ -1,3 +1,4 @@
+// Discord helper module supports message handler.preflight helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ChannelType } from "../internal/discord.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";

@@ -1,3 +1,4 @@
+/** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
@@ -19,6 +20,7 @@ function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
   );
 }
 
+/** Creates a verified pre-migration backup, treating absent local state as empty. */
 export async function createPreMigrationBackup(opts: {
   output?: string;
 }): Promise<string | undefined> {
@@ -45,6 +47,7 @@ export async function createPreMigrationBackup(opts: {
   }
 }
 
+/** Applies the selected migration provider plan and writes the final result. */
 export async function runMigrationApply(params: {
   runtime: RuntimeEnv;
   opts: MigrateApplyOptions;
@@ -81,6 +84,8 @@ export async function runMigrationApply(params: {
       applyMigrationSkillSelection(preflightPlan, params.opts.skills),
       params.opts.plugins,
     );
+    // Selection is applied before conflict checks so deselected conflicting items
+    // cannot block an otherwise safe migration.
     assertConflictFreePlan(selectedPlan, params.providerId);
     const stateDir = resolveStateDir();
     const reportDir = buildMigrationReportDir(params.providerId, stateDir);

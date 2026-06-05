@@ -1,3 +1,4 @@
+// Daemon constant tests cover platform constants used by service installers.
 import { describe, expect, it } from "vitest";
 import {
   formatGatewayServiceDescription,

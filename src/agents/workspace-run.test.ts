@@ -1,3 +1,5 @@
+// Workspace run tests cover runtime workspace resolution from explicit input,
+// agent config, session keys, and environment fallback.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -104,6 +106,8 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {
+    // Malformed agent-prefixed keys are configuration/data errors; default
+    // agents should not mask them as legacy main-session keys.
     const mainWorkspace = path.join(process.cwd(), "tmp", "workspace-main-default");
     const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research-default");
     const cfg = {

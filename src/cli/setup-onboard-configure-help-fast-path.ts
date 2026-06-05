@@ -1,3 +1,4 @@
+// Fast help renderer for setup/onboard/configure without loading full CLI startup.
 import { Command } from "commander";
 import { VERSION } from "../version.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -66,6 +67,7 @@ async function registerHelpCommand(
 }
 
 export async function tryOutputSetupOnboardConfigureHelp(argv: string[]): Promise<boolean> {
+  // Register only the requested command so help stays quick and avoids config/plugin startup.
   const command = resolveSetupOnboardConfigureHelpCommand(argv);
   if (!command) {
     return false;

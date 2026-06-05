@@ -1,3 +1,4 @@
+// Matrix tests cover actions.account propagation plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";

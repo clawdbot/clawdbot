@@ -1,3 +1,4 @@
+// Control UI module implements usage types behavior.
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,

@@ -1,3 +1,5 @@
+// Gateway assistant identity resolver.
+// Combines UI, agent config, and workspace identity files for Control UI display.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
@@ -81,6 +83,7 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+/** Resolve the display name/avatar/emoji for an agent-facing assistant identity. */
 export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;

@@ -1,3 +1,7 @@
+/**
+ * Provider discovery descriptor for Anthropic Vertex. This variant is used by
+ * catalog surfaces that need the provider contract without full plugin entry setup.
+ */
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildAnthropicVertexProvider } from "./provider-catalog.js";
@@ -67,6 +71,7 @@ async function runAnthropicVertexCatalog(ctx: ProviderCatalogContext) {
   };
 }
 
+/** Anthropic Vertex provider discovery descriptor. */
 export const anthropicVertexProviderDiscovery: AnthropicVertexProviderPlugin = {
   id: PROVIDER_ID,
   label: "Anthropic Vertex",

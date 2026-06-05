@@ -1,3 +1,4 @@
+// Adapts declarative and imperative channel setup wizards to the command-facing interface.
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelSetupWizard } from "../../channels/plugins/setup-wizard.js";
@@ -31,6 +32,7 @@ function isDeclarativeChannelSetupWizard(
   );
 }
 
+/** Resolve the setup wizard adapter exposed by one channel plugin, caching declarative adapters. */
 export function resolveChannelSetupWizardAdapterForPlugin(
   plugin?: ChannelPlugin,
 ): ChannelSetupWizardAdapter | undefined {
@@ -68,6 +70,7 @@ const getChannelSetupWizardAdapterMap = () => {
   return adapters;
 };
 
+/** Look up the setup wizard adapter for a registered setup channel. */
 export function getChannelSetupWizardAdapter(
   channel: ChannelChoice,
 ): ChannelSetupWizardAdapter | undefined {

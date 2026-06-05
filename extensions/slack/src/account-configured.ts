@@ -1,3 +1,4 @@
+// Slack helper module supports account configured behavior.
 import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedSlackAccount } from "./accounts.js";
 

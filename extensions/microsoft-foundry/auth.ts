@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements auth behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,

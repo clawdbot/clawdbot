@@ -1,3 +1,8 @@
+/**
+ * Reaction action message-id resolver.
+ *
+ * Reads explicit reaction targets or falls back to the current tool message context.
+ */
 import { readStringOrNumberParam } from "../../../agents/tools/common.js";
 
 type ReactionToolContext = {

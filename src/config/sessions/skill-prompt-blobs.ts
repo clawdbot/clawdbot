@@ -1,3 +1,4 @@
+// Skill prompt blobs externalize large session prompts into content-addressed files.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -88,6 +89,7 @@ function buildPromptRef(prompt: string): SessionSkillPromptRef {
     bytes: Buffer.byteLength(prompt, "utf8"),
   };
   promptRefCache.set(prompt, ref);
+  // Bounded process cache avoids rehashing repeated prompt snapshots without becoming store state.
   while (promptRefCache.size > PROMPT_REF_CACHE_MAX_ENTRIES) {
     const oldest = promptRefCache.keys().next().value;
     if (typeof oldest !== "string") {
@@ -100,6 +102,8 @@ function buildPromptRef(prompt: string): SessionSkillPromptRef {
 
 function shouldStorePromptAsBlob(prompt: string): boolean {
   const bytes = Buffer.byteLength(prompt, "utf8");
+  // Small prompts stay inline; oversized prompts stay inline too because blob cleanup only owns
+  // bounded files that can be safely read back during store hydration.
   return prompt.length >= MIN_PROMPT_BLOB_CHARS && bytes <= MAX_PROMPT_BLOB_BYTES;
 }
 
@@ -219,6 +223,7 @@ export function projectSessionStoreForPersistence(params: {
       prompt,
     });
     if (persisted === params.store) {
+      // Copy-on-write keeps callers that only inspect the projection from seeing partial mutation.
       persisted = { ...params.store };
     }
     persisted[key] = stripPromptForPersistence(entry, promptRef);
@@ -271,6 +276,8 @@ export function hydrateSessionStoreSkillPromptRefs(params: {
     const promptRef = parsePromptRef((snapshot as { promptRef?: unknown }).promptRef);
     const prompt = promptRef ? readValidPromptBlob(params.storePath, promptRef) : null;
     if (!prompt) {
+      // Missing or invalid blob means the snapshot is no longer trustworthy; drop it instead of
+      // leaving a promptRef that downstream prompt assembly cannot dereference.
       const nextEntry = { ...entry };
       delete nextEntry.skillsSnapshot;
       params.store[key] = nextEntry;

@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot access behavior.
 import {
   firstDefined,
   isSenderIdAllowed,

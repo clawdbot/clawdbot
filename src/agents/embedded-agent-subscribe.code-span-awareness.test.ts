@@ -1,3 +1,5 @@
+// Code-span awareness tests ensure streamed thinking-tag stripping ignores
+// literal examples inside inline and fenced code.
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -7,6 +9,8 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 describe("subscribeEmbeddedAgentSession thinking tag code span awareness", () => {
   function createPartialReplyHarness() {
+    // Partial replies are the earliest user-visible stream path, so this
+    // harness isolates tag stripping before terminal message handling.
     const { session, emit } = createStubSessionHarness();
     const onPartialReply = vi.fn();
 

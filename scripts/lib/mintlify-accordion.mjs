@@ -1,3 +1,5 @@
+// Checks and repairs Mintlify component indentation that can swallow following markdown.
+/** Lint message emitted for Mintlify component closing tags with unsafe indentation. */
 export const MINTLIFY_ACCORDION_INDENT_MESSAGE =
   "Mintlify component closing tag is indented deeper than its opening tag; Mintlify can parse following markdown as nested content.";
 
@@ -54,6 +56,7 @@ function visitMintlifyComponentIndentation(raw, onMisindentedClose, onMisindente
   return lines;
 }
 
+/** Return indentation errors for Mintlify accordion-like components. */
 export function checkMintlifyAccordionIndentation(raw) {
   const errors = [];
   visitMintlifyComponentIndentation(raw, ({ closeComponent, index }) => {
@@ -66,6 +69,7 @@ export function checkMintlifyAccordionIndentation(raw) {
   return errors;
 }
 
+/** Repair Mintlify component indentation and list-adjacent closing tags when needed. */
 export function repairMintlifyAccordionIndentation(raw) {
   let changed = false;
   const lines = visitMintlifyComponentIndentation(

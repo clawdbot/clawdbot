@@ -1,3 +1,5 @@
+// Exercises recursive command-risk detection through interpreters, carriers,
+// shell wrappers, env split-string, eval, and source invocations.
 import { describe, expect, it } from "vitest";
 import {
   buildCommandPayloadCandidates,

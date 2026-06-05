@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds an HTML/manifest evidence bundle from Telegram QA scenario summaries.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +89,9 @@ function renderObservedMessages(observedMessages) {
     .join("\n");
 }
 
+/**
+ * Renders a self-contained Telegram evidence HTML report.
+ */
 export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
   const counts = summary.counts ?? {};
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;

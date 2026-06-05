@@ -1,3 +1,6 @@
+/**
+ * Builds heartbeat-specific guidance for agent system prompts.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_HEARTBEAT_EVERY,

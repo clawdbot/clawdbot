@@ -1,3 +1,5 @@
+// Gateway operator-approvals client helper.
+// Connects a backend Gateway client scoped to operator approval events.
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   GATEWAY_CLIENT_MODES,
@@ -47,6 +49,7 @@ function shouldOmitApprovalRuntimeDeviceIdentity(params: {
   return shouldOmitOperatorApprovalDeviceIdentity(params);
 }
 
+/** Create a Gateway client authorized for operator approval event handling. */
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
@@ -96,6 +99,7 @@ export async function createOperatorApprovalsGatewayClient(
   });
 }
 
+/** Run a callback with a started operator-approvals Gateway client and close it after. */
 export async function withOperatorApprovalsGatewayClient<T>(
   params: {
     config: OpenClawConfig;

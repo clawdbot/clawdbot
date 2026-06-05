@@ -1,3 +1,5 @@
+// Covers best-effort external target normalization and session-only downgrade
+// decisions.
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveExternalBestEffortDeliveryTarget,

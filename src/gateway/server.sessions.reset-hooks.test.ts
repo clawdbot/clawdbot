@@ -1,3 +1,5 @@
+// Session reset hook tests cover before/after reset payloads, transcript reset
+// events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";

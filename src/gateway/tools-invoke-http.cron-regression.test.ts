@@ -1,3 +1,5 @@
+// Tool invoke cron regression tests cover HTTP tool invocation for cron/gateway
+// tools with lightweight mocks around auth, config, and before-tool hooks.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

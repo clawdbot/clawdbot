@@ -1,3 +1,4 @@
+// Discord plugin module implements agent control behavior.
 import {
   controlRealtimeVoiceAgentRun,
   shouldAutoControlRealtimeVoiceAgentText,

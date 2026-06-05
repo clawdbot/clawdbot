@@ -1,3 +1,5 @@
+// Session search tests cover gateway session rows, transcript usage summaries,
+// subagent state, model context limits, and cost/token display metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

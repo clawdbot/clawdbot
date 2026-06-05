@@ -1,3 +1,4 @@
+// Telegram plugin module implements sendchataction 401 backoff behavior.
 import type { Bot } from "grammy";
 import {
   computeBackoff,

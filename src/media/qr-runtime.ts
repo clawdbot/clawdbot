@@ -1,3 +1,4 @@
+// QR runtime helpers lazily load QR code generation and normalize QR text.
 import type QRCode from "qrcode";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 

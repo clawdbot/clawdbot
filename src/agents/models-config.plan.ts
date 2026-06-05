@@ -1,3 +1,8 @@
+/**
+ * Plans root and plugin-owned model catalog writes. Setup and doctor flows use
+ * this module to merge implicit provider discovery, explicit config, and
+ * preserved secrets before touching models.json.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";

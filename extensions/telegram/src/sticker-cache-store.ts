@@ -1,3 +1,4 @@
+// Telegram plugin module implements sticker cache store behavior.
 import path from "node:path";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";

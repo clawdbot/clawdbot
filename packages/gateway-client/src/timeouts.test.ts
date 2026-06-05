@@ -1,3 +1,4 @@
+// Gateway Client tests cover timeouts behavior.
 import { describe, expect, it } from "vitest";
 import {
   addSafeTimeoutDelayGraceMs,

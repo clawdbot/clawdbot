@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.context behavior.
 import {
   buildChannelInboundEventContext,
   formatInboundEnvelope,

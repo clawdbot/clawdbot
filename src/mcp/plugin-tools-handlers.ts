@@ -1,3 +1,4 @@
+// Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,

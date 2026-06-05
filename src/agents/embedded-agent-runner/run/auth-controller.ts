@@ -1,3 +1,6 @@
+/**
+ * Coordinates provider auth, profile rotation, and runtime auth refresh.
+ */
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";

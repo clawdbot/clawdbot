@@ -1,3 +1,4 @@
+// Shared gateway RPC command options and progress-wrapped CLI call helper.
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,

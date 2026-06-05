@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,

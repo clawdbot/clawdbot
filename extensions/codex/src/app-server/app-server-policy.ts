@@ -1,9 +1,17 @@
+/**
+ * Policy promotion for Codex app-server runs that can safely use OpenClaw tool
+ * approvals.
+ */
 import type {
   CodexAppServerRuntimeOptions,
   CodexPluginConfig,
   OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 
+/**
+ * Promotes implicit `never` approval policy to `untrusted` only when runtime
+ * requirements allow OpenClaw to handle tool approvals.
+ */
 export function resolveCodexAppServerForOpenClawToolPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;

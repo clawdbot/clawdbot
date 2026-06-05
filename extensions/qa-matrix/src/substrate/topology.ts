@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements topology behavior.
 export type MatrixQaParticipantRole = "driver" | "observer" | "sut";
 
 type MatrixQaRoomKind = "dm" | "group";

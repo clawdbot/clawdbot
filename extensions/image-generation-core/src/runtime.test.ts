@@ -1,3 +1,4 @@
+// Image Generation Core tests cover runtime plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const sdkExports = vi.hoisted(() => ({

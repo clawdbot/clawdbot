@@ -1,3 +1,4 @@
+/** Shared setup helpers for isolated-agent run test suites. */
 import { afterEach, beforeEach } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {

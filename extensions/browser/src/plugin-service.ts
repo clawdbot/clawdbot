@@ -1,3 +1,6 @@
+/**
+ * Browser plugin service factory that lazily starts the control server.
+ */
 import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
@@ -20,6 +23,7 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
   return trimmed;
 }
 
+/** Creates the Browser plugin service registered by the plugin entrypoint. */
 export function createBrowserPluginService(): OpenClawPluginService {
   let handle: BrowserControlHandle = null;
 

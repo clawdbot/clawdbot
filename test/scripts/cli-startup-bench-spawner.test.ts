@@ -1,3 +1,4 @@
+// Cli Startup Bench Spawner tests cover cli startup bench spawner script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -172,10 +173,7 @@ describe("CLI startup benchmark script spawners", () => {
           exitBudgetMs: 1,
         },
       };
-      fs.writeFileSync(
-        baselinePath,
-        JSON.stringify({ primary: { cases: [slowResponseCase] } }),
-      );
+      fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
       fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
       const responseBudgetResult = spawnSync(
         process.execPath,

@@ -1,3 +1,4 @@
+// Qa Lab tests cover self check plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaSelfCheckOutputPath } from "./self-check.js";

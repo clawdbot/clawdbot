@@ -1,3 +1,4 @@
+// Channel route helpers define plugin-facing route keys for inbound message sessions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

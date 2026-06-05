@@ -1,3 +1,4 @@
+// Deepseek tests cover deepseek plugin behavior.
 import {
   completeSimple,
   streamSimple,

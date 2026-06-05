@@ -1,3 +1,4 @@
+// Documents provider/model id normalization from built-ins and plugin manifests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -30,6 +31,8 @@ describe("normalizeStaticProviderModelId", () => {
   });
 
   it("applies shipped bundled provider model aliases without manifest lookup", () => {
+    // Shipped aliases must work before plugin metadata is loaded so catalog and
+    // config parsing can normalize common refs during startup.
     expect(normalizeStaticProviderModelId("anthropic", "sonnet-4.6")).toBe("claude-sonnet-4-6");
     expect(normalizeStaticProviderModelId("vercel-ai-gateway", "sonnet-4.6")).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -88,6 +91,8 @@ describe("normalizeStaticProviderModelId", () => {
   });
 
   it("uses current plugin metadata manifest normalization by default", () => {
+    // Runtime callers use the current metadata snapshot by default, so plugin
+    // normalization policy applies even without an explicit manifest list.
     setCurrentPluginMetadataSnapshot(
       {
         policyHash: "test-policy",

@@ -1,3 +1,4 @@
+// Runtime session types describe the store hooks shared across config, gateway, and channels.
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";

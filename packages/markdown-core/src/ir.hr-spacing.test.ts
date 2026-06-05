@@ -1,3 +1,4 @@
+// Markdown Core tests cover ir.hr spacing behavior.
 import { describe, it, expect } from "vitest";
 import { markdownToIR } from "./ir.js";
 

@@ -1,3 +1,4 @@
+// Slack tests cover message handler plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});

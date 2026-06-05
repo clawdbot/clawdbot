@@ -1,3 +1,4 @@
+// Matrix tests cover idb persistence plugin behavior.
 import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";

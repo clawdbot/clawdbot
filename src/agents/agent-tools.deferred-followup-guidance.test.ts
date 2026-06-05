@@ -1,3 +1,7 @@
+/**
+ * Tests cron-aware deferred follow-up guidance in exec/process descriptions.
+ * Protects the model-facing text selected after tool filtering.
+ */
 import { describe, expect, it } from "vitest";
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";

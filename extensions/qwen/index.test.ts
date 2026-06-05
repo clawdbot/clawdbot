@@ -1,3 +1,4 @@
+// Qwen tests cover index plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

@@ -1,3 +1,4 @@
+// Resolves npm commands from the active Node toolchain, especially on Windows.
 import fs from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine, resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
@@ -41,6 +42,9 @@ function resolveToolchainNpmRunner(params) {
   return null;
 }
 
+/**
+ * Resolves a toolchain-local npm invocation for the current platform.
+ */
 export function resolveNpmRunner(params = {}) {
   const execPath = params.execPath ?? process.execPath;
   const npmArgs = params.npmArgs ?? [];

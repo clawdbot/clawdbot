@@ -1,3 +1,4 @@
+// Control UI chat module implements heartbeat display behavior.
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";

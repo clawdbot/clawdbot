@@ -1,3 +1,4 @@
+// Systemd unavailable tests cover fallback behavior when systemd is not present.
 import { describe, expect, it } from "vitest";
 import {
   classifySystemdUnavailableDetail,

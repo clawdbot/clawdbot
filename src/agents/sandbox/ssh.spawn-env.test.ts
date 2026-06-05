@@ -1,3 +1,5 @@
+// SSH spawn-env tests ensure subprocesses inherit only safe environment values
+// while command execution and uploads run through ssh.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -48,6 +50,8 @@ function mockSuccessfulSpawnCalls(times = 1) {
 }
 
 function spawnOptionsAt(index: number): SpawnOptions {
+  // Secret filtering happens at the child_process.spawn boundary, so tests read
+  // the captured SpawnOptions env directly.
   const options = spawnMock.mock.calls[index]?.[2] as SpawnOptions | undefined;
   if (!options) {
     throw new Error(`expected spawn options for call ${index}`);

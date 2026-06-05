@@ -1,3 +1,4 @@
+// Voice Call plugin module implements realtime fast context behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveRealtimeVoiceFastContextConsult,

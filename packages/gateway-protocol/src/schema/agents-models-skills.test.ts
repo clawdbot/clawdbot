@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover agents models skills behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {

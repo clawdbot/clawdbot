@@ -1,3 +1,4 @@
+// Control UI chat module implements run controls behavior.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";

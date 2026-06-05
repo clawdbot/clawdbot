@@ -1,3 +1,4 @@
+// Status-all channels tests cover plugin-generic channel rows, account inspection, and load failure reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildChannelsTable } from "./channels.js";
 

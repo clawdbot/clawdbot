@@ -1,3 +1,4 @@
+/** Child-process wrapper used by daemon installers to preserve stdout/stderr on failure. */
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 
 type ExecResult = { stdout: string; stderr: string; code: number };

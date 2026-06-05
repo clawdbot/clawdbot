@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.sender prefix support behavior.
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import {

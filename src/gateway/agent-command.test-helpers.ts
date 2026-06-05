@@ -1,9 +1,8 @@
+// Gateway agent-command test helpers.
+// Waits for mocked agent command dispatches in async gateway tests.
 import { vi } from "vitest";
 import { agentCommand } from "./test-helpers.runtime-state.js";
 
-/**
- * Async wait helpers for gateway tests that assert agent-command invocations.
- */
 type AgentCommandCall = Record<string, unknown>;
 
 function agentCommandCalls(): Array<[AgentCommandCall]> {

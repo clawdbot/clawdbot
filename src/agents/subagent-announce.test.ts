@@ -1,3 +1,5 @@
+// Subagent announce flow tests cover the seam-level orchestration between wait
+// outcomes, requester lookup, delivery, and cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
@@ -108,6 +110,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
   }) => {
+    // The delivery mock preserves the key branch: active Discord requester
+    // sessions are steered in-process, while inactive/direct paths call agent.
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
     const requesterEntry = (store?.[params.targetRequesterSessionKey] ?? {}) as
       | { sessionId?: string; origin?: { provider?: string; channel?: string } }

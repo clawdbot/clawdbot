@@ -1,3 +1,4 @@
+// Vitest utils config wires the utils test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 

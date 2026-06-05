@@ -1,3 +1,4 @@
+// Deepinfra provider module implements model/runtime integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";

@@ -1,3 +1,5 @@
+// Subagent registry archive tests cover keep/delete cleanup modes, retryable
+// session deletion, and context-engine lifecycle callbacks.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +12,8 @@ let currentConfig = {
 };
 const loadConfigMock = vi.fn(() => currentConfig);
 const flushSweepMicrotasks = async () => {
+  // Archive sweeps schedule follow-up work through microtasks; drain them before
+  // asserting registry and context-engine side effects.
   await Promise.resolve();
   await Promise.resolve();
 };

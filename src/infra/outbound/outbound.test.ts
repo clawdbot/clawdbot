@@ -1,3 +1,5 @@
+// Cross-cuts outbound target/cache behavior through shared fixtures and active
+// plugin registry setup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

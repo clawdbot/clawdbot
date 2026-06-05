@@ -1,3 +1,4 @@
+// Website Installer Sync Workflow tests cover website installer sync workflow script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

@@ -1,3 +1,4 @@
+// Qqbot plugin module implements gateway connection behavior.
 import WebSocket from "ws";
 import type { EngineAdapters } from "../adapter/index.js";
 import {

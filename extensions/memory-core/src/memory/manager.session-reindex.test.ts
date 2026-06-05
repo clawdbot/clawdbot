@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.session reindex plugin behavior.
 import { describe, expect, it } from "vitest";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 

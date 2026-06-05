@@ -1,3 +1,7 @@
+/**
+ * Implements filesystem JSON-RPC handlers for the Codex sandbox exec-server
+ * with OpenClaw sandbox policy checks before every bridge operation.
+ */
 import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
@@ -22,6 +26,7 @@ import type { DirectoryEntry, OpenClawExecServer, ResolvedFsSandboxPolicy } from
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES = 512 * 1024 * 1024;
 
+/** Reads a sandbox file as base64 after read-policy and size checks. */
 export async function readFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -45,6 +50,7 @@ export async function readFile(
   return { dataBase64: data.toString("base64") };
 }
 
+/** Writes base64 data to an existing sandbox directory after write-policy checks. */
 export async function writeFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -64,6 +70,7 @@ export async function writeFile(
   });
 }
 
+/** Creates a sandbox directory, respecting recursive and parent-directory semantics. */
 export async function createDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -84,6 +91,7 @@ export async function createDirectory(
   });
 }
 
+/** Returns normalized metadata for a sandbox path. */
 export async function getMetadata(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -101,6 +109,7 @@ export async function getMetadata(
   return metadataResponse(stat);
 }
 
+/** Lists sandbox directory entries visible under the resolved filesystem policy. */
 export async function readDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -148,6 +157,7 @@ async function listDirectoryEntries(
   });
 }
 
+/** Removes a sandbox path after rejecting writes outside policy or under read-only descendants. */
 export async function removePath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
@@ -167,6 +177,7 @@ export async function removePath(
   });
 }
 
+/** Copies sandbox files or recursive directories while enforcing source and destination policy. */
 export async function copyPath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,

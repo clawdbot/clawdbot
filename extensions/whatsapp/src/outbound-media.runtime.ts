@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements outbound media behavior.
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 
 export async function loadOutboundMediaFromUrl(

@@ -1,3 +1,7 @@
+/**
+ * Browser route context factory that wires profile-scoped runtime operations for
+ * the Browser control server.
+ */
 import {
   resolveCdpControlPolicy,
   resolveCdpReachabilityPolicy,
@@ -37,6 +41,7 @@ export type {
   ProfileStatus,
 } from "./server-context.types.js";
 
+/** Lists configured and runtime-known Browser profile names without duplicates. */
 export function listKnownProfileNames(state: BrowserServerState): string[] {
   const names = new Set(Object.keys(state.resolved.profiles));
   for (const name of state.profiles.keys()) {
@@ -129,6 +134,7 @@ function createProfileContext(
   };
 }
 
+/** Creates the Browser route context used by control-server route handlers. */
 export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
   const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
 

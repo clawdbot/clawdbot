@@ -1,3 +1,7 @@
+/**
+ * Browser CLI management commands for lifecycle, profiles, tabs, and doctor
+ * checks.
+ */
 import type { Command } from "commander";
 import { runCommandWithRuntime } from "../core-api.js";
 import {
@@ -297,6 +301,7 @@ function formatBrowserConnectionSummary(params: {
   return `port: ${params.cdpPort ?? "(unset)"}`;
 }
 
+/** Registers Browser lifecycle, profile, tab, and doctor commands. */
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

@@ -1,3 +1,4 @@
+// Discord tests cover inbound context plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createDiscordSupplementalContextAccessChecker,

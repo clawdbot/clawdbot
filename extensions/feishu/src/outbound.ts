@@ -1,3 +1,4 @@
+// Feishu plugin module implements outbound behavior.
 import path from "node:path";
 import {
   attachChannelToResult,

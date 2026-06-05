@@ -1,3 +1,4 @@
+// Session store read tests cover loading persisted sessions from disk.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

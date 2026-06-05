@@ -1,11 +1,14 @@
+/**
+ * External channel plugin catalog contract suites.
+ *
+ * Writes synthetic manifests and catalog files to prove parser behavior for discovered plugins.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
 import { listChannelPluginCatalogEntries } from "../../catalog.js";
 
-// Shared catalog contract suites for synthetic external/discovered channel
-// plugins. Each fixture writes real manifest files to prove parser behavior.
 function createCatalogEntry(params: {
   packageName: string;
   channelId: string;

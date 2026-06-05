@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register clear storage behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { getQQBotMediaPath } from "../../utils/platform.js";

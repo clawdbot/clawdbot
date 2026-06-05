@@ -1,3 +1,5 @@
+// Idle-timeout breaker tests cover the outer run-loop guard that stops
+// repeated silent provider attempts from spinning forever.
 import { describe, expect, it } from "vitest";
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
@@ -25,6 +27,8 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
     }>,
     options?: { cap?: number },
   ) {
+    // Drive one persistent breaker state across attempts, matching the run
+    // loop scope where profile rotation and retry sessions would otherwise reset.
     const state = createIdleTimeoutBreakerState();
     const steps: Array<{ consecutive: number; tripped: boolean }> = [];
     for (const input of inputs) {

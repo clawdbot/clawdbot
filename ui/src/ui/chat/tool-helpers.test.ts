@@ -1,3 +1,4 @@
+// Control UI tests cover tool helpers behavior.
 import { describe, it, expect } from "vitest";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 

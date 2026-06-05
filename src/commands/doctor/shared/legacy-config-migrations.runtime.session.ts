@@ -1,3 +1,4 @@
+// Legacy session runtime config migrations for retired maintenance/fork sizing keys.
 import {
   defineLegacyConfigMigration,
   getRecord,
@@ -29,6 +30,7 @@ const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   match: hasLegacyParentForkMaxTokens,
 };
 
+/** Legacy config migration specs for session runtime config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "session.maintenance.rotateBytes",

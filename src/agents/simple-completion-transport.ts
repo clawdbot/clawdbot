@@ -1,3 +1,8 @@
+/**
+ * Simple completion transport preparation.
+ *
+ * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getApiProvider } from "../llm/api-registry.js";
 import type { Api, Model } from "../llm/types.js";

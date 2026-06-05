@@ -1,3 +1,4 @@
+// Broad coverage for embedded runner model resolution behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -192,6 +193,8 @@ afterEach(() => {
 });
 
 function createRuntimeHooks() {
+  // Runtime hooks emulate provider plugin model discovery, transport
+  // normalization, and OpenRouter capability loading without plugin imports.
   return createProviderRuntimeTestMock({
     handledDynamicProviders: [
       "openrouter",
@@ -215,6 +218,8 @@ function resolveModelForTest(
   agentDir?: string,
   cfg?: OpenClawConfig,
 ) {
+  // Most tests use fixed auth storage to keep assertions focused on model
+  // resolution rather than auth discovery.
   const resolvedAgentDir = agentDir ?? "/tmp/agent";
   return resolveModel(provider, modelId, agentDir, cfg, {
     authStorage: { mocked: true } as never,

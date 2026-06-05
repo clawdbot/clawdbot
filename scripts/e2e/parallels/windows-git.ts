@@ -1,3 +1,4 @@
+// Windows Git script supports OpenClaw repository automation.
 import path from "node:path";
 import type { WindowsGuest } from "./guest-transports.ts";
 import { die, run, say } from "./host-command.ts";

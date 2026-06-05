@@ -1,3 +1,4 @@
+// Channel MCP server tests cover channel tool registration and requests.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";

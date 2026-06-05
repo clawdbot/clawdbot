@@ -1,3 +1,4 @@
+// Command spec tests cover skill-provided command metadata and filtering.
 import { describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";

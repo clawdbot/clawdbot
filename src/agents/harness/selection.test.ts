@@ -1,3 +1,4 @@
+// Covers agent harness selection, fallback behavior, and compaction routing.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -133,6 +134,8 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
 }
 
 function createContextEngineRequiringAssembly(): ContextEngine {
+  // Selection tests use this to prove fallback cannot cross into a harness
+  // that lacks required context-engine host capabilities.
   return {
     info: {
       id: "lossless-claw",
@@ -156,6 +159,8 @@ function createContextEngineRequiringAssembly(): ContextEngine {
 }
 
 function registerFailingCodexHarness(): void {
+  // Forces the selected plugin runtime to throw so fallback behavior is
+  // exercised through runAgentHarnessAttempt, not only selectAgentHarness.
   registerAgentHarness(
     {
       id: "codex",
@@ -186,6 +191,8 @@ function registerSuccessfulCodexHarness(): void {
 }
 
 function groupSenderDenyAllConfig(): OpenClawConfig {
+  // Mirrors Telegram sender policy shape used when selection must preserve
+  // channel/group sender tool constraints across fallback attempts.
   return {
     channels: {
       telegram: {

@@ -1,3 +1,4 @@
+// Music Generation Providers.Live.Test.Ts tests cover music generation providers plugin behavior.
 import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,

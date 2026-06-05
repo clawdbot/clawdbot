@@ -1,3 +1,4 @@
+// Cached lookup view for active channel plugin registry entries and aliases.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActivePluginChannelRegistration,
@@ -5,8 +6,6 @@ import type {
 } from "../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
 
-// Cached lookup view for the active channel plugin registry. The cache is keyed
-// by registry object/version so request-time callers avoid rebuilding alias maps.
 export type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: ActivePluginChannelRegistration["plugin"] & {
     id?: string | null;
@@ -34,6 +33,7 @@ function setLookupEntry(
   key: string | undefined,
   entry: RegisteredChannelPluginEntry,
 ): void {
+  // First writer wins so canonical ids keep priority over later aliases.
   if (key && !map.has(key)) {
     map.set(key, entry);
   }

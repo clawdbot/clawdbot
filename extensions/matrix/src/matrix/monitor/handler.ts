@@ -1,3 +1,4 @@
+// Matrix plugin module implements handler behavior.
 import {
   buildChannelInboundEventContext,
   toInboundMediaFacts,

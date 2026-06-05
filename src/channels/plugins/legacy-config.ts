@@ -1,3 +1,8 @@
+/**
+ * Channel legacy config rule collector.
+ *
+ * Gathers channel-owned doctor migration rules from public artifacts and plugin hooks.
+ */
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
@@ -5,8 +10,6 @@ import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
 import type { ChannelId } from "./types.public.js";
 
-// Collects channel-owned legacy config rules for validator fast paths. Bundled
-// contract APIs are checked before plugin doctor hooks so startup stays cheap.
 function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
   if (!raw || typeof raw !== "object") {
     return [];

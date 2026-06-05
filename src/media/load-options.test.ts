@@ -1,3 +1,4 @@
+// Media load option tests cover normalized media load policy.
 import { describe, expect, it } from "vitest";
 import { buildOutboundMediaLoadOptions, resolveOutboundMediaLocalRoots } from "./load-options.js";
 

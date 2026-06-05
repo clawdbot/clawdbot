@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Audits root package runtime dependencies against source imports and bundled
+// plugin ownership so extension-owned deps can move out of root.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -79,6 +81,9 @@ function sectionFor(relativePath) {
   return section;
 }
 
+/**
+ * Collects static and simple constant-backed package specifiers from source text.
+ */
 export function collectModuleSpecifiers(source) {
   const specifiers = new Set();
   for (const pattern of IMPORT_PATTERNS) {
@@ -210,6 +215,9 @@ function sectionSetIsSubsetOf(sectionSet, allowed) {
   return sectionSet.size > 0;
 }
 
+/**
+ * Classifies whether a root dependency is core-owned, shared, or extension-local.
+ */
 export function classifyRootDependencyOwnership(record) {
   const sections = new Set(record.sections);
 
@@ -276,6 +284,9 @@ export function classifyRootDependencyOwnership(record) {
   };
 }
 
+/**
+ * Builds dependency ownership records from root package.json and scanned imports.
+ */
 export function collectRootDependencyOwnershipAudit(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const rootPackageJson = readJson(path.join(repoRoot, "package.json"));
@@ -352,6 +363,9 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
     .toSorted((left, right) => left.depName.localeCompare(right.depName));
 }
 
+/**
+ * Returns actionable errors for dependencies that should not remain root-owned.
+ */
 export function collectRootDependencyOwnershipCheckErrors(records) {
   return records
     .filter((record) => record.category === "extension_only_localizable")

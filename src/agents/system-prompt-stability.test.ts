@@ -1,3 +1,5 @@
+// System prompt stability tests cover deterministic workspace bootstrap file
+// loading so prompt-cache inputs stay byte-stable.
 import { describe, expect, it, beforeEach } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
@@ -73,6 +75,8 @@ describe("system prompt stability for cache hits", () => {
   });
 
   it("returns consistent ordering across calls", async () => {
+    // Prompt cache keys depend on file order, so repeated loads must preserve
+    // the canonical bootstrap ordering independent of filesystem timing.
     const testFiles = [
       { name: DEFAULT_AGENTS_FILENAME, content: "# Agents content" },
       { name: DEFAULT_TOOLS_FILENAME, content: "# Tools content" },

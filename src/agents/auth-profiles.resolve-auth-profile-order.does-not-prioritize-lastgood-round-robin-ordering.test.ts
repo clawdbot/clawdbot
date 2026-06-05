@@ -1,3 +1,8 @@
+/**
+ * Auth profile ordering regression tests.
+ * Ensures last-good hints do not override explicit config, aws-sdk, or
+ * round-robin ordering semantics.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_CFG,

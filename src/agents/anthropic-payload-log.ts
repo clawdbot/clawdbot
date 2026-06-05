@@ -1,3 +1,8 @@
+/**
+ * Optional Anthropic request/usage JSONL diagnostics.
+ * Redacts payload content before writing and stores digests for correlation
+ * without persisting raw secret-bearing request bodies.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -10,9 +15,6 @@ import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
 
-// Optional Anthropic diagnostics logger. Payload and error data is redacted
-// before JSONL output; payload digests let operators correlate requests without
-// keeping raw secret-bearing content.
 type PayloadLogStage = "request" | "usage";
 
 type PayloadLogEvent = {

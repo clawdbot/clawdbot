@@ -1,3 +1,4 @@
+// Doctor install tests cover install checks, repair notes, and binary/package diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";

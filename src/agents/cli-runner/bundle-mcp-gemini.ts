@@ -1,3 +1,6 @@
+/**
+ * Gemini CLI bundle MCP adapter that writes temporary system settings files.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,8 +14,6 @@ import {
   normalizeStringRecord,
 } from "./bundle-mcp-adapter-shared.js";
 
-// Gemini CLI MCP adapter. It writes a temporary system settings file that merges
-// any existing settings with enabled bundle MCP servers.
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
   const raw = await tryReadJson<unknown>(filePath);
   return raw && typeof raw === "object" && !Array.isArray(raw)
@@ -58,6 +59,7 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
+/** Writes merged Gemini system settings and returns env plus cleanup hook. */
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,

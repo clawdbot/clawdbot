@@ -1,3 +1,4 @@
+// Qa Lab tests cover harness parity plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildHarnessParityCell,

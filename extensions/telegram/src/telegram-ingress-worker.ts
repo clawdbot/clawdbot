@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram ingress worker behavior.
 import { Worker } from "node:worker_threads";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 

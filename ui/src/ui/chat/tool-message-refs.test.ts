@@ -1,3 +1,4 @@
+// Control UI tests cover tool message refs behavior.
 import { describe, expect, it } from "vitest";
 import { extractToolMessageRefs } from "./tool-message-refs.ts";
 

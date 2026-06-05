@@ -1,3 +1,4 @@
+// Discord tests cover message utils plugin behavior.
 import {
   ComponentType,
   MessageFlags,

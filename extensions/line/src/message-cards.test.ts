@@ -1,3 +1,4 @@
+// Line tests cover message cards plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createActionCard,

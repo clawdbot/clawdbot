@@ -1,3 +1,4 @@
+// TTS provider types describe speech provider config and synthesize APIs.
 import type { TalkProviderConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ResolvedTtsPersona } from "../config/types.tts.js";

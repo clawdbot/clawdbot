@@ -1,3 +1,5 @@
+// Gateway reachability probe client.
+// Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -105,6 +107,8 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
+  // Repeated unauthenticated probes can trigger pairing/device-required closes.
+  // Short-circuit briefly so status checks do not spam the gateway.
   const entry = deviceRequiredProbeCache.get(cacheKey);
   if (!entry) {
     return false;

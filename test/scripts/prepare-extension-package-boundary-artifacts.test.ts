@@ -1,5 +1,7 @@
-import { EventEmitter } from "node:events";
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
 import { spawn } from "node:child_process";
+// Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

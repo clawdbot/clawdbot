@@ -1,3 +1,4 @@
+// Misc utility tests cover small shared helper behavior.
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";

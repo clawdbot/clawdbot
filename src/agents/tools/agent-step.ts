@@ -1,3 +1,8 @@
+/**
+ * Nested agent-step executor.
+ *
+ * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
+ */
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -6,12 +11,6 @@ import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
-/**
- * Runs a single nested agent step for sessions_send and related inter-session flows.
- *
- * The helper supports both in-process command execution and Gateway execution,
- * then waits for the updated assistant reply when the Gateway path is used.
- */
 export { readLatestAssistantReply } from "../run-wait.js";
 
 type GatewayCaller = typeof callGateway;

@@ -1,3 +1,4 @@
+// Telegram tests cover sendchataction 401 backoff plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

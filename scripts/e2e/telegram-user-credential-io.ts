@@ -1,3 +1,4 @@
+// Telegram User Credential Io script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
@@ -36,11 +37,15 @@ function readKillGraceMs() {
     return 5_000;
   }
   if (!/^\d+$/u.test(raw)) {
-    throw new Error(`OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`);
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
   }
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`);
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
   }
   return parsed;
 }
@@ -183,7 +188,9 @@ export function runCommand(
         return;
       }
       if (forwardedSignalExitCode !== undefined) {
-        activeChildTree.unregister({ finishForwardedSignal: !childProcessTreeMayStillExist(child) });
+        activeChildTree.unregister({
+          finishForwardedSignal: !childProcessTreeMayStillExist(child),
+        });
         return;
       }
       if (timedOutError && killTimer && childProcessTreeMayStillExist(child)) {

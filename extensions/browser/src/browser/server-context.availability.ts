@@ -1,3 +1,7 @@
+/**
+ * Browser profile availability operations: reachability probes, managed Chrome
+ * launch/restart, Chrome MCP attach, and profile stop handling.
+ */
 import fs from "node:fs";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
@@ -133,6 +137,7 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
+/** Builds reachability, ensure, and stop operations for one resolved browser profile. */
 export function createProfileAvailability({
   opts,
   profile,

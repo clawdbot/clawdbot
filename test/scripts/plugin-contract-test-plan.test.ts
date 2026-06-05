@@ -1,3 +1,4 @@
+// Plugin Contract Test Plan tests cover plugin contract test plan script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mjs";

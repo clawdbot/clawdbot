@@ -1,3 +1,4 @@
+// Identifier redaction helpers replace sensitive identifiers with stable hashes.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 

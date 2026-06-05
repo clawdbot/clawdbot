@@ -1,3 +1,5 @@
+// PDF tool tests cover model discovery, input validation, managed inbound refs,
+// native document providers, extraction fallback, and model-facing schema.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -116,6 +118,8 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
+  // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
+  // remote media loading are replaced with narrow spies at the module boundary.
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
   if (params?.mockLoad !== false) {
     loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
@@ -156,6 +160,8 @@ async function stubPdfToolInfra(
 async function withManagedInboundPdf(
   run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
 ) {
+  // Managed inbound PDFs live under state and may be addressed by claim-check
+  // IDs or absolute paths even when workspace-only policy is active.
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-managed-inbound-"));
   const inboundDir = path.join(stateDir, "media", "inbound");
   const mediaId = "claim-check-test.pdf";
@@ -483,6 +489,8 @@ describe("createPdfTool", () => {
   });
 
   it("uses native PDF path without eager extraction", async () => {
+    // Document-capable providers receive the PDF bytes directly; extraction is
+    // reserved for text-only model paths.
     await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = path.join(agentDir, "workspace");
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });

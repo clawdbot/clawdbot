@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.async search plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 

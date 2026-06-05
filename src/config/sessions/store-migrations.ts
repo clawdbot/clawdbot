@@ -1,3 +1,4 @@
+// Session store migrations repair legacy field names during load/save normalization.
 import type { SessionEntry } from "./types.js";
 
 /** Applies best-effort in-place migrations for legacy session store entry fields. */

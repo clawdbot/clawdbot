@@ -1,9 +1,13 @@
+/**
+ * Default agent workspace resolver.
+ *
+ * Derives the process workspace directory from env, profile, and home-directory state.
+ */
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
-// Default workspace directory resolution for agents.
 /** Resolve the default agent workspace directory from env/profile/home state. */
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,

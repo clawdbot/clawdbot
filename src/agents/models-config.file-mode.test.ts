@@ -1,3 +1,4 @@
+// Verifies models.json writes and repairs use private file permissions.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +27,7 @@ describe("models-config file mode", () => {
   });
 
   it("repairs models.json mode to 0600 on no-content-change paths", async () => {
+    // No-op content updates should still harden existing file permissions.
     if (process.platform === "win32") {
       return;
     }

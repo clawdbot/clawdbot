@@ -1,3 +1,4 @@
+// Web Readability plugin module implements web content extractor behavior.
 import type {
   WebContentExtractionRequest,
   WebContentExtractionResult,

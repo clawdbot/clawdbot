@@ -1,3 +1,4 @@
+// Browser tests cover pw session.get page for targetid.extension fallback plugin behavior.
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";

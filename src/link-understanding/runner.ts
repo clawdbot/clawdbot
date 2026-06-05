@@ -1,3 +1,4 @@
+// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";

@@ -1,3 +1,6 @@
+/**
+ * Browser CLI observation commands for console, PDF, and response bodies.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
@@ -16,6 +19,7 @@ function runBrowserObserve(action: () => Promise<void>) {
   });
 }
 
+/** Registers Browser commands that observe current page state without direct input. */
 export function registerBrowserActionObserveCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

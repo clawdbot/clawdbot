@@ -1,3 +1,8 @@
+/**
+ * Agent session directory discovery helpers.
+ * Lists per-agent `sessions` directories under state roots in sorted order for
+ * callers that scan persisted session stores.
+ */
 import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

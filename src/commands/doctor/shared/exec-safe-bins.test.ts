@@ -1,3 +1,4 @@
+// Exec safe-bin tests cover doctor validation of executable helper paths.
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";

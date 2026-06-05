@@ -1,3 +1,4 @@
+// Internal hook types define runtime hook event families and payload contracts.
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
 export interface InternalHookEvent {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Measures CLI startup memory with an isolated home and RSS hook.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -358,6 +359,9 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   return { skipped: false, results };
 }
 
+/**
+ * Test-only access to pure startup memory helper functions.
+ */
 export const testing = {
   cases,
   parseArgs,

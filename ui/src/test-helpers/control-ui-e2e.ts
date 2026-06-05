@@ -1,3 +1,4 @@
+// Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";

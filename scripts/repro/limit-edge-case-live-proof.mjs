@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Live repro for numeric limit edge cases across diagnostics, usage, and voice-call CLI.
 import assert from "node:assert/strict";
 /**
  * Live repro for limit/CLI numeric fixes (PR #82679). Run: pnpm exec tsx scripts/repro/limit-edge-case-live-proof.mjs
@@ -15,6 +16,9 @@ import {
   resetDiagnosticPhasesForTest,
 } from "../../src/logging/diagnostic-phase.ts";
 
+/**
+ * Creates and cleans a temp root for live proof fixtures.
+ */
 export async function withProofTempRoot(callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-"));
   try {

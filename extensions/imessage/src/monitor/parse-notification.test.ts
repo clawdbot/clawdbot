@@ -1,3 +1,4 @@
+// Imessage tests cover parse notification plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseIMessageNotification } from "./parse-notification.js";
 

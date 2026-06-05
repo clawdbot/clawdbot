@@ -1,3 +1,8 @@
+/**
+ * Exec security floor tests.
+ * Verifies tool config and exec-approvals policy combine by tightening
+ * security/ask rather than silently broadening execution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

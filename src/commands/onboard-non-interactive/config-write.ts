@@ -1,3 +1,9 @@
+/**
+ * Config write commit helper for non-interactive onboarding.
+ *
+ * It preserves pending plugin install records before replacing the user config,
+ * which lets setup reruns avoid dropping plugin-owned state accidentally.
+ */
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
@@ -7,6 +13,7 @@ import {
 import { replaceConfigFile } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Commits a non-interactive onboard config update with pending plugin records handled first. */
 export async function commitNonInteractiveOnboardConfig(params: {
   nextConfig: OpenClawConfig;
   baseConfig: OpenClawConfig;
@@ -19,6 +26,8 @@ export async function commitNonInteractiveOnboardConfig(params: {
   let writeBaseHash = params.baseHash;
   let nextConfig = params.nextConfig;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(params.baseConfig)) {
+    // Pending install records are persisted against the old config first so the
+    // later onboard write can use the fresh hash and keep optimistic locking.
     const migrated = await commitConfigWriteWithPendingPluginInstalls({
       nextConfig: params.baseConfig,
       writeOptions: { allowConfigSizeDrop: true },
@@ -31,6 +40,8 @@ export async function commitNonInteractiveOnboardConfig(params: {
       },
     });
     writeBaseHash = migrated.persistedHash ?? undefined;
+    // If onboard did not change a pending record, strip it from the next write;
+    // the migration above has already committed the durable version.
     nextConfig = stripPendingPluginInstallRecords(
       nextConfig,
       unchangedPendingPluginInstallRecordIds(nextConfig, params.baseConfig),

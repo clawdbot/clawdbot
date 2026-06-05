@@ -1,3 +1,4 @@
+/** Shared cron store sidecar and quarantine types. */
 import type { CronStoreFile } from "../types.js";
 
 /** Invalid config-backed cron job captured for quarantine instead of runtime load. */

@@ -1,3 +1,4 @@
+// Browser tests cover client fetch.attach only plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";

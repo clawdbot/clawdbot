@@ -1,3 +1,8 @@
+/**
+ * web_search built-in tool.
+ *
+ * Runs the configured runtime provider and returns normalized cached search results.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
@@ -6,9 +11,6 @@ import { asToolParamsRecord, jsonResult } from "./common.js";
 import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
 import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
-/**
- * Web search tool wrapper over the configured runtime web-search provider.
- */
 const WebSearchSchema = {
   type: "object",
   required: ["query"],

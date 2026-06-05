@@ -1,12 +1,11 @@
+/**
+ * Subagent session metric helpers.
+ *
+ * Derives display/runtime status from partial live, archived, or recovered registry records.
+ */
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/**
- * Derives display/runtime metrics from persisted subagent run records.
- *
- * These helpers tolerate partial records because registry views can include
- * archived, live, or recovered sessions with different timestamp coverage.
- */
 function resolveSubagentSessionStartedAtInternal(
   entry: Pick<SubagentRunRecord, "sessionStartedAt" | "startedAt" | "createdAt">,
 ): number | undefined {

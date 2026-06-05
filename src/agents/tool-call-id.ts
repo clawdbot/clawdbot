@@ -1,3 +1,8 @@
+/**
+ * Tool call id normalization and extraction helpers.
+ *
+ * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
+ */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "./runtime/index.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";

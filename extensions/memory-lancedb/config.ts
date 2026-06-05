@@ -1,3 +1,4 @@
+// Memory Lancedb helper module supports config behavior.
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

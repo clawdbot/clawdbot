@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reports plugin SDK export surface metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

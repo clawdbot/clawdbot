@@ -1,3 +1,4 @@
+// Verifies workspace-relative path policy across POSIX and Windows semantics.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
@@ -11,6 +12,7 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 
 describe("toRelativeWorkspacePath (windows semantics)", () => {
   beforeEach(() => {
+    // Sandbox input resolution is not under test; return normalized input paths directly.
     resolveSandboxInputPathMock.mockReset();
     resolveSandboxInputPathMock.mockImplementation((filePath: string) => filePath);
   });

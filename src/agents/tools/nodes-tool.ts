@@ -1,3 +1,8 @@
+/**
+ * nodes built-in tool.
+ *
+ * Manages node pairing, notifications, device state, media capture, and approved command invocation.
+ */
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";

@@ -1,5 +1,9 @@
+/**
+ * Shared ClickClack config, runtime account, API object, and target types.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
+/** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
@@ -18,17 +22,20 @@ export type ClickClackAccountConfig = {
   reconnectMs?: number;
 };
 
+/** Root ClickClack channel config with optional named accounts. */
 export type ClickClackConfig = ClickClackAccountConfig & {
   accounts?: Record<string, Partial<ClickClackAccountConfig>>;
   defaultAccount?: string;
 };
 
+/** OpenClaw config narrowed to include ClickClack channel settings. */
 export type CoreConfig = OpenClawConfig & {
   channels?: OpenClawConfig["channels"] & {
     clickclack?: ClickClackConfig;
   };
 };
 
+/** Normalized account snapshot consumed by runtime paths. */
 export type ResolvedClickClackAccount = {
   accountId: string;
   enabled: boolean;
@@ -50,6 +57,7 @@ export type ResolvedClickClackAccount = {
   config: ClickClackAccountConfig;
 };
 
+/** User object returned by the ClickClack API. */
 export type ClickClackUser = {
   id: string;
   kind?: "human" | "bot";
@@ -60,6 +68,7 @@ export type ClickClackUser = {
   created_at: string;
 };
 
+/** Workspace object returned by the ClickClack API. */
 export type ClickClackWorkspace = {
   id: string;
   name: string;
@@ -67,6 +76,7 @@ export type ClickClackWorkspace = {
   created_at: string;
 };
 
+/** Channel object returned by the ClickClack API. */
 export type ClickClackChannel = {
   id: string;
   workspace_id: string;
@@ -75,6 +85,7 @@ export type ClickClackChannel = {
   created_at: string;
 };
 
+/** Message object returned by ClickClack channel, DM, and thread endpoints. */
 export type ClickClackMessage = {
   id: string;
   workspace_id: string;
@@ -91,6 +102,7 @@ export type ClickClackMessage = {
   author?: ClickClackUser;
 };
 
+/** Realtime event envelope returned by ClickClack polling/websocket APIs. */
 export type ClickClackEvent = {
   id: string;
   cursor: string;
@@ -102,6 +114,7 @@ export type ClickClackEvent = {
   payload: Record<string, unknown>;
 };
 
+/** Parsed outbound destination for ClickClack delivery. */
 export type ClickClackTarget =
   | { chatType: "group"; kind: "channel"; id: string }
   | { chatType: "group"; kind: "thread"; id: string }

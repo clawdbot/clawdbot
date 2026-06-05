@@ -1,3 +1,4 @@
+// Vitest boundary config tests validate boundary test configuration.
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {

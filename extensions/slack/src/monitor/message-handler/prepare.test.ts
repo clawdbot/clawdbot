@@ -1,3 +1,4 @@
+// Slack tests cover prepare plugin behavior.
 import fs from "node:fs";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";

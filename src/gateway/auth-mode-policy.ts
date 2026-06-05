@@ -1,3 +1,5 @@
+// Gateway auth mode policy rejects ambiguous token+password config before
+// credential resolution can choose the wrong side.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 

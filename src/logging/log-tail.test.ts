@@ -1,3 +1,4 @@
+// Log tail tests cover reading, parsing, and limiting recent log entries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Gateway E2E harness starts test gateway processes and HTTP probes.
 import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";

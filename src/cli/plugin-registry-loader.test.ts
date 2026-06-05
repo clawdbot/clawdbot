@@ -1,3 +1,4 @@
+// Plugin registry loader tests cover CLI plugin registry loading and cache reset behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());

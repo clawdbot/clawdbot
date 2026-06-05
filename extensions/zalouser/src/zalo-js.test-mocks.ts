@@ -1,3 +1,4 @@
+// Zalouser plugin module implements zalo js mocks behavior.
 import { vi, type Mock } from "vitest";
 
 type ZaloJsModule = typeof import("./zalo-js.js");

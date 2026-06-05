@@ -1,3 +1,4 @@
+// Coverage for provider-runtime extra parameter handoff and transport filtering.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { Model } from "../../llm/types.js";
@@ -18,6 +19,8 @@ beforeEach(() => {
       if (provider !== "local-provider" || context.thinkingLevel !== "off") {
         return context.streamFn;
       }
+      // Local-provider plugin owns the exact payload spelling for thinking-off;
+      // core only hands the intent through this wrapper seam.
       const baseStreamFn = context.streamFn;
       if (!baseStreamFn) {
         return undefined;
@@ -42,6 +45,8 @@ afterEach(() => {
 
 describe("extra-params: provider runtime handoff", () => {
   it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
+    // Upstream transports can name modes OpenClaw does not own; unresolved values
+    // must be filtered before plugin runtime hooks receive them.
     const settingsManager = {
       getGlobalSettings: () => ({}),
       getProjectSettings: () => ({}),
@@ -84,7 +89,8 @@ describe("extra-params: provider runtime handoff", () => {
       },
     }).payload as Record<string, unknown>;
 
-    // think must be top-level, not nested under options
+    // think must be top-level, not nested under options; provider runtimes own
+    // this wire-format distinction.
     expect(payload.think).toBe(false);
     expect((payload.options as Record<string, unknown>).think).toBeUndefined();
   });

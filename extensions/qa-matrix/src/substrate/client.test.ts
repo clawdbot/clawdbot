@@ -1,3 +1,4 @@
+// Qa Matrix tests cover client plugin behavior.
 import { describe, expect, it } from "vitest";
 import { testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";

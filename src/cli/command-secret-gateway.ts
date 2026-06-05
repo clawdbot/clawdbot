@@ -1,3 +1,4 @@
+// Command-time secret resolution through gateway/local secret stores for configured targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements ack emoji behavior.
 import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 

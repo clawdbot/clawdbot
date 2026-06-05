@@ -1,3 +1,5 @@
+// Sandbox workspace tests cover bootstrap file seeding into isolated workspaces
+// without following unsafe host links.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +37,8 @@ describe("ensureSandboxWorkspace", () => {
   });
 
   it.runIf(process.platform !== "win32")("skips symlinked bootstrap seed files", async () => {
+    // Bootstrap files can influence agent behavior; symlinks must not pull in
+    // arbitrary host files from outside the source workspace.
     const root = await makeTempRoot();
     const seed = path.join(root, "seed");
     const sandbox = path.join(root, "sandbox");

@@ -1,3 +1,4 @@
+// Matrix tests cover crypto facade plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";

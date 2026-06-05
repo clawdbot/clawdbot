@@ -1,3 +1,7 @@
+/**
+ * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
+ * termination for Codex sandbox exec-server process RPCs.
+ */
 import { spawn } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { WebSocket } from "ws";
@@ -9,6 +13,7 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RETAINED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const CLOSED_PROCESS_EVICTION_MS = 60_000;
 
+/** Starts a sandbox-backed process and registers it in the connection-local process table. */
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
@@ -148,6 +153,8 @@ function appendProcessChunk(
   };
   managed.chunks.push(chunk);
   managed.retainedOutputBytes += data.length;
+  // Keep enough recent output for polling clients without letting long-running
+  // processes grow the app-server bridge memory without bound.
   while (managed.retainedOutputBytes > RETAINED_PROCESS_OUTPUT_BYTES && managed.chunks.length > 1) {
     const removed = managed.chunks.shift();
     if (!removed) {
@@ -196,6 +203,8 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
       error: message,
     });
   });
+  // Closed processes stay briefly readable so clients that observe close before
+  // their final poll can still drain exit/output state.
   managed.evictProcess();
   notifyProcessWaiters(managed);
 }
@@ -234,6 +243,7 @@ function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined
   return retained;
 }
 
+/** Reads buffered process output, optionally waiting for new output or process close. */
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -261,6 +271,7 @@ export async function readProcess(
   };
 }
 
+/** Writes base64 stdin data to a running process when stdin is still open. */
 export function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -279,6 +290,7 @@ export function writeProcess(
   return { status: "accepted" };
 }
 
+/** Requests process termination and reports whether it was running at call time. */
 export function terminateProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,

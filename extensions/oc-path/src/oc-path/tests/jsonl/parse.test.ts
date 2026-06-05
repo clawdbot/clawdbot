@@ -1,3 +1,4 @@
+// OC Path tests cover parse plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseJsonl } from "../../jsonl/parse.js";
 

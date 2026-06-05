@@ -1,3 +1,5 @@
+// Extra bootstrap file tests cover glob/literal path loading, workspace
+// containment checks, symlink handling, and diagnostics for skipped files.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -117,6 +119,8 @@ describe("loadExtraBootstrapFiles", () => {
   });
 
   it("rejects hardlinked aliases to files outside workspace", async () => {
+    // Hardlinks can look like in-workspace files by path; inode/realpath checks
+    // keep outside bootstrap content from entering the prompt.
     if (process.platform === "win32") {
       return;
     }

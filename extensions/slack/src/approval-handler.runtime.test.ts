@@ -1,3 +1,4 @@
+// Slack tests cover approval handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 

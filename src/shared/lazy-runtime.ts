@@ -1,3 +1,4 @@
+// Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
   select: (module: TModule) => TSurface,

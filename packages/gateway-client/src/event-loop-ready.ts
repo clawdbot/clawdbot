@@ -1,3 +1,4 @@
+// Gateway Client module implements event loop ready behavior.
 import { resolveFiniteTimeoutDelayMs } from "./timeouts.js";
 
 /** Readiness probe outcome with timing data for diagnosing event-loop stalls. */

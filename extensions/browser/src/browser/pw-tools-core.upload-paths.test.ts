@@ -1,12 +1,17 @@
+// Browser tests cover pw tools core.upload paths plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installPwToolsCoreTestHooks, setPwToolsCoreCurrentPage } from "./pw-tools-core.test-harness.js";
+import {
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+} from "./pw-tools-core.test-harness.js";
 
 const pathMocks = vi.hoisted(() => ({
-  resolveStrictExistingUploadPaths: vi.fn<
-    (args: { requestedPaths: string[] }) => Promise<
-      { ok: true; paths: string[] } | { ok: false; error: string }
-    >
-  >(),
+  resolveStrictExistingUploadPaths:
+    vi.fn<
+      (args: {
+        requestedPaths: string[];
+      }) => Promise<{ ok: true; paths: string[] } | { ok: false; error: string }>
+    >(),
 }));
 
 vi.mock("./paths.js", async (importOriginal) => {

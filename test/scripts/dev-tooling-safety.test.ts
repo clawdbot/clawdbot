@@ -1,3 +1,4 @@
+// Dev Tooling Safety tests cover dev tooling safety script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";

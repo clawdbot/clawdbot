@@ -1,3 +1,4 @@
+// Matrix tests cover onboarding plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import {

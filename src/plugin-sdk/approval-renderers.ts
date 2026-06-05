@@ -1,3 +1,4 @@
+// Approval renderer helpers convert approval request data into channel-safe display text.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildApprovalPresentation,
@@ -81,6 +82,7 @@ export function buildApprovalResolvedReplyPayload(params: {
   };
 }
 
+/** Build pending plugin approval copy and metadata from a plugin approval request. */
 export function buildPluginApprovalPendingReplyPayload(params: {
   /** Plugin approval request to render. */
   request: PluginApprovalRequest;
@@ -107,6 +109,7 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   });
 }
 
+/** Build resolved plugin approval copy and metadata from a plugin approval event. */
 export function buildPluginApprovalResolvedReplyPayload(params: {
   /** Resolved plugin approval event to render. */
   resolved: PluginApprovalResolved;

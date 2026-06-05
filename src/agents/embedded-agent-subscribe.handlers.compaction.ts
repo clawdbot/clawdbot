@@ -1,3 +1,8 @@
+/**
+ * Handles embedded-agent compaction lifecycle events. The handlers pause
+ * liveness, emit agent events, run hooks, reconcile persisted counts, and
+ * clear stale usage after compaction rewrites history.
+ */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";

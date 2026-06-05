@@ -1,3 +1,4 @@
+// Whatsapp tests cover session plugin behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -509,6 +510,16 @@ describe("web session", () => {
 
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeout: "none" },
+    );
+    ev.emit("connection.update", { connection: "open" });
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("keeps one-argument callers on the old no-timeout wait policy", async () => {
+    const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
       typeof baileys.makeWASocket
     >);
@@ -518,14 +529,44 @@ describe("web session", () => {
 
   it("rejects when connection closes", async () => {
     const ev = new EventEmitter();
-    const promise = waitForWaConnection({ ev } as unknown as ReturnType<
-      typeof baileys.makeWASocket
-    >);
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeout: "none" },
+    );
     ev.emit("connection.update", {
       connection: "close",
       lastDisconnect: new Error("bye"),
     });
     await expect(promise).rejects.toBeInstanceOf(Error);
+  });
+
+  it("rejects after timeout with no connection event", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeoutMs: 100 },
+    );
+    vi.advanceTimersByTime(100);
+    const error = await promise.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("timed out after 100ms");
+    expect(error).toMatchObject({ output: { statusCode: 408 } });
+    expect(ev.listenerCount("connection.update")).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("clears timeout when connection opens before timeout", async () => {
+    vi.useFakeTimers();
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeoutMs: 5000 },
+    );
+    ev.emit("connection.update", { connection: "open" });
+    await expect(promise).resolves.toBeUndefined();
+    expect(ev.listenerCount("connection.update")).toBe(0);
+    vi.useRealTimers();
   });
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {

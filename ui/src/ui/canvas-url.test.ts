@@ -1,3 +1,4 @@
+// Control UI tests cover canvas url behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCanvasIframeUrl } from "./canvas-url.ts";
 

@@ -1,3 +1,4 @@
+// Plugin payload validation tests cover update payload checks for plugin updates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

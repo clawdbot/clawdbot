@@ -1,3 +1,4 @@
+// Matrix plugin module implements crypto bootstrap behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";

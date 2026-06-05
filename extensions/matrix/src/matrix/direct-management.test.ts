@@ -1,3 +1,4 @@
+// Matrix tests cover direct management plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   inspectMatrixDirectRooms,

@@ -1,3 +1,4 @@
+// File Transfer tests cover file write tool plugin behavior.
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createFileWriteTool } from "./file-write-tool.js";

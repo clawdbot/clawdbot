@@ -1,3 +1,4 @@
+/** SQLite column codec for cron payload variants. */
 import type { CronPayload } from "../types.js";
 import {
   booleanToInteger,

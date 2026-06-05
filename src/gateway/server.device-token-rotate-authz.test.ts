@@ -1,3 +1,5 @@
+// Device token rotation tests cover pairing-scoped operators, admin rotation
+// rights, approved node reconnects, and invoke continuity after token changes.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {

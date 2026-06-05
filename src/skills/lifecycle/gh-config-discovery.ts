@@ -1,3 +1,4 @@
+// GitHub config discovery helpers locate skill config files inside repository archives.
 import { posix as posixPath, win32 as win32Path } from "node:path";
 
 function pathFor(platform: NodeJS.Platform) {

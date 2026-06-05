@@ -1,3 +1,4 @@
+// Qa Lab Up tests cover qa lab up script behavior.
 import { describe, expect, it, vi } from "vitest";
 import { qaLabUpTesting } from "../../scripts/qa-lab-up.js";
 

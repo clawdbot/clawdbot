@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register streaming behavior.
 import type { ApproveRuntimeGetter } from "../../adapter/commands.port.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import {

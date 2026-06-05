@@ -1,3 +1,4 @@
+// Matrix tests cover route plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import {

@@ -1,3 +1,9 @@
+/**
+ * Runtime plugin install helpers for model selection.
+ *
+ * Model choices can require runtime plugins such as Codex or Copilot; this
+ * module installs, enables, or repairs those plugins from a shared descriptor.
+ */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,6 +14,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Static install metadata for a runtime plugin required by model selection. */
 export type RuntimePluginInstallDescriptor = {
   pluginId: string;
   label: string;
@@ -15,6 +22,7 @@ export type RuntimePluginInstallDescriptor = {
   warningLabel: string;
 };
 
+/** Result returned after ensuring a runtime plugin for a selected model. */
 export type RuntimePluginInstallResult = {
   cfg: OpenClawConfig;
   required: boolean;
@@ -22,8 +30,10 @@ export type RuntimePluginInstallResult = {
   status?: "installed" | "skipped" | "failed" | "timed_out";
 };
 
+/** Predicate that decides whether a config/model pair needs the runtime plugin. */
 export type RuntimePluginSelection = (params: { cfg: OpenClawConfig; model?: string }) => boolean;
 
+/** Parameters for installing or enabling a runtime plugin during setup. */
 export type RuntimePluginEnsureParams = {
   cfg: OpenClawConfig;
   model?: string;
@@ -32,12 +42,14 @@ export type RuntimePluginEnsureParams = {
   workspaceDir?: string;
 };
 
+/** Parameters for doctor-style runtime plugin repair. */
 export type RuntimePluginRepairParams = {
   cfg: OpenClawConfig;
   model?: string;
   env?: NodeJS.ProcessEnv;
 };
 
+/** Convenience helpers bound to one runtime plugin descriptor. */
 export type RuntimePluginModelSelectionHelpers = {
   ensure: (params: RuntimePluginEnsureParams) => Promise<RuntimePluginInstallResult>;
   repair: (
@@ -56,6 +68,7 @@ function isInstalledRecordPresentOnDisk(
   return existsSync(path.join(resolveUserPath(installPath, env), "package.json"));
 }
 
+/** Ensures the runtime plugin required by the selected model is installed and enabled. */
 export async function ensureRuntimePluginForModelSelection(params: {
   cfg: OpenClawConfig;
   model?: string;
@@ -74,6 +87,8 @@ export async function ensureRuntimePluginForModelSelection(params: {
   }
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
   if (isInstalledRecordPresentOnDisk(existingRecords[params.descriptor.pluginId], process.env)) {
+    // A recorded install with package.json on disk can be repaired/enabled
+    // without re-downloading the plugin during setup.
     const repair = await repairRuntimePluginInstallForModelSelection({
       cfg: params.cfg,
       model: params.model,
@@ -96,6 +111,8 @@ export async function ensureRuntimePluginForModelSelection(params: {
     };
   }
   const { ensureOnboardingPluginInstalled } = await import("./onboarding-plugin-install.js");
+  // Defer to the onboarding plugin installer so runtime plugin installs get the
+  // same trust, record, timeout, and progress handling as channel/provider setup.
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
@@ -122,6 +139,7 @@ export async function ensureRuntimePluginForModelSelection(params: {
   };
 }
 
+/** Repairs missing install records for runtime plugins required by model selection. */
 export async function repairRuntimePluginInstallForModelSelection(params: {
   cfg: OpenClawConfig;
   model?: string;
@@ -146,6 +164,7 @@ export async function repairRuntimePluginInstallForModelSelection(params: {
   };
 }
 
+/** Creates ensure/repair helpers pre-bound to a runtime plugin descriptor. */
 export function createRuntimePluginModelSelectionHelpers(params: {
   descriptor: RuntimePluginInstallDescriptor;
   shouldEnsure: RuntimePluginSelection;

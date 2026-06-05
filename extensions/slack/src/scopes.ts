@@ -1,3 +1,4 @@
+// Slack plugin module implements scopes behavior.
 import type { WebClient } from "@slack/web-api";
 import {
   isRecord,

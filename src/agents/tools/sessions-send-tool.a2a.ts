@@ -1,3 +1,8 @@
+/**
+ * sessions_send agent-to-agent reply flow.
+ *
+ * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
+ */
 import crypto from "node:crypto";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";

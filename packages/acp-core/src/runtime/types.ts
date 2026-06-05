@@ -1,3 +1,4 @@
+// ACP Core type module defines shared TypeScript contracts.
 export type AcpRuntimePromptMode = "prompt" | "steer";
 
 export type AcpRuntimeSessionMode = "persistent" | "oneshot";

@@ -1,3 +1,4 @@
+// Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPackageManagerWarningMessage,

@@ -1,3 +1,7 @@
+/**
+ * Anthropic config defaulting helpers. They seed default Anthropic/Claude CLI
+ * model refs and cache-retention params based on configured auth mode.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   isRecord,
@@ -274,6 +278,7 @@ function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unk
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
 }
 
+/** Normalize Anthropic provider config defaults for one provider entry. */
 export function normalizeAnthropicProviderConfigForProvider<
   T extends { api?: string; models?: unknown[] },
 >(params: { provider: string; providerConfig: T }): T {
@@ -284,6 +289,7 @@ export function normalizeAnthropicProviderConfigForProvider<
   return normalizeAnthropicProviderConfig(params.providerConfig);
 }
 
+/** Apply Anthropic and Claude CLI defaults to an OpenClaw config object. */
 export function applyAnthropicConfigDefaults(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

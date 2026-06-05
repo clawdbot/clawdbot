@@ -1,3 +1,5 @@
+// Covers command-session store updates after agent runs, CLI compaction, and
+// runtime metadata persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,6 +101,8 @@ vi.mock("../../config/sessions.js", async () => {
           .map(([key, entry]) => [key, entry.acp]),
       );
       const result = await mutator(store);
+      // The mocked store keeps ACP metadata sticky to preserve the production
+      // merge behavior that protects persistent ACP session handles.
       for (const [key, acp] of previousAcpByKey) {
         const next = store[key];
         if (next && !next.acp) {
@@ -155,6 +159,8 @@ function acpMeta() {
 async function withTempSessionStore<T>(
   run: (params: { dir: string; storePath: string }) => Promise<T>,
 ): Promise<T> {
+  // Session-store tests exercise real JSON persistence, but each case gets an
+  // isolated file so mutation order remains deterministic.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
   try {
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
@@ -206,6 +212,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
+      // The gateway write takes cache ownership and supplies single-entry
+      // persistence so large stores are not rewritten unnecessarily.
       const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
       expect(updateOptions).toMatchObject({
         takeCacheOwnership: true,

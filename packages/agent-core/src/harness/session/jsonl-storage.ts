@@ -1,3 +1,4 @@
+// Agent Core module implements jsonl storage behavior.
 import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";

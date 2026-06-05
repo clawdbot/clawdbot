@@ -1,3 +1,4 @@
+// Slack tests cover progress blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildSlackProgressDraftBlocks,

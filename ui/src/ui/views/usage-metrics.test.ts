@@ -1,3 +1,4 @@
+// Control UI tests cover usage metrics behavior.
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   buildPeakErrorHours,

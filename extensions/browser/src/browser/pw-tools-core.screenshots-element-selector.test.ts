@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.screenshots element selector plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

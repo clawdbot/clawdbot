@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover qmd query parser behavior.
 import { describe, expect, it } from "vitest";
 import { parseQmdQueryJson } from "./qmd-query-parser.js";
 

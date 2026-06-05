@@ -1,3 +1,4 @@
+// Diffs Shiki Curated script supports OpenClaw repository automation.
 import {
   createBundledHighlighter,
   createCssVariablesTheme,

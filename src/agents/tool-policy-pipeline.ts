@@ -1,3 +1,8 @@
+/**
+ * Applies layered tool policy in runtime resolution order. Policy diagnostics
+ * stay tied to the layer that introduced them, while plugin groups are
+ * expanded only after unknown core/plugin entries are classified.
+ */
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
@@ -10,12 +15,6 @@ import {
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
-/**
- * Applies layered tool policy in runtime resolution order.
- *
- * Policy diagnostics stay tied to the layer that introduced them, while plugin
- * groups are expanded only after unknown core/plugin entries are classified.
- */
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
 const toolPolicyWarningOrder: string[] = [];

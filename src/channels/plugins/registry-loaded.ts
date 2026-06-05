@@ -1,3 +1,8 @@
+/**
+ * Loaded channel plugin registry view.
+ *
+ * Normalizes and sorts active plugin runtime state for channel registry callers.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
@@ -5,10 +10,6 @@ import type {
 } from "../../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
-
-/**
- * Loaded channel plugin registry view derived from active plugin runtime state.
- */
 
 /**
  * Loaded channel plugin shape after id/meta normalization.

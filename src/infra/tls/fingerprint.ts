@@ -1,3 +1,5 @@
+// TLS fingerprint normalization accepts common SHA-256 display formats and
+// stores lowercase hex for config comparisons.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Gateway TLS fingerprints are stored as lowercase hex without labels or

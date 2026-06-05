@@ -1,3 +1,8 @@
+/**
+ * Session auth-profile override rotation tests.
+ * Exercises provider compatibility, cooldown handling, and persisted override
+ * updates without loading the real auth store implementation.
+ */
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";

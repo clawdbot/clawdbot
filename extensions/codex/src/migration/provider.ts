@@ -1,3 +1,4 @@
+// Codex provider module implements model/runtime integration.
 import type {
   MigrationPlan,
   MigrationProviderContext,

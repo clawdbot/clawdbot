@@ -1,3 +1,5 @@
+// Gateway run-id to session-key resolver.
+// Bridges live agent run context with persisted session stores.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -53,6 +55,8 @@ function setResolvedSessionKeyCache(
   }
   let expiresAt: number | null = null;
   if (sessionKey === null) {
+    // Negative caching avoids repeated full-store scans while still allowing
+    // a just-created run/session pair to appear shortly after the first lookup.
     const missExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS);
     if (missExpiresAt === undefined) {
       return;
@@ -122,6 +126,8 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
+    // Return caller-facing agent request keys, not raw store keys, because
+    // HTTP/RPC clients reuse this value in later session operations.
     const sessionKey = resolveRunSessionKeyForCaller(storeKey);
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;

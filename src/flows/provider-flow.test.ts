@@ -1,3 +1,4 @@
+// Provider flow tests cover provider setup prompts and config mutations.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveProviderInstallCatalogEntries =

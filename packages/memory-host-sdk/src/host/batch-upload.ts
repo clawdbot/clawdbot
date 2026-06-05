@@ -1,3 +1,4 @@
+// Memory Host SDK module implements batch upload behavior.
 import {
   buildBatchHeaders,
   normalizeBatchBaseUrl,

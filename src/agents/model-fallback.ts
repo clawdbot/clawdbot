@@ -1,3 +1,6 @@
+/**
+ * Runs model and image fallback chains across provider/model candidates.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {

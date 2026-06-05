@@ -1,3 +1,4 @@
+// Discord plugin module implements component custom id behavior.
 import { parseCustomId, type ComponentParserResult } from "./internal/discord.js";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";

@@ -1,3 +1,4 @@
+// Doctor auth alias tests cover canonical API-key profile repair and auth-profile store migration.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

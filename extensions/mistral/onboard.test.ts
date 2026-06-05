@@ -1,3 +1,4 @@
+// Mistral tests cover onboard plugin behavior.
 import {
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPrimaryAndFallbacks,

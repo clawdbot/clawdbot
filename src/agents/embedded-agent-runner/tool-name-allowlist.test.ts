@@ -1,3 +1,5 @@
+// Tool-name allowlist tests cover session replay names, client tool conflict
+// checks, and Tool Search compaction visibility.
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -54,6 +56,8 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden core names available for client conflict admission", () => {
+    // Tool Search hides many built-ins from the visible tool list, but conflict
+    // checks still need the original core names to reject duplicate client tools.
     const uncompactedTools = [
       createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
       createStubTool("exec"),
@@ -150,6 +154,8 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden catalog tools valid for replay guards after Tool Search compaction", () => {
+    // Replay validation uses the full registered tool set; the visible session
+    // allowlist can be narrower after catalog compaction.
     const config = { tools: { toolSearch: true } } as never;
     const uncompactedTools = [
       createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),

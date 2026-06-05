@@ -1,3 +1,4 @@
+// Openai tests cover realtime transcription provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 

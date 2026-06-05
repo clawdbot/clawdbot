@@ -1,3 +1,4 @@
+// Discord plugin module implements native command ui behavior.
 export {
   buildDiscordCommandArgCustomId,
   buildDiscordCommandArgMenu,

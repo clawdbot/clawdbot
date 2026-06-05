@@ -1,3 +1,4 @@
+// QA Convex credential tests validate credential payload shapes.
 import { describe, expect, it } from "vitest";
 import {
   CredentialPayloadValidationError,

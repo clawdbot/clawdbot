@@ -1,3 +1,4 @@
+// Parent default help tests cover parent command help fallback behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyParentDefaultHelpAction, isParentDefaultHelpAction } from "./parent-default-help.js";

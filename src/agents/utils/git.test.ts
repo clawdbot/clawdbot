@@ -1,3 +1,5 @@
+// Git utility tests cover plugin git source parsing, ref extraction, and path
+// traversal rejection before managed checkouts are created.
 import { describe, expect, it } from "vitest";
 import { parseGitUrl } from "./git.js";
 
@@ -38,6 +40,8 @@ describe("parseGitUrl", () => {
   });
 
   it("rejects repository paths that could escape managed checkout roots", () => {
+    // Managed plugin checkouts derive local paths from repo path segments, so
+    // dot-segments are rejected instead of normalized.
     expect(parseGitUrl("git:https://example.com/openclaw/../outside")).toBeNull();
     expect(parseGitUrl("git:git@example.com:openclaw/../outside")).toBeNull();
     expect(parseGitUrl("git:example.com/openclaw/./outside")).toBeNull();

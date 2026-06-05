@@ -1,3 +1,4 @@
+// Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,

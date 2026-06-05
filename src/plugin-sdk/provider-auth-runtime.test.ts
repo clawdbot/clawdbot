@@ -1,3 +1,4 @@
+// Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
 import { createServer } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";

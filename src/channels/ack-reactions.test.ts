@@ -1,3 +1,4 @@
+// Ack reaction tests cover acknowledgement reaction behavior for inbound channel events.
 import { describe, expect, it, vi } from "vitest";
 import {
   createAckReactionHandle,

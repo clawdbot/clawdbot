@@ -1,5 +1,7 @@
+// Command secret gateway tests cover secret resolution for gateway-backed CLI commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildTalkTestProviderConfig,
   readTalkTestProviderApiKey as readTalkProviderApiKey,
@@ -45,21 +47,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     value: string | undefined,
     fn: () => Promise<void>,
   ): Promise<void> {
-    const priorValue = process.env[envKey];
-    if (value === undefined) {
-      delete process.env[envKey];
-    } else {
-      process.env[envKey] = value;
-    }
-    try {
-      await fn();
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = priorValue;
-      }
-    }
+    await withEnvAsync({ [envKey]: value }, fn);
   }
 
   async function resolveTalkProviderApiKey(params: {
@@ -526,10 +514,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("fails fast when gateway-backed resolution is unavailable", async () => {
     const envKey = "TALK_API_KEY_FAILFAST";
-    const priorValue = process.env[envKey];
-    delete process.env[envKey];
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-    try {
+    await withEnvValue(envKey, undefined, async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       await expect(
         resolveCommandSecretRefsViaGateway({
           config: buildTalkTestProviderConfig({
@@ -541,20 +527,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           targetIds: new Set(["talk.providers.*.apiKey"]),
         }),
       ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = priorValue;
-      }
-    }
+    });
   });
 
   it("falls back to local resolution when gateway secrets.resolve is unavailable", async () => {
-    const priorValue = process.env.TALK_API_KEY;
-    process.env.TALK_API_KEY = "local-fallback-key"; // pragma: allowlist secret
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-    try {
+    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           ...buildTalkTestProviderConfig({
@@ -579,13 +557,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(
         result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
       ).toBe(true);
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env.TALK_API_KEY;
-      } else {
-        process.env.TALK_API_KEY = priorValue;
-      }
-    }
+    });
   });
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
@@ -1155,20 +1127,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("limits strict local fallback analysis to unresolved gateway paths", async () => {
     const locallyRecoveredKey = "TALK_API_KEY_PARTIAL_GATEWAY_LOCAL";
-    const priorLocallyRecoveredValue = process.env[locallyRecoveredKey];
-    process.env[locallyRecoveredKey] = "recovered-locally";
-    callGateway.mockResolvedValueOnce({
-      assignments: [
-        {
-          path: TALK_TEST_PROVIDER_API_KEY_PATH,
-          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-          value: "resolved-by-gateway",
-        },
-      ],
-      diagnostics: [],
-    });
-
-    try {
+    await withEnvValue(locallyRecoveredKey, "recovered-locally", async () => {
+      callGateway.mockResolvedValueOnce({
+        assignments: [
+          {
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            value: "resolved-by-gateway",
+          },
+        ],
+        diagnostics: [],
+      });
       const result = await resolveCommandSecretRefsViaGateway({
         config: buildTalkTestProviderConfig({
           source: "env",
@@ -1182,25 +1151,14 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("resolved-by-gateway");
       expect(result.hadUnresolvedTargets).toBe(false);
       expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
-    } finally {
-      if (priorLocallyRecoveredValue === undefined) {
-        delete process.env[locallyRecoveredKey];
-      } else {
-        process.env[locallyRecoveredKey] = priorLocallyRecoveredValue;
-      }
-    }
+    });
   });
 
   it("limits local fallback to targeted refs in read-only modes", async () => {
     const talkEnvKey = "TALK_API_KEY_TARGET_ONLY";
     const gatewayEnvKey = "GATEWAY_PASSWORD_UNRELATED";
-    const priorTalkValue = process.env[talkEnvKey];
-    const priorGatewayValue = process.env[gatewayEnvKey];
-    process.env[talkEnvKey] = "target-only";
-    delete process.env[gatewayEnvKey];
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-
-    try {
+    await withEnvAsync({ [talkEnvKey]: "target-only", [gatewayEnvKey]: undefined }, async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           ...buildTalkTestProviderConfig({
@@ -1222,27 +1180,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
       expect(result.hadUnresolvedTargets).toBe(false);
       expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    } finally {
-      if (priorTalkValue === undefined) {
-        delete process.env[talkEnvKey];
-      } else {
-        process.env[talkEnvKey] = priorTalkValue;
-      }
-      if (priorGatewayValue === undefined) {
-        delete process.env[gatewayEnvKey];
-      } else {
-        process.env[gatewayEnvKey] = priorGatewayValue;
-      }
-    }
+    });
   });
 
   it("degrades unresolved refs in read-only operational mode", async () => {
     const envKey = "TALK_API_KEY_OPERATIONAL_MISSING";
-    const priorValue = process.env[envKey];
-    delete process.env[envKey];
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-
-    try {
+    await withEnvValue(envKey, undefined, async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: buildTalkTestProviderConfig({
           source: "env",
@@ -1262,12 +1206,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           entry.includes("attempted local command-secret resolution"),
         ),
       ).toBe(true);
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = priorValue;
-      }
-    }
+    });
   });
 });

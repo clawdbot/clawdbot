@@ -1,3 +1,4 @@
+// Test routing roots for Microsoft Teams extension tests.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const msTeamsExtensionIds = ["msteams"];

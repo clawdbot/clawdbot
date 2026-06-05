@@ -1,3 +1,4 @@
+// Verifies provider auth aliases share trusted env/profile credentials.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
@@ -87,6 +88,8 @@ function expectAuthResult(
     profileId?: string;
   },
 ) {
+  // Keep auth result assertions focused on persisted marker/source fields
+  // rather than the whole resolver result shape.
   expect(value.apiKey).toBe(expected.apiKey);
   expect(value.mode).toBe(expected.mode);
   expect(value.source).toBe(expected.source);
@@ -151,6 +154,8 @@ describe("provider auth aliases", () => {
   });
 
   it("ignores provider auth aliases from untrusted workspace plugins during runtime auth lookup", () => {
+    // Workspace plugins cannot alias themselves to bundled provider auth and
+    // inherit its credentials at runtime.
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {

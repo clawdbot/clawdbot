@@ -1,3 +1,4 @@
+// Fire-and-forget hook tests cover async hook execution without blocking callers.
 import { describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";

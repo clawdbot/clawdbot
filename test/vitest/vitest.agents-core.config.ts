@@ -1,3 +1,4 @@
+// Vitest agents core config wires the agents core test shard.
 import { agentsCoreTestPatterns } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

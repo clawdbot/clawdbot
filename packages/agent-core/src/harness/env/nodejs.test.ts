@@ -1,3 +1,4 @@
+// Agent Core tests cover nodejs behavior.
 import { describe, expect, it } from "vitest";
 import { resolveExecTimeoutMs } from "./nodejs.js";
 

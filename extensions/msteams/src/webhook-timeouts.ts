@@ -1,3 +1,4 @@
+// Msteams plugin module implements webhook timeouts behavior.
 import type { Server } from "node:http";
 
 const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;

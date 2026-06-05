@@ -1,3 +1,4 @@
+// Memory Wiki tests cover time plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 

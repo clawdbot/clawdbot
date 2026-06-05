@@ -1,3 +1,4 @@
+// Zalouser plugin module implements accounts mocks behavior.
 import { vi } from "vitest";
 import { createDefaultResolvedZalouserAccount } from "./test-helpers.js";
 

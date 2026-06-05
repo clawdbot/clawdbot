@@ -1,3 +1,4 @@
+// Qa Lab tests cover tool coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {

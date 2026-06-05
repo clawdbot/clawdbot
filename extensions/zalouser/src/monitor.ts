@@ -1,3 +1,4 @@
+// Zalouser plugin module implements monitor behavior.
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
   implicitMentionKindWhen,

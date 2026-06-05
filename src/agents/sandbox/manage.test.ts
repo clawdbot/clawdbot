@@ -1,3 +1,5 @@
+// Sandbox management tests cover browser runtime listing/removal metadata and
+// backend manager wiring.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
@@ -133,6 +135,8 @@ describe("listSandboxBrowsers", () => {
   });
 
   it("compares browser runtimes against sandbox.browser.image", async () => {
+    // Browser containers have a different configured image than shell sandboxes;
+    // management views must compare against the browser label kind.
     const results = await listSandboxBrowsers();
 
     const describeInput = firstDescribeRuntimeInput();

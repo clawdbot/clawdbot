@@ -1,3 +1,4 @@
+// Imessage plugin module implements echo cache behavior.
 import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 type SentMessageLookup = {

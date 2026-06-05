@@ -1,3 +1,4 @@
+// Memory Wiki helper module supports test helpers behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";

@@ -1,3 +1,5 @@
+// Subagent registry tests cover run state, completion capture, archive cleanup,
+// persistence, lifecycle hooks, and orphan recovery scheduling.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +61,8 @@ function findRecordCallArg(
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
+  // Cleanup assertions need ENOENT proof; fs.access success means the artifact
+  // directory survived when lifecycle cleanup should have removed it.
   try {
     await fs.access(targetPath);
   } catch (error) {

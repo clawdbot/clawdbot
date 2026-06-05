@@ -1,3 +1,6 @@
+/**
+ * Shared process-local state for active and abandoned embedded-agent runs.
+ */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,

@@ -1,3 +1,4 @@
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { Mistral } from "@mistralai/mistralai";
 import type {
   ChatCompletionStreamRequest,

@@ -1,3 +1,4 @@
+// Control UI tests cover open external url behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "./open-external-url.ts";
 

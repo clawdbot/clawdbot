@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message dispatch.media dedup behavior.
 export function deduplicateBlockSentMedia<
   T extends { mediaUrl?: string; mediaUrls?: string[]; text?: string },
 >(payload: T, sentBlockMediaUrls: ReadonlySet<string>): T | undefined {

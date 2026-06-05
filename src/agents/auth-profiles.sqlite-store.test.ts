@@ -1,3 +1,8 @@
+/**
+ * SQLite auth-profile store integration tests.
+ * Verifies secrets/state persistence, runtime overlays, and legacy JSON
+ * migration boundaries in temporary agent directories.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
@@ -53,27 +59,19 @@ function apiKeyStore(key: string): AuthProfileStore {
 
 async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void | Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const agentDir = path.join(root, "agents", "main", "agent");
   try {
-    process.env.OPENCLAW_STATE_DIR = root;
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
     fs.mkdirSync(agentDir, { recursive: true });
-    await run(agentDir);
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_AGENT_DIR: agentDir,
+      },
+      async () => await run(agentDir),
+    );
   } finally {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

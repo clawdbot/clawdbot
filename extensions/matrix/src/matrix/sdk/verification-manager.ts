@@ -1,3 +1,4 @@
+// Matrix plugin module implements verification manager behavior.
 import {
   VerificationPhase,
   VerificationRequestEvent,

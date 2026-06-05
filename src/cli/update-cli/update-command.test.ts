@@ -1,3 +1,4 @@
+// Update command tests cover update command orchestration and filesystem effects.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

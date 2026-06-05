@@ -1,3 +1,5 @@
+// MiniMax docs sync tests keep provider docs and live-test guidance aligned
+// with the shared MiniMax model constants.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

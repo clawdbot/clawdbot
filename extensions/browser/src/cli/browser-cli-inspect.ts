@@ -1,3 +1,6 @@
+/**
+ * Browser CLI inspection commands for screenshots and snapshots.
+ */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,6 +39,7 @@ function parseOptionalIntegerOption(
   return parsed;
 }
 
+/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

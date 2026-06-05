@@ -1,3 +1,4 @@
+// Qa Matrix helper module supports scenario runtime config behavior.
 import { readFile } from "node:fs/promises";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord as isMatrixQaPlainRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

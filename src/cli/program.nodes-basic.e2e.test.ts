@@ -1,3 +1,4 @@
+// Program nodes basic e2e tests cover node command registration through the full CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";

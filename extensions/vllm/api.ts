@@ -1,3 +1,4 @@
+// Vllm API module exposes the plugin public contract.
 export {
   VLLM_DEFAULT_API_KEY_ENV_VAR,
   VLLM_DEFAULT_BASE_URL,

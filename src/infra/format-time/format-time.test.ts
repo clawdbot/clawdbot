@@ -1,3 +1,4 @@
+// Covers duration, UTC/zoned timestamp, timezone, and relative time formatting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
 import {

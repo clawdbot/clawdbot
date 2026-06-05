@@ -1,3 +1,4 @@
+// Delivery failure notification tests cover alerts emitted after delivery failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

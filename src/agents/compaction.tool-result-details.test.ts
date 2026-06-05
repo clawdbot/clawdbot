@@ -1,3 +1,4 @@
+// Covers compaction sanitization for toolResult details and runtime context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummar
 let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
 
 async function loadFreshCompactionModuleForTest() {
+  // Reset modules so each test observes the mocked token/summary helpers from a
+  // fresh compaction import.
   vi.resetModules();
   ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
 }
@@ -35,6 +38,8 @@ function makeAssistantToolCall(timestamp: number): AssistantMessage {
 }
 
 function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: string }> {
+  // The raw detail intentionally looks prompt-like; it must never reach summary
+  // generation or token oversize checks.
   return {
     role: "toolResult",
     toolCallId: "call_1",
@@ -72,6 +77,8 @@ describe("compaction toolResult details stripping", () => {
     expect(summary).toBe("summary");
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
 
+    // Summary generation receives only model-visible fields. Raw detail payloads
+    // are diagnostics, not transcript content.
     const chunk = (
       agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];

@@ -1,3 +1,4 @@
+// Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
@@ -8,6 +9,7 @@ describe("buildSandboxCreateArgs", () => {
     overrides: Partial<SandboxDockerConfig> = {},
     binds?: string[],
   ): SandboxDockerConfig {
+    // Baseline config keeps each Docker argument case focused on one override.
     return {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -39,6 +41,7 @@ describe("buildSandboxCreateArgs", () => {
   }
 
   function valuesForFlag(args: string[], flag: string): string[] {
+    // Docker flags are positional, so collect repeated flag values for assertions.
     const values: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
       if (args[i] === flag) {

@@ -1,3 +1,4 @@
+// Line plugin module implements schedule cards behavior.
 import { attachFooterText } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Reports transitive npm package manifest risks such as lifecycle scripts,
+// exotic specs, and recently published versions.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -20,6 +22,7 @@ const PINNED_GITHUB_TARBALL_PATTERN =
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
+/** Maximum npm packument response size accepted by the risk scanner. */
 export const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function isAllowedPinnedSpec(spec) {

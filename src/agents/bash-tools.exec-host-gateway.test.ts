@@ -1,3 +1,8 @@
+/**
+ * Gateway-host exec approval tests.
+ * Covers allowlist misses, auto-review, strict inline eval, diagnostics
+ * follow-ups, and gateway approval result routing.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";

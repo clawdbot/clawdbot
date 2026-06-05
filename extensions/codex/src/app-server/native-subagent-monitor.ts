@@ -1,3 +1,7 @@
+/**
+ * Monitors Codex native subagent threads and mirrors their lifecycle/completion
+ * into OpenClaw task runtime records for parent sessions.
+ */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -86,6 +90,7 @@ const defaultRuntime: NativeSubagentMonitorRuntime = {
 
 const monitors = new WeakMap<CodexAppServerClient, CodexNativeSubagentMonitor>();
 
+/** Registers or updates the monitor bound to a Codex app-server client. */
 export function registerCodexNativeSubagentMonitor(params: {
   client: CodexAppServerClient;
   parentThreadId: string;
@@ -112,6 +117,7 @@ export function registerCodexNativeSubagentMonitor(params: {
   });
 }
 
+/** Tracks native subagent thread notifications, transcript completions, and task delivery. */
 export class CodexNativeSubagentMonitor {
   private readonly startedAt = Date.now();
   private readonly parentStates = new Map<string, ParentState>();

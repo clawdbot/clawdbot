@@ -1,3 +1,8 @@
+/**
+ * Exec script preflight tests.
+ * Covers Python/Node script file validation, shell-bleed detection, and
+ * symlink/path race handling before execution.
+ */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

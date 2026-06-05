@@ -1,3 +1,4 @@
+// Voice Call tests cover config plugin behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,

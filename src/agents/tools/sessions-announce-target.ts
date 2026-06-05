@@ -1,3 +1,8 @@
+/**
+ * Session announcement target resolver.
+ *
+ * Resolves where sessions_send/subagent completion announcements should be delivered.
+ */
 import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";

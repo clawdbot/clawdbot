@@ -1,3 +1,4 @@
+// Telegram tests cover account throttler plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAccountThrottlersForTest,

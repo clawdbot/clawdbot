@@ -1,3 +1,4 @@
+// Azure Speech tests cover azure speech plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

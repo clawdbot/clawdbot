@@ -1,3 +1,5 @@
+// Web search tests cover model-facing schema limits, provider-specific time
+// filters, unsupported filter errors, and scoped provider config merging.
 import { describe, expect, it } from "vitest";
 import {
   MAX_SEARCH_COUNT,
@@ -202,6 +204,8 @@ describe("web_search scoped config merge", () => {
 
     expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
     expect(merged?.apiKey).toBe("brave-test-key");
+    // Injected provider detail is available to runtime validation but hidden
+    // from ordinary config serialization.
     expect(Object.keys(merged ?? {})).toEqual(["provider", "apiKey"]);
     expect(Object.getOwnPropertyDescriptor(merged, "brave")?.enumerable).toBe(false);
   });

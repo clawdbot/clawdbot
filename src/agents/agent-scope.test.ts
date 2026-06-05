@@ -1,9 +1,11 @@
+/** Tests agent scope config, model selection, fallbacks, and workspace resolution. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -28,10 +30,6 @@ import {
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe("resolveAgentConfig", () => {
   it("should return undefined when no agents config exists", () => {
@@ -1153,41 +1151,43 @@ describe("resolveAgentConfig", () => {
 
   it("uses OPENCLAW_HOME for default agent workspace", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
-    vi.stubEnv("OPENCLAW_HOME", home);
-
-    const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
-    expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
+    withEnv({ OPENCLAW_HOME: home }, () => {
+      const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+      expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
+    });
   });
 
   it("uses OPENCLAW_WORKSPACE_DIR for default agent workspace", () => {
     const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
-    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaceDir);
-    vi.stubEnv("OPENCLAW_HOME", path.join(path.sep, "srv", "openclaw-home"));
-
-    const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
-    expect(workspace).toBe(path.resolve(workspaceDir));
+    withEnv(
+      {
+        OPENCLAW_WORKSPACE_DIR: workspaceDir,
+        OPENCLAW_HOME: path.join(path.sep, "srv", "openclaw-home"),
+      },
+      () => {
+        const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+        expect(workspace).toBe(path.resolve(workspaceDir));
+      },
+    );
   });
 
   it("uses OPENCLAW_HOME for default agentDir", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
-    vi.stubEnv("OPENCLAW_HOME", home);
-    // Clear state dir so it falls back to OPENCLAW_HOME
-    vi.stubEnv("OPENCLAW_STATE_DIR", "");
-
-    const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
-    expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+    withEnv({ OPENCLAW_HOME: home, OPENCLAW_STATE_DIR: "" }, () => {
+      const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
+      expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+    });
   });
 
   it("resolves default agentDir from the configured default agent", () => {
     const stateDir = path.join(path.sep, "tmp", "test-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main" }, { id: "ops", default: true }],
       },
     };
 
-    const agentDir = resolveDefaultAgentDir(cfg);
+    const agentDir = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => resolveDefaultAgentDir(cfg));
 
     expect(agentDir).toBe(path.resolve(stateDir, "agents", "ops", "agent"));
   });
@@ -1216,13 +1216,14 @@ describe("resolveAgentConfig", () => {
 
   it("non-default agent without defaults.workspace falls back to stateDir", () => {
     const stateDir = path.join(path.sep, "tmp", "test-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main" }, { id: "work", default: true, workspace: "/work-ws" }],
       },
     };
-    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    const workspace = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveAgentWorkspaceDir(cfg, "main"),
+    );
     expect(workspace).toBe(path.resolve(stateDir, "workspace-main"));
   });
 });

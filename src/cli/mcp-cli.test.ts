@@ -1,3 +1,4 @@
+// MCP CLI tests cover MCP command registration and server configuration behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

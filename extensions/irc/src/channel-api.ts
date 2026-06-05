@@ -1,3 +1,4 @@
+// Irc API module exposes the plugin public contract.
 export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";

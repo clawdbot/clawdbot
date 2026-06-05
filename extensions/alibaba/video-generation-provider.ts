@@ -1,3 +1,7 @@
+/**
+ * Alibaba Model Studio video provider adapter. It resolves DashScope auth and
+ * HTTP policy before delegating task polling to the shared video helper.
+ */
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";
@@ -25,6 +29,7 @@ function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/u, "");
 }
 
+/** Build the Alibaba/DashScope video generation provider descriptor. */
 export function buildAlibabaVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "alibaba",

@@ -1,3 +1,4 @@
+/** Shared mocked ACP connection and Gateway client helpers for translator tests. */
 import type { AgentSideConnection } from "@agentclientprotocol/sdk";
 import { vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
@@ -24,6 +25,7 @@ export function createAcpConnection(
   } as unknown as TestAcpConnection;
 }
 
+/** Creates a mocked Gateway client for translator tests. */
 export function createAcpGateway(
   request: GatewayClient["request"] = vi.fn(async () => ({ ok: true })) as GatewayClient["request"],
 ): GatewayClient {

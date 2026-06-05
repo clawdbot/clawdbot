@@ -1,3 +1,4 @@
+// Browser tests cover agent.snapshot.timeout plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 

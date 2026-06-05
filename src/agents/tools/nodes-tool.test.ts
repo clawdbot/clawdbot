@@ -1,3 +1,5 @@
+// Nodes tool tests cover gateway-scoped node actions, media payload writing,
+// numeric schema guardrails, and pairing approval scopes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -68,6 +70,8 @@ function mockNodePairApproveFlow(pendingRequest: {
   requiredApproveScopes?: string[];
   commands?: string[];
 }): void {
+  // Pairing approval is two-step by design: list pending requests under the
+  // operator scope, then approve with the request's required scopes.
   gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
     if (method === "node.pair.list") {
       return {

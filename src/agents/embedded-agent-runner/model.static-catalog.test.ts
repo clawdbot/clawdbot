@@ -1,3 +1,4 @@
+// Coverage for resolving bundled static manifest model catalog rows.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestMocks = vi.hoisted(() => ({
@@ -17,6 +18,8 @@ vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
 import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
+  // Static catalog resolution reads scan metadata first, then loads the manifest
+  // from disk; the mock preserves that two-step contract.
   const byPluginDir = new Map(
     plugins.map((plugin) => {
       const id = (plugin as { id?: string }).id ?? "plugin";
@@ -42,6 +45,7 @@ function createMistralManifestPlugin(overrides?: {
   discovery?: "static" | "refreshable" | "runtime";
   origin?: string;
 }) {
+  // Mistral fixture represents a bundled plugin with a static modelCatalog row.
   return {
     id: "mistral",
     origin: overrides?.origin ?? "bundled",
@@ -111,6 +115,8 @@ describe("resolveBundledStaticCatalogModel", () => {
   });
 
   it("ignores non-bundled and non-static manifest catalog rows", () => {
+    // Workspace plugins and refreshable/runtime catalogs are not process-stable
+    // enough for this fallback path.
     for (const plugin of [
       createMistralManifestPlugin({ origin: "workspace" }),
       createMistralManifestPlugin({ discovery: "refreshable" }),

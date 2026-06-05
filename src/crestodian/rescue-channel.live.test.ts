@@ -1,3 +1,4 @@
+// Crestodian live rescue channel tests cover live-channel rescue message delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

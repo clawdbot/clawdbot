@@ -1,3 +1,5 @@
+// Session manager init tests cover how run startup rewrites or preserves
+// transcript headers when resuming, forking, or recovering sessions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +10,8 @@ import { prepareSessionManagerForRun } from "./session-manager-init.js";
 const tempPaths: string[] = [];
 
 async function makeTempFile(): Promise<string> {
+  // Each case gets its own transcript file so destructive rewrite checks stay
+  // isolated from recovery-path assertions.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-manager-init-"));
   tempPaths.push(dir);
   return path.join(dir, "session.jsonl");
@@ -68,6 +72,8 @@ describe("prepareSessionManagerForRun", () => {
   });
 
   it("rewrites forked transcript headers with copied assistant messages to the runtime cwd", async () => {
+    // Forked sessions keep copied assistant context but rewrite the session
+    // header to the child run id and active workspace cwd.
     const sessionFile = await makeTempFile();
     await fs.writeFile(
       sessionFile,
@@ -149,6 +155,8 @@ describe("prepareSessionManagerForRun", () => {
   });
 
   it("does not truncate an existing transcript with a corrupted header", async () => {
+    // A corrupt header may still be followed by useful transcript entries; fail
+    // closed instead of truncating unknown persisted user data.
     const sessionFile = await makeTempFile();
     const originalTranscript =
       [

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements system prompt behavior.
 export function resolveWhatsAppGroupSystemPrompt(params: {
   accountConfig?: { groups?: Record<string, { systemPrompt?: string | null }> } | null;
   groupId?: string | null;

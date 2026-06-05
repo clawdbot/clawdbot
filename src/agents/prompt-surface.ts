@@ -1,10 +1,12 @@
+/**
+ * Prompt-surface helpers for OpenClaw tool guidance.
+ *
+ * Maps runtime/session surfaces to the fallback tool text and workflow hints that belong in prompts.
+ */
 import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
-/**
- * Prompt-surface helpers for deciding which OpenClaw tool guidance belongs in a session prompt.
- */
 /** Builds fallback tool guidance when a runtime cannot render the structured tool list. */
 export function buildOpenClawToolFallbackText(params: {
   surface: AgentPromptSurfaceKind;

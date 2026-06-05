@@ -1,3 +1,6 @@
+/**
+ * State machine for Codex app-server turn notifications and idle-watch updates.
+ */
 import {
   codexExecutionToolName,
   describeNotificationActivity,
@@ -28,6 +31,7 @@ type CodexExecutionPhase =
   | { phase: "assistant_output_started" }
   | { phase: "tool_execution_started"; itemId?: string; tool: string };
 
+/** Emits coarse execution phases exactly once from app-server notifications. */
 export function reportCodexExecutionNotification(params: {
   notification: CodexServerNotification;
   emitExecutionPhaseOnce: (key: string, info: CodexExecutionPhase) => void;
@@ -58,6 +62,7 @@ export function reportCodexExecutionNotification(params: {
   });
 }
 
+/** Returns true when a notification ends the current app-server turn. */
 export function isTerminalCodexTurnNotificationForTurn(params: {
   notification: CodexServerNotification;
   threadId: string;
@@ -75,6 +80,10 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   );
 }
 
+/**
+ * Applies one notification to active item tracking, idle watches, and terminal
+ * turn state.
+ */
 export function applyCodexTurnNotificationState(params: {
   notification: CodexServerNotification;
   threadId: string;

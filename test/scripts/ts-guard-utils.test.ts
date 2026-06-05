@@ -1,3 +1,4 @@
+// Ts Guard Utils tests cover ts guard utils script behavior.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

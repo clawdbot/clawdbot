@@ -1,3 +1,4 @@
+/** Tests model discovery auth storage, SecretRef placeholders, and env-backed credentials. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

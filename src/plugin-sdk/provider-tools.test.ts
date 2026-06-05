@@ -1,3 +1,4 @@
+// Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import {
   buildProviderToolCompatFamilyHooks,

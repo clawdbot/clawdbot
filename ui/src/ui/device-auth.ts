@@ -1,3 +1,4 @@
+// Control UI module implements device auth behavior.
 import {
   clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,

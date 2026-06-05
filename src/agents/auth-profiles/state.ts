@@ -1,3 +1,8 @@
+/**
+ * Runtime-state normalization and persistence for auth profile selection.
+ * This state tracks order, last-good profile, and cooldown/failure metadata
+ * separately from secret-bearing credentials.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";

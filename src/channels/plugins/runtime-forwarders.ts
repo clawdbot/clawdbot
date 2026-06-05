@@ -1,8 +1,9 @@
-import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.adapters.js";
-
 /**
- * Runtime delegate factories for plugin adapters that load heavy runtimes lazily.
+ * Runtime adapter forwarders.
+ *
+ * Creates directory and outbound adapters whose methods delegate to lazily resolved runtimes.
  */
+import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.adapters.js";
 
 type MaybePromise<T> = T | Promise<T>;
 

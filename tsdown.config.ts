@@ -1,3 +1,4 @@
+// tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";

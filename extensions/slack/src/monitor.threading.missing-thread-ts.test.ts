@@ -1,3 +1,4 @@
+// Slack tests cover monitor.threading.missing thread ts plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createSlackThreadTsResolver } from "./monitor/thread-resolution.js";
 import type { SlackMessageEvent } from "./types.js";

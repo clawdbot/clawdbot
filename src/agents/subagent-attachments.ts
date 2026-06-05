@@ -1,3 +1,8 @@
+/**
+ * Subagent inline attachment staging.
+ *
+ * Validates base64/utf8 payloads, writes private receipt files, and resolves inherited workspace paths.
+ */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";

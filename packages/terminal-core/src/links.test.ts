@@ -1,3 +1,4 @@
+// Terminal Core tests cover links behavior.
 import { describe, expect, it } from "vitest";
 import { formatDocsLink } from "./links.js";
 

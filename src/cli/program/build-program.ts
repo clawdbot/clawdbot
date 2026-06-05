@@ -1,3 +1,4 @@
+// Builds the root Commander program, context, help, hooks, and command registry.
 import process from "node:process";
 import { Command } from "commander";
 import { registerProgramCommands } from "./command-registry.js";

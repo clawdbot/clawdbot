@@ -1,3 +1,8 @@
+/**
+ * Rendering helpers for session tool output in the TUI.
+ *
+ * Normalizes paths/text/image fallbacks before tool results are styled or truncated.
+ */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
@@ -5,12 +10,6 @@ import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
 
-/**
- * Rendering helpers for session tool output in the TUI.
- *
- * These helpers normalize paths/text/image fallbacks before tool results are
- * styled or truncated by higher-level renderers.
- */
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
   if (typeof path !== "string") {

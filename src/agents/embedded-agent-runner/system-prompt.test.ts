@@ -1,3 +1,5 @@
+// Embedded system prompt tests cover prompt assembly for provider guidance,
+// delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import type { AgentSession } from "../sessions/index.js";
@@ -21,6 +23,8 @@ describe("applySystemPromptToSession", () => {
 });
 describe("buildEmbeddedSystemPrompt", () => {
   afterEach(() => {
+    // Memory prompt sections are shared plugin state, so each prompt-rendering
+    // test leaves the global registry clean.
     clearMemoryPluginState();
   });
 
@@ -79,6 +83,8 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
+    // The prompt must steer writes toward workspace-local scratch paths when
+    // filesystem tools are constrained to the workspace.
     const prompt = buildEmbeddedSystemPrompt({
       config: {
         tools: {

@@ -1,3 +1,4 @@
+/** Tests context-pruning extension settings, runtime registry, and message pruning. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage } from "openclaw/plugin-sdk/llm";

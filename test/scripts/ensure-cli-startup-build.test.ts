@@ -1,3 +1,4 @@
+// Ensure Cli Startup Build tests cover ensure cli startup build script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

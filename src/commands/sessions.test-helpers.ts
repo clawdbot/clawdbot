@@ -1,3 +1,4 @@
+// Session command test helpers create temporary homes, session stores, and runtime fixtures.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

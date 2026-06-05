@@ -1,3 +1,4 @@
+// Boot.md gateway startup tests cover boot context injection during gateway startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { CliDeps } from "../../../cli/deps.js";

@@ -1,3 +1,4 @@
+// OC Path plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerOcPathCli } from "./cli-registration.js";
 

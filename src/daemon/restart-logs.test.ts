@@ -1,3 +1,4 @@
+// Daemon restart log tests cover restart log formatting and filtering.
 import { describe, expect, it } from "vitest";
 import {
   GATEWAY_RESTART_LOG_FILENAME,

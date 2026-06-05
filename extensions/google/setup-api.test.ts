@@ -1,3 +1,4 @@
+// Google tests cover setup api plugin behavior.
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";

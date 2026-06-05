@@ -1,3 +1,8 @@
+/**
+ * Subagent delivery state migration.
+ *
+ * Normalizes legacy flat registry rows into nested execution, completion, and delivery state.
+ */
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,

@@ -1,3 +1,8 @@
+/**
+ * Built-in bash session tool.
+ *
+ * Executes local shell commands with streaming output accumulation and TUI renderers.
+ */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";

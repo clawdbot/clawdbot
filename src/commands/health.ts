@@ -1,3 +1,4 @@
+/** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
@@ -101,6 +102,8 @@ const buildNonSensitiveProbeFailure = (
     return undefined;
   }
 
+  // Preserve the actionable Full Disk Access failure while stripping the local
+  // username path before health leaves the gateway.
   const error = redactIMessageProbeErrorMessage(record.error);
   if (
     !/\bimsg\b/i.test(error) ||
@@ -155,6 +158,7 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
+/** Formats optional model-pricing cache degradation for text health output. */
 export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
   const modelPricing = summary.modelPricing;
   if (!modelPricing || modelPricing.state === "disabled") {
@@ -184,6 +188,7 @@ function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefin
   return quarantined.length > 0 ? { quarantined } : undefined;
 }
 
+/** Formats context engine quarantine state for text health output. */
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -403,6 +408,7 @@ async function resolveHealthAccountContext(params: {
   };
 }
 
+/** Builds the gateway-side health snapshot for channels, agents, plugins, and sessions. */
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
@@ -471,6 +477,8 @@ export async function getHealthSnapshot(params?: {
         ),
       ),
     );
+    // Probe preferred/default/bound accounts first, but include all configured
+    // accounts so verbose health can explain account-specific failures.
     debugHealth("channel", {
       id: plugin.id,
       accountIds,
@@ -623,6 +631,7 @@ export async function getHealthSnapshot(params?: {
   return summary;
 }
 
+/** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
   opts: {
     json?: boolean;

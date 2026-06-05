@@ -1,3 +1,5 @@
+// Node gateway methods manage paired node discovery, pairing lifecycle, command
+// invocation, wake delivery, events, pending work, and node metadata updates.
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {

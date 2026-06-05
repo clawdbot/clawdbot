@@ -1,3 +1,4 @@
+// Channels status external-env tests cover env-backed credentials and config-only status rendering.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,3 +1,4 @@
+// Control UI module implements app scroll behavior.
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */

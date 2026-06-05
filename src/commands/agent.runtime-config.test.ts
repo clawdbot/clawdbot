@@ -1,3 +1,4 @@
+// Agent runtime config tests cover agent-specific runtime config resolution from temp homes.
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";

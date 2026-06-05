@@ -1,3 +1,7 @@
+/**
+ * Resolves the managed Codex app-server binary shipped with or installed beside
+ * the Codex plugin before stdio startup.
+ */
 import { constants as fsConstants, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -20,6 +24,7 @@ type ResolveManagedCodexAppServerOptions = {
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
 };
 
+/** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
   options: ResolveManagedCodexAppServerOptions = {},
@@ -47,6 +52,7 @@ export async function resolveManagedCodexAppServerStartOptions(
   };
 }
 
+/** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
 export function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
@@ -170,6 +176,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Internal helpers exposed for managed-binary path-resolution tests. */
 export const testing = {
   resolveDefaultCodexPluginRoot,
 };

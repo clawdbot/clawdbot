@@ -1,3 +1,4 @@
+// Provider contract suites provide shared assertions for provider plugin behavior.
 import { expect, it } from "vitest";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";

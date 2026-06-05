@@ -1,3 +1,4 @@
+// Trajectory command export helpers implement CLI export behavior.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../infra/fs-safe.js";

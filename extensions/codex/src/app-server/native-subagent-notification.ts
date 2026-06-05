@@ -1,9 +1,14 @@
+/**
+ * Extracts native Codex subagent completion notifications from trusted
+ * inter-agent commentary messages emitted by the app-server.
+ */
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
 const CODEX_SUBAGENT_NOTIFICATION_START = "<subagent_notification>";
 const CODEX_SUBAGENT_NOTIFICATION_END = "</subagent_notification>";
 
+/** Terminal status values OpenClaw accepts for Codex native subagent completion. */
 export type CodexNativeSubagentCompletionStatus = "succeeded" | "failed" | "cancelled";
 
 type CodexNativeSubagentCompletionDetails = {
@@ -12,14 +17,17 @@ type CodexNativeSubagentCompletionDetails = {
   result: string;
 };
 
+/** Completion associated with a resolved child thread id. */
 export type CodexNativeSubagentCompletion = CodexNativeSubagentCompletionDetails & {
   childThreadId: string;
 };
 
+/** Completion parsed from a notification payload before agent-path matching resolves the thread. */
 export type CodexNativeSubagentNotificationCompletion = CodexNativeSubagentCompletionDetails & {
   agentPath: string;
 };
 
+/** Extracts trusted subagent completion payloads from a Codex server notification. */
 export function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
@@ -41,6 +49,7 @@ export function extractCodexNativeSubagentCompletions(
   );
 }
 
+/** Parses one or more tagged subagent completion payloads from commentary text. */
 export function extractCodexNativeSubagentCompletionsFromText(
   text: string,
 ): CodexNativeSubagentNotificationCompletion[] {

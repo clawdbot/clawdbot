@@ -1,3 +1,4 @@
+// Media Generation Core tests cover model ref behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveCapabilityModelRefForProviders,

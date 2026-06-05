@@ -1,3 +1,4 @@
+// Proxy stream wrapper tests cover wrapper selection and provider passthrough.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";

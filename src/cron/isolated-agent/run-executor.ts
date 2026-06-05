@@ -1,3 +1,4 @@
+/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -96,6 +97,8 @@ export function isCommandStyleCronMessage(message: string): boolean {
 function resolveCronBootstrapContextMode(
   payload: AgentTurnPayload,
 ): BootstrapContextMode | undefined {
+  // Command-like cron prompts benefit from lightweight bootstrap context so
+  // simple scheduled command tasks do not spend budget on full repo context.
   if (payload?.lightContext === true) {
     return "lightweight";
   }
@@ -268,6 +271,8 @@ export function createCronPromptExecutor(params: {
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
+        // Embedded runs receive both the explicit route and the current-channel
+        // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,

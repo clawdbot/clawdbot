@@ -1,3 +1,4 @@
+/** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

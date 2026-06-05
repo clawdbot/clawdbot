@@ -1,3 +1,6 @@
+// Fast `openclaw status --json` scan policy.
+// Skips channel tables and most network/update work unless `--all` asks for fuller evidence.
+
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -50,6 +53,7 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
     if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
       continue;
     }
+    // `enabled` alone can be a default scaffold; require another configured field.
     if (hasMeaningfulStatusJsonChannelConfig(value)) {
       return true;
     }
@@ -76,6 +80,7 @@ function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boole
   return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
 }
 
+/** Runs status JSON with an injectable policy for tests and specialized callers. */
 export async function scanStatusJsonWithPolicy(
   opts: {
     timeoutMs?: number;
@@ -92,6 +97,7 @@ export async function scanStatusJsonWithPolicy(
     allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
     includeChannelsData: false,
+    // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
     includeChannelSecretTargets: false,
     skipConfigPluginValidation: true,
     fetchGitUpdate: policy.fetchGitUpdate,
@@ -112,6 +118,7 @@ export async function scanStatusJsonWithPolicy(
   });
 }
 
+/** Runs the default fast status JSON scan. */
 export async function scanStatusJsonFast(
   opts: {
     timeoutMs?: number;

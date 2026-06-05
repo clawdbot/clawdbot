@@ -1,3 +1,5 @@
+// Lazy attachment cache resolves local/remote media bytes and temporary files
+// under local-root and SSRF policy.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -66,6 +68,8 @@ function concreteMime(mime: string | undefined): string | undefined {
 }
 
 function getDefaultLocalPathRoots(): readonly string[] {
+  // Default local roots are process-stable inbound attachment locations; merge
+  // once and reuse for cache instances.
   defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
 }

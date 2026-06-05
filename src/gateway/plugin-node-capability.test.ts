@@ -1,3 +1,5 @@
+// Plugin node capability tests cover scoped host URLs, request rewriting, and
+// authorization state attached to gateway node clients.
 import { describe, expect, test } from "vitest";
 import {
   buildPluginNodeCapabilityScopedHostUrl,

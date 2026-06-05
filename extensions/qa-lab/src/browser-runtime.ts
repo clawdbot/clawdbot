@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements browser runtime behavior.
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 

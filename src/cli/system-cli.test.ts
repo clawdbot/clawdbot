@@ -1,3 +1,4 @@
+// System CLI tests cover system command registration and status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";

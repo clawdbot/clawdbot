@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for CLI session persistence helpers.
+ * Verifies provider-keyed bindings, legacy Claude state, and reuse invalidation.
+ */
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {

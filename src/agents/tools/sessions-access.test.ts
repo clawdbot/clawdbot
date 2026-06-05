@@ -1,3 +1,5 @@
+// Sessions access tests cover session-tool visibility policy, sandbox clamps,
+// and agent-to-agent allow rules.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -168,6 +170,8 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("handles multiple wildcards without polynomial backtracking", () => {
+    // Allow patterns use segment matching rather than a greedy regex so
+    // adversarial agent ids cannot cause slow policy checks.
     const policy = createAgentToAgentPolicy({
       tools: {
         agentToAgent: {

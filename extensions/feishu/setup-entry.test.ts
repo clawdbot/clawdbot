@@ -1,3 +1,4 @@
+// Feishu tests cover setup entry plugin behavior.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@larksuiteoapi/node-sdk", () => {

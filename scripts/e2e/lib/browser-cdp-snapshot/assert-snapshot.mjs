@@ -1,3 +1,4 @@
+// Assertions for browser CDP snapshot E2E fixtures.
 import fs from "node:fs";
 
 const snapshotPath = process.argv[2] ?? "/tmp/browser-cdp-snapshot.txt";

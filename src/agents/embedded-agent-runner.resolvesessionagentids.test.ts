@@ -1,3 +1,4 @@
+// Covers resolving the active agent id from session keys and explicit config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -34,6 +35,8 @@ describe("resolveSessionAgentIds", () => {
   });
 
   it("keeps the agent id for provider-qualified agent sessions", () => {
+    // Channel-qualified agent session keys still carry the owning agent in the
+    // second segment.
     const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "agent:beta:quietchat:channel:c1",
       config: cfg,

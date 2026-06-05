@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";

@@ -1,3 +1,8 @@
+/**
+ * Per-path queued append writer for logs and transcripts.
+ *
+ * Serializes writes, bounds queue/file growth, and exposes diagnostics for stuck-write probes.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, resolveRegularFileAppendFlags } from "../infra/fs-safe.js";

@@ -1,3 +1,4 @@
+// Webhooks CLI tests cover webhook command registration and option parsing.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWebhooksCli } from "./webhooks-cli.js";

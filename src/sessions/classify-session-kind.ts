@@ -1,3 +1,4 @@
+// Session kind helpers classify cron, interactive, and channel-backed sessions.
 import { isCronSessionKey } from "./session-key-utils.js";
 
 export type SessionKind = "cron" | "direct" | "group" | "global" | "spawn-child" | "unknown";

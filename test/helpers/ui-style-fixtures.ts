@@ -1,3 +1,4 @@
+// UI style fixtures load expected UI style files for tests.
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";

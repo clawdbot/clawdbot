@@ -1,3 +1,4 @@
+// Memory Core tests cover flush plan plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./flush-plan.js";
 

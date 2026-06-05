@@ -1,3 +1,4 @@
+// Tool Search Gateway E2E tests cover tool search gateway e2e script behavior.
 import { describe, expect, it } from "vitest";
 import {
   fetchJson,

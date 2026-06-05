@@ -1,3 +1,4 @@
+// Live media script tests cover live media test command construction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loadShellEnvFallbackMock = vi.fn();

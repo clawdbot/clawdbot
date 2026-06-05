@@ -1,3 +1,4 @@
+// Run main exit tests cover process exit behavior for CLI failures.
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";

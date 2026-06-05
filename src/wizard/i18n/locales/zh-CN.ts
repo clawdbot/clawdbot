@@ -1,3 +1,4 @@
+// Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_CN = {

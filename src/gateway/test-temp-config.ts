@@ -1,3 +1,5 @@
+// Temporary Gateway config test helper.
+// Installs isolated config files and restores process-global config state.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,9 +11,6 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 
-/**
- * Temporary gateway config helper for tests that need isolated config files.
- */
 function withStableOwnerDisplaySecretForTest(cfg: unknown): unknown {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
     return cfg;
@@ -49,6 +48,8 @@ export async function withTempConfig(params: {
 
   try {
     await writeFile(configPath, JSON.stringify(testConfig, null, 2), "utf-8");
+    // Mirror both on-disk and runtime snapshots so code paths using either
+    // config IO layer see the same isolated fixture.
     clearConfigCache();
     resetConfigRuntimeState();
     clearSecretsRuntimeSnapshot();

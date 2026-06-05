@@ -1,3 +1,4 @@
+// Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
 import {
   formatDocsLink,

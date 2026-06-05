@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.state behavior.
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

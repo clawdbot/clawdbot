@@ -1,3 +1,8 @@
+/**
+ * Durable outbound message recovery state.
+ *
+ * Creates and classifies persisted send records after delivery interruptions.
+ */
 import type { DurableMessageSendIntent, MessageReceipt } from "./types.js";
 
 /** Durable send state stored for recovery and operator-visible delivery status. */

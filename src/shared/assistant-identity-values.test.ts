@@ -1,3 +1,4 @@
+// Assistant identity tests cover normalized assistant names and metadata values.
 import { describe, expect, it } from "vitest";
 import { coerceIdentityValue } from "./assistant-identity-values.js";
 

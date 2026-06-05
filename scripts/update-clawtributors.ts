@@ -1,3 +1,4 @@
+// Update Clawtributors script supports OpenClaw repository automation.
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";

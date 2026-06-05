@@ -1,11 +1,11 @@
+// Gateway cron lazy loader.
+// Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { GatewayCronState } from "./server-cron.js";
 
-// Gateway cron is loaded lazily so startup/tests that never touch cron do not
-// materialize scheduler loops or bundled plugin runtime.
 type LazyGatewayCronParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -29,6 +29,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     if (loaded) {
       return loaded;
     }
+    // Share the same import promise across concurrent API calls so only one
+    // scheduler instance is built for a Gateway process.
     loading ??= import("./server-cron.js").then(({ buildGatewayCronService }) => {
       loaded = {
         state: buildGatewayCronService(params),

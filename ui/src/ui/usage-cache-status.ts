@@ -1,3 +1,4 @@
+// Control UI module implements usage cache status behavior.
 import { t } from "../i18n/index.ts";
 import type { SessionsUsageResult } from "./usage-types.ts";
 

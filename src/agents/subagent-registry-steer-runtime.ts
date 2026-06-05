@@ -1,11 +1,10 @@
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
 /**
  * Late-bound steer hooks for the subagent registry.
  *
- * Control/recovery code can depend on this small module while the full registry
- * installs the concrete mutation functions during startup.
+ * Lets steer/recovery code depend on a small module while the full registry installs concrete mutation hooks.
  */
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
 type ReplaceSubagentRunAfterSteerParams = {
   previousRunId: string;
   nextRunId: string;

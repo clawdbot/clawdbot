@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Ensures memory extension runtime entries are built before checks.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -27,6 +28,9 @@ function positiveEnvInt(name, env, fallback) {
   return value;
 }
 
+/**
+ * Resolves the extension memory build timeout from environment.
+ */
 export function resolveExtensionMemoryBuildTimeoutMs(env = process.env) {
   return positiveEnvInt(
     "OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS",
@@ -52,6 +56,9 @@ function collectExpectedExtensionMemoryEntryIds(rootDir, env) {
   }
 }
 
+/**
+ * Reports whether built memory extension entries exist.
+ */
 export function hasBuiltExtensionMemoryEntries(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const exists = params.existsSync ?? existsSync;
@@ -80,6 +87,9 @@ export function hasBuiltExtensionMemoryEntries(params = {}) {
   );
 }
 
+/**
+ * Builds memory extension entries when required outputs are missing.
+ */
 export function ensureExtensionMemoryBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (

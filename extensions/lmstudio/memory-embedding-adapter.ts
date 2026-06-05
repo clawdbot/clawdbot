@@ -1,3 +1,4 @@
+// Lmstudio plugin module implements memory embedding adapter behavior.
 import {
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,

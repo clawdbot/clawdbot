@@ -1,3 +1,4 @@
+// Googlechat tests cover setup plugin behavior.
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,

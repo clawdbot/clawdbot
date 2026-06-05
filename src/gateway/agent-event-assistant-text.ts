@@ -1,3 +1,5 @@
+// Gateway assistant-event text extractor.
+// Normalizes provider stream event shapes into a display text delta.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 
 // Agent stream events may carry assistant text as either incremental delta or

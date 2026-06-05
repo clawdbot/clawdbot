@@ -1,3 +1,4 @@
+/** Leases and formats completed subagent results for injection into requester turns. */
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -13,6 +14,7 @@ const MAX_MERGED_STEERING_CHARS = 24_000;
 const MAX_RESULT_CHARS_PER_ITEM = 6_000;
 const MAX_METADATA_CHARS = 500;
 
+/** Pending subagent completion selected for requester-session steering. */
 export type AgentSteeringQueueItem = {
   runId: string;
   entry: SubagentRunRecord;
@@ -171,6 +173,7 @@ function selectPromptBoundedItems(
 /**
  * Lease pending steering items and mark them in-progress before prompt injection.
  */
+/** Leases pending steering items and returns the prompt to prepend to the requester turn. */
 export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
@@ -208,6 +211,7 @@ export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Acknowledge successfully injected leased steering items. */
+/** Marks leased steering items delivered after successful requester injection. */
 export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   runIds: readonly string[];
@@ -237,6 +241,7 @@ export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Release leased steering items after a failed requester turn or injection path. */
+/** Releases leased steering items when requester injection fails or is abandoned. */
 export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   runIds: readonly string[];
@@ -265,6 +270,7 @@ export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Prepend steering runtime data before the current parent-turn prompt. */
+/** Prepends a steering prompt to an existing user prompt when pending results exist. */
 export function prependAgentSteeringPrompt(params: {
   steeringPrompt: string;
   prompt: string;

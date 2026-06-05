@@ -1,5 +1,7 @@
-// Debug formatting helpers for model transport endpoints. These keep logs useful
-// without exposing credentials, request params, or fragments.
+/**
+ * Debug formatting helpers for model transport endpoints.
+ * Keeps logs useful without exposing credentials, request params, or fragments.
+ */
 /** Return a sanitized URL suitable for logs and diagnostics. */
 export function formatModelTransportDebugUrl(rawUrl: string): string {
   try {

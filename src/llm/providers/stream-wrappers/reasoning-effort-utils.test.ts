@@ -1,3 +1,4 @@
+// Reasoning effort utility tests cover provider reasoning effort normalization.
 import { describe, expect, it } from "vitest";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 

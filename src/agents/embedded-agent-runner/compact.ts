@@ -1,3 +1,6 @@
+/**
+ * Implements embedded-agent transcript compaction and runtime handoff.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";

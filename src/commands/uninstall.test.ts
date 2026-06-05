@@ -1,3 +1,4 @@
+// Uninstall command tests cover cleanup flow, prompts, and runtime messages.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,

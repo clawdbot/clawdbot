@@ -1,3 +1,4 @@
+// Tagline tests cover CLI tagline selection and display formatting.
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TAGLINE, pickTagline } from "./tagline.js";
 

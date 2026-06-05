@@ -1,3 +1,4 @@
+// Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,

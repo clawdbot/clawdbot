@@ -1,3 +1,4 @@
+// Provider auth contract helpers define reusable tests for provider auth implementations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "../agent-runtime.js";
 import { createNonExitingRuntime } from "../runtime.js";

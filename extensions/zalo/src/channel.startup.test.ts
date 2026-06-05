@@ -1,3 +1,4 @@
+// Zalo tests cover channel.startup plugin behavior.
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,

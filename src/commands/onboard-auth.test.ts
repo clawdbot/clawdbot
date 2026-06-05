@@ -1,3 +1,4 @@
+// Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

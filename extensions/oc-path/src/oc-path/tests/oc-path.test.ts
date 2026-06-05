@@ -1,3 +1,4 @@
+// OC Path tests cover oc path plugin behavior.
 import { describe, expect, it } from "vitest";
 import { OcPathError, formatOcPath, isValidOcPath, parseOcPath } from "../oc-path.js";
 

@@ -1,3 +1,4 @@
+// Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthChoiceLoadedPluginProvider,

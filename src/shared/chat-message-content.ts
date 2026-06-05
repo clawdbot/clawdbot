@@ -1,3 +1,4 @@
+// Chat message content helpers extract user-visible text from mixed message parts.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */

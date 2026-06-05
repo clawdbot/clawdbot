@@ -1,3 +1,4 @@
+// Status memory scan tests cover memory-search manager status and shared-memory snapshot reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

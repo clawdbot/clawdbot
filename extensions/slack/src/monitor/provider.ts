@@ -1,3 +1,4 @@
+// Slack provider module implements model/runtime integration.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addAllowlistUserEntriesFromConfigEntry,

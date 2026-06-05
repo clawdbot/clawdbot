@@ -1,3 +1,4 @@
+// QR dashboard integration tests cover QR dashboard command wiring and rendered output.
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";

@@ -1,3 +1,4 @@
+// Zalouser tests cover zalo quote metadata plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing as zaloTesting } from "./zalo-js.js";
 

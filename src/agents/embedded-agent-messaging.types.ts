@@ -1,6 +1,8 @@
+/**
+ * Shared messaging-tool metadata types captured from embedded-agent runs.
+ */
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
-// Messaging tool metadata captured during embedded agent runs.
 export type MessagingToolSend = {
   tool: string;
   provider: string;
@@ -13,7 +15,6 @@ export type MessagingToolSend = {
   mediaUrls?: string[];
 };
 
-// Reply payload subset preserved for message-tool idempotency and delivery.
 export type MessagingToolSourceReplyPayload = Pick<
   ReplyPayload,
   | "audioAsVoice"

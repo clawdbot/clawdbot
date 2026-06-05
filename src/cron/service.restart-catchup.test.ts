@@ -1,3 +1,4 @@
+// Restart catchup tests cover cron jobs missed while the service was stopped.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";

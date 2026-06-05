@@ -1,3 +1,4 @@
+// Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import {

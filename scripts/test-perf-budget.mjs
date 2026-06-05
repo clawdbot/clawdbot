@@ -1,3 +1,4 @@
+// Runs a Vitest config and enforces wall-time regression budgets.
 import { pathToFileURL } from "node:url";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import {
@@ -90,6 +91,7 @@ function main() {
   }
 }
 
+/** Test-facing parser helpers for budget validation. */
 export const testing = {
   parseArgs,
   parseBudgetNumber,

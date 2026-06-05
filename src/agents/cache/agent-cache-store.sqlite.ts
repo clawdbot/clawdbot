@@ -1,3 +1,6 @@
+/**
+ * SQLite implementation of the agent runtime cache store.
+ */
 import {
   MAX_DATE_TIMESTAMP_MS,
   asDateTimestampMs,
@@ -24,13 +27,13 @@ import type {
   AgentRuntimeCacheWriteOptions,
 } from "./agent-cache-store.js";
 
-// SQLite-backed agent runtime cache. Entries are scoped per agent/scope pair and
-// can store JSON values, binary blobs, and optional expiration timestamps.
+/** Options for an agent/scope-scoped SQLite runtime cache. */
 export type SqliteAgentCacheStoreOptions = OpenClawAgentDatabaseOptions & {
   scope: string;
   now?: () => number;
 };
 
+/** Options for writing a single SQLite agent cache entry. */
 export type WriteSqliteAgentCacheEntryOptions = SqliteAgentCacheStoreOptions &
   AgentRuntimeCacheWriteOptions;
 

@@ -1,3 +1,4 @@
+// Media Core tests cover inbound path policy behavior.
 import { describe, expect, it } from "vitest";
 import {
   isInboundPathAllowed,

@@ -1,3 +1,5 @@
+<!-- Agent test performance notes for keeping expensive runtime imports out of focused tests. -->
+
 # Agents Test Performance
 
 Agent tests are often import-bound. Treat slow test files as architecture

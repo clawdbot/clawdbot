@@ -1,3 +1,7 @@
+/**
+ * WebSocket payload normalization helpers for Browser gateway transports.
+ */
+/** Converts raw WebSocket payload shapes into UTF-8 strings. */
 export function rawDataToString(data: unknown): string {
   if (typeof data === "string") {
     return data;

@@ -1,3 +1,4 @@
+// Trajectory path helpers resolve storage paths for trajectory artifacts.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";

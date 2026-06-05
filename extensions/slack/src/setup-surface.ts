@@ -1,3 +1,4 @@
+// Slack plugin module implements setup surface behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   noteChannelLookupFailure,

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";

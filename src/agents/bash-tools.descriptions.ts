@@ -1,3 +1,8 @@
+/**
+ * Tool descriptions for bash exec and process-control tools.
+ * Descriptions include platform-specific guidance and approved executable
+ * hints that are safe to show to the model.
+ */
 import path from "node:path";
 import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
 
@@ -13,6 +18,7 @@ function deriveExecShortName(fullPath: string): string {
   return base.replace(/\.exe$/i, "") || base;
 }
 
+/** Builds the model-facing exec tool description for the current platform/config. */
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
     "Execute shell commands with background continuation for work that starts now.",
@@ -63,6 +69,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
   return lines.join("\n");
 }
 
+/** Builds the model-facing process-control tool description. */
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",

@@ -1,3 +1,4 @@
+// Covers CLI-backed attempt execution and session-binding persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +50,8 @@ vi.mock("../model-runtime-aliases.js", async () => {
       modelId?: string;
     }) => {
       const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+      // Runtime alias tests only need the model-level runtime override path;
+      // keeping the mock narrow avoids loading provider catalogs here.
       const runtime = key
         ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
         : undefined;
@@ -109,6 +112,8 @@ async function readSessionFileEntries(sessionFile: string) {
 }
 
 async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
+  // Session transcripts are JSONL; tests preserve that format so parent/child
+  // id ordering and append behavior are covered end-to-end.
   const raw = await fs.readFile(sessionFile, "utf-8");
   const entries: T[] = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -218,6 +223,8 @@ describe("CLI attempt execution", () => {
   }
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
+    // Claude stores resumable sessions under a workspace-derived project dir,
+    // so stale-session tests must create the same on-disk shape.
     const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
     const projectsDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir: tmpDir,
@@ -279,6 +286,8 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
+    // The retry hook must clear poisoned bindings before the fresh CLI attempt
+    // runs, otherwise the runner would resume the same expired Claude session.
     runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
       const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
       expect(retry).toBeTypeOf("function");
@@ -425,6 +434,8 @@ describe("CLI attempt execution", () => {
     const sessionEntry = makeClaudeCliSessionEntry("session-storeless", cliSessionId);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("storeless ok"));
 
+    // Storeless attempts cannot persist binding cleanup, so installing the hook
+    // would only give callers a false sense that stale state was repaired.
     await runAgentAttempt({
       providerOverride: "claude-cli",
       originalProvider: "claude-cli",

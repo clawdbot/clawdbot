@@ -1,3 +1,8 @@
+/**
+ * Session runtime compatibility helpers.
+ *
+ * Resolves persisted runtime overrides without leaking provider-specific CLI runtime bindings across model routes.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";

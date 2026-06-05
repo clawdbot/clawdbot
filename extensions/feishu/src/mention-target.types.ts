@@ -1,3 +1,4 @@
+// Feishu type declarations define plugin contracts.
 export type MentionTarget = {
   openId: string;
   name: string;

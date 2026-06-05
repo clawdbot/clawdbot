@@ -1,3 +1,4 @@
+// Qa Lab tests cover live timeout plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 

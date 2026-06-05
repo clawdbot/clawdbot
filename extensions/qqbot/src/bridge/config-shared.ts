@@ -1,3 +1,4 @@
+// Qqbot helper module supports config shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAccountNameToChannelSection,

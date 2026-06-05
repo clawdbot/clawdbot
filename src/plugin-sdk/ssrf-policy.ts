@@ -1,3 +1,4 @@
+// SSRF policy helpers enforce network target safety for plugin HTTP requests.
 import { asNullableRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
@@ -18,6 +19,7 @@ import type { OpenClawConfig } from "./config-runtime.js";
 export { isPrivateIpAddress, mergeSsrFPolicies };
 export type { SsrFPolicy };
 
+/** Accepted channel config shapes that opt into private-network HTTP targets. */
 export type PrivateNetworkOptInInput =
   | boolean
   | null
@@ -127,6 +129,7 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   );
 }
 
+/** Build doctor rules that migrate legacy private-network aliases for one channel config. */
 export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: string }): {
   legacyConfigRules: ChannelDoctorLegacyConfigRule[];
   normalizeCompatibilityConfig: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;

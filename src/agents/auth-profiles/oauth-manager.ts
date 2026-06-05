@@ -1,3 +1,8 @@
+/**
+ * OAuth credential manager.
+ * Resolves usable access tokens, refreshes expired credentials under global
+ * locks, adopts safer main-store credentials, and mirrors refreshed tokens.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -56,6 +61,7 @@ export type ResolvedOAuthAccess = {
   credential: OAuthCredential;
 };
 
+/** Refresh failure that preserves a redacted refreshed store and credential. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   readonly profileId: string;
   readonly code?: string;
@@ -262,6 +268,7 @@ async function loadFreshStoredOAuthCredential(params: {
   return reloaded;
 }
 
+/** Select local OAuth unless a safe external bootstrap credential should win. */
 export function resolveEffectiveOAuthCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -306,6 +313,7 @@ export function resolveEffectiveOAuthCredential(params: {
   return params.credential;
 }
 
+/** Create an OAuth manager bound to provider-specific build/refresh adapters. */
 export function createOAuthManager(adapter: OAuthManagerAdapter) {
   function adoptNewerMainOAuthCredential(params: {
     store: AuthProfileStore;

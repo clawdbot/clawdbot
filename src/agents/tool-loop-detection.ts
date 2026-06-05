@@ -1,3 +1,8 @@
+/**
+ * Tool-call loop detection.
+ *
+ * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
+ */
 import { createHash } from "node:crypto";
 import {
   normalizeNullableString as nonEmptyStringField,

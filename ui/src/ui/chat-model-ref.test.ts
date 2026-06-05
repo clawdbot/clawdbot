@@ -1,3 +1,4 @@
+// Control UI tests cover chat model ref behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,

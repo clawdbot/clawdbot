@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";

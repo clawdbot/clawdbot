@@ -1,7 +1,11 @@
+/**
+ * Compact tool error summary types.
+ *
+ * Stores failure metadata used by transcripts, retry behavior, and mutation recovery logic.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { FileTarget } from "./tool-mutation.js";
 
-/** Compact tool failure payload stored for transcript and mutation recovery logic. */
 export type ToolErrorSummary = {
   toolName: string;
   meta?: string;

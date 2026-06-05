@@ -1,3 +1,4 @@
+// Qqbot plugin module implements resolve policy behavior.
 import type { QQBotDmPolicy, QQBotGroupPolicy } from "./types.js";
 
 export interface EffectivePolicyInput {

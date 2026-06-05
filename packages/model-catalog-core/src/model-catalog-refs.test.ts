@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover model catalog refs behavior.
 import { describe, expect, it } from "vitest";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 

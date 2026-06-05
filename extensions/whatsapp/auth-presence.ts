@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements auth presence behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";

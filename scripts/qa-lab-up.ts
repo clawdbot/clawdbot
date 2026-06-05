@@ -1,3 +1,4 @@
+// Qa Lab Up script supports OpenClaw repository automation.
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";

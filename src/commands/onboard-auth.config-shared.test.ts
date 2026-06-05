@@ -1,3 +1,4 @@
+// Onboard auth shared-config tests cover provider config merges for auth setup.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";

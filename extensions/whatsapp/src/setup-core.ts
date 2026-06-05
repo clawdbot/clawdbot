@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements setup core behavior.
 import {
   applyAccountNameToChannelSection,
   type ChannelSetupAdapter,

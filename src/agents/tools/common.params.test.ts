@@ -1,3 +1,5 @@
+// Common parameter tests cover shared action gates and typed argument readers
+// used by channel/tool adapters.
 import { describe, expect, it } from "vitest";
 import {
   createActionGate,
@@ -47,6 +49,8 @@ describe("readNumberParam", () => {
   });
 
   it("keeps partial parse behavior by default", () => {
+    // Some legacy channel tools pass identifiers with numeric prefixes; strict
+    // parsing is opt-in for new bounded fields.
     const params = { messageId: "42abc" };
     expect(readNumberParam(params, "messageId")).toBe(42);
   });

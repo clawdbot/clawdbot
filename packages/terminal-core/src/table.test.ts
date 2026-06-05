@@ -1,3 +1,4 @@
+// Terminal Core tests cover table behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, wrapNoteMessage } from "./note.js";

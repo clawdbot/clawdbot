@@ -1,3 +1,4 @@
+// Codex plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -27,6 +28,7 @@ import type {
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
+const OPENAI_CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 const LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER = "codex-cli";
 const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [
   CODEX_APP_SERVER_AUTH_PROVIDER,
@@ -607,6 +609,7 @@ function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrde
   const resolvedProvider = resolveProviderIdForAuth(provider, { config });
   return (
     resolvedProvider === CODEX_APP_SERVER_AUTH_PROVIDER ||
+    resolvedProvider === OPENAI_CODEX_APP_SERVER_AUTH_PROVIDER ||
     // Older Codex auth profiles stored the CLI runtime id here. The app-server
     // login protocol still receives the same externally managed ChatGPT token.
     resolvedProvider === LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER

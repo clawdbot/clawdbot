@@ -1,3 +1,4 @@
+// Irc plugin module implements inbound behavior.
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,

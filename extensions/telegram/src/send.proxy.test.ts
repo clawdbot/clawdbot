@@ -1,3 +1,4 @@
+// Telegram tests cover send.proxy plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({

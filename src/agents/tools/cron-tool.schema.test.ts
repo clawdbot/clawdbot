@@ -1,3 +1,5 @@
+// Cron tool schema tests cover the provider-facing parameter shape and runtime
+// validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
@@ -110,6 +112,8 @@ describe("CronToolSchema", () => {
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    // Cron expressions are interpreted by the gateway scheduler; model-facing
+    // docs must not encourage UTC conversion by the agent.
     const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
     const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
     const jobTz = propertyAt(schemaRecord, "job.schedule.tz");

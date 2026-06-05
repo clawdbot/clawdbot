@@ -1,3 +1,4 @@
+// Whatsapp tests cover auto reply.web auto reply.compresses common formats jpeg cap plugin behavior.
 import fs from "node:fs/promises";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";

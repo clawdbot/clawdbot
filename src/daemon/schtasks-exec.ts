@@ -1,3 +1,4 @@
+/** Executes Windows Task Scheduler commands with daemon-friendly timeouts. */
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const SCHTASKS_TIMEOUT_MS = 15_000;
@@ -17,6 +18,8 @@ export async function execSchtasks(
       : result.termination === "no-output-timeout"
         ? `schtasks produced no output for ${SCHTASKS_NO_OUTPUT_TIMEOUT_MS}ms`
         : "";
+  // schtasks can hang without output on some Windows hosts; convert both timeout
+  // modes into ordinary process-like failures for service fallback logic.
   return {
     stdout: result.stdout,
     stderr: result.stderr || timeoutDetail,

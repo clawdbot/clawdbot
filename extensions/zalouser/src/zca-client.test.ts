@@ -1,3 +1,4 @@
+// Zalouser tests cover zca client plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 describe("zca-client runtime loading", () => {

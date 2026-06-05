@@ -1,3 +1,4 @@
+// Vercel Ai Gateway tests cover thinking plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

@@ -1,9 +1,13 @@
+// Runs the full live Vitest suite with live-test env and heartbeat output.
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
 
+/**
+ * Renders CLI usage for the live-test wrapper.
+ */
 export function testLiveUsage() {
   return [
     "Usage: node scripts/test-live.mjs [options] [--] [vitest targets/args...]",
@@ -19,6 +23,9 @@ export function testLiveUsage() {
   ].join("\n");
 }
 
+/**
+ * Parses live-test wrapper flags and forwarded Vitest args.
+ */
 export function parseTestLiveArgs(argv) {
   const forwardedArgs = [];
   let quietOverride;
@@ -61,6 +68,9 @@ export function parseTestLiveArgs(argv) {
   };
 }
 
+/**
+ * Builds env for live tests, including quiet mode and Codex harness opt-in.
+ */
 export function buildTestLiveEnv(args, baseEnv = process.env) {
   return {
     ...baseEnv,
@@ -73,6 +83,9 @@ export function buildTestLiveEnv(args, baseEnv = process.env) {
   };
 }
 
+/**
+ * Reads the live-test heartbeat interval.
+ */
 export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   const value = baseEnv.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS;
   if (value === undefined || value === "") {
@@ -89,6 +102,9 @@ export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   return parsed;
 }
 
+/**
+ * Builds pnpm/vitest args for full live test execution.
+ */
 export function buildTestLivePnpmArgs(args) {
   return [
     "exec",
@@ -100,6 +116,9 @@ export function buildTestLivePnpmArgs(args) {
   ];
 }
 
+/**
+ * Builds spawn options for the live-test Vitest child.
+ */
 export function buildTestLiveSpawnParams(env, platform = process.platform) {
   return {
     detached: shouldUseDetachedVitestProcessGroup(platform),
@@ -108,6 +127,9 @@ export function buildTestLiveSpawnParams(env, platform = process.platform) {
   };
 }
 
+/**
+ * Runs the live-test wrapper process.
+ */
 export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   const args = parseTestLiveArgs(argv);
   if (args.help) {

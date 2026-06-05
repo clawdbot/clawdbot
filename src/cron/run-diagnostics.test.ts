@@ -1,3 +1,4 @@
+// Cron run diagnostics tests cover diagnostic event formatting for scheduled runs.
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {

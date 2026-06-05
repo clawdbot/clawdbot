@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming markdown plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

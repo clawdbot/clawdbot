@@ -1,3 +1,4 @@
+// Typing indicator keepalive loop with in-flight tick suppression.
 type AsyncTick = () => Promise<void> | void;
 
 type TypingKeepaliveLoop = {

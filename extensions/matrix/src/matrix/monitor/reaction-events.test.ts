@@ -1,3 +1,4 @@
+// Matrix tests cover reaction events plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMatrixApprovalReactionTargetsForTest,

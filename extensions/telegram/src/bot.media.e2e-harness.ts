@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot.media harness behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

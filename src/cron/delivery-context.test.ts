@@ -1,3 +1,4 @@
+// Cron delivery context tests cover context assembly for scheduled job delivery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

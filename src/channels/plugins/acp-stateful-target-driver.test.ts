@@ -1,3 +1,4 @@
+// ACP stateful target driver tests cover ACP target state persistence and routing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resetMocks = vi.hoisted(() => ({

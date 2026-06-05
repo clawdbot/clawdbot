@@ -1,3 +1,4 @@
+// Scans packaged dist JavaScript for relative imports and missing closure entries.
 import path from "node:path";
 
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
@@ -108,6 +109,7 @@ function collectImportSpecifiers(source) {
   return specifiers;
 }
 
+/** Collect missing-file errors for relative imports inside package dist files. */
 export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
@@ -123,6 +125,7 @@ export function collectPackageDistImportErrors(params) {
   return errors;
 }
 
+/** Collect relative dist import edges from package JavaScript files. */
 export function collectPackageDistImports(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const imports = [];
@@ -144,6 +147,7 @@ export function collectPackageDistImports(params) {
   return imports;
 }
 
+/** Expand seed dist files to include all reachable relative dist imports. */
 export function expandPackageDistImportClosure(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);

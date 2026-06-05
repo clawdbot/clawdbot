@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements coverage report behavior.
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildLiveTransportCoverageLaneSummaries,

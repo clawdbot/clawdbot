@@ -1,3 +1,4 @@
+// Groq API module exposes the plugin public contract.
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const GROQ_QWEN3_32B_ID = "qwen/qwen3-32b";

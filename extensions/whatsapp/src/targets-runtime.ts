@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements targets runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";

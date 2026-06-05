@@ -1,3 +1,4 @@
+// Voice Call plugin module implements core bridge behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 

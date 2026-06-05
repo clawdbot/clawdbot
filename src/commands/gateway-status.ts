@@ -1,3 +1,4 @@
+/** CLI entrypoint for `openclaw gateway status`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
@@ -35,6 +36,7 @@ function loadGatewayTlsModule() {
   return gatewayTlsModuleLoader.load();
 }
 
+/** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
     url?: string;
@@ -66,6 +68,8 @@ export async function gatewayStatusCommand(
     sanitizeSshTarget(opts.sshIdentity) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
 
   if (!sshTarget) {
+    // Remote URL inference gives users a useful SSH default without requiring
+    // gateway.remote.sshTarget when the host already appears in config.
     sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);
   }
 

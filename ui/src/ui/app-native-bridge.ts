@@ -1,3 +1,4 @@
+// Control UI module implements app native bridge behavior.
 type WebView2Bridge = {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;

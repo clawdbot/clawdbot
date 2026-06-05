@@ -1,3 +1,4 @@
+// Isolated agent test harness builds filesystem and config fixtures for cron agent tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";

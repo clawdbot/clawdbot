@@ -1,3 +1,4 @@
+// Diagnostic memory helpers capture process memory facts for support diagnostics.
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,

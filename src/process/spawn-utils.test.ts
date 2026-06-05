@@ -1,3 +1,4 @@
+// Spawn utility tests cover child process setup and stream handling helpers.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";

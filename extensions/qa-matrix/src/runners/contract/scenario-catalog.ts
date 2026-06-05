@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario catalog behavior.
 import type { QaProviderModeInput } from "../../run-config.js";
 import {
   collectLiveTransportStandardScenarioCoverage,

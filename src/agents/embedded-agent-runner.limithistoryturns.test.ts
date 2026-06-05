@@ -1,3 +1,4 @@
+// Covers limiting persisted history by recent user turns.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { limitHistoryTurns } from "./embedded-agent-runner/history.js";
@@ -50,6 +51,8 @@ describe("limitHistoryTurns", () => {
     }) as AgentMessage;
 
   const firstText = (message: AgentMessage): string | undefined => {
+    // Tests only inspect visible text; helper hides provider-specific content
+    // block shapes.
     if (!("content" in message)) {
       return undefined;
     }
@@ -106,6 +109,8 @@ describe("limitHistoryTurns", () => {
   });
 
   it("handles messages with multiple assistant responses per user turn", () => {
+    // The limit is counted by user turns, so only the assistant tail attached to
+    // the kept user turn should remain.
     const messages = makeMessages(["user", "assistant", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
@@ -114,6 +119,7 @@ describe("limitHistoryTurns", () => {
   });
 
   it("preserves message content integrity", () => {
+    // Limiting should slice whole turns, not mutate tool calls or message bodies.
     const messages: AgentMessage[] = [
       userMessage("first"),
       assistantToolCallMessage("1"),

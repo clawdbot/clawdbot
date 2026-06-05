@@ -1,3 +1,5 @@
+// Gemini schema cleaner tests cover OpenAPI-compatible tool schema cleanup for
+// Gemini-backed providers before schemas are sent upstream.
 import { describe, expect, it } from "vitest";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 
@@ -182,9 +184,9 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties?.nested).not.toHaveProperty("required");
   });
 
-  // Regression: #61206 — `not` keyword is not part of the OpenAPI 3.0 subset
-  // and must be stripped to avoid HTTP 400 from Gemini-backed providers.
   it("strips the not keyword from schemas", () => {
+    // `not` is outside the OpenAPI 3.0 subset accepted by Gemini-backed
+    // providers and triggers upstream HTTP 400s if left in tool schemas.
     const cleaned = cleanSchemaForGemini({
       type: "object",
       not: { const: true },
@@ -198,9 +200,9 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties).toEqual({ name: { type: "string" } });
   });
 
-  // Regression: #61206 — type arrays like ["string", "null"] must be
-  // collapsed to a single scalar type for OpenAPI 3.0 compatibility.
   it("collapses type arrays by stripping null entries", () => {
+    // Type arrays like ["string", "null"] must collapse to a scalar OpenAPI
+    // type for Gemini compatibility.
     const cleaned = cleanSchemaForGemini({
       type: ["string", "null"],
       description: "nullable field",

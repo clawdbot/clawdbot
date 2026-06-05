@@ -1,3 +1,4 @@
+// Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliResizeModule from "./browser-cli-resize.js";

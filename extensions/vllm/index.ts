@@ -1,3 +1,4 @@
+// Vllm plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawPluginApi,

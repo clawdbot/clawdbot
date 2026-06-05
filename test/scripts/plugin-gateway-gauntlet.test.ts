@@ -1,3 +1,4 @@
+// Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";

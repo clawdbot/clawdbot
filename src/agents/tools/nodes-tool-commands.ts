@@ -1,3 +1,8 @@
+/**
+ * Nodes command action executor.
+ *
+ * Handles non-media node reads/actions and guarded raw command invocation through Gateway.
+ */
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -179,7 +184,5 @@ async function invokeNodeCommandPayload(params: {
     params: params.commandParams ?? {},
     idempotencyKey: crypto.randomUUID(),
   });
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
-    ? raw.payload
-    : {};
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
 }

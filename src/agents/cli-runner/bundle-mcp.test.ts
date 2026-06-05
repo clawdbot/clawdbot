@@ -1,3 +1,4 @@
+/** Tests Claude-style bundle-MCP config-file overlays for CLI backends. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,6 +31,7 @@ describe("prepareCliBundleMcpConfig", () => {
     });
 
     expect(prepared.backend.args).toContain("--strict-mcp-config");
+    // Even empty overlays force Claude to ignore user/global MCP servers.
     const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, unknown>;
@@ -61,6 +63,7 @@ describe("prepareCliBundleMcpConfig", () => {
       "openclaw-cli-bundle-mcp-workspace-root-",
     );
     const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "workspace-probe");
+    // Workspace-local plugins should be resolved relative to workspaceDir, not HOME.
     const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
     await fs.mkdir(path.dirname(serverPath), { recursive: true });
     await fs.writeFile(serverPath, "export {};\n", "utf-8");

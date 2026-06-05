@@ -1,3 +1,8 @@
+/**
+ * Shared OAuth credential replacement and identity policy.
+ * Used by manager, external CLI overlays, and persistence paths to decide when
+ * incoming runtime credentials may replace or bootstrap stored profiles.
+ */
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";

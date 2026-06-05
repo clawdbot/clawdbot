@@ -1,3 +1,8 @@
+/**
+ * sessions_history built-in tool.
+ *
+ * Reads bounded, redacted session transcript history after session visibility filtering.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";

@@ -1,3 +1,4 @@
+// Empty system event tests cover skipping main jobs with no message content.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

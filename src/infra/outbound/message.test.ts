@@ -1,3 +1,5 @@
+// Covers outbound message send/poll orchestration, target resolution, durable
+// capability checks, gateway fallback, dry runs, and payload planning.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

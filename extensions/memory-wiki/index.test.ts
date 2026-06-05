@@ -1,3 +1,4 @@
+// Memory Wiki tests cover index plugin behavior.
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";

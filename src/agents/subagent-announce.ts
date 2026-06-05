@@ -1,3 +1,8 @@
+/**
+ * Subagent completion announcement coordinator.
+ *
+ * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyText,

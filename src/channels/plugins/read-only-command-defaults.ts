@@ -1,3 +1,8 @@
+/**
+ * Read-only channel command default resolver.
+ *
+ * Reads native command/skill defaults from installed plugin manifests without loading plugins.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
@@ -5,10 +10,6 @@ import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.j
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
-
-/**
- * Read-only command default resolution from installed plugin manifests.
- */
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 

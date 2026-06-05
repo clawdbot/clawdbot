@@ -1,3 +1,4 @@
+// Media utility adapters for node CLI commands and temporary media outputs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -13,6 +14,7 @@ export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: 
   tmpDir: string;
   id: string;
 } {
+  // Restrict extensions before writing temp media paths derived from CLI/user input.
   const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
   const rawExt = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
   if (!/^\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/u.test(rawExt)) {

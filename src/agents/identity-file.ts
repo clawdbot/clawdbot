@@ -1,10 +1,14 @@
+/**
+ * IDENTITY.md parsing and writing support.
+ * The parser accepts human-authored markdown, while the writer only updates
+ * stable rich identity fields.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
-// IDENTITY.md parsing/writing support. The parser accepts human-authored
-// markdown, while the writer only updates stable rich identity fields.
+/** Parsed rich identity values from a workspace `IDENTITY.md` file. */
 export type AgentIdentityFile = {
   name?: string;
   emoji?: string;
@@ -52,6 +56,7 @@ function isIdentityPlaceholder(value: string): boolean {
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
 }
 
+/** Parse rich identity fields from human-authored markdown content. */
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);

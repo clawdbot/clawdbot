@@ -1,3 +1,4 @@
+// Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
@@ -232,6 +233,7 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
+/** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {

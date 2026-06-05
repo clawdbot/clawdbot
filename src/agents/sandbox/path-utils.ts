@@ -1,10 +1,10 @@
+/**
+ * POSIX container path helpers for sandbox paths.
+ *
+ * Container paths normalize independently from host platform paths.
+ */
 import path from "node:path";
 
-/**
- * POSIX path helpers for sandbox container paths.
- *
- * Container paths are always normalized as POSIX paths even when the host is not.
- */
 /** Normalizes a container path and treats "." as the container root. */
 export function normalizeContainerPath(value: string): string {
   const normalized = path.posix.normalize(value);

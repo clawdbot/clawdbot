@@ -1,3 +1,5 @@
+// Chat error broadcast tests ensure chat.send failures still respond and emit
+// error-state broadcasts for connected UI clients.
 import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";

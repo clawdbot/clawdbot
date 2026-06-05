@@ -1,3 +1,6 @@
+/**
+ * Discovers cached model/provider state from configured agent stores.
+ */
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

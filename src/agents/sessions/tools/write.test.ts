@@ -1,3 +1,5 @@
+// Write tool tests cover session path resolution and post-write recovery when
+// remote or sandbox operations fail after persisting content.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,6 +51,8 @@ describe("write tool", () => {
   }
 
   it("recovers success after a post-write abort when readback matches requested content", async () => {
+    // Remote transports can report cancellation after the write landed; verify
+    // by readback before surfacing a false failure to the model.
     const filePath = await createTempPath();
     const controller = new AbortController();
     const tool = createWriteTool(tmpDir, {
@@ -72,6 +76,7 @@ describe("write tool", () => {
   });
 
   it("keeps the original abort when the file already matched before execution", async () => {
+    // Matching pre-existing content is not proof this call wrote successfully.
     const filePath = await createTempPath();
     await fs.writeFile(filePath, "finished\n", "utf-8");
     const controller = new AbortController();

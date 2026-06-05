@@ -1,3 +1,4 @@
+// Migrate Claude helper module supports config behavior.
 import {
   applyMigrationConfigPatchItem,
   applyMigrationManualItem,

@@ -1,3 +1,4 @@
+// Verifies OpenAI tool schema normalization remains stable across runtime paths.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
@@ -56,6 +57,7 @@ describe("OpenAI transport schema normalization runtime contract", () => {
   });
 
   it("passes prepared executable schemas through compaction-triggered Responses requests", () => {
+    // Server-side compaction must not strip provider-prepared strict tool schemas.
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = hooks.normalizeToolSchemas({
       provider: "openai",

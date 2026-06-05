@@ -1,3 +1,4 @@
+// Coverage for prompt-cache retention resolution by provider and model API.
 import { describe, expect, it } from "vitest";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
@@ -31,11 +32,8 @@ describe("prompt cache retention", () => {
   });
 
   it("passes explicit cacheRetention through for openai-completions providers when supportsPromptCacheKey (issue #81281)", () => {
-    // Regression: openai-completions providers with prefix-caching backends
-    // (oMLX, llama.cpp, etc.) set compat.supportsPromptCacheKey: true and
-    // cacheRetention: "long" but the wrapper was silently dropping the
-    // user's explicit cacheRetention because the provider is neither in the
-    // anthropic family nor google-eligible.
+    // Regression: prefix-caching OpenAI-compatible backends opt in with
+    // supportsPromptCacheKey, so explicit user retention must pass through.
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },
@@ -67,8 +65,7 @@ describe("prompt cache retention", () => {
 
   it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
     // Providers that route via openai-completions but do not advertise prompt
-    // caching (e.g. amazon-bedrock proxying amazon.* nova models) must keep
-    // the explicit cacheRetention from leaking into the outgoing payload.
+    // caching must keep retention out of outgoing payloads.
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },

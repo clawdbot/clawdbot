@@ -1,3 +1,4 @@
+// Control UI module implements browser redact behavior.
 const PAYMENT_CREDENTIAL_KEYS =
   "card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|securityCode|payment[-_]?credential|paymentCredential|shared[-_]?payment[-_]?token|sharedPaymentToken";
 

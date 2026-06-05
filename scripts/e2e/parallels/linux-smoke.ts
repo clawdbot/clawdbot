@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Linux Smoke script supports OpenClaw repository automation.
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

@@ -1,3 +1,8 @@
+/**
+ * Sandbox workspace bootstrapper.
+ *
+ * Creates sandbox workspaces and seeds agent bootstrap files through root-boundary reads.
+ */
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

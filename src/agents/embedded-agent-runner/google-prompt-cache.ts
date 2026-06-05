@@ -1,3 +1,6 @@
+/**
+ * Prepares Google prompt-cache payloads for embedded-agent stream calls.
+ */
 import crypto from "node:crypto";
 import {
   asDateTimestampMs,

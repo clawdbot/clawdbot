@@ -1,3 +1,4 @@
+/** Timeout watchdogs for isolated cron agent setup and execution phases. */
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -111,6 +112,8 @@ export function createCronAgentWatchdog(params: {
     const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
+    // A fallback attempt can return to setup-like phases after execution began;
+    // re-arm pre-execution timing so the fallback path cannot stall silently.
     if (
       state === "executing" &&
       previousPhase === "before_agent_reply" &&

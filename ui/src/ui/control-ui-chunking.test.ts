@@ -1,3 +1,4 @@
+// Control UI tests cover control ui chunking behavior.
 import { describe, expect, it } from "vitest";
 import { controlUiManualChunk, normalizeModuleId } from "../../config/control-ui-chunking.ts";
 
@@ -29,7 +30,8 @@ describe("Control UI build chunking", () => {
     expect(normalizeModuleId(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`)).toBe(
       "C:/repo/ui/node_modules/highlight.js/lib/core.js",
     );
-    expect(controlUiManualChunk(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`))
-      .toBe("markdown-runtime");
+    expect(controlUiManualChunk(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`)).toBe(
+      "markdown-runtime",
+    );
   });
 });

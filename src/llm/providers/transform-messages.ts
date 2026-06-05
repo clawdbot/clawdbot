@@ -1,3 +1,4 @@
+// Provider message transform helpers convert runtime messages to provider payloads.
 import type {
   Api,
   AssistantMessage,

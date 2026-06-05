@@ -1,3 +1,4 @@
+// Covers model runtime policy precedence and private QA runtime overrides.
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,6 +27,7 @@ function restoreEnv(
   name: "OPENCLAW_BUILD_PRIVATE_QA" | "OPENCLAW_QA_FORCE_RUNTIME",
   value: string | undefined,
 ): void {
+  // Tests mutate private QA env gates; restore exact process state after each.
   if (value == null) {
     delete process.env[name];
     return;
@@ -70,6 +72,8 @@ describe("resolveModelRuntimePolicy", () => {
   });
 
   it("respects the QA force-runtime override when the private QA gate is set", () => {
+    // The force-runtime override is intentionally gated to private QA builds so
+    // normal users cannot accidentally change model runtime selection via env.
     process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
 
@@ -149,6 +153,8 @@ describe("resolveModelRuntimePolicy", () => {
   });
 
   it("prefers exact agent model runtime policy entries over provider wildcards", () => {
+    // Exact configured model refs beat provider wildcards to keep intentional
+    // per-model runtime routing stable.
     const config = {
       agents: {
         defaults: {

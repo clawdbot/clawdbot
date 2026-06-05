@@ -1,3 +1,4 @@
+// Imessage tests cover self chat cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfChatCache } from "./self-chat-cache.js";
 

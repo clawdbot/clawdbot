@@ -1,3 +1,4 @@
+// Live model profile gateway tests sweep configured providers, auth profiles, model listing, and smoke prompts.
 import { randomBytes, randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";

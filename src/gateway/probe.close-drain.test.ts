@@ -1,3 +1,5 @@
+// Probe close-drain tests ensure probeGateway waits for the WebSocket socket to
+// close before resolving, preventing leaked handles in callers and test runs.
 import { type AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";

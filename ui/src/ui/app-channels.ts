@@ -1,3 +1,4 @@
+// Control UI module implements app channels behavior.
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   loadChannels,

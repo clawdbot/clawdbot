@@ -1,3 +1,4 @@
+// Zalo plugin module implements setup allow from behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,

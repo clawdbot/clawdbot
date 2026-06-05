@@ -1,3 +1,4 @@
+// Timer delay helpers clamp delays to runtime-safe timeout values.
 import { resolveSafeTimeoutDelayMs } from "../../packages/gateway-client/src/timeouts.js";
 
 export {

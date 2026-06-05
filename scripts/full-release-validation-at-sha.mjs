@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Dispatches full release validation against a temporary SHA-pinned branch.
 import { execFileSync, spawnSync } from "node:child_process";
 
 const WORKFLOW = "full-release-validation.yml";

@@ -1,8 +1,7 @@
+// Gateway node pairing auto-approval policy.
+// Allows first-time node pairing from configured CIDRs while rejecting upgrades/browser paths.
 import { isTrustedProxyAddress } from "./net.js";
 
-// Node auto-approval is limited to first-time node pairings from configured
-// CIDRs. Browser/control-ui/webchat paths and upgrade requests require manual
-// approval because they can expand trust or user-facing capability.
 export type NodePairingAutoApproveReason =
   | "not-paired"
   | "role-upgrade"

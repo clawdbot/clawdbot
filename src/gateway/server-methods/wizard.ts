@@ -1,3 +1,5 @@
+// Wizard gateway methods manage interactive setup wizard sessions and route
+// start/next/status/cancel RPCs through the wizard runtime.
 import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {

@@ -1,3 +1,4 @@
+// Verifies session thinking levels reach OpenAI and Codex Responses transports.
 import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -119,6 +120,7 @@ function createCapturingStreamFn(
   model: ResponsesModel,
   capturedOptions: SimpleStreamOptions[],
 ): StreamFn {
+  // Captures Agent -> stream options while returning a complete assistant event.
   return (_model, _context, options) => {
     capturedOptions.push({ ...options });
     const stream = createAssistantMessageEventStream();
@@ -164,6 +166,7 @@ async function captureProviderPayload<
   ) => ReturnType<StreamFn>;
   options: SimpleStreamOptions;
 }): Promise<Record<string, unknown>> {
+  // Stop at onPayload so transport serialization can be asserted without HTTP.
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`provider payload callback was not invoked for ${params.model.api}`)),

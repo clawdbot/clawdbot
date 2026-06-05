@@ -1,3 +1,5 @@
+// Web tool default tests cover enablement, runtime provider discovery, and
+// late-bound runtime config for web_search/web_fetch tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -51,6 +53,8 @@ vi.mock("../../web-search/runtime.js", async () => {
     config?: unknown;
     runtimeWebSearch?: { selectedProvider?: string; providerConfigured?: string };
   }) => {
+    // The mock mirrors production provider resolution order closely enough to
+    // catch stale construction-time metadata in late-bound tool instances.
     const providerId =
       options?.runtimeWebSearch?.selectedProvider ??
       options?.runtimeWebSearch?.providerConfigured ??
@@ -217,6 +221,8 @@ describe("web tools defaults", () => {
   });
 
   it("late-binds managed web_search execution to the current runtime snapshot", async () => {
+    // Managed agents can outlive a credentials refresh; execution should read
+    // the active runtime snapshot just before dispatch.
     const registry = createEmptyPluginRegistry();
     registry.webSearchProviders.push(
       {

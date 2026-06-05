@@ -1,3 +1,4 @@
+// Discord tests cover durable delivery plugin behavior.
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,

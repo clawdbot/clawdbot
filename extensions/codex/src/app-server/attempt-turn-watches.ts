@@ -1,10 +1,16 @@
+/**
+ * Idle-watch controller for Codex app-server turn progress, completion, and
+ * terminal-event gaps.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 type Timer = ReturnType<typeof setTimeout>;
 
+/** Timeout bucket reported by the turn watch controller. */
 export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
 
+/** Structured timeout event emitted when a watch fires. */
 export type CodexAttemptTurnWatchTimeout = {
   kind: CodexAttemptTurnWatchTimeoutKind;
   idleMs: number;
@@ -13,10 +19,15 @@ export type CodexAttemptTurnWatchTimeout = {
   details?: Record<string, unknown>;
 };
 
+/** Controller API returned by `createCodexAttemptTurnWatchController`. */
 export type CodexAttemptTurnWatchController = ReturnType<
   typeof createCodexAttemptTurnWatchController
 >;
 
+/**
+ * Creates a controller that arms/disarms timers as Codex app-server
+ * notifications and tool handoffs progress.
+ */
 export function createCodexAttemptTurnWatchController(params: {
   threadId: string;
   signal: AbortSignal;

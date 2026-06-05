@@ -1,3 +1,6 @@
+/**
+ * Sanitizes and validates replayed session history before model calls.
+ */
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +55,7 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
+  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -731,16 +735,25 @@ export async function sanitizeSessionHistory(params: {
   const preserveLatestAssistantThinking =
     params.preserveLatestAssistantThinking ??
     shouldPreserveLatestAssistantThinking(sanitizedImages);
+  // Strip thinking signatures that are stale due to compaction context changes before
+  // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
+  // bound to the original prefix; after compaction the prefix changes and Anthropic
+  // rejects them. Timestamp comparison with the latest compaction summary identifies
+  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  const compactionStaleStripped =
+    signedThinkingProvider || policy.preserveSignatures
+      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
+      : sanitizedImages;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
   const validatedThinkingSignatures =
     signedThinkingProvider || policy.preserveSignatures
-      ? stripInvalidThinkingSignatures(sanitizedImages, {
+      ? stripInvalidThinkingSignatures(compactionStaleStripped, {
           preserveLatestAssistant: preserveLatestAssistantThinking,
         })
-      : sanitizedImages;
+      : compactionStaleStripped;
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;

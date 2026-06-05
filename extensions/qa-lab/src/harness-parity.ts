@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements harness parity behavior.
 import { createHash } from "node:crypto";
 import type {
   RuntimeId,

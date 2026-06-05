@@ -1,3 +1,4 @@
+// Slack plugin module implements streaming compat behavior.
 import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,

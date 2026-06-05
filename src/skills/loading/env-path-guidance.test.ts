@@ -1,3 +1,4 @@
+// Env path guidance tests cover user-facing guidance for skill path environment config.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

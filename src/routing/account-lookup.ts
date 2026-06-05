@@ -1,3 +1,4 @@
+// Account lookup helpers resolve route accounts from normalized account ids.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Case-insensitive account lookup for config maps that may preserve user

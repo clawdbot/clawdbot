@@ -1,3 +1,4 @@
+// OC Path tests cover h2 block split plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../../parse.js";
 

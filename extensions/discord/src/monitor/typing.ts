@@ -1,3 +1,4 @@
+// Discord plugin module implements typing behavior.
 import { sendChannelTyping, type RequestClient } from "../internal/discord.js";
 import { raceWithTimeout } from "./timeouts.js";
 

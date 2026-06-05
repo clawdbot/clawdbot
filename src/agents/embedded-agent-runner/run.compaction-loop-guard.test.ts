@@ -1,3 +1,4 @@
+// Coverage for wiring the post-compaction loop guard into embedded runs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   diagnosticSessionStates as DiagnosticSessionStatesType,
@@ -29,9 +30,8 @@ import {
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-// These need to be imported AFTER loadRunOverflowCompactionHarness so that
-// they reference the same module instances the (re-imported) runner uses.
-// vi.resetModules() inside the harness invalidates any earlier import.
+// Import after loadRunOverflowCompactionHarness so these references point at the
+// same module instances as the re-imported runner graph.
 let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
 let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
 let recordToolCall: typeof RecordToolCallType;
@@ -51,6 +51,8 @@ function recordToolOutcome(
   result: unknown,
   runId?: string,
 ): void {
+  // Seed diagnostic history directly for cases that inspect persisted loop
+  // state without running a wrapped tool.
   const toolCallId = `${toolName}-${state.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
   recordToolCall(state, toolName, toolParams, toolCallId, undefined, scope);
@@ -75,6 +77,8 @@ async function executeWrappedToolOutcome(
   onToolOutcome?: ToolOutcomeObserver,
   runId = baseParams.runId,
 ): Promise<unknown> {
+  // Exercise the live before_tool_call wrapper so the guard sees the same
+  // outcome observer path used by real embedded tools.
   const tool = wrapToolWithBeforeToolCallHook(
     {
       name: toolName,
@@ -135,15 +139,13 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     let attemptSignalAborted = false;
     let attemptSignalReason: unknown;
 
-    // Attempt 1: overflow → triggers compaction.
+    // Attempt 1: overflow triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
-    // Attempt 2: post-compaction. The live wrapped-tool path records each
-    // outcome while the prompt is still running. The third identical result
-    // must not rely on throwing out of tool execution (the dependency converts
-    // tool errors into tool results); instead it aborts the attempt signal and
-    // the runner raises the persisted-loop error after the attempt unwinds.
+    // Attempt 2: live wrapped-tool outcomes repeat while the prompt is running.
+    // The guard aborts the attempt signal, then the runner raises the loop error
+    // after the attempt unwinds.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
       const { abortSignal, onToolOutcome } = attemptParams as {
         abortSignal?: AbortSignal;

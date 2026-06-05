@@ -1,3 +1,4 @@
+// Message program helper tests cover message command helper behavior and mocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});

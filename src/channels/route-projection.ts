@@ -1,3 +1,4 @@
+// Route projection helpers between sessions, delivery context, and channel routes.
 import type { SessionEntry } from "../config/sessions/types.js";
 import type {
   ConversationRef,

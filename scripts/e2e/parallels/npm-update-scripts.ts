@@ -1,3 +1,4 @@
+// Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
 import { posixProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";

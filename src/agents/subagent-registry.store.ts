@@ -1,3 +1,8 @@
+/**
+ * JSON-backed subagent registry store.
+ *
+ * Loads and saves persisted subagent run records with legacy migration and bounded read caching.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

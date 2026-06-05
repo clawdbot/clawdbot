@@ -1,3 +1,4 @@
+// Cloudflare Ai Gateway tests cover stream wrappers plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {

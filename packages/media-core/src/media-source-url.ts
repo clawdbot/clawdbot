@@ -1,3 +1,4 @@
+// Media Core module implements media source url behavior.
 const HTTP_URL_RE = /^https?:\/\//i;
 const MXC_URL_RE = /^mxc:\/\//i;
 

@@ -1,3 +1,4 @@
+// Check No Deprecated Channel Access script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";

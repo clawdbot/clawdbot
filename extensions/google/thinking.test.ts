@@ -1,3 +1,4 @@
+// Google tests cover thinking plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveGoogleGemini3ThinkingLevel,

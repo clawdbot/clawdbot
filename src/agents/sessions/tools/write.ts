@@ -1,3 +1,8 @@
+/**
+ * Built-in write session tool.
+ *
+ * Writes files through queued local or injected operations with readback/idempotency metadata.
+ */
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,

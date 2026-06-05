@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for plugin-only tool allowlist analysis.
+ * Confirms plugin group expansion and unknown allowlist reporting.
+ */
 import { describe, expect, it } from "vitest";
 import {
   analyzeAllowlistByToolType,

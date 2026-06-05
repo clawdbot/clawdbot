@@ -1,3 +1,4 @@
+// Verifies persisted provider auth markers preserve credential provenance.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -53,6 +54,8 @@ beforeEach(() => {
 beforeAll(loadProviderAuthModules);
 
 function buildPairedApiKeyProviders(apiKey: string) {
+  // Several generated provider pairs should carry the same persisted key
+  // marker; this helper keeps those expectations identical.
   return {
     provider: { apiKey },
     paired: { apiKey },
@@ -86,6 +89,8 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", () => {
+    // Ref-managed secrets may be resolved in memory, but models.json should
+    // persist only a non-env marker so plaintext is not written back.
     const byteplusApiKey = resolveApiKeyFromCredential({
       type: "api_key",
       provider: "byteplus",
@@ -141,6 +146,8 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("resolves plugin-owned synthetic auth through the provider hook", () => {
+    // Plugin-owned synthetic auth can provide discovery keys while persisted
+    // config still records a non-secret marker.
     mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
       apiKey: "xai-plugin-key",
       mode: "api-key",

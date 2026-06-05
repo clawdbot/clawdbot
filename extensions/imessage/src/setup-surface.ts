@@ -1,3 +1,4 @@
+// Imessage plugin module implements setup surface behavior.
 import {
   createDetectedBinaryStatus,
   setSetupChannelEnabled,

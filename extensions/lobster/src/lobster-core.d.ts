@@ -1,3 +1,4 @@
+// Lobster type declarations define plugin contracts.
 declare module "@clawdbot/lobster/core" {
   type LobsterApprovalRequest = {
     type: "approval_request";

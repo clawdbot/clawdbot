@@ -1,3 +1,5 @@
+// Subagent spawn model-session tests verify runtime model metadata is persisted
+// before a child agent run starts.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -46,6 +48,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   });
 
   it("persists runtime model fields on the child session before starting the run", async () => {
+    // The child run reads model/provider from session state, so persistence must
+    // happen before the gateway accepts the agent request.
     const operations: string[] = [];
     callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
       operations.push(`gateway:${opts.method ?? "unknown"}`);

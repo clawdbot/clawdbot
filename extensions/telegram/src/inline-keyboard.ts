@@ -1,3 +1,4 @@
+// Telegram plugin module implements inline keyboard behavior.
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "grammy/types";
 import type { TelegramInlineButtons } from "./button-types.js";
 

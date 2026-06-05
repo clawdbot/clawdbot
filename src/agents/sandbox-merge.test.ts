@@ -1,3 +1,4 @@
+// Verifies sandbox config merge precedence across global, agent, and shared scopes.
 import { describe, expect, it } from "vitest";
 import {
   resolveSandboxBrowserConfig,
@@ -60,6 +61,7 @@ describe("sandbox config merges", () => {
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {
+    // Shared scope intentionally ignores agent-specific Docker overrides.
     for (const scenario of [
       {
         name: "merges sandbox docker binds (global + agent combined)",

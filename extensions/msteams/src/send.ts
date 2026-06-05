@@ -1,3 +1,4 @@
+// Msteams plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,

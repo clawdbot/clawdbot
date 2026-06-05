@@ -1,3 +1,4 @@
+// Discord provider module implements model/runtime integration.
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,

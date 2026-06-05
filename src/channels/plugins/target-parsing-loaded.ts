@@ -1,3 +1,8 @@
+/**
+ * Loaded-channel target parsing helpers.
+ *
+ * Bridges deprecated explicit target parsing with modern channel route target helpers.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

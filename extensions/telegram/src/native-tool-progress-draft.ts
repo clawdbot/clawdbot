@@ -1,3 +1,4 @@
+// Telegram plugin module implements native tool progress draft behavior.
 import type { Bot } from "grammy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";

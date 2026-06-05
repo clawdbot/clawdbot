@@ -1,3 +1,5 @@
+// Tool image tests cover image payload sanitization before tool outputs are
+// returned to model-visible content blocks.
 import { describe, expect, it } from "vitest";
 import {
   createNoisyPngBuffer,
@@ -116,6 +118,8 @@ describe("tool image sanitizing", () => {
   });
 
   it("drops malformed image base64 payloads", async () => {
+    // Invalid base64 is replaced with text so malformed payloads cannot smuggle
+    // attributes or script-like text through image blocks.
     const blocks = [
       {
         type: "image" as const,

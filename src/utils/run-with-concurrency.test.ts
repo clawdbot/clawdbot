@@ -1,3 +1,4 @@
+// Concurrency runner tests cover bounded parallel task execution.
 import { describe, expect, it, vi } from "vitest";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 

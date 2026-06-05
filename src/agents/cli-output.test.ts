@@ -1,3 +1,4 @@
+/** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
 import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,

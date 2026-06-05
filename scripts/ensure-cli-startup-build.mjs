@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Ensures CLI startup benchmark assets are built before checks.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -25,10 +26,16 @@ function positiveEnvInt(name, env, fallback) {
   return value;
 }
 
+/**
+ * Resolves the CLI startup build timeout from environment.
+ */
 export function resolveCliStartupBuildTimeoutMs(env = process.env) {
   return positiveEnvInt("OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS", env, DEFAULT_BUILD_TIMEOUT_MS);
 }
 
+/**
+ * Reports whether required CLI startup build outputs exist.
+ */
 export function hasCliStartupBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const exists = params.existsSync ?? existsSync;
@@ -36,6 +43,9 @@ export function hasCliStartupBuild(params = {}) {
   return hasEntry && exists(path.join(rootDir, startupMetadataPath));
 }
 
+/**
+ * Builds CLI startup assets when required outputs are missing.
+ */
 export function ensureCliStartupBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {

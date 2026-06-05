@@ -1,3 +1,4 @@
+// OpenClaw SDK module implements event hub behavior.
 import type { GatewayEvent } from "./types.js";
 
 // Async event hub with bounded replay for SDK event streams.

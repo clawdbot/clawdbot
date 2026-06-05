@@ -1,3 +1,4 @@
+// Diffs helper module supports test helpers behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";

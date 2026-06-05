@@ -1,3 +1,6 @@
+/**
+ * Manages active embedded-agent run handles, queues, aborts, and waiters.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   abortActiveReplyRuns,

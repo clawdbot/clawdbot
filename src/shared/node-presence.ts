@@ -1,3 +1,4 @@
+// Node presence helpers normalize live node presence and heartbeat metadata.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Gateway event name used by node hosts to refresh their last-seen presence. */

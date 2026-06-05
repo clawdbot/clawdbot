@@ -1,3 +1,4 @@
+/** Post-upgrade validation probes for persisted plugin index and package extension entries. */
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -147,6 +148,7 @@ async function sha256OfFile(absPath: string): Promise<string | null> {
   }
 }
 
+/** Runs post-upgrade plugin probes and returns structured findings for the caller to render. */
 export async function runPostUpgradeProbes(params: {
   installsPath?: string;
   stateDir?: string;

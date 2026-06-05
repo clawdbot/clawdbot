@@ -1,3 +1,8 @@
+/**
+ * OpenClaw-owned agent runtime facade.
+ *
+ * Wires agent-core to the plugin SDK LLM runtime and re-exports reusable runtime helpers.
+ */
 import {
   Agent as CoreAgent,
   type AgentOptions as CoreAgentOptions,

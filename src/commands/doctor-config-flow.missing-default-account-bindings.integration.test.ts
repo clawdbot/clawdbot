@@ -1,3 +1,4 @@
+// Doctor default-account integration tests cover binding warnings across realistic config shapes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

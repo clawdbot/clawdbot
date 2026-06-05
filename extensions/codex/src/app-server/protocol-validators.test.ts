@@ -1,3 +1,4 @@
+// Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   readCodexModelListResponse,

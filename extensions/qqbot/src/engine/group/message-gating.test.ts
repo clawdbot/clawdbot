@@ -1,3 +1,4 @@
+// Qqbot tests cover message gating plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveGroupMessageGate,

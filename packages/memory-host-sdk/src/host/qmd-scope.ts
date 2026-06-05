@@ -1,3 +1,4 @@
+// Memory Host SDK module implements qmd scope behavior.
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import {
   normalizeLowercaseStringOrEmpty,

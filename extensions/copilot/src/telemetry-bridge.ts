@@ -1,3 +1,4 @@
+// Copilot plugin module implements telemetry bridge behavior.
 import type { CopilotClientOptions } from "@github/copilot-sdk";
 
 // Telemetry bridge for the GitHub Copilot agent runtime.

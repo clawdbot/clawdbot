@@ -1,3 +1,5 @@
+// System gateway methods expose device identity, heartbeat controls, system
+// presence snapshots, and normalized system events.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

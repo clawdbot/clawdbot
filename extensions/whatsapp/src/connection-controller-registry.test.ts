@@ -1,3 +1,4 @@
+// Whatsapp tests cover connection controller registry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 type RegistryModule = typeof import("./connection-controller-registry.js");

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements echo behavior.
 export type EchoTracker = {
   rememberText: (
     text: string | undefined,

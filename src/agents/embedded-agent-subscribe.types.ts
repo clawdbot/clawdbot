@@ -1,3 +1,6 @@
+/**
+ * Public parameter types for subscribing to embedded-agent sessions.
+ */
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,

@@ -1,3 +1,5 @@
+// Attachment path normalization tests cover file URL host checks and Windows
+// network path rejection.
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

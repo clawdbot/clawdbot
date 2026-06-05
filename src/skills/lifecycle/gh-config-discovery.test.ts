@@ -1,3 +1,4 @@
+// GitHub config discovery tests cover repository path matching for skill configs.
 import { describe, expect, it } from "vitest";
 import {
   detectGhConfigDirMismatch,

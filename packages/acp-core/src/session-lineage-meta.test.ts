@@ -1,3 +1,4 @@
+// ACP Core tests cover session lineage meta behavior.
 import { describe, expect, it } from "vitest";
 import { toAcpSessionLineageMeta, type AcpSessionLineageRow } from "./session-lineage-meta.js";
 

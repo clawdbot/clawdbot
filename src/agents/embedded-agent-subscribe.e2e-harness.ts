@@ -1,3 +1,6 @@
+/**
+ * E2E harness helpers for subscribed embedded-agent event streams.
+ */
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";

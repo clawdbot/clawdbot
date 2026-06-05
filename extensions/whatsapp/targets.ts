@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements targets behavior.
 export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,

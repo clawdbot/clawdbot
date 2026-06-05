@@ -1,3 +1,4 @@
+// Transcript streaming reads large JSONL files forward or backward without whole-file buffering.
 import fs from "node:fs";
 import readline from "node:readline";
 
@@ -106,6 +107,8 @@ export async function* streamSessionTranscriptLinesReverse(
       const chunk = await readFileRangeAsync(fileHandle, position, readLength);
       const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
       let lineEnd = combined.length;
+      // Split on newline bytes before decoding so UTF-8 characters crossing chunk boundaries stay
+      // intact inside `carry`.
       for (let index = combined.length - 1; index >= 0; index -= 1) {
         if (combined[index] !== 0x0a) {
           continue;

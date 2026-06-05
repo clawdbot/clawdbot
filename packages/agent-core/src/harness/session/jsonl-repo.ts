@@ -1,3 +1,4 @@
+// Agent Core module implements jsonl repo behavior.
 import type {
   FileSystem,
   JsonlSessionCreateOptions,

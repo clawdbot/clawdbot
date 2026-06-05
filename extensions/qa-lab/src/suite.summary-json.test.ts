@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite.summary json plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildQaSuiteSummaryJson } from "./suite.js";
 

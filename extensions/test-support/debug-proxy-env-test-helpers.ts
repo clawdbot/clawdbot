@@ -1,3 +1,4 @@
+// Test Support helper module supports debug proxy env test helpers behavior.
 import { afterEach, vi } from "vitest";
 
 const DEBUG_PROXY_ENV_KEYS = [

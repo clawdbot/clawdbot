@@ -70,6 +70,10 @@ present.
   `vsearch` and `query`). `search` is BM25-only, so OpenClaw skips semantic
   vector readiness probes and embedding maintenance in that mode. If a mode
   fails, OpenClaw retries with `qmd query`.
+- When `searchMode` is `query`, set `memory.qmd.rerank` to `false` to use QMD's
+  hybrid query path without the reranker. OpenClaw passes `--no-rerank` to the
+  direct QMD CLI path and `rerank: false` to QMD's MCP query tool. This option
+  requires QMD 2.1 or newer.
 - With QMD releases that advertise multi-collection filters, OpenClaw groups
   same-source collections into one QMD search invocation. Older QMD releases
   keep the compatible per-collection fallback.

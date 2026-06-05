@@ -1,3 +1,4 @@
+// Binding routing tests cover channel binding selection and message routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing,

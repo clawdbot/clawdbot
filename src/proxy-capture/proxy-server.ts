@@ -1,3 +1,4 @@
+// Proxy capture server records proxied HTTP traffic for deterministic test fixtures.
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { request as httpRequest } from "node:http";

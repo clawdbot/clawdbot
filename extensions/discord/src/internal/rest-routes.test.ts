@@ -1,3 +1,4 @@
+// Discord tests cover rest routes plugin behavior.
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readHeaderNumber, readResetAt } from "./rest-routes.js";

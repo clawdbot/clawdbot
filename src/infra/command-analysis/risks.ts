@@ -1,3 +1,5 @@
+// Command risk detection follows nested carriers, shell wrappers, and inline
+// interpreter eval paths used by approval policy and command explanations.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
@@ -250,6 +252,8 @@ function detectInlineEvalArgvInternal(
   if (!Array.isArray(argv)) {
     return null;
   }
+  // Try direct interpreters first, then shell positional trampoline patterns,
+  // then transparent carriers such as sudo/env/exec.
   return (
     detectInterpreterInlineEvalArgv(argv) ??
     detectShellPositionalCarrierInlineEvalArgvInternal(argv, seenArgv) ??

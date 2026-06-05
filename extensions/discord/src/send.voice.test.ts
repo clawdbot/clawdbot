@@ -1,3 +1,4 @@
+// Discord tests cover send.voice plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 

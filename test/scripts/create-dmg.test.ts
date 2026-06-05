@@ -1,3 +1,4 @@
+// Create Dmg tests cover create dmg script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -74,10 +75,7 @@ describe("create-dmg plist validation", () => {
   it.runIf(process.platform === "darwin")(
     "fails before hdiutil when required plist keys are missing",
     () => {
-      const app = makeApp([
-        "<key>CFBundleName</key>",
-        "<string>OpenClaw</string>",
-      ]);
+      const app = makeApp(["<key>CFBundleName</key>", "<string>OpenClaw</string>"]);
       const result = runScript([app, path.join(path.dirname(app), "out.dmg")]);
 
       expect(result.status).toBe(1);

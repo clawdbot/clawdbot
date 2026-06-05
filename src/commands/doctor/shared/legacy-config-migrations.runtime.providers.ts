@@ -1,3 +1,4 @@
+// Legacy provider runtime config migrations for plugin ids and bundled discovery policy.
 import {
   defineLegacyConfigMigration,
   type LegacyConfigMigrationSpec,
@@ -100,6 +101,7 @@ function rewriteLegacyOpenAICodexPluginPolicy(raw: Record<string, unknown>): str
   return changes;
 }
 
+/** Legacy config migration specs for provider/plugin runtime config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "plugins.openai-codex->plugins.openai",

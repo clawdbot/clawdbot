@@ -1,3 +1,9 @@
+/**
+ * Interactive onboarding command entrypoint.
+ *
+ * It wires the Clack prompter to the setup wizard and restores terminal state
+ * on every exit path so canceled setup cannot leave stdin paused.
+ */
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -6,6 +12,7 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
+/** Runs the interactive setup wizard and maps user cancellation to exit code 1. */
 export async function runInteractiveSetup(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,

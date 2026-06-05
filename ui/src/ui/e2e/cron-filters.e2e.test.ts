@@ -1,3 +1,4 @@
+// Control UI tests cover cron filters behavior.
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {

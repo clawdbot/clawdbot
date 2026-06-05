@@ -1,3 +1,4 @@
+// Qa Lab tests cover gateway rpc client plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayRpcMock = vi.hoisted(() => {

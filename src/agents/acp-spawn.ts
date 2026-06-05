@@ -1,3 +1,4 @@
+/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
@@ -1563,6 +1564,7 @@ export async function spawnAcpDirect(
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
+      cfg,
     });
   }
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
@@ -1622,6 +1624,7 @@ export async function spawnAcpDirect(
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
+        cfg,
       });
     }
     parentRelay?.notifyStarted();

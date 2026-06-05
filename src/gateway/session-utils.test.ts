@@ -1,3 +1,5 @@
+// Session utility tests cover key parsing, store migration, agent/default rows,
+// model identity resolution, title derivation, and byte-capped row payloads.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

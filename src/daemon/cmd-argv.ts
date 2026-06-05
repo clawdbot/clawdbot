@@ -1,3 +1,4 @@
+/** Windows cmd argument quoting and parser mirror used by service tests. */
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
 

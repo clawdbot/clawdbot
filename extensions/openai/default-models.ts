@@ -1,3 +1,4 @@
+// Openai plugin module implements default models behavior.
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import {
   applyAgentDefaultModelPrimary,

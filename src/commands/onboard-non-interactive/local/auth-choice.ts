@@ -1,3 +1,9 @@
+/**
+ * Non-interactive local auth-choice dispatcher.
+ *
+ * It normalizes legacy choices, handles secret storage mode, delegates plugin
+ * setup when applicable, and applies built-in custom provider config.
+ */
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -27,6 +33,7 @@ type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
 >;
 
+/** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
   authChoice: AuthChoice;
@@ -59,6 +66,8 @@ export async function applyNonInteractiveAuthChoice(params: {
       return resolved.key;
     }
     if (!resolved.envVarName) {
+      // Secret refs need a durable env-var id; provider auto-detection without
+      // a concrete name cannot be serialized as a config reference.
       runtime.error(
         [
           `Unable to determine which environment variable to store as a ref for provider "${authChoice}".`,
@@ -91,6 +100,8 @@ export async function applyNonInteractiveAuthChoice(params: {
       requestedSecretInputMode === "ref" && paramsLocal.resolved.source === "env"; // pragma: allowlist secret
     if (storeSecretRef) {
       if (!paramsLocal.resolved.envVarName) {
+        // Plugin profile credentials have the same secret-ref contract as core
+        // provider config: the stored ref must name a specific env variable.
         runtime.error(
           [
             `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
@@ -123,6 +134,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     };
   };
   if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
+    // Keep deprecated aliases out of the config by normalizing them before
+    // either plugin dispatch or built-in setup handling.
     const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
       config: nextConfig,
       env: process.env,
@@ -157,6 +170,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     toApiKeyCredential,
   });
   if (pluginProviderChoice !== undefined) {
+    // null means the plugin path handled an error and requested exit; undefined
+    // means no trusted plugin matched and core choices should continue.
     return pluginProviderChoice;
   }
 
@@ -185,6 +200,8 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "custom-api-key") {
     try {
+      // Custom provider setup can be optional-key: some local endpoints do not
+      // require auth, but flags and env refs still need validation if present.
       const customAuth = parseNonInteractiveCustomApiFlags({
         baseUrl: opts.customBaseUrl,
         modelId: opts.customModelId,
@@ -212,6 +229,8 @@ export async function applyNonInteractiveAuthChoice(params: {
       if (resolvedCustomApiKey) {
         const storeCustomApiKeyAsRef = requestedSecretInputMode === "ref"; // pragma: allowlist secret
         if (storeCustomApiKeyAsRef) {
+          // Reuse the same SecretInput conversion as core providers so custom
+          // endpoints preserve env-ref storage semantics.
           const stored = toStoredSecretInput(resolvedCustomApiKey);
           if (!stored) {
             return null;

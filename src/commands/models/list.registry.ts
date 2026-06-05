@@ -1,3 +1,4 @@
+/** Model registry access helpers for `openclaw models list`. */
 import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
 import {
   shouldSuppressBuiltInModel,
@@ -84,6 +85,7 @@ function loadAvailableModels(
   }
 }
 
+/** Loads registry models and optional availability keys with suppression applied. */
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
   opts?: {
@@ -137,6 +139,7 @@ export async function loadModelRegistry(
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
 
+/** Compatibility wrapper around the shared model-row builder. */
 export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
   return toModelRowBase(params);
 }

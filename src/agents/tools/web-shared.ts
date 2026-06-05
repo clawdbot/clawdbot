@@ -1,3 +1,8 @@
+/**
+ * Shared web tool cache, timeout, and response helpers.
+ *
+ * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
+ */
 import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,

@@ -1,3 +1,4 @@
+// Mcp Connect Timeout script supports OpenClaw repository automation.
 type McpConnectTransport = {
   close?(): Promise<void> | void;
 };

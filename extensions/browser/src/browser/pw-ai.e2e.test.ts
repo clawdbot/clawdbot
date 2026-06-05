@@ -1,3 +1,4 @@
+// Browser tests cover pw ai plugin behavior.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { connectOverCdpMock, getChromeWebSocketUrlMock } from "./pw-session.mock-setup.js";
 

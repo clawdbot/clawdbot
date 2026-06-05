@@ -1,3 +1,4 @@
+// Persisted auth state tests cover channel plugin auth state serialization and recovery.
 import { describe, expect, it } from "vitest";
 import {
   hasBundledChannelPersistedAuthState,

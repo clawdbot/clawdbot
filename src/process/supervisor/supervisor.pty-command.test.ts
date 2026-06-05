@@ -1,3 +1,4 @@
+// PTY command supervisor tests cover supervised terminal command lifecycles.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createPtyAdapterMock } = vi.hoisted(() => ({

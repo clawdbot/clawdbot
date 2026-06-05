@@ -1,3 +1,4 @@
+// Discord plugin module implements structures behavior.
 import type {
   APIChannel,
   APIEmbed,

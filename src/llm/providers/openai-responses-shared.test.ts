@@ -1,3 +1,4 @@
+// OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import type { Context, Model, Tool } from "../types.js";

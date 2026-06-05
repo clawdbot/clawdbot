@@ -1,3 +1,6 @@
+/**
+ * Browser CLI root command registration with lazy subcommand loading.
+ */
 import type { Command } from "commander";
 import {
   registerCommandGroups,
@@ -241,6 +244,7 @@ function registerLazyBrowserCommands(
   });
 }
 
+/** Registers the Browser CLI command and its lazy-loaded subcommand groups. */
 export function registerBrowserCli(program: Command, argv: string[] = process.argv) {
   const browser = program
     .command("browser")

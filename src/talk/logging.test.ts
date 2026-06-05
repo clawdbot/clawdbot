@@ -1,3 +1,4 @@
+// Talk logging tests cover voice session log output and redaction.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

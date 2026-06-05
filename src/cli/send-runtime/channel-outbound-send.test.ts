@@ -1,3 +1,4 @@
+// Channel outbound send tests cover CLI send runtime handoff to channel outbound adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

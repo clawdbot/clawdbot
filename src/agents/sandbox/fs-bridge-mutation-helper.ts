@@ -1,3 +1,8 @@
+/**
+ * Pinned Python mutation helper for sandbox filesystem writes.
+ *
+ * Performs symlink-resistant create/replace/delete operations inside a previously validated sandbox boundary.
+ */
 import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
 import type {
   PathSafetyCheck,

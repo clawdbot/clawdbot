@@ -1,3 +1,4 @@
+// Outbound attachment tests cover media loading rules for outgoing messages.
 import { describe, expect, it, vi } from "vitest";
 
 const loadWebMedia = vi.hoisted(() => vi.fn());

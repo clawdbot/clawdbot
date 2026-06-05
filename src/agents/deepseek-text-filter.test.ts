@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for DeepSeek DSML streamed text filtering.
+ * Verifies complete, split, full-width, and unterminated DSML markup handling.
+ */
 import { describe, expect, it } from "vitest";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 

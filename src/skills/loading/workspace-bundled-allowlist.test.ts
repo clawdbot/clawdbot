@@ -1,3 +1,4 @@
+// Workspace bundled allowlist tests cover which bundled skills may sync into workspaces.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

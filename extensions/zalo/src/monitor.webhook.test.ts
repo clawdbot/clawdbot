@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.webhook plugin behavior.
 import type { RequestListener } from "node:http";
 import {
   createEmptyPluginRegistry,

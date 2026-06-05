@@ -1,3 +1,6 @@
+/**
+ * Loads bundled, manifest, and discovered model catalog entries.
+ */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";

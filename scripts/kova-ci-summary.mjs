@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Summarizes Kova CI run metadata for diagnostics.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 

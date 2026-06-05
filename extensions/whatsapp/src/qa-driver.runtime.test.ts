@@ -1,3 +1,4 @@
+// Whatsapp tests cover qa driver plugin behavior.
 import { EventEmitter } from "node:events";
 import type { WAMessage } from "baileys";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -87,8 +88,7 @@ describe("startWhatsAppQaDriverSession", () => {
     await session.close();
   });
 
-  it("clears the connection timeout after a successful connection", async () => {
-    vi.useFakeTimers();
+  it("passes the connection timeout to the shared connection waiter", async () => {
     const sock = createMockSocket();
     mocks.createWaSocket.mockResolvedValue(sock);
     mocks.waitForWaConnection.mockResolvedValue(undefined);
@@ -98,30 +98,26 @@ describe("startWhatsAppQaDriverSession", () => {
       connectionTimeoutMs: 45_000,
     });
 
-    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
 
     await session.close();
   });
 
   it("closes the socket and removes listeners when connection setup times out", async () => {
-    vi.useFakeTimers();
     const sock = createMockSocket();
+    const timeoutError = new Error("timed out waiting for WhatsApp QA driver session");
     mocks.createWaSocket.mockResolvedValue(sock);
-    mocks.waitForWaConnection.mockReturnValue(new Promise(() => {}));
+    mocks.waitForWaConnection.mockRejectedValue(timeoutError);
 
-    const started = startWhatsAppQaDriverSession({
-      authDir: "/tmp/openclaw-whatsapp-auth",
-      connectionTimeoutMs: 10,
-    });
-    const rejection = started.catch((error: unknown) => error);
+    await expect(
+      startWhatsAppQaDriverSession({
+        authDir: "/tmp/openclaw-whatsapp-auth",
+        connectionTimeoutMs: 10,
+      }),
+    ).rejects.toThrow("timed out waiting for WhatsApp QA driver session");
 
-    await vi.advanceTimersByTimeAsync(10);
-
-    const error = await rejection;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("timed out waiting for WhatsApp QA driver session");
+    expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 10 });
     expect(sock.ev.listenerCount("messages.upsert")).toBe(0);
     expect(sock.end).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

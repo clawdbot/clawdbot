@@ -1,3 +1,4 @@
+// Matrix tests cover crypto node plugin behavior.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";

@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor gating behavior.
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {

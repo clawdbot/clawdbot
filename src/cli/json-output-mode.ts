@@ -1,3 +1,4 @@
+// Early JSON-output detection and console-log routing for parseable CLI stdout.
 import { loggingState } from "../logging/state.js";
 
 /** Detects CLI JSON mode before Commander parses options, stopping at the argv sentinel. */

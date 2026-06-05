@@ -1,3 +1,4 @@
+// OC Path tests cover oc path parse edges plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   OcPathError,

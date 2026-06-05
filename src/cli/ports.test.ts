@@ -1,3 +1,4 @@
+// Port tests cover CLI port probing and conflict handling.
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";

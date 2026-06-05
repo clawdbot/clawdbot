@@ -1,3 +1,5 @@
+// Gateway HTTP session kill handler.
+// Allows local admins or owning parent sessions to stop subagent runs.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -92,6 +94,8 @@ export async function handleSessionKillHttpRequest(
   const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
 
+  // Remote browser requests must prove parent-session ownership; local direct
+  // operator requests can perform the stronger admin kill path.
   if (!requesterSessionKey && !allowLocalAdminKill) {
     sendJson(res, 403, {
       ok: false,

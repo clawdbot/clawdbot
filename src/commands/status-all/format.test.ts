@@ -1,3 +1,4 @@
+// Status-all format tests cover dashboard URLs, gateway summaries, overview rows, and JSON payload shapes.
 import { describe, expect, it } from "vitest";
 import {
   baseStatusExpectedUpdateChannelInfo,

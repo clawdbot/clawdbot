@@ -1,3 +1,5 @@
+// Music background tests cover task-run creation, progress recording, and
+// completion delivery through announcement agents or direct fallback sends.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
@@ -22,6 +24,8 @@ const {
 } = await import("./music-generate-background.js");
 
 function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
+  // Completion agents receive internal events; tests inspect them to keep the
+  // visible-reply media contract explicit.
   const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
     | { internalEvents?: unknown }
     | undefined;

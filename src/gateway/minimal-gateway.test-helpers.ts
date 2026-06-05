@@ -1,11 +1,10 @@
+// Minimal Gateway websocket test helpers.
+// Provides small fake-server frames for client/backend tests.
 import type WebSocket from "ws";
 import type { WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../infra/ws.js";
 
-/**
- * Minimal WebSocket gateway fixtures used by client/backend tests.
- */
 export type MinimalGatewayRequestFrame = {
   type?: string;
   id?: string;

@@ -1,3 +1,4 @@
+// Copilot tests cover attempt plugin behavior.
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

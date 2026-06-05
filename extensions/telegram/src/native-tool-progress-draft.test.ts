@@ -1,3 +1,4 @@
+// Telegram tests cover native tool progress draft plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 

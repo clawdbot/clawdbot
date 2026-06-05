@@ -1,3 +1,4 @@
+// Docker E2E Observability tests cover docker e2e observability script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

@@ -1,3 +1,4 @@
+// Vitest tooling isolated config wires the tooling isolated test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createToolingIsolatedVitestConfig(env?: Record<string, string | undefined>) {

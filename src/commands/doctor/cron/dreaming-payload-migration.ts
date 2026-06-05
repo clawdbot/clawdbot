@@ -1,12 +1,13 @@
+// Cron doctor migration for managed memory dreaming jobs created before isolated agent-turn shape.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
 } from "../../../memory-host-sdk/dreaming.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../../packages/normalization-core/src/string-coerce.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -61,6 +62,7 @@ function rewriteDreamingJobShape(raw: UnknownRecord): void {
   raw.delivery = { mode: "none" };
 }
 
+/** Rewrite managed dreaming jobs to the isolated light-context agent-turn shape. */
 export function migrateLegacyDreamingPayloadShape(jobs: UnknownRecord[]): {
   changed: boolean;
   rewrittenCount: number;
@@ -79,6 +81,7 @@ export function migrateLegacyDreamingPayloadShape(jobs: UnknownRecord[]): {
   return { changed: rewrittenCount > 0, rewrittenCount };
 }
 
+/** Count managed dreaming jobs that still need payload/session/delivery migration. */
 export function countStaleDreamingJobs(jobs: UnknownRecord[]): number {
   let count = 0;
   for (const raw of jobs) {

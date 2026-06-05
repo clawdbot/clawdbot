@@ -1,3 +1,7 @@
+/**
+ * Process-local auth profile snapshots used by prepared runtimes and tests.
+ * Snapshots are cloned at boundaries so callers cannot mutate shared state.
+ */
 import { cloneAuthProfileStore } from "./clone.js";
 import { resolveAuthStorePath } from "./path-resolve.js";
 import type { AuthProfileStore } from "./types.js";

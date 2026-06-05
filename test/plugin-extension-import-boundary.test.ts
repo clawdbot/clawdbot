@@ -1,3 +1,4 @@
+// Plugin extension import boundary tests enforce plugin extension import rules.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

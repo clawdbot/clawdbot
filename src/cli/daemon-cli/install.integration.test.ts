@@ -1,3 +1,4 @@
+// Daemon install integration tests cover service install paths with filesystem fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

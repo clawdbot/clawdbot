@@ -1,3 +1,8 @@
+/**
+ * Unit coverage for adapting runtime and client-hosted tools.
+ * Exercises result coercion, error wrapping, client delegation, and conflict
+ * detection at the ToolDefinition boundary.
+ */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";

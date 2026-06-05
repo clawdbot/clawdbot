@@ -1,3 +1,4 @@
+// Qa Lab tests cover qa channel transport plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";

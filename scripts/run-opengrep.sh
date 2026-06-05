@@ -109,9 +109,43 @@ if (( CHANGED_ONLY && PATHS_PASSED )); then
   exit 64
 fi
 
+resolve_changed_diff_ref() {
+  local diff_ref="${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}"
+  local base_ref
+  local head_ref
+  local resolved_base
+
+  if [[ "$diff_ref" != *"..."* ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+  if [[ "${OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT:-0}" != "1" ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+
+  base_ref="${diff_ref%%...*}"
+  head_ref="${diff_ref#*...}"
+  # First-parent resolution is shared with the Node CI routers so PR diff
+  # scope cannot drift between changed-lanes, changed-scope, and OpenGrep.
+  resolved_base="$(
+    node "$REPO_ROOT/scripts/lib/merge-head-diff-base.mjs" \
+      --base "$base_ref" \
+      --head "$head_ref" \
+      --prefer-first-parent 2>/dev/null || true
+  )"
+  if [[ -z "$resolved_base" || "$resolved_base" == "$base_ref" ]]; then
+    printf '%s\n' "$diff_ref"
+    return 0
+  fi
+
+  printf '%s...%s\n' "$resolved_base" "$head_ref"
+}
+
 # Default scan paths match CI. Override by passing `-- <paths...>`.
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
+    CHANGED_DIFF_REF="$(resolve_changed_diff_ref)"
     SCAN_PATHS=()
     while IFS= read -r path; do
       # OpenGrep errors when an explicit changed path is a symlink; scan the
@@ -125,7 +159,7 @@ if (( PATHS_PASSED == 0 )); then
       SCAN_PATHS+=( "$path" )
     done < <(
       {
-        git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
+        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
         git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
         git ls-files --others --exclude-standard
       } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
@@ -135,7 +169,7 @@ if (( PATHS_PASSED == 0 )); then
       RULEPACK_CHANGED_PATHS+=( "$path" )
     done < <(
       {
-        git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
+        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
         git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
         git ls-files --others --exclude-standard
       } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u

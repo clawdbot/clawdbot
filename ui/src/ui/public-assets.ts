@@ -1,3 +1,4 @@
+// Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 
 export type ControlUiPublicAsset =

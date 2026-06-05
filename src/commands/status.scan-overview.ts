@@ -1,3 +1,6 @@
+// Shared status scan overview used by compact status, status --json, and status --all.
+// It collects config, update, gateway, channel, and local agent state before specialized callers add details.
+
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -86,6 +89,7 @@ async function resolveStatusChannelsStatus(params: {
   useGatewayCallOverrides?: boolean;
 }) {
   if (!params.gatewayReachable) {
+    // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
     return null;
   }
   const { callGateway } = await loadGatewayCallModule();
@@ -131,6 +135,7 @@ export type StatusScanOverviewResult = {
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 };
 
+/** Collects the common status scan data shared by text, JSON, and status-all commands. */
 export async function collectStatusScanOverview(params: {
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
@@ -279,6 +284,7 @@ export async function collectStatusScanOverview(params: {
             })
           : null;
         params.progress?.tick();
+        // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
         const { collectChannelStatusIssues, buildChannelsTable } =
           await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
         const channelIssuesLocal = channelsStatusLocal
@@ -304,6 +310,7 @@ export async function collectStatusScanOverview(params: {
         };
       })()
     : {
+        // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
         channelsStatus: null,
         channelIssues: [],
         channels: { rows: [], details: [] },
@@ -329,6 +336,7 @@ export async function collectStatusScanOverview(params: {
   };
 }
 
+/** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
   includeChannelSummary?: boolean;

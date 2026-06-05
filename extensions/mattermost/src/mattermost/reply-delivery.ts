@@ -1,3 +1,4 @@
+// Mattermost plugin module implements reply delivery behavior.
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {

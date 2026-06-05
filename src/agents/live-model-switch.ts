@@ -1,3 +1,6 @@
+/**
+ * Resolves and persists live-session model switch requests.
+ */
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";

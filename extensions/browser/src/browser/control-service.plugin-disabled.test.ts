@@ -1,3 +1,4 @@
+// Browser tests cover control service.plugin disabled plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

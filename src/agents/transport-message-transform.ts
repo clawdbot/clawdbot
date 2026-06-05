@@ -1,3 +1,8 @@
+/**
+ * Normalizes transcript messages before provider transport replay. It drops
+ * unsafe failed turns, maps tool-call ids across model boundaries, and fills
+ * strict provider tool-result gaps when supported.
+ */
 import type { Api, Context, Model } from "../llm/types.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -37,6 +42,7 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   return message.stopReason === "error" || message.stopReason === "aborted";
 }
 
+/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model,

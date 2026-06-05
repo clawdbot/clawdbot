@@ -1,3 +1,4 @@
+// Memory Core tests cover tools.citations plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

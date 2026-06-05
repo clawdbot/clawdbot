@@ -1,3 +1,4 @@
+// Session goal tests cover persisted session goal state and transitions.
 import { describe, expect, it } from "vitest";
 import {
   clearSessionGoal,

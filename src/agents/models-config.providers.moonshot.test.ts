@@ -1,3 +1,4 @@
+// Isolates Moonshot implicit-provider auth and streaming compat decisions.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
@@ -33,6 +34,7 @@ vi.mock("./model-auth-env-vars.js", () => {
 });
 
 vi.mock("../plugin-sdk/provider-http.js", () => ({
+  // Only the CN endpoint advertises native streaming usage in this contract.
   resolveProviderRequestCapabilities: (params: { provider: string; baseUrl?: string }) => ({
     supportsNativeStreamingUsageCompat:
       params.provider === "moonshot" && params.baseUrl === "https://api.moonshot.cn/v1",
@@ -43,6 +45,7 @@ const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
 function buildMoonshotProvider(): ModelProviderConfig {
+  // Base catalog starts provider-neutral; the final compat pass decides per endpoint.
   return {
     baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",

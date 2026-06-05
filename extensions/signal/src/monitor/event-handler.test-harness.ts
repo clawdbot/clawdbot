@@ -1,3 +1,4 @@
+// Signal plugin module implements event handler harness behavior.
 import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
 
 export function createBaseSignalEventHandlerDeps(

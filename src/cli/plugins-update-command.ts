@@ -142,6 +142,7 @@ export async function runPluginUpdateCommand(params: {
         config: nextConfig,
         reason: "source-changed",
         installRecords: nextPluginInstallRecords,
+        invalidateRuntimeCache: false,
         logger,
       });
     }

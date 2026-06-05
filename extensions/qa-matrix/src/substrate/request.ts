@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements request behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type MatrixQaFetchLike = typeof fetch;

@@ -1,6 +1,11 @@
+/**
+ * Runtime guards for sandbox exec-server handlers that need backend-specific
+ * execution and filesystem bridges.
+ */
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import type { OpenClawExecServer } from "./types.js";
 
+/** Returns the configured sandbox backend or fails the current JSON-RPC request. */
 export function requireBackend(
   execServer: OpenClawExecServer,
 ): NonNullable<SandboxContext["backend"]> {
@@ -11,6 +16,7 @@ export function requireBackend(
   return backend;
 }
 
+/** Returns the configured filesystem bridge or fails the current JSON-RPC request. */
 export function requireFsBridge(
   execServer: OpenClawExecServer,
 ): NonNullable<SandboxContext["fsBridge"]> {

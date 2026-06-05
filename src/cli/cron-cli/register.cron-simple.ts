@@ -1,3 +1,4 @@
+// Cron simple command registration: remove, toggle, show, runs, and run-now.
 import {
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
@@ -68,6 +69,7 @@ async function waitForCronRunCompletion(params: {
   timeoutMs: number;
   pollIntervalMs: number;
 }): Promise<CronRunLogEntryResult> {
+  // Poll the run log rather than cron.run because completion state is written asynchronously.
   const startedAt = Date.now();
   for (;;) {
     const page = (await callGatewayFromCli("cron.runs", params.opts, {

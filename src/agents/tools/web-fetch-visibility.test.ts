@@ -1,3 +1,5 @@
+// web_fetch visibility tests cover hidden HTML and invisible Unicode stripping
+// before extracted content reaches the model.
 import { describe, expect, it } from "vitest";
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
@@ -196,6 +198,8 @@ describe("sanitizeHtml", () => {
   });
 
   it("drops nested hidden same-name elements without leaking trailing hidden text", async () => {
+    // Malformed hidden regions are prompt-injection territory; nested tags must
+    // not leak trailing hidden text after the inner close tag.
     const html = "<p>Visible</p><div hidden><div>Nested hidden</div>Still hidden</div><p>Shown</p>";
     const result = await sanitizeHtml(html);
     expect(result).toContain("Visible");
@@ -237,6 +241,8 @@ describe("stripInvisibleUnicode", () => {
   });
 
   it("strips directional overrides (LRO, RLO, PDF, etc.)", () => {
+    // Directional controls can make visible text render differently from the
+    // byte sequence the model sees.
     const text = "\u202AHello\u202E";
     expect(stripInvisibleUnicode(text)).toBe("Hello");
   });

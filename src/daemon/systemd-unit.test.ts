@@ -1,3 +1,4 @@
+// Systemd unit tests cover generated systemd unit files.
 import { describe, expect, it } from "vitest";
 import { buildSystemdUnit } from "./systemd-unit.js";
 

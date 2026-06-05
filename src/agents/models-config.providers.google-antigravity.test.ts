@@ -1,9 +1,12 @@
+// Verifies provider-owned Google Antigravity and Vertex model id normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 vi.mock("../plugins/provider-runtime.js", () => {
   function normalizeGoogleModelIdForProvider(provider: string, modelId: string): string {
+    // Mirrors the provider plugin normalization contract used by config
+    // planning without importing the bundled plugin runtime.
     if (provider === "google-antigravity") {
       return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
     }
@@ -65,6 +68,8 @@ function buildProvider(
 function normalizeProviderMap(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
+  // Normalization should preserve object identity when no provider changed so
+  // callers can cheaply detect no-op config planning.
   let changed = false;
   const next: Record<string, ProviderConfig> = {};
   for (const [providerKey, provider] of Object.entries(providers)) {

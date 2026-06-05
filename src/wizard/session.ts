@@ -1,3 +1,4 @@
+// Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 

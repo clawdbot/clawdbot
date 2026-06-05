@@ -1,3 +1,4 @@
+// Firecrawl API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runFirecrawlScrape } from "./src/firecrawl-client.js";

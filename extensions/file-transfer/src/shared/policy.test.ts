@@ -1,3 +1,4 @@
+// File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";

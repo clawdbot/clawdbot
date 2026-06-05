@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
+// Generates release dependency evidence artifacts and summaries.
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
+/**
+ * Dependency evidence reports generated for release artifacts.
+ */
 export const DEPENDENCY_EVIDENCE_REPORTS = [
   {
     name: "npm advisory vulnerability gate",
@@ -70,6 +74,9 @@ function runCommand(command, args, { rootDir, execFileSyncImpl = execFileSync })
   });
 }
 
+/**
+ * Resolves the release tag when the release ref is a SHA or tag.
+ */
 export function resolveReleaseTag({ releaseRef, packageVersion }) {
   if (/^[0-9a-fA-F]{40}$/u.test(releaseRef)) {
     return `v${packageVersion}`;
@@ -77,6 +84,9 @@ export function resolveReleaseTag({ releaseRef, packageVersion }) {
   return releaseRef;
 }
 
+/**
+ * Resolves the previous reachable release tag for dependency diffs.
+ */
 export function resolvePreviousReleaseTag({
   rootDir = process.cwd(),
   execFileSyncImpl = execFileSync,
@@ -114,6 +124,9 @@ export function resolvePreviousReleaseTag({
   );
 }
 
+/**
+ * Creates the dependency evidence manifest payload.
+ */
 export function createDependencyEvidenceManifest({
   generatedAt = new Date().toISOString(),
   releaseTag,
@@ -149,6 +162,9 @@ async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
 }
 
+/**
+ * Reads generated reports and collects summary counts.
+ */
 export async function collectDependencyEvidenceSummaryCounts(evidenceDir) {
   const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges] = await Promise.all([
     readJson(reportPath(evidenceDir, "dependency-vulnerability-gate.json")),
@@ -171,6 +187,9 @@ export async function collectDependencyEvidenceSummaryCounts(evidenceDir) {
   };
 }
 
+/**
+ * Renders the dependency evidence Markdown summary.
+ */
 export function renderDependencyEvidenceSummary({ releaseTag, releaseSha, baseRef, counts }) {
   return `${[
     "# Dependency release evidence",
@@ -199,6 +218,9 @@ export function renderDependencyEvidenceSummary({ releaseTag, releaseSha, baseRe
   ].join("\n")}\n`;
 }
 
+/**
+ * Renders the GitHub Actions step summary for dependency evidence.
+ */
 export function renderDependencyEvidenceStepSummary({ evidenceArtifactName, baseRef, counts }) {
   return `${[
     "### Dependency release evidence",
@@ -267,6 +289,9 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
   );
 }
 
+/**
+ * Generates dependency evidence reports, manifest, and summaries for a release.
+ */
 export async function generateDependencyReleaseEvidence({
   rootDir = process.cwd(),
   outputDir,
@@ -402,6 +427,9 @@ function parseArgs(argv) {
   return options;
 }
 
+/**
+ * Runs the dependency release evidence generator CLI.
+ */
 export async function main(argv = process.argv.slice(2)) {
   await generateDependencyReleaseEvidence(parseArgs(argv));
   return 0;

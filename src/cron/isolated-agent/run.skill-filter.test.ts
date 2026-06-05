@@ -1,3 +1,4 @@
+// Skill filter tests cover active skill selection for isolated cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,

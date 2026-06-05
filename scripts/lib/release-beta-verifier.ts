@@ -1,3 +1,4 @@
+// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

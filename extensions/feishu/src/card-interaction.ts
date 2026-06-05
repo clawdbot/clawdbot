@@ -1,3 +1,4 @@
+// Feishu plugin module implements card interaction behavior.
 import { isRecord } from "./comment-shared.js";
 
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";

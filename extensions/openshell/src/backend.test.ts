@@ -1,3 +1,4 @@
+// Openshell tests cover backend plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { buildOpenShellSandboxName, buildOpenShellSshExecEnv } from "./backend.js";
 

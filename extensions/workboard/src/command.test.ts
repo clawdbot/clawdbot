@@ -1,3 +1,4 @@
+// Workboard tests cover command plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleWorkboardCommand } from "./command.js";
 import type { WorkboardSubagentRuntime } from "./dispatcher.js";

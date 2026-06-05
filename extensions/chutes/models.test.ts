@@ -1,3 +1,4 @@
+// Chutes tests cover models plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChutesModelDefinition,

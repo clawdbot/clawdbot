@@ -1,3 +1,4 @@
+// OAuth TLS preflight doctor tests cover certificate warnings and repair notes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 

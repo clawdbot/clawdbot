@@ -1,3 +1,4 @@
+// Msteams plugin module implements bot framework service url behavior.
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,

@@ -5,6 +5,7 @@ type LazyValue<T> = T | (() => T);
 
 /** Returns a getter that resolves the supplied value at most once. */
 export function createCachedLazyValueGetter<T>(value: LazyValue<T>): () => T;
+/** Returns a getter that resolves once and substitutes a fallback for nullish values. */
 export function createCachedLazyValueGetter<T>(
   value: LazyValue<T | null | undefined>,
   fallback: T,

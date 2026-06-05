@@ -1,3 +1,4 @@
+// Channels status error-surface tests cover Signal runtime errors in channel status output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";

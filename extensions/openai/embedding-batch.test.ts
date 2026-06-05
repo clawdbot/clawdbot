@@ -1,3 +1,4 @@
+// Openai tests cover embedding batch plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseOpenAiBatchOutput } from "./embedding-batch.js";
 

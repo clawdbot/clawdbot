@@ -1,3 +1,5 @@
+// Gateway session reset/delete service.
+// Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -80,6 +82,8 @@ function resolveResetSessionFile(params: {
   agentId: string;
 }): string {
   const currentEntry = params.currentEntry;
+  // Preserve explicit session-file placement across reset while swapping the
+  // embedded session id, so linked runtimes keep writing beside old transcripts.
   const rewrittenSessionFile = currentEntry?.sessionId
     ? rewriteSessionFileForNewSessionId({
         sessionFile: currentEntry.sessionFile,
@@ -108,6 +112,8 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   }
   return {
     ...entry,
+    // Reset should keep user selection preferences but drop per-run resolved
+    // model state so the next turn rehydrates from current config.
     model: undefined,
     modelProvider: undefined,
     contextTokens: undefined,

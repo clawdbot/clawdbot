@@ -1,3 +1,4 @@
+// Qa Channel API module exposes the plugin public contract.
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

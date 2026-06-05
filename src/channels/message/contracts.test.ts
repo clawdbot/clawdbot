@@ -1,3 +1,4 @@
+// Message contract tests cover shared channel message shape and runtime invariants.
 import { describe, expect, it, vi } from "vitest";
 import {
   listDeclaredChannelMessageLiveCapabilities,

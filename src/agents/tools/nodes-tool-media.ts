@@ -1,3 +1,8 @@
+/**
+ * Nodes media action executor.
+ *
+ * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
+ */
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

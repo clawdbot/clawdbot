@@ -1,7 +1,9 @@
+/** Top-level doctor command wrapper, including post-upgrade probe mode. */
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
+/** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
   if (options?.postUpgrade) {
     const outputRuntime = runtime ?? defaultRuntime;

@@ -1,3 +1,8 @@
+/**
+ * Deprecated GPT-5 prompt overlay helpers.
+ * Kept for OpenAI/Codex provider-owned compatibility while prompt behavior
+ * moves toward provider plugin ownership.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderSystemPromptContribution } from "./system-prompt-contribution.js";

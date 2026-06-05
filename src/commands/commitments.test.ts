@@ -1,3 +1,4 @@
+// Commitments command tests cover commitment list/detail output and terminal formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { CommitmentRecord } from "../commitments/types.js";

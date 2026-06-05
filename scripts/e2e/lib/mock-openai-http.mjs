@@ -1,3 +1,4 @@
+// Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 

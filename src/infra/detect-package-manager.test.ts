@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 
 async function withPackageManagerRoot<T>(
@@ -122,26 +123,13 @@ describe("detectPackageManager", () => {
 
   it("keeps bun-owned global package roots that ship npm-shrinkwrap", async () => {
     await withTempDir({ prefix: "openclaw-detect-pm-bun-" }, async (base) => {
-      const oldBunInstall = process.env.BUN_INSTALL;
-      process.env.BUN_INSTALL = path.join(base, "bun-home");
-      try {
-        const packageRoot = path.join(
-          process.env.BUN_INSTALL,
-          "install",
-          "global",
-          "node_modules",
-          "openclaw",
-        );
+      const bunInstall = path.join(base, "bun-home");
+      await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
+        const packageRoot = path.join(bunInstall, "install", "global", "node_modules", "openclaw");
         await writePublishedOpenClawRoot(packageRoot);
 
         await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
-      } finally {
-        if (oldBunInstall == null) {
-          delete process.env.BUN_INSTALL;
-        } else {
-          process.env.BUN_INSTALL = oldBunInstall;
-        }
-      }
+      });
     });
   });
 

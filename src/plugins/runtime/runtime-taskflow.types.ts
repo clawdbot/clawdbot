@@ -1,3 +1,4 @@
+// Runtime task-flow types describe task-flow hooks and options for plugin runtimes.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { JsonValue, TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import type {

@@ -1,3 +1,4 @@
+// Whatsapp tests cover send result plugin behavior.
 import type { WAMessage } from "baileys";
 import { describe, expect, it } from "vitest";
 import { combineWhatsAppSendResults, normalizeWhatsAppSendResult } from "./send-result.js";

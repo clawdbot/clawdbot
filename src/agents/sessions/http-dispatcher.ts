@@ -1,8 +1,10 @@
+/**
+ * HTTP session dispatcher config helpers.
+ *
+ * Parses idle-timeout values shared by server and config surfaces.
+ */
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 
-/**
- * HTTP session dispatcher idle-timeout parsing shared by server and config surfaces.
- */
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 
 /** Parses idle timeout values, using `0` for the explicit disabled sentinel. */

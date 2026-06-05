@@ -1,3 +1,4 @@
+// Provider operation retry tests cover retry timing and abort behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   executeProviderOperationWithRetry,

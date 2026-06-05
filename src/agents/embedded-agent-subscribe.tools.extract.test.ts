@@ -1,15 +1,21 @@
+// Messaging tool extraction tests cover channel/provider normalization, thread
+// evidence, and plugin-provided send extraction hooks.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { extractMessagingToolSend } from "./embedded-agent-subscribe.tools.js";
 
 function normalizeTelegramMessagingTargetForTest(raw: string): string | undefined {
+  // Test normalizer mirrors channel plugins that canonicalize human targets
+  // before subscription delivery tracking stores them.
   const trimmed = raw.trim();
   return trimmed ? `telegram:${trimmed}` : undefined;
 }
 
 describe("extractMessagingToolSend", () => {
   beforeEach(() => {
+    // Active registry state drives provider-specific extraction; reset it for
+    // each case so channel plugin behavior is deterministic.
     setActivePluginRegistry(
       createTestRegistry([
         {

@@ -1,3 +1,4 @@
+// Telegram tests cover bot plugin behavior.
 import { rm } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

@@ -1,3 +1,4 @@
+// Memory Host SDK module implements sqlite behavior.
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";

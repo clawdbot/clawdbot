@@ -1,3 +1,4 @@
+// Memory Wiki tests cover claim health plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildPageContradictionClusters } from "./claim-health.js";
 import type { WikiPageSummary } from "./markdown.js";

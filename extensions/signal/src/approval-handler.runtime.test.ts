@@ -1,3 +1,4 @@
+// Signal tests cover approval handler plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMocks = vi.hoisted(() => ({

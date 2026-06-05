@@ -1,3 +1,4 @@
+// Windows exec tests cover command invocation behavior on Windows paths.
 import type { execFile as execFileType } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";

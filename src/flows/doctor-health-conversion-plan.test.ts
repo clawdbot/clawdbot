@@ -1,3 +1,4 @@
+// Doctor health conversion tests cover converting health checks to repair plans.
 import { describe, expect, it } from "vitest";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { resolveDoctorHealthContributions } from "./doctor-health-contributions.js";

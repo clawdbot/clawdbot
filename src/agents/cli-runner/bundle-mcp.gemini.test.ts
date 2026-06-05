@@ -1,3 +1,4 @@
+/** Tests Gemini CLI bundle-MCP system settings generation. */
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -32,6 +33,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(prepared.backend.args).toEqual(["--prompt", "{prompt}"]);
     expect(prepared.env?.OPENCLAW_MCP_TOKEN).toBe("loopback-token-123");
     expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
+    // Gemini reads MCP servers from a generated system settings JSON file.
     const raw = JSON.parse(
       await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
     ) as {
@@ -75,6 +77,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
 
     expect(prepared.env?.CONTEXT7_API_KEY).toBe("ctx7-test");
     expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
+    // User OpenClaw transport names are normalized to Gemini's expected schema.
     const raw = JSON.parse(
       await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
     ) as {

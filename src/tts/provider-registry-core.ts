@@ -1,3 +1,4 @@
+// TTS provider registry core stores provider factories and defaults.
 import type { OpenClawConfig } from "../config/types.js";
 import {
   buildCapabilityProviderMaps,

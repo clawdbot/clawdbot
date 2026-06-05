@@ -1,3 +1,4 @@
+// Coverage for building compaction runtime context from active runner state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
@@ -94,7 +95,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
-    // Auth profile dropped because provider changed
+    // Auth profile must be dropped when provider changes; otherwise compaction
+    // could send a stale credential to the override provider.
     expect(result.authProfileId).toBeUndefined();
   });
 
@@ -130,6 +132,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("preserves scoped active process session references for compaction", () => {
+    // Only sessions tied to the same scope are summarized; cross-session process
+    // state would leak unrelated task context into the compaction prompt.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const active = createProcessSessionFixture({

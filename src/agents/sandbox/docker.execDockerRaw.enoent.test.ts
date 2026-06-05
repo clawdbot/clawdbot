@@ -1,9 +1,13 @@
+// Docker command tests cover actionable errors when sandbox mode cannot find
+// the docker executable.
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { execDockerRaw } from "./docker.js";
 
 describe("execDockerRaw", () => {
   it("wraps docker ENOENT with an actionable configuration error", async () => {
+    // ENOENT otherwise looks like a low-level spawn failure; operators need the
+    // sandbox config remediation in the error text.
     await withEnvAsync({ PATH: "" }, async () => {
       let err: unknown;
       try {

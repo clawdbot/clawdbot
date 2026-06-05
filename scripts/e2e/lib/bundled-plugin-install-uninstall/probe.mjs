@@ -1,3 +1,4 @@
+// Probe script for bundled plugin install/uninstall E2E scenarios.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

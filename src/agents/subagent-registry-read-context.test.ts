@@ -1,3 +1,5 @@
+// Subagent registry read-context tests cover the indexed snapshot used by hot
+// prompt/control paths instead of repeatedly scanning the run map.
 import { describe, expect, it } from "vitest";
 import {
   buildSubagentRunReadIndexFromRuns,
@@ -160,6 +162,8 @@ describe("subagent registry read index", () => {
   });
 
   it("keeps one snapshot stable for the lifetime of the context", () => {
+    // Read indexes are process-local snapshots; callers can reuse them through
+    // one prompt assembly without observing later registry mutations.
     const root = "agent:main:main";
     const runs = toRunMap([
       makeRun({

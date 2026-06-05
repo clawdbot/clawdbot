@@ -1,3 +1,4 @@
+// Discord plugin module implements guilds behavior.
 import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 

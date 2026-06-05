@@ -1,3 +1,4 @@
+// Model-catalog authority tests cover precedence between config, manifest, cache, runtime, and preview rows.
 import { describe, expect, it } from "vitest";
 import { mergeModelCatalogRowsByAuthority } from "./index.js";
 import type { ModelCatalogSource, NormalizedModelCatalogRow } from "./index.js";

@@ -1,3 +1,6 @@
+/**
+ * Browser CLI form fill, wait, and evaluate commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -31,6 +34,7 @@ function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undef
   }
 }
 
+/** Registers Browser fill, wait, and evaluate commands. */
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,

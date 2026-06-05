@@ -1,3 +1,4 @@
+// Parse port tests cover shared CLI port parsing and validation.
 import { describe, expect, it } from "vitest";
 import { parsePort } from "./parse-port.js";
 

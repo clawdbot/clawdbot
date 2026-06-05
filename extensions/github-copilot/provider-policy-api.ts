@@ -1,3 +1,4 @@
+// Github Copilot API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveStaticCopilotModelOverride } from "./model-metadata.js";

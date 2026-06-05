@@ -1,3 +1,5 @@
+// Chat attachment tests cover inbound image/file parsing, media-store cleanup,
+// warning surfaces, size limits, and outbound message block assembly.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>

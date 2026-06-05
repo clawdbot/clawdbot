@@ -1,3 +1,4 @@
+/** Orchestrates model-list row sources across registry, manifests, catalogs, and config. */
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import {
   appendCatalogSupplementRows,
@@ -26,6 +27,7 @@ type AppendAllModelRowSourcesResult = {
   requiresRegistryFallback: boolean;
 };
 
+/** Appends all rows requested by `models list --all` or a provider-filtered list. */
 export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
@@ -84,6 +86,8 @@ export async function appendAllModelRowSources(
       params.rows.length === 0 &&
       params.sourcePlan.fallbackToRegistryWhenEmpty
     ) {
+      // Provider-scoped static sources can be empty when a plugin exposes only
+      // runtime discovery; tell the caller to load the registry and retry.
       if (!params.modelRegistry) {
         return { requiresRegistryFallback: true };
       }
@@ -167,6 +171,7 @@ export async function appendAllModelRowSources(
   return { requiresRegistryFallback: false };
 }
 
+/** Appends the configured/default rows used by the cheap default list path. */
 export async function appendConfiguredModelRowSources(params: {
   rows: ModelRow[];
   entries: ConfiguredEntry[];

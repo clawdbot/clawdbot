@@ -1,3 +1,4 @@
+// Tavily helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-search";
 import {

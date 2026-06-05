@@ -1,3 +1,4 @@
+// Sms tests cover status plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";

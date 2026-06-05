@@ -1,3 +1,4 @@
+// Skill binary discovery helpers normalize executable metadata from skill manifests.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SkillEntry } from "../types.js";
 

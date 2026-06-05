@@ -1,3 +1,4 @@
+// Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,

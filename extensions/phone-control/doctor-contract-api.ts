@@ -1,3 +1,4 @@
+// Phone Control API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";

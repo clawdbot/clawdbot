@@ -1,3 +1,4 @@
+// Feishu plugin module implements dedup migrations behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

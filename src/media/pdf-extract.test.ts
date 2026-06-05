@@ -1,3 +1,4 @@
+// PDF extraction tests cover text extraction adapter selection and failures.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { extractDocumentContentMock } = vi.hoisted(() => ({

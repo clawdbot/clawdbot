@@ -1,3 +1,4 @@
+// Together API module exposes the plugin public contract.
 export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,

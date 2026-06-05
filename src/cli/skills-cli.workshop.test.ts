@@ -1,3 +1,4 @@
+// Skills workshop CLI tests cover workshop skill commands and filesystem setup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";

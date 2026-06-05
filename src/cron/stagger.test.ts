@@ -1,3 +1,4 @@
+// Cron stagger tests cover deterministic schedule spreading across jobs.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TOP_OF_HOUR_STAGGER_MS,

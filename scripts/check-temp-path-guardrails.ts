@@ -1,3 +1,4 @@
+// Check Temp Path Guardrails script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";

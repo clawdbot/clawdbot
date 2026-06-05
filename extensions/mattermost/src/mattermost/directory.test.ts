@@ -1,3 +1,4 @@
+// Mattermost tests cover directory plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {

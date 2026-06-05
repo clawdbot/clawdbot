@@ -1,3 +1,4 @@
+// Public surface loader test helpers import SDK subpaths for export-contract assertions.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";

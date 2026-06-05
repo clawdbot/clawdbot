@@ -1,3 +1,8 @@
+/**
+ * Per-file mutation queue.
+ *
+ * Serializes edits/writes targeting the same real file while allowing independent files to mutate in parallel.
+ */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 

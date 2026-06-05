@@ -1,3 +1,4 @@
+// Launchd current service tests cover resolving active macOS service labels.
 import { describe, expect, it } from "vitest";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 

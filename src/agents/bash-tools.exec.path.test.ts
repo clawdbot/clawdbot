@@ -1,3 +1,8 @@
+/**
+ * Exec PATH handling tests.
+ * Covers shell snapshot PATH merging, pathPrepend behavior, and host env
+ * sanitization for gateway/sandbox execution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,7 @@
+/**
+ * Enriches Codex usage-limit failures with current rate-limit information and
+ * marks blocked auth profiles when Codex exposes a reset time.
+ */
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -33,6 +37,7 @@ type CodexUsageLimitErrorResult = {
   rateLimitsForProfile?: JsonValue;
 };
 
+/** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   params: EmbeddedRunAttemptParams;
   authProfileId?: string;
@@ -64,6 +69,7 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   }
 }
 
+/** Formats a turn-start usage-limit error, refreshing rate limits when needed. */
 export async function formatCodexTurnStartUsageLimitError(params: {
   client: CodexAppServerClient;
   error: unknown;
@@ -79,6 +85,7 @@ export async function formatCodexTurnStartUsageLimitError(params: {
   });
 }
 
+/** Refreshes a generic prompt usage-limit message into a reset-aware message. */
 export async function refreshCodexUsageLimitPromptError(params: {
   client: CodexAppServerClient;
   message: string | undefined;

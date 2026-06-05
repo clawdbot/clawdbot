@@ -1,3 +1,4 @@
+// Matrix tests cover poll types plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildPollResultsSummary,

@@ -1,3 +1,4 @@
+// Matrix helper module supports idb persistence helpers behavior.
 export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
   const databases = await indexedDB.databases();
   const expectedPrefix = params?.databasePrefix ? `${params.databasePrefix}::` : null;

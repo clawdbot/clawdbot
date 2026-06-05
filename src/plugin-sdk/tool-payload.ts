@@ -1,3 +1,4 @@
+// Tool payload helpers normalize provider tool-call schemas and compatibility payloads.
 import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
@@ -43,6 +44,7 @@ type ToolPayloadTextBlock = {
   text: string;
 };
 
+/** Minimal tool-result-like object shape accepted by payload extraction helpers. */
 export type ToolPayloadCarrier = {
   /** Structured payload preferred over content text when present. */
   details?: unknown;

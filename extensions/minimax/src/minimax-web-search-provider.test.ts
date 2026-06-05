@@ -1,3 +1,4 @@
+// Minimax tests cover minimax web search provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { minimaxWebSearchTesting } from "../test-api.js";
 

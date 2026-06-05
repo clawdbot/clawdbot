@@ -1,3 +1,5 @@
+// Covers core message-action send fallback, TTS application, and durable send
+// policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

@@ -1,3 +1,6 @@
+/**
+ * Loads model catalog views for browse/search UI surfaces.
+ */
 import {
   clampTimerTimeoutMs,
   resolveTimerTimeoutMs,

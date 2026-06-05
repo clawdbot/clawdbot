@@ -1,3 +1,4 @@
+// Directory CLI tests cover directory command registration and plugin-backed lookups.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDirectoryCli } from "./directory-cli.js";

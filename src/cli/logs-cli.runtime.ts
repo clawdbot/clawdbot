@@ -1,3 +1,4 @@
+// Runtime helpers for bounded subprocess log tails and service runtime lookups.
 import { spawn } from "node:child_process";
 
 export { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -11,6 +12,7 @@ export async function execFileUtf8Tail(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; maxBytes: number },
 ): Promise<ExecFileTailResult> {
+  // Keep only the newest stdout bytes; log commands should not buffer unbounded output.
   return await new Promise<ExecFileTailResult>((resolve) => {
     const child = spawn(command, args, {
       env: options.env,

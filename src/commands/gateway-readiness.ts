@@ -1,3 +1,4 @@
+/** Ensures the managed gateway is available before commands that need it run. */
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,6 +15,7 @@ const daemonLifecycleModuleLoader = createLazyImportLoader(
   () => import("../cli/daemon-cli/lifecycle.js"),
 );
 
+/** Result returned after checking, optionally installing, and optionally starting the gateway. */
 export type GatewayReadinessResult =
   | {
       ready: true;
@@ -34,6 +36,7 @@ type GatewayReadinessDeps = {
   startGateway?: () => Promise<void>;
 };
 
+/** Inputs controlling readiness checks, recovery prompts, and injectable test seams. */
 export type GatewayReadinessOptions = {
   runtime: RuntimeEnv;
   operation: string;
@@ -92,6 +95,8 @@ function gatewayLooksReachable(status: DaemonStatus): boolean {
   if (port?.status !== "busy") {
     return false;
   }
+  // A busy port alone is not enough: pair it with probe evidence so another
+  // local service on the same port cannot satisfy gateway readiness.
   return gatewayProbeSawGateway(status);
 }
 
@@ -176,6 +181,7 @@ async function waitForGatewayReady(params: {
   return latest;
 }
 
+/** Checks readiness and, when approved, recovers by installing or starting the gateway. */
 export async function ensureGatewayReadyForOperation(
   options: GatewayReadinessOptions,
 ): Promise<GatewayReadinessResult> {

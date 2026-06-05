@@ -1,3 +1,4 @@
+// Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,

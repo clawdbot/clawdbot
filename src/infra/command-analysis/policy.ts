@@ -1,3 +1,5 @@
+// Approval-policy command analysis normalizes shell and argv inputs into the
+// shared exec segment shape consumed by risk checks.
 import {
   analyzeArgvCommand,
   analyzeShellCommand,

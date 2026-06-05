@@ -1,3 +1,4 @@
+// Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeForLog,

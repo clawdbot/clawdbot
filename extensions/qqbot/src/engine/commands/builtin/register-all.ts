@@ -1,3 +1,4 @@
+// Qqbot plugin module implements register all behavior.
 import type { SlashCommandRegistry } from "../slash-commands.js";
 import { registerApproveCommands } from "./register-approve.js";
 import { registerBasicBotCommands } from "./register-basic.js";

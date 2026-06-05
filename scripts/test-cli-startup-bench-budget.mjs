@@ -1,3 +1,4 @@
+// Compares CLI startup benchmark reports against checked-in budgets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";

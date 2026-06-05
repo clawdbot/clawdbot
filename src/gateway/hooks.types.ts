@@ -1,3 +1,5 @@
+// Gateway hook payload type aliases.
+// Keeps hook-facing channel ids on public plugin channel contracts.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
 // Gateway hooks use public channel ids so hook payloads stay aligned with plugin

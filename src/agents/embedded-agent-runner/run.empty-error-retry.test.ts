@@ -1,3 +1,4 @@
+// Coverage for retrying empty errored assistant turns in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -10,14 +11,6 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-// Regression coverage for the silent-error retry in runEmbeddedAgent.
-//
-// Symptom: ollama/glm-5.1 occasionally ends a turn with stopReason="error" and
-// zero output tokens after a successful tool-call sequence. The user sees no
-// reply and has to nudge. This suite locks in a narrower model-agnostic
-// resubmission for errored turns, separate from the visible-answer retry used
-// for stopReason="stop" empty zero-token turns.
-
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 function emptyErrorAttempt(
@@ -25,6 +18,8 @@ function emptyErrorAttempt(
   model: string,
   outputTokens = 0,
 ): EmbeddedRunAttemptResult {
+  // Models can report stopReason=error with no output after tool activity; that
+  // is replay-safe only when the attempt metadata records no side effects.
   return makeAttemptResult({
     assistantTexts: [],
     lastAssistant: {
@@ -155,11 +150,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {
-    // If the errored turn already sent a message / added a cron / ran a
-    // mutating tool whose result wasn't captured as replay-safe,
-    // resubmission would duplicate those actions. Mirror the gate used by
-    // the other retry resolvers (resolveEmptyResponseRetryInstruction et al.)
-    // and surface the incomplete-turn error instead of retrying blind.
+    // Resubmission would duplicate side effects when replay metadata cannot
+    // prove the failed turn is safe to replay.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],

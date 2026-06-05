@@ -1,3 +1,5 @@
+// Tool image logging tests cover diagnostic context emitted while sanitizing
+// oversized or transformed image payloads.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 

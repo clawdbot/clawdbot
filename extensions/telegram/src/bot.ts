@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot behavior.
 import {
   createTelegramBotCore,
   getTelegramSequentialKey,

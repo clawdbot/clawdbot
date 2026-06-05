@@ -1,3 +1,4 @@
+// Runtime task tests cover plugin task runtime registration, invocation, and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDetachedTaskLifecycleRuntime,

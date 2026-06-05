@@ -1,3 +1,5 @@
+// Runtime plan type tests keep the leaf type contract free from concrete
+// runtime policy modules so the plan can stay a low-dependency boundary.
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -23,6 +25,8 @@ describe("AgentRuntimePlan leaf contracts", () => {
   });
 
   it("guards against policy type imports re-entering the leaf contract", () => {
+    // The patterns intentionally match representative forbidden imports so the
+    // first test fails if concrete policy types creep into the leaf contract.
     const forbiddenImports = [
       'import type { PromptContribution } from "../system-prompt.types.js";',
       'import type { TranscriptPolicy } from "../transcript-policy.types.js";',

@@ -1,3 +1,4 @@
+// Matrix tests cover group mentions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixGroupToolPolicy } from "./group-mentions.js";
 

@@ -1,3 +1,5 @@
+// Node wake state tracks APNs wake attempts and reconnect nudges for paired
+// nodes, plus a narrow read-only testing seam.
 export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;

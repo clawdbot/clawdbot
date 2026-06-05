@@ -1,3 +1,8 @@
+/**
+ * Agent transcript redaction helpers.
+ *
+ * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
@@ -7,9 +12,6 @@ import {
 } from "../logging/redact.js";
 import type { AgentMessage } from "./runtime/index.js";
 
-// Transcript redaction helpers for persisted agent messages. Text and structured
-// fields share logging redaction config while preserving object identity when no
-// redaction changes are needed.
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
 }

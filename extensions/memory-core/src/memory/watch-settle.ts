@@ -1,3 +1,4 @@
+// Memory Core plugin module implements watch settle behavior.
 import fsSync from "node:fs";
 import path from "node:path";
 

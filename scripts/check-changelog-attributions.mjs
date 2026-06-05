@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
+// Rejects changelog thanks entries that credit bots or internal handles.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Exact handles that changelog thanks entries must not credit.
+ */
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "codex",
   "openclaw",
@@ -13,20 +17,38 @@ export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "clawsweeper[bot]",
   "openclaw-clawsweeper[bot]",
 ];
+/**
+ * Handle prefixes that identify forbidden changelog thanks credits.
+ */
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
+/**
+ * Handle suffixes that identify forbidden changelog thanks credits.
+ */
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES = ["[bot]"];
+/**
+ * Handles that require an explicit human credit instead.
+ */
 export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = [
   "clawsweeper",
   "openclaw-clawsweeper",
   "clawsweeper[bot]",
   "openclaw-clawsweeper[bot]",
 ];
+/**
+ * Handle prefixes that require explicit human credit instead.
+ */
 export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
+/**
+ * Handle suffixes that require explicit human credit instead.
+ */
 export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES = ["[bot]"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 
+/**
+ * Reports whether a handle is forbidden in changelog thanks text.
+ */
 export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
@@ -48,6 +70,9 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   return false;
 }
 
+/**
+ * Reports whether a handle needs a separate human credit.
+ */
 export function requiresExplicitHumanChangelogThanks(handle) {
   const normalized = handle.toLowerCase();
   if (normalized === "" || normalized === "null") {
@@ -64,6 +89,9 @@ export function requiresExplicitHumanChangelogThanks(handle) {
   );
 }
 
+/**
+ * Finds changelog lines that thank forbidden handles.
+ */
 export function findForbiddenChangelogThanks(content) {
   return content
     .split(/\r?\n/u)
@@ -82,6 +110,9 @@ export function findForbiddenChangelogThanks(content) {
     .filter(Boolean);
 }
 
+/**
+ * Runs the changelog attribution check.
+ */
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "--is-forbidden-handle") {
     process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "", {

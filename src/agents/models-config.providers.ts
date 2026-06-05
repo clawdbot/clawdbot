@@ -1,6 +1,8 @@
-// Provider-config public barrel. Keep provider normalization, implicit provider
-// discovery, policy hooks, and secret enforcement imports centralized here so
-// model config callers do not depend on each implementation file.
+/**
+ * Provider-config public barrel. It centralizes provider normalization,
+ * implicit discovery, policy hooks, and secret enforcement imports for
+ * models-config callers.
+ */
 export { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 export {
   normalizeProviderCatalogModelsForConfig,

@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover push behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { PushTestResultSchema } from "./schema/push.js";

@@ -1,3 +1,4 @@
+// Matrix type declarations define plugin contracts.
 import type { MatrixSyncState } from "../sync-state.js";
 import type {
   MatrixVerificationRequestLike,

@@ -1,3 +1,4 @@
+// Plugin MCP cancellation tests cover cancellation of in-flight plugin tool calls.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";

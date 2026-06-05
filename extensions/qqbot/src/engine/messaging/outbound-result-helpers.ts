@@ -1,3 +1,4 @@
+// Qqbot helper module supports outbound result helpers behavior.
 import path from "node:path";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "../api/retry.js";
 import { MediaFileType } from "../types.js";

@@ -1,3 +1,8 @@
+/**
+ * Tests filesystem tools when workspaceOnly is disabled.
+ * Confirms host read/write/edit and memory append wrappers allow intended
+ * outside-workspace paths.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Android node capability policy config fixture describes gateway policy config.
 import type { OpenClawConfig } from "../../../src/config/config.js";
 
 // Test helper for unwrapping gateway config.get response shapes.

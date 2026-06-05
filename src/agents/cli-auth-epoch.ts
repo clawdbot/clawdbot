@@ -1,3 +1,7 @@
+/**
+ * Builds auth-state epochs for CLI-backed runtimes so reusable sessions reset
+ * when the owning local credential identity changes.
+ */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
@@ -27,12 +31,15 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
+/** Version salt for CLI auth epoch encoding semantics. */
 export const CLI_AUTH_EPOCH_VERSION = 5;
 
+/** Overrides credential readers for auth-epoch unit tests. */
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
 }
 
+/** Restores default credential readers after auth-epoch unit tests. */
 export function resetCliAuthEpochTestDeps(): void {
   Object.assign(cliAuthEpochDeps, defaultCliAuthEpochDeps);
 }
@@ -198,6 +205,7 @@ function getAuthProfileCredential(
   return store.profiles[authProfileId];
 }
 
+/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   authProfileId?: string;

@@ -1,3 +1,4 @@
+// WebSocket connect-policy tests cover Control UI pairing, trusted proxy auth, and device identity policy.
 import { describe, expect, test } from "vitest";
 import {
   evaluateMissingDeviceIdentity,

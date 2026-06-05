@@ -1,3 +1,8 @@
+/**
+ * Channel outbound adapter types.
+ *
+ * Defines text/media/payload/poll contexts, presentation capabilities, and send results.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

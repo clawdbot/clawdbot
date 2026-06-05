@@ -1,3 +1,4 @@
+// Discord tests cover setup account state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   inspectDiscordSetupAccount,

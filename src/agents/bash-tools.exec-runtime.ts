@@ -1,3 +1,8 @@
+/**
+ * Bash exec runtime.
+ * Spawns host/sandbox processes, manages session updates/backgrounding,
+ * approval messaging constants, environment safety, and exit outcome shaping.
+ */
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -84,8 +89,7 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
   return lastSmkx > lastRmkx ? "application" : "normal";
 }
 
-// Sanitize inherited host env before merge so dangerous variables from process.env
-// are not propagated into non-sandboxed executions.
+/** Removes dangerous inherited host env vars before non-sandboxed execution. */
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
@@ -101,8 +105,7 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
   }
   return sanitized;
 }
-// Centralized sanitization helper.
-// Throws an error if dangerous variables or PATH modifications are detected on the host.
+/** Validates caller-provided host env, rejecting dangerous vars and PATH overrides. */
 export function validateHostEnv(env: Record<string, string>): void {
   for (const key of Object.keys(env)) {
     const upperKey = key.toUpperCase();
@@ -123,27 +126,34 @@ export function validateHostEnv(env: Record<string, string>): void {
     }
   }
 }
+/** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
 );
+/** Default pending output cap for poll/update buffers. */
 export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
   30_000,
   1_000,
   200_000,
 );
+/** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/** Tail length used in background completion notifications. */
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
+/** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+/** Gateway request timeout for approval registration/wait calls. */
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
+/** Failure categories used to explain exec process exits. */
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
@@ -155,6 +165,7 @@ export type ExecProcessFailureKind =
 
 type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
 
+/** Normalized result of a spawned exec process. */
 export type ExecProcessOutcome =
   | {
       status: "completed";
@@ -175,6 +186,7 @@ export type ExecProcessOutcome =
       reason: string;
     };
 
+/** Live handle returned after an exec process has started. */
 export type ExecProcessHandle = {
   session: ProcessSession;
   startedAt: number;
@@ -219,14 +231,17 @@ function emitExecProcessCompleted(params: {
   });
 }
 
+/** Renders a host label for user-facing exec policy messages. */
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
 
+/** Renders an exec target label, preserving `auto`. */
 export function renderExecTargetLabel(target: ExecTarget) {
   return target === "auto" ? "auto" : renderExecHostLabel(target);
 }
 
+/** Returns true when a per-call target override is allowed by configured policy. */
 export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
@@ -247,6 +262,7 @@ export function isRequestedExecTargetAllowed(params: {
   return false;
 }
 
+/** Resolves configured/requested/elevated exec target into an effective host. */
 export function resolveExecTarget(params: {
   configuredTarget?: ExecTarget;
   requestedTarget?: ExecTarget | null;
@@ -296,6 +312,7 @@ export function resolveExecTarget(params: {
   };
 }
 
+/** Normalizes notification snippets to a compact single-line form. */
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -312,6 +329,7 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
+/** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -377,10 +395,12 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
 }
 
+/** Creates the short approval id shown in `/approve` prompts. */
 export function createApprovalSlug(id: string) {
   return id.slice(0, APPROVAL_SLUG_LENGTH);
 }
 
+/** Builds the user-facing approval-pending message for foreground exec. */
 export function buildApprovalPendingMessage(params: {
   warningText?: string;
   approvalSlug: string;
@@ -427,6 +447,7 @@ export function buildApprovalPendingMessage(params: {
   return lines.join("\n");
 }
 
+/** Normalizes the delay before showing a running approval notice. */
 export function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
@@ -437,6 +458,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
   return Math.floor(value);
 }
 
+/** Emits an exec system event and wakes the routed session when appropriate. */
 export function emitExecSystemEvent(
   text: string,
   opts: {
@@ -510,6 +532,7 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
+/** Formats a user-facing reason for a failed exec process exit. */
 export function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
@@ -534,6 +557,7 @@ export function formatExecFailureReason(params: {
   throw new Error("Unsupported exec failure kind");
 }
 
+/** Converts a supervisor exit record into a normalized exec process outcome. */
 export function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -579,6 +603,7 @@ export function buildExecExitOutcome(params: {
   };
 }
 
+/** Converts spawn/runtime errors into a normalized failed exec outcome. */
 export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;
@@ -631,6 +656,7 @@ function wrapPosixCommandWithPathPrepend(
   return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
 }
 
+/** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).

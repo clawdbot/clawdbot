@@ -1,3 +1,4 @@
+// OC Path tests cover parse plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "../../jsonc/parse.js";
 

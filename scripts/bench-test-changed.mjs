@@ -1,3 +1,4 @@
+// Benchmarks `pnpm test:changed` planning/runtime behavior across repeated runs.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";

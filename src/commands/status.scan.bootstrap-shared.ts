@@ -1,3 +1,6 @@
+// Shared bootstrap for status scans.
+// Starts update, Tailscale, agent, and gateway probes with cold-start shortcuts for first-run users.
+
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
@@ -22,6 +25,7 @@ function buildColdStartAgentLocalStatuses() {
   };
 }
 
+/** Builds an empty summary for cold-start status paths that skip network and session work. */
 export function buildColdStartStatusSummary() {
   return {
     runtimeVersion: null,
@@ -48,6 +52,7 @@ function shouldSkipStatusScanNetworkChecks(params: {
   hasConfiguredChannels: boolean;
   all?: boolean;
 }): boolean {
+  // First-run users without channels should get instant status instead of waiting on network probes.
   return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
 }
 
@@ -77,6 +82,7 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
+/** Starts the common async probes used by status scans and exposes their promises to callers. */
 export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
@@ -98,6 +104,7 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
           )
           .catch(() => null);
   const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
+  // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
   const updatePromise = skipNetworkUpdate
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({

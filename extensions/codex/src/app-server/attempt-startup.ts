@@ -1,3 +1,8 @@
+/**
+ * Startup orchestration for Codex app-server attempts, including shared-client
+ * leasing, plugin thread config, sandbox execution environment, and thread
+ * lifecycle binding.
+ */
 import {
   embeddedAgentLog,
   formatErrorMessage,
@@ -59,6 +64,7 @@ const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
+/** Resources and bindings returned after a Codex attempt thread starts. */
 export type StartCodexAttemptThreadResult = {
   client: CodexAppServerClient;
   thread: CodexAppServerThreadLifecycleBinding;
@@ -71,6 +77,10 @@ export type StartCodexAttemptThreadResult = {
   restartContextEngineCodexThread: () => Promise<CodexAppServerThreadLifecycleBinding>;
 };
 
+/**
+ * Starts or resumes the Codex app-server thread and returns the resources the
+ * run loop must later release.
+ */
 export async function startCodexAttemptThread(params: {
   attemptClientFactory: CodexAppServerClientFactory;
   appServer: CodexAppServerRuntimeOptions;
@@ -195,6 +205,8 @@ export async function startCodexAttemptThread(params: {
               params.config,
               {
                 onStartedClient: (client) => {
+                  // Timeout cleanup may fire before the client factory resolves;
+                  // close any late-arriving client instead of leaking a lease.
                   startupClientForAbandonedRequestCleanup = client;
                   if (startupAbandoned || startupAbandonController.signal.aborted) {
                     void closeAbandonedStartupClient(client);

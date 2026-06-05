@@ -1,3 +1,5 @@
+// Reply-payload normalization projects loose tool/agent objects onto the
+// outbound-supported reply payload fields.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload as InternalReplyPayload } from "../../auto-reply/reply-payload.js";
 

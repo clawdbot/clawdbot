@@ -1,3 +1,4 @@
+// Discord tests cover provider.skill dedupe plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 
 let testing: typeof import("./provider.js").testing;

@@ -1,3 +1,4 @@
+// Agent Core module implements agent harness behavior.
 import type {
   AssistantMessage,
   ImageContent,

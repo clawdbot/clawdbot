@@ -16,6 +16,7 @@ import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
+const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
 
@@ -306,6 +307,36 @@ export type ClawHubSkillDetail = {
   } | null;
 };
 
+export type ClawHubSkillInstallResolutionResponse =
+  | {
+      ok: true;
+      slug: string;
+      installKind: "archive";
+      archive: {
+        version: string;
+        downloadUrl: string;
+      };
+    }
+  | {
+      ok: true;
+      slug: string;
+      installKind: "github";
+      github: {
+        repo: string;
+        path: string;
+        commit: string;
+        contentHash: string;
+        sourceUrl: string;
+      };
+    }
+  | {
+      ok: false;
+      slug: string;
+      reason: string;
+      message: string;
+      status: number;
+    };
+
 export type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
 
 export type ClawHubSkillVerificationResponse = {
@@ -389,6 +420,10 @@ export type ClawHubDownloadResult = {
   cleanup: () => Promise<void>;
 };
 
+export type ClawHubInstallTelemetrySkill = {
+  version?: string | null;
+};
+
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type ClawHubRequestParams = {
@@ -436,6 +471,14 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function normalizeGitHubCodeloadBaseUrl(): string {
+  const value =
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    DEFAULT_GITHUB_CODELOAD_URL;
+  return value.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
 }
 
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {
@@ -787,6 +830,17 @@ function buildVersionOrTagSearch(params: {
   return tag ? { tag } : undefined;
 }
 
+function buildGitHubZipUrl(repo: string, commit: string): string {
+  const url = new URL(`${normalizeGitHubCodeloadBaseUrl()}/`);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const repoPath = repo
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  url.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(commit)}`;
+  return url.toString();
+}
+
 function formatSha256Integrity(bytes: Uint8Array): string {
   const digest = createHash("sha256").update(bytes).digest("base64");
   return `sha256-${digest}`;
@@ -1004,6 +1058,35 @@ export async function fetchClawHubSkillDetail(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   });
+}
+
+export async function fetchClawHubSkillInstallResolution(params: {
+  slug: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+  forceInstall?: boolean;
+}): Promise<ClawHubSkillInstallResolutionResponse> {
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: {
+      forceInstall: params.forceInstall ? "1" : undefined,
+    },
+  });
+  const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
+  if (!response.ok && !isStructuredBlock) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  try {
+    return (await response.json()) as ClawHubSkillInstallResolutionResponse;
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
 }
 
 export async function fetchClawHubSkillVerification(params: {
@@ -1276,6 +1359,149 @@ export async function downloadClawHubSkillArchive(params: {
     artifact: "archive",
     cleanup: target.cleanup,
   };
+}
+
+export async function downloadClawHubSkillArchiveUrl(params: {
+  url: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubDownloadResult> {
+  const explicitToken = normalizeOptionalString(params.token);
+  const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
+  const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
+  const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    url: params.url,
+    token: explicitToken,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    skipAuth,
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `skill archive download at ${url.pathname}`,
+  });
+  const sha256Hex = formatSha256Hex(bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-skill",
+    fileName: "skill.zip",
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
+  return {
+    archivePath: target.path,
+    integrity: formatSha256Integrity(bytes),
+    sha256Hex,
+    artifact: "archive",
+    cleanup: target.cleanup,
+  };
+}
+
+export async function downloadClawHubGitHubSkillArchive(params: {
+  repo: string;
+  commit: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubDownloadResult> {
+  const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
+  const { response, url, hasToken } = await clawhubRequest({
+    url: downloadUrl,
+    skipAuth: true,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `GitHub source archive for ${params.repo}@${params.commit}`,
+  });
+  const sha256Hex = formatSha256Hex(bytes);
+  const target = await createTempDownloadTarget({
+    prefix: "openclaw-clawhub-github-skill",
+    fileName: `${params.commit}.zip`,
+    tmpDir: os.tmpdir(),
+  });
+  await fs.writeFile(target.path, bytes);
+  return {
+    archivePath: target.path,
+    integrity: formatSha256Integrity(bytes),
+    sha256Hex,
+    artifact: "archive",
+    cleanup: target.cleanup,
+  };
+}
+
+export async function reportClawHubSkillInstallTelemetry(params: {
+  baseUrl?: string;
+  token?: string;
+  root: string;
+  skills: Record<string, ClawHubInstallTelemetrySkill>;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<void> {
+  const token = normalizeOptionalString(params.token) ?? (await resolveClawHubAuthToken());
+  if (!token || isClawHubTelemetryDisabled()) {
+    return;
+  }
+  const skills = Object.entries(params.skills)
+    .map(([slug, entry]) => ({
+      slug,
+      version: entry.version ?? null,
+    }))
+    .filter((entry) => entry.slug.length > 0);
+
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: "/api/cli/telemetry/install",
+    method: "POST",
+    token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    json: {
+      roots: [
+        {
+          rootId: createHash("sha256").update(path.resolve(params.root)).digest("hex"),
+          label: formatTelemetryRootLabel(params.root),
+          skills,
+        },
+      ],
+    },
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+}
+
+function isClawHubTelemetryDisabled(): boolean {
+  const raw = process.env.CLAWHUB_DISABLE_TELEMETRY ?? process.env.CLAWDHUB_DISABLE_TELEMETRY;
+  if (!raw) {
+    return false;
+  }
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+function formatTelemetryRootLabel(root: string): string {
+  const home = os.homedir();
+  const absolute = path.resolve(root);
+  if (absolute === home) {
+    return "~";
+  }
+  const normalized = absolute.replaceAll("\\", "/");
+  const normalizedHome = home.replaceAll("\\", "/");
+  const withinHome = normalized.startsWith(`${normalizedHome}/`);
+  const stripped = withinHome ? normalized.slice(normalizedHome.length + 1) : normalized;
+  const tail = stripped.split("/").filter(Boolean).slice(-2).join("/");
+  return withinHome ? `~/${tail}` : tail || absolute;
 }
 
 /** Resolves the preferred latest package version from detail metadata. */

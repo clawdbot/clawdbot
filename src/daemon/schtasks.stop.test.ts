@@ -1,3 +1,4 @@
+// Windows schtasks stop tests cover stopping scheduled task services.
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";

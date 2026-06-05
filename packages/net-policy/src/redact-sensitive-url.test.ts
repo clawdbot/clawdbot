@@ -1,3 +1,4 @@
+// Network Policy tests cover redact sensitive url behavior.
 import { describe, expect, it } from "vitest";
 import {
   isSensitiveUrlQueryParamName,

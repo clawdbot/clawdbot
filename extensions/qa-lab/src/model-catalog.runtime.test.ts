@@ -1,3 +1,4 @@
+// Qa Lab tests cover model catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseQaRunnerModelOptionsOutput,

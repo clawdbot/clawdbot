@@ -1,3 +1,4 @@
+// Openai tests cover openai chatgpt provider plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());

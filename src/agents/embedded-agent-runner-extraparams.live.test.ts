@@ -1,3 +1,4 @@
+// Live verification for extra-params behavior against provider APIs.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,8 @@ const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : descr
 
 describeLive("embedded agent extra params (live)", () => {
   it("applies config max_completion_tokens alias to openai streamFn", async () => {
+    // This is live because token-limit alias behavior is enforced by OpenAI's
+    // API, not just by local payload mutation.
     const model: Model<"openai-responses"> = {
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -78,6 +81,8 @@ describeLive("embedded agent extra params (live)", () => {
   }, 30_000);
 
   it("verifies OpenAI fast-mode service_tier semantics against the live API", async () => {
+    // service_tier is provider-defined response metadata; mocked wrappers cannot
+    // prove that the live API accepts both values.
     const headers = {
       "content-type": "application/json",
       authorization: `Bearer ${OPENAI_KEY}`,

@@ -1,3 +1,4 @@
+// Code region tests cover Markdown code span and fence detection.
 import { describe, expect, it } from "vitest";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 

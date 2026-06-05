@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus.integration plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";

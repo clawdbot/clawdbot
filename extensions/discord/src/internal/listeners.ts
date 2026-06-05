@@ -1,3 +1,4 @@
+// Discord plugin module implements listeners behavior.
 import {
   GatewayDispatchEvents,
   type APIMessage,

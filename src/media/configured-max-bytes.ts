@@ -1,3 +1,4 @@
+// Configured media size helpers resolve maximum byte limits by media kind.
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

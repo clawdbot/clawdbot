@@ -1,3 +1,6 @@
+/**
+ * Builds extension factories available to embedded-agent runtime sessions.
+ */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

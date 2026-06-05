@@ -1,3 +1,4 @@
+// Write Cli Startup Metadata script supports OpenClaw repository automation.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -568,18 +569,15 @@ async function renderSourceBrowserHelpText(
     `browser.outputHelp();`,
     "process.exit(0);",
   ].join("\n");
-  return await spawnText(
-    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
-    {
-      cwd: rootDir,
-      env: {
-        ...renderContext.env,
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      },
-      failureMessage: "Failed to render source browser help",
-      timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
+    cwd: rootDir,
+    env: {
+      ...renderContext.env,
+      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
-  );
+    failureMessage: "Failed to render source browser help",
+    timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  });
 }
 
 async function renderSourceCommandHelpText(

@@ -1,3 +1,8 @@
+/**
+ * Shared state and context contracts for embedded-agent subscription handlers.
+ * Message, tool, compaction, and liveness handlers all mutate this single
+ * state shape while keeping their implementation files decoupled.
+ */
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -35,6 +40,7 @@ type EmbeddedSubscribeLogger = {
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+/** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
@@ -42,6 +48,7 @@ export type ToolCallSummary = {
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
+/** User-visible assistant stream payload emitted to subscribers. */
 export type AssistantStreamData = {
   text: string;
   delta: string;
@@ -50,11 +57,13 @@ export type AssistantStreamData = {
   phase?: AssistantPhase;
 };
 
+/** Deferred assistant stream event plus whether it should emit partial replies. */
 export type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };
 
+/** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{
@@ -168,6 +177,7 @@ export type EmbeddedAgentSubscribeState = {
   lastAssistant?: AgentMessage;
 };
 
+/** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;

@@ -1,3 +1,4 @@
+// Codex tests cover harness plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 

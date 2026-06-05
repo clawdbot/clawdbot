@@ -1,3 +1,4 @@
+// Unit test routing globs and boundary/bundled-plugin exclusions.
 import path from "node:path";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
 

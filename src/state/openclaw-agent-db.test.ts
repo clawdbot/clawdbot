@@ -1,3 +1,4 @@
+// OpenClaw agent database tests cover agent-scoped DB storage and migrations.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

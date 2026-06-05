@@ -1,3 +1,4 @@
+// Copilot tests cover replay shim plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   classifyResumeFailure,

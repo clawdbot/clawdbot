@@ -1,3 +1,4 @@
+// Session attachment contract tests cover plugin session attachment metadata and storage.
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";

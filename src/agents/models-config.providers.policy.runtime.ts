@@ -1,3 +1,7 @@
+/**
+ * Runtime-policy bridge for provider config normalization. These helpers call
+ * plugin hooks without triggering runtime plugin loading from config assembly.
+ */
 import {
   applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,
@@ -6,8 +10,6 @@ import {
 import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
-// Runtime-policy bridge for provider config normalization. These helpers call
-// plugin hooks without triggering runtime plugin loading from config assembly.
 /** Apply provider native-streaming usage compatibility policy. */
 export function applyProviderNativeStreamingUsagePolicy(
   providerKey: string,

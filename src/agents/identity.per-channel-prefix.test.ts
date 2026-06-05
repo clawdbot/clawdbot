@@ -1,3 +1,4 @@
+// Documents response-prefix cascade across global, channel, and account scopes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveResponsePrefix, resolveEffectiveMessagesConfig } from "./identity.js";
@@ -38,6 +39,7 @@ describe("resolveResponsePrefix with per-channel override", () => {
 
   describe("channel-level prefix", () => {
     it("returns channel prefix when set, ignoring global", () => {
+      // Channel scope is more specific than the global messages default.
       const cfg = makeConfig({
         messages: { responsePrefix: "[Global] " },
         channels: {
@@ -58,6 +60,7 @@ describe("resolveResponsePrefix with per-channel override", () => {
     });
 
     it("channel empty string stops cascade (no global prefix applied)", () => {
+      // Empty string is an explicit operator choice, not an unset value.
       const cfg = makeConfig({
         messages: { responsePrefix: "[Global] " },
         channels: {
@@ -229,6 +232,8 @@ describe("resolveResponsePrefix with per-channel override", () => {
   // ─── Full cascade ─────────────────────────────────────────────────
 
   describe("full 4-level cascade", () => {
+    // Specificity order: account, channel, agent/global identity fallback,
+    // then global messages config.
     const fullCfg = makeConfig({
       agents: {
         list: [{ id: "main", identity: { name: "TestBot" } }],

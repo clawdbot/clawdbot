@@ -1,3 +1,4 @@
+// Duckduckgo provider module implements model/runtime integration.
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-contract";
 
 const DUCKDUCKGO_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];

@@ -1,3 +1,4 @@
+/** Doctor repair for stale plugin-owned routing state persisted in session entries. */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -58,6 +59,7 @@ function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string 
   return parseAgentSessionKey(sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
 }
 
+/** Resolves the currently configured provider/model/runtime route for a session key. */
 export function resolveConfiguredDoctorSessionStateRoute(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -121,6 +123,7 @@ function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
   );
 }
 
+/** Fast prefilter for session stores that might contain plugin-owned routing state. */
 export function storeMayContainPluginSessionRouteState(
   store: Record<string, SessionEntry>,
 ): boolean {
@@ -328,6 +331,7 @@ function scanEntryForOwner(params: {
   };
 }
 
+/** Scans session entries for state owned by plugins that no longer match the configured route. */
 export function scanSessionRouteStateOwners(params: {
   owners: readonly DoctorSessionRouteStateOwner[];
   store: Record<string, Record<string, unknown>>;
@@ -386,6 +390,7 @@ function clearRecordKeys(
   return true;
 }
 
+/** Clears stale plugin-owned routing fields from a session entry and refreshes updatedAt. */
 export function applySessionRouteStateRepair(params: {
   entry: Record<string, unknown>;
   repair: DoctorSessionRouteStateRepair;
@@ -443,6 +448,7 @@ function groupRepairsByOwner(
   return grouped;
 }
 
+/** Prompts for and applies plugin-owned session route state repairs to the session store. */
 export async function runPluginSessionStateDoctorRepairs(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;

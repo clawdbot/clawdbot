@@ -1,3 +1,4 @@
+// File Transfer tests cover lazy node invoke policy plugin behavior.
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,

@@ -1,3 +1,4 @@
+// Voice Call plugin module implements twiml policy behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WebhookContext } from "../../types.js";
 

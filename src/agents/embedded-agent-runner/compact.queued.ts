@@ -1,3 +1,6 @@
+/**
+ * Queues embedded-agent session compaction onto the correct command lane.
+ */
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,

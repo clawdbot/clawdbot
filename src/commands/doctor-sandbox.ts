@@ -1,3 +1,4 @@
+/** Doctor checks and repairs for Docker sandbox images, namespaces, and registry state. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -266,6 +267,12 @@ async function handleMissingSandboxImage(
   }
 }
 
+/**
+ * Checks configured sandbox images and optionally runs repo build scripts for missing defaults.
+ *
+ * Non-Docker backends skip Docker image checks; Docker mode also probes Codex bwrap namespace
+ * support because nested app-server shells rely on host user/network namespace policy.
+ */
 export async function maybeRepairSandboxImages(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -369,6 +376,7 @@ function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigratio
   return "";
 }
 
+/** Migrates legacy sandbox registry files into the current sharded registry layout. */
 export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
   const legacyFiles = (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
   if (legacyFiles.length === 0) {
@@ -396,6 +404,7 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
   }
 }
 
+/** Warns when agent sandbox overrides are ignored because sandbox scope resolves to shared. */
 export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];

@@ -1,3 +1,4 @@
+// Feishu plugin module implements bot behavior.
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import {
   buildChannelInboundEventContext,

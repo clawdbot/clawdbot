@@ -1,3 +1,4 @@
+// Minimax plugin module implements oauth behavior.
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   MAX_DATE_TIMESTAMP_MS,

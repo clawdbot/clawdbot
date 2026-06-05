@@ -1,3 +1,4 @@
+// Discord plugin module implements ui colors behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccount } from "./account-inspect.js";
 

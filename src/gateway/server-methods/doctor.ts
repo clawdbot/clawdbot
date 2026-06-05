@@ -1,3 +1,5 @@
+// Doctor gateway methods inspect and repair memory dreaming artifacts, managed
+// cron state, and REM harness previews for operator diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";

@@ -1,3 +1,4 @@
+// Http module supports OpenClaw QA credential workflows.
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";

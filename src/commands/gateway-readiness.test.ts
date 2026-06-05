@@ -1,3 +1,4 @@
+// Gateway readiness tests cover readiness checks, status details, and failure messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";

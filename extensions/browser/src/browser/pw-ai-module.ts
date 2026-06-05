@@ -1,5 +1,12 @@
+/**
+ * Optional Playwright AI module loader.
+ *
+ * Lazily imports the Playwright-backed browser helpers while allowing routes to
+ * soft-fail when the dependency is unavailable in a gateway build.
+ */
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
+/** Type of the Playwright-backed browser helper module. */
 export type PwAiModule = typeof import("./pw-ai.js");
 
 type PwAiLoadMode = "soft" | "strict";
@@ -36,6 +43,7 @@ async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   }
 }
 
+/** Load the Playwright AI helper module in soft or strict mode. */
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {

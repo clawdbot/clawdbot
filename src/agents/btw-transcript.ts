@@ -1,3 +1,6 @@
+/**
+ * Reads prior session transcript context for `/btw` side-question handoffs.
+ */
 import { readFile } from "node:fs/promises";
 import {
   resolveSessionFilePath,

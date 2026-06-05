@@ -1,3 +1,6 @@
+/**
+ * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
+ */
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -32,12 +35,6 @@ import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-/**
- * Live Claude CLI stdio session manager.
- *
- * This keeps a bounded pool of long-lived Claude CLI processes and routes individual turns through
- * stream-json stdin/stdout while preserving exec permission state and diagnostic tool events.
- */
 type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
 >;

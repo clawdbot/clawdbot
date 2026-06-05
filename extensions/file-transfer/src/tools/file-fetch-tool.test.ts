@@ -1,3 +1,4 @@
+// File Transfer tests cover file fetch tool plugin behavior.
 import crypto from "node:crypto";
 import {
   callGatewayTool,

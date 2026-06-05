@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.comment notice handler behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import {

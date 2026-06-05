@@ -1,11 +1,8 @@
+/**
+ * Removes short-window duplicate user turns from compaction summaries.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-/**
- * Duplicate user-message filtering for compaction inputs.
- *
- * This removes immediate repeated user prompts from compaction summaries without touching short
- * prompts, image-bearing prompts, or duplicates outside the retry window.
- */
 const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
 
@@ -61,6 +58,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   };
 }
 
+/** Drop later duplicate user messages while preserving the first prompt. */
 export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   messages: readonly T[],
   options: DuplicateUserMessageOptions = {},

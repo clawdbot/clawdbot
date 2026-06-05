@@ -1,3 +1,4 @@
+// Qa Lab provider module implements model/runtime integration.
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
 

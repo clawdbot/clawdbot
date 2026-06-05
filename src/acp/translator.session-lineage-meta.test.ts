@@ -1,3 +1,4 @@
+/** Tests ACP session lineage metadata in list/load session responses. */
 import type { ListSessionsRequest, LoadSessionRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";

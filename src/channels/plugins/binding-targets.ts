@@ -1,3 +1,8 @@
+/**
+ * Configured binding target lifecycle helpers.
+ *
+ * Ensures or resets stateful binding targets through registered target drivers.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import {

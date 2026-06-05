@@ -1,3 +1,4 @@
+// Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,
   ReasoningLevel,

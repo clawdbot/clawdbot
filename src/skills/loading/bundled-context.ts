@@ -1,3 +1,4 @@
+// Bundled context helpers resolve bundled skill paths and logging for skill loading.
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveBundledSkillsDir, type BundledSkillsResolveOptions } from "./bundled-dir.js";
 import { loadSkillsFromDirSafe } from "./local-loader.js";

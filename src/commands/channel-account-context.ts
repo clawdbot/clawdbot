@@ -1,3 +1,4 @@
+// Resolves a channel plugin's default account with strict or read-only diagnostics.
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -39,6 +40,7 @@ function formatContextDiagnostic(params: {
   return `${prefix}channels.${params.pluginId}.accounts.${params.accountId}: ${params.message}`;
 }
 
+/** Resolve default channel account state for commands that need enabled/configured checks. */
 export async function resolveDefaultChannelAccountContext(
   plugin: ChannelPlugin,
   cfg: OpenClawConfig,

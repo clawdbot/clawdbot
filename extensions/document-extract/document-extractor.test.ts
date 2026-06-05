@@ -1,3 +1,4 @@
+// Document Extract tests cover document extractor plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createEngineMock, openPdfMock, pdfDocument } = vi.hoisted(() => ({

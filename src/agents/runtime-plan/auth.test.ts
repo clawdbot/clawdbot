@@ -1,3 +1,5 @@
+// Runtime plan auth tests cover provider/auth-profile selection and plugin
+// alias loading behavior for the auth portion of the plan.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => {
@@ -52,6 +54,8 @@ describe("buildAgentRuntimeAuthPlan", () => {
   });
 
   it("does not load provider auth aliases when plugins are disabled", () => {
+    // Disabling alias support should avoid metadata loading entirely, not just
+    // ignore aliases after doing plugin work.
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {

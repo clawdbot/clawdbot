@@ -1,3 +1,4 @@
+// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {

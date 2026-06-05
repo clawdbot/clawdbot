@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Resolves SecretRef requests against Bitwarden Secrets Manager without printing secrets.
 import { execFileSync } from "node:child_process";
 
 const readStdin = () =>

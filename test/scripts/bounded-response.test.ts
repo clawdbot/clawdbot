@@ -1,3 +1,4 @@
+// Bounded Response tests cover bounded response script behavior.
 import { describe, expect, it } from "vitest";
 import { readBoundedResponseText as readBoundedResponseTextMjs } from "../../scripts/lib/bounded-response.mjs";
 import { readBoundedResponseText as readBoundedResponseTextTs } from "../../scripts/lib/bounded-response.ts";

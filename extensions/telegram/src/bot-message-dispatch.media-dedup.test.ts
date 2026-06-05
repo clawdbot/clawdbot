@@ -1,3 +1,4 @@
+// Telegram tests cover bot message dispatch.media dedup plugin behavior.
 import { describe, expect, it } from "vitest";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
 

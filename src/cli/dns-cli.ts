@@ -1,3 +1,4 @@
+// DNS setup helper for wide-area discovery using Tailscale addresses and CoreDNS.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -35,6 +36,7 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
 }
 
 function writeFileSudoIfNeeded(filePath: string, content: string): void {
+  // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
   try {
     fs.writeFileSync(filePath, content, "utf-8");
     return;

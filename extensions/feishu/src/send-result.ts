@@ -1,3 +1,4 @@
+// Feishu plugin module implements send result behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,

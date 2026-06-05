@@ -1,3 +1,4 @@
+// Msteams tests cover sdk proactive plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";

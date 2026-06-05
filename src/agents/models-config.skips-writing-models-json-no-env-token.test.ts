@@ -1,3 +1,4 @@
+// Verifies models.json generation skips env-gated providers until auth exists.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +25,7 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
 
 vi.mock("./models-config.providers.js", async () => {
   function createImplicitProvider(baseUrl: string): ModelsProviderConfig {
+    // Shared implicit-provider fixture keeps generated-provider expectations compact.
     return {
       baseUrl,
       api: "openai-completions",
@@ -106,6 +108,7 @@ type ParsedProviderConfig = {
 async function readGeneratedProviders(
   agentDir: string,
 ): Promise<Record<string, ParsedProviderConfig>> {
+  // Generated plugin catalogs are separate files but part of the effective provider set.
   const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as { providers?: Record<string, ParsedProviderConfig> };
   const providers = { ...parsed.providers };
@@ -142,6 +145,7 @@ async function runEnvProviderCase(params: {
   providerKey: "minimax" | "synthetic";
   expectedApiKeyRef: string;
 }) {
+  // Mutate one env var at a time so auth-gated provider generation stays isolated.
   const previousValue = process.env[params.envVar];
   process.env[params.envVar] = params.envValue;
   try {

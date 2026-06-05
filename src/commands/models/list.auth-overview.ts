@@ -1,3 +1,4 @@
+/** Builds provider auth summaries for model-list/status output. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -62,6 +63,7 @@ function resolveProfileSourceAgentDir(params: {
     : params.agentDir;
 }
 
+/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -150,6 +152,8 @@ export function resolveProviderAuthOverview(params: {
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
+      // Profiles win over env/config markers because runtime auth selection uses
+      // the profile store before provider-wide fallback material.
       return {
         kind: "profiles",
         detail: shortenHomePath(

@@ -1,3 +1,4 @@
+// Admin Http Rpc tests cover handler plugin behavior.
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";

@@ -1,3 +1,4 @@
+// Control UI view renders workboard screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";

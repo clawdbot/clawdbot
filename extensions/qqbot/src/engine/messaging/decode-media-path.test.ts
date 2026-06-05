@@ -1,3 +1,4 @@
+// Qqbot tests cover decode media path plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { decodeMediaPath } from "./decode-media-path.js";
 

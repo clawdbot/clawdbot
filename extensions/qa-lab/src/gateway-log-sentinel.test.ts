@@ -1,3 +1,4 @@
+// Qa Lab tests cover gateway log sentinel plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   assertNoGatewayLogSentinels,

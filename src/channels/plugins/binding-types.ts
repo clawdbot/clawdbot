@@ -1,3 +1,8 @@
+/**
+ * Configured channel binding types.
+ *
+ * Defines normalized conversation facts, binding records, and stateful target descriptors.
+ */
 import type { AgentBinding } from "../../config/types.js";
 import type {
   ConversationRef,

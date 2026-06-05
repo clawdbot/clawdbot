@@ -1,3 +1,4 @@
+// Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnProcessAdapter } from "./types.js";

@@ -1,3 +1,4 @@
+// Check No Raw Window Open tests cover check no raw window open script behavior.
 import { describe, expect, it } from "vitest";
 import { findRawWindowOpenLines } from "../../scripts/check-no-raw-window-open.mjs";
 

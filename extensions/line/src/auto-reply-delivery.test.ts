@@ -1,3 +1,4 @@
+// Line tests cover auto reply delivery plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";

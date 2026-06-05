@@ -1,3 +1,4 @@
+// Bundled Plugin Install Uninstall Probe tests cover bundled plugin install uninstall probe script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";

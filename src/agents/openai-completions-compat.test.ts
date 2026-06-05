@@ -1,3 +1,4 @@
+// Verifies OpenAI-compatible endpoint defaults for streaming usage and reasoning payloads.
 import { describe, expect, it } from "vitest";
 import {
   detectOpenAICompletionsCompat,
@@ -50,6 +51,7 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
   it.each(["vllm", "sglang", "lmstudio"])(
     "enables streaming usage compat for manifest-declared local provider %s",
     (provider) => {
+      // Manifest capability, not provider id alone, enables local streaming usage compat.
       expect(
         resolveOpenAICompletionsCompatDefaults({
           provider,
@@ -118,6 +120,7 @@ describe("detectOpenAICompletionsCompat", () => {
 
 describe("xiaomi compat detection", () => {
   it("sets thinkingFormat to deepseek for xiaomi-native endpoint", () => {
+    // Xiaomi's OpenAI-compatible route uses DeepSeek-style reasoning payloads.
     expect(
       resolveOpenAICompletionsCompatDefaults({
         provider: "xiaomi",

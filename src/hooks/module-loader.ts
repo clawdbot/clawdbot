@@ -1,3 +1,4 @@
+// Hook module loader imports hook modules from file URLs with cache isolation.
 import { pathToFileURL } from "node:url";
 
 type ModuleNamespace = Record<string, unknown>;

@@ -1,3 +1,4 @@
+/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../infra/fs-safe.js";
@@ -81,6 +82,8 @@ async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
 
 async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | undefined> {
   let current = path.dirname(path.resolve(entrypoint));
+  // Installed dist entrypoints can sit several levels below package root in
+  // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
     const packageJson = path.join(current, "package.json");
     if (await pathExists(packageJson)) {

@@ -1,3 +1,4 @@
+// Tasks JSON tests cover structured task command output and managed task flow state.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import {

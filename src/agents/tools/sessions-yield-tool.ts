@@ -1,13 +1,12 @@
+/**
+ * sessions_yield built-in tool.
+ *
+ * Ends the current turn after subagent spawning so completion events can resume the session later.
+ */
 import { Type } from "typebox";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
-/**
- * Factory for the sessions_yield orchestration tool.
- *
- * The tool ends the current turn after subagent spawning so completion events can
- * arrive as the next message instead of encouraging polling loops.
- */
 const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(Type.String()),
 });

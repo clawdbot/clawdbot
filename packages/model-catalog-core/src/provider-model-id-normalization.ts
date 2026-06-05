@@ -1,3 +1,4 @@
+// Model Catalog Core module implements provider model id normalization behavior.
 import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 import {
   normalizeGooglePreviewModelId,

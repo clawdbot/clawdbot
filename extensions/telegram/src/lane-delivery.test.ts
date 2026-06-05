@@ -1,3 +1,4 @@
+// Telegram tests cover lane delivery plugin behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";

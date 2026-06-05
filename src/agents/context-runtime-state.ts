@@ -1,9 +1,12 @@
+/**
+ * Process-global context-window runtime state.
+ * Keeps model-config loads, backoff counters, and token cache reset behavior
+ * shared across module reloads and runtime seams.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader, type LazyPromiseLoader } from "../shared/lazy-promise.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 
-// Process-global context-window runtime state. Keeping this on globalThis avoids
-// duplicate model-config loads when modules are reloaded in tests/runtime seams.
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
 type ContextWindowRuntimeState = {
@@ -14,6 +17,7 @@ type ContextWindowRuntimeState = {
   modelsConfigRuntimeLoader: LazyPromiseLoader<typeof import("./models-config.runtime.js")>;
 };
 
+/** Shared mutable state for context-window resolution and model config loading. */
 export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
   const globalState = globalThis as typeof globalThis & {
     [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: ContextWindowRuntimeState;

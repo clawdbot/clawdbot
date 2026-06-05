@@ -1,3 +1,4 @@
+// Agent consult runtime starts agent consultation flows from talk sessions.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";

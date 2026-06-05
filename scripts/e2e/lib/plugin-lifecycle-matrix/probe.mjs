@@ -1,3 +1,4 @@
+// Probe script for plugin lifecycle matrix E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

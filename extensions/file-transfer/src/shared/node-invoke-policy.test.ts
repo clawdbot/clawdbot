@@ -1,3 +1,4 @@
+// File Transfer tests cover node invoke policy plugin behavior.
 import fs from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";

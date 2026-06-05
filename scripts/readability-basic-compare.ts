@@ -1,3 +1,4 @@
+// Readability Basic Compare script supports OpenClaw repository automation.
 import { createWebFetchTool } from "../src/agents/tools/web-tools.js";
 
 const DEFAULT_URLS = [

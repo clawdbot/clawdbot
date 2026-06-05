@@ -1,3 +1,7 @@
+/**
+ * Browser-local SDK bridge for gateway, plugin runtime, CLI runtime, and timeout
+ * helpers.
+ */
 export {
   addGatewayClientOptions,
   callGatewayFromCli,
@@ -65,6 +69,7 @@ function waitForAbort(
   };
 }
 
+/** Runs async work with an optional aborting timeout signal. */
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,

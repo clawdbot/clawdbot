@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.named account dm support behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getRecordedUpdateLastRoute,

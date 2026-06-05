@@ -1,3 +1,4 @@
+// Feishu plugin module implements mention behavior.
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { isFeishuGroupChatType } from "./types.js";

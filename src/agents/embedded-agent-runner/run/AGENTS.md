@@ -1,3 +1,5 @@
+<!-- Embedded runner test performance notes for limiting full-runner coverage to integration behavior. -->
+
 # Embedded Runner Test Performance
 
 The embedded attempt runner is one of the most expensive agent test surfaces.

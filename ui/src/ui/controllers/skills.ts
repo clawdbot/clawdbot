@@ -1,3 +1,4 @@
+// Control UI controller manages skills gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SkillClawHubLink, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 

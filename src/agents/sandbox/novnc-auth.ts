@@ -1,3 +1,8 @@
+/**
+ * noVNC observer authentication helpers.
+ *
+ * Issues short-lived observer tokens and builds local noVNC URLs without exposing long-lived browser bridge state.
+ */
 import crypto from "node:crypto";
 import {
   isFutureDateTimestampMs,

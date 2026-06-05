@@ -1,3 +1,4 @@
+// Device pairing access tests cover role and scope checks for pairing requests.
 import { describe, expect, it } from "vitest";
 import { resolvePendingDeviceApprovalState } from "./device-pairing-access.js";
 

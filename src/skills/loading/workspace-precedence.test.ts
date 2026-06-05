@@ -1,3 +1,4 @@
+// Workspace precedence tests cover precedence between workspace, plugin, and bundled skills.
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";

@@ -1,3 +1,4 @@
+// Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
 import type {
   ChannelAccountSnapshot,

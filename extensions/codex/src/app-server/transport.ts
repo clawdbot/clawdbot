@@ -1,3 +1,8 @@
+/**
+ * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
+ * connections.
+ */
+/** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
     write: (data: string, callback?: (error?: Error | null) => void) => unknown;
@@ -24,6 +29,7 @@ export type CodexAppServerTransport = {
   off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
+/** Starts graceful transport shutdown and schedules a force kill fallback. */
 export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
@@ -52,6 +58,7 @@ export function closeCodexAppServerTransport(
   child.stdin.unref?.();
 }
 
+/** Closes a transport and waits briefly for an exit event. */
 export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
   options: { exitTimeoutMs?: number; forceKillDelayMs?: number } = {},

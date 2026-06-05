@@ -1,3 +1,4 @@
+// Group session keys convert channel-specific group metadata into stable store ids.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -17,6 +18,8 @@ type LegacyGroupSessionSurface = {
 };
 
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+  // Legacy plugin resolvers stay first-class because some channels still expose native group ids
+  // only through channel-owned context parsing.
   for (const plugin of listChannelPlugins()) {
     const resolved = (
       plugin.messaging as LegacyGroupSessionSurface | undefined
@@ -93,6 +96,7 @@ export function buildGroupDisplayName(params: {
   const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;
   let token = normalizeGroupLabel(rawLabel);
+  // Very long opaque ids become a readable stable token instead of leaking full route ids into UI.
   if (!token) {
     token = normalizeGroupLabel(shortenGroupId(rawLabel));
   }

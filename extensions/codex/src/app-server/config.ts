@@ -1,3 +1,4 @@
+// Codex helper module supports config behavior.
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";

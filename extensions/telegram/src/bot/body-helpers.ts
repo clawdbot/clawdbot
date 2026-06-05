@@ -1,3 +1,4 @@
+// Telegram helper module supports body helpers behavior.
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {

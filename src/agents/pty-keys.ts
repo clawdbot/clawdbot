@@ -1,3 +1,8 @@
+/**
+ * Encodes terminal key, hex, literal, and paste inputs into PTY byte
+ * sequences. The encoder handles xterm modifiers and DECCKM application
+ * cursor mode.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../utils.js";
 
@@ -6,7 +11,9 @@ const CR = "\r";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
 
+/** Bracketed-paste prefix emitted before pasted text. */
 export const BRACKETED_PASTE_START = `${ESC}[200~`;
+/** Bracketed-paste suffix emitted after pasted text. */
 export const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
@@ -113,6 +120,7 @@ type KeyEncodingResult = {
   warnings: string[];
 };
 
+/** True when request keys depend on normal vs application cursor-key mode. */
 export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
   return (
     request.keys?.some((raw) => {
@@ -129,6 +137,7 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
+/** Encodes literal, hex, and named key tokens into one PTY input string. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
@@ -160,6 +169,7 @@ export function encodeKeySequence(
   return { data, warnings };
 }
 
+/** Wraps pasted text in bracketed-paste markers when enabled. */
 export function encodePaste(text: string, bracketed = true): string {
   if (!bracketed) {
     return text;

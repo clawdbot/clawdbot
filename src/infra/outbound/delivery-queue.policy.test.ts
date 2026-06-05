@@ -1,3 +1,5 @@
+// Covers delivery retry policy: permanent-error classification, backoff timing,
+// and first-replay eligibility after crashes.
 import { describe, expect, it } from "vitest";
 import {
   computeBackoffMs,

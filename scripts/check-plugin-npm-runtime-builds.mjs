@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Verifies publishable plugin packages can build their npm runtime outputs.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -30,6 +31,9 @@ function parseArgs(argv) {
   return { packageDirs };
 }
 
+/**
+ * Builds publishable plugin npm runtimes and verifies declared outputs exist.
+ */
 export async function checkPluginNpmRuntimeBuilds(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDirs =

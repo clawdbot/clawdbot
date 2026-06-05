@@ -1,3 +1,4 @@
+// Msteams plugin module implements policy behavior.
 import type {
   AllowlistMatch,
   ChannelGroupContext,

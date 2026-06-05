@@ -1,3 +1,4 @@
+// Msteams tests cover graph messages.search plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {

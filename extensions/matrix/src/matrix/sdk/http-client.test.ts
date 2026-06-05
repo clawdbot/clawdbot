@@ -1,3 +1,4 @@
+// Matrix tests cover http client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({

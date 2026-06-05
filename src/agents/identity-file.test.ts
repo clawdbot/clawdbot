@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for IDENTITY.md parsing and merging.
+ * Ensures placeholders are ignored and rich identity fields stay stable.
+ */
 import { describe, expect, it } from "vitest";
 import { mergeIdentityMarkdownContent, parseIdentityMarkdown } from "./identity-file.js";
 

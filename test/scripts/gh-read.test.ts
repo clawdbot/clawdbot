@@ -1,3 +1,4 @@
+// Gh Read tests cover gh read script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,

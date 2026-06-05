@@ -1,3 +1,5 @@
+// Covers session-manager guard behavior for tool-result pairing and transcript
+// redaction.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
@@ -14,6 +16,8 @@ function assistantToolCall(id: string): AgentMessage {
 
 describe("guardSessionManager integration", () => {
   it("persists synthetic toolResult before subsequent assistant message", () => {
+    // Providers require every assistant tool call to be followed by a result
+    // before the next assistant turn.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
@@ -38,6 +42,8 @@ describe("guardSessionManager integration", () => {
   });
 
   it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
+    // Delivery mirrors are display copies, not real model turns; they must not
+    // cause the guard to synthesize missing tool results.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
@@ -135,6 +141,8 @@ describe("guardSessionManager integration", () => {
   });
 
   it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
+    // Blocked messages are audit records, not the actual user turn that should
+    // receive prepared media metadata.
     const sm = guardSessionManager(SessionManager.inMemory(), {
       preparedUserTurnMessage: {
         role: "user",

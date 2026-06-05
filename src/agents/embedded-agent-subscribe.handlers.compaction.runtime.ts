@@ -1,3 +1,6 @@
+/**
+ * Runtime helpers for reconciling compaction counts after subscribe events.
+ */
 import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */

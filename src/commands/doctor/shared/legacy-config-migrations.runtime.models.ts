@@ -1,3 +1,4 @@
+// Legacy model runtime config migrations for stale model refs, compat fields, and catalog data.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import {
@@ -1027,6 +1028,7 @@ const RETIRED_MODEL_REF_RULES: LegacyConfigRule[] = [
   match: (value) => scanKnownModelRefs(value),
 }));
 
+/** Legacy config migration specs for model/provider runtime config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "models.providers.openai-codex->models.providers.openai",

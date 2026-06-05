@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for built-in model suppression helpers.
+ * Verifies plugin manifest suppression rules, cache reuse, and lifecycle clears.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

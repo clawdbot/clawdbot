@@ -1,3 +1,5 @@
+// Reasoning block reply tests cover message_end extraction of native reasoning
+// and tag-promoted thinking when reasoning output is enabled.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +11,8 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
+    // message_end block replies let reasoning and final answer be emitted as
+    // separate payloads without depending on streaming deltas.
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
@@ -33,6 +37,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   }
 
   function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
+    // The expected contract is two user-visible payloads: reasoning first,
+    // final answer second.
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(blockReplyTextAt(onBlockReply, 0)).toBe("Because it helps");
     expect(blockReplyTextAt(onBlockReply, 1)).toBe("Final answer");

@@ -1,3 +1,4 @@
+// Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

@@ -1,3 +1,4 @@
+// Signal plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { type SignalApiMode, signalCheck, signalRpcRequest } from "./client-adapter.js";

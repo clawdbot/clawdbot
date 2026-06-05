@@ -1,3 +1,4 @@
+// Codex tests cover request plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({

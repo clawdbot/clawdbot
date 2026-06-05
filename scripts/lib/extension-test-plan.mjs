@@ -1,3 +1,4 @@
+// Resolves extension Vitest configs, costs, and batch shards for plugin test runs.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -29,6 +30,7 @@ import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
+/** Default number of shards for broad bundled extension test batches. */
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   // CI shard planning uses measured wall time rather than raw file count.
@@ -129,6 +131,7 @@ function listFilesystemTestFiles(rootPath) {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List tracked or filesystem-discovered test files for extension roots. */
 export function listTrackedTestFilesForRoots(roots) {
   const files = [];
   for (const root of roots) {
@@ -190,6 +193,7 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
   );
 }
 
+/** Resolve the Vitest configs, files, and estimated cost for one extension target. */
 export function resolveExtensionTestPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const targetArg = params.targetArg;
@@ -327,6 +331,7 @@ function mergeTestPlans(plans) {
   };
 }
 
+/** Resolve a combined extension test plan for explicit or all available extension ids. */
 export function resolveExtensionBatchPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const hasExplicitExtensionIds = params.extensionIds !== undefined;
@@ -357,6 +362,7 @@ function pickLeastLoadedShard(shards) {
   }, -1);
 }
 
+/** Create balanced extension test shards from per-extension plans. */
 export function createExtensionTestShards(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();

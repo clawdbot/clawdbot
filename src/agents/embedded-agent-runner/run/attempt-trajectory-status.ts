@@ -1,3 +1,6 @@
+/**
+ * Resolves terminal attempt trajectory status and assistant-visible text.
+ */
 import {
   hasAcceptedSessionSpawn,
   type AcceptedSessionSpawn,

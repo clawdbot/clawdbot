@@ -1,3 +1,4 @@
+// Coverage for OpenRouter model capability loading and cache invalidation.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,8 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
+  // Each case gets an isolated state dir because the module persists capability
+  // rows through the plugin state store across imports.
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
   resetPluginStateStoreForTests();
   process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -28,6 +31,7 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
 }
 
 async function importOpenRouterModelCapabilities(scope: string) {
+  // Import fresh per scope so module-level caches cannot mask persistence bugs.
   return await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
     import.meta.url,
     `./openrouter-model-capabilities.js?scope=${scope}`,
@@ -139,6 +143,8 @@ describe("openrouter-model-capabilities", () => {
   });
 
   it("does not reuse retired JSON caches with precomputed OpenRouter context windows", async () => {
+    // Old JSON caches stored unnormalized provider context windows; force a live
+    // refresh so endpoint-specific caps are used instead.
     await withOpenRouterStateDir(async (stateDir) => {
       const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
       const cacheDir = join(stateDir, "cache");

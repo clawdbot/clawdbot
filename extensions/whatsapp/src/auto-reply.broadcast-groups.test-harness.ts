@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements auto reply.broadcast groups harness behavior.
 import { vi } from "vitest";
 import {
   createWebInboundDeliverySpies,

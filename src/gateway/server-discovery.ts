@@ -1,10 +1,10 @@
+// Gateway server discovery helpers.
+// Provides Bonjour CLI metadata and optional Tailscale DNS hints.
 import fs from "node:fs";
 import path from "node:path";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { runExec } from "../process/exec.js";
 
-// Server discovery helpers provide Bonjour/Tailscale metadata for gateway
-// advertising without making startup depend on optional tailscale tooling.
 type ResolveBonjourCliPathOptions = {
   env?: NodeJS.ProcessEnv;
   argv?: string[];

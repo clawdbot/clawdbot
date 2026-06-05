@@ -1,3 +1,4 @@
+// Gateway method policy helpers classify reserved and operator-only gateway methods.
 const RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES = [
   "exec.approvals.",
   "config.",

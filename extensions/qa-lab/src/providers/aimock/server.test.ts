@@ -1,3 +1,4 @@
+// Qa Lab tests cover server plugin behavior.
 import { describe, expect, it } from "vitest";
 import { startQaAimockServer } from "./server.js";
 

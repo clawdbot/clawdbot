@@ -1,3 +1,4 @@
+// Discord plugin module implements listeners behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {

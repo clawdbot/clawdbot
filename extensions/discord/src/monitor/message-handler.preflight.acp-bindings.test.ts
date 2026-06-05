@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight.acp bindings plugin behavior.
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

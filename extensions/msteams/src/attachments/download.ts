@@ -1,3 +1,4 @@
+// Msteams plugin module implements download behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

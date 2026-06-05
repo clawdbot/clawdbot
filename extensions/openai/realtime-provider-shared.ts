@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderHttpError,

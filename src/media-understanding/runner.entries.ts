@@ -1,3 +1,5 @@
+// Media-understanding entry execution handles provider/CLI attempts, auth
+// rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {

@@ -1,3 +1,4 @@
+// OC Path tests cover jsonc byte fidelity plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { JsoncValue } from "../../jsonc/ast.js";
 import { emitJsonc } from "../../jsonc/emit.js";

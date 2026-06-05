@@ -1,3 +1,4 @@
+// Logger transport tests cover file and console transport routing.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";

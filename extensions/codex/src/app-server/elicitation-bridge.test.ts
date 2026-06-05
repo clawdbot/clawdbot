@@ -1,3 +1,4 @@
+// Codex tests cover elicitation bridge plugin behavior.
 import {
   callGatewayTool,
   embeddedAgentLog,

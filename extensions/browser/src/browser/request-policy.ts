@@ -1,3 +1,6 @@
+/**
+ * Request policy helpers for profile-aware Browser control server routes.
+ */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type BrowserRequestProfileParams = {
@@ -6,6 +9,7 @@ type BrowserRequestProfileParams = {
   profile?: string | null;
 };
 
+/** Normalizes route paths so mutation-policy checks compare stable slash forms. */
 export function normalizeBrowserRequestPath(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -18,6 +22,7 @@ export function normalizeBrowserRequestPath(value: string): string {
   return withLeadingSlash.replace(/\/+$/, "");
 }
 
+/** Returns true when a control request mutates persistent browser profile state. */
 export function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
   const normalizedPath = normalizeBrowserRequestPath(path);
   if (
@@ -29,6 +34,7 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
 }
 
+/** Resolves the requested profile from query, body, or route defaults. */
 export function resolveRequestedBrowserProfile(
   params: BrowserRequestProfileParams,
 ): string | undefined {

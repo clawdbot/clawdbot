@@ -1,3 +1,8 @@
+/**
+ * Image/media understanding helper functions.
+ *
+ * Handles model config, data URL decoding, provider lookup, and reasoning-only response validation.
+ */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,11 +12,6 @@ import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-/**
- * Shared image-tool helpers for model selection, data URL decoding, and response validation.
- *
- * These helpers are reused by image, PDF, and media factory paths.
- */
 /** Image tool model config uses the shared tool model config shape. */
 export type ImageModelConfig = ToolModelConfig;
 

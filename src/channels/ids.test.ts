@@ -1,3 +1,4 @@
+// Channel id tests cover identifier normalization and validation helpers.
 import { describe, expect, it } from "vitest";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 import {

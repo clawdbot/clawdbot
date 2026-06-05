@@ -1,3 +1,4 @@
+// Hook integration coverage for direct and queued embedded compaction.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
@@ -63,6 +64,8 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
+  // Tests use manual deferreds to prove queued compaction waits at the exact
+  // lifecycle boundary instead of racing transcript updates.
   let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((promiseResolve) => {
     resolve = promiseResolve;
@@ -141,6 +144,8 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
   })?.[0] as SessionHookEvent | undefined;
 
 async function runCompactionHooks(params: { sessionKey?: string; messageProvider?: string }) {
+  // Build metrics through the production helper so hook payload assertions stay
+  // aligned with compaction token accounting.
   const originalMessages = sessionMessages.slice(1) as AgentMessage[];
   const currentMessages = sessionMessages.slice(1) as AgentMessage[];
   const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({

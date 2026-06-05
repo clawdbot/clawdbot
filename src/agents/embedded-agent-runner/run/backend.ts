@@ -1,3 +1,6 @@
+/**
+ * Dispatches embedded attempts to native harness or OpenClaw backend execution.
+ */
 import { runAgentHarnessAttempt } from "../../harness/selection.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 

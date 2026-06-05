@@ -1,3 +1,4 @@
+// Codex Supervisor tests cover mcp tools plugin behavior.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it } from "vitest";
 import {

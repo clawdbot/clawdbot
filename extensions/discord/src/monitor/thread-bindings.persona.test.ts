@@ -1,3 +1,4 @@
+// Discord tests cover thread bindings.persona plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveThreadBindingPersona,

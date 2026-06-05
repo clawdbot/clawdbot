@@ -1,3 +1,4 @@
+// Discord plugin module implements dm command auth behavior.
 import {
   type AccessGroupMembershipFact,
   type ChannelIngressEventInput,

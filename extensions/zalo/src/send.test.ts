@@ -1,3 +1,4 @@
+// Zalo tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageMock = vi.fn();

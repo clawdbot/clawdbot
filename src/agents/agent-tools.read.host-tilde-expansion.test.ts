@@ -1,3 +1,8 @@
+/**
+ * Tests tilde expansion in host workspace file operations.
+ * Non-workspace mode should resolve home paths before passing through guarded
+ * edit and write operations.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

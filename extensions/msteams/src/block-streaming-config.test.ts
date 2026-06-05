@@ -1,3 +1,4 @@
+// Msteams tests cover block streaming config plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 

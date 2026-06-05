@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Scans source files for usage of deprecated API markers.
 import fs from "node:fs";
 import path from "node:path";
 import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";

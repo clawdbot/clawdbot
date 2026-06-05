@@ -1,9 +1,14 @@
+/**
+ * Static Anthropic Vertex model catalog builder. It derives provider base URLs
+ * from region configuration and publishes Claude model metadata.
+ */
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveAnthropicVertexRegion } from "./region.js";
+/** Default Anthropic Vertex model used for implicit provider catalogs. */
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -59,6 +64,7 @@ function buildAnthropicVertexCatalog(): ModelDefinitionConfig[] {
   ];
 }
 
+/** Build the implicit Anthropic Vertex provider config for the current env. */
 export function buildAnthropicVertexProvider(params?: {
   env?: NodeJS.ProcessEnv;
 }): ModelProviderConfig {

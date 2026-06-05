@@ -1,3 +1,4 @@
+// File Transfer plugin module implements node tool invoke behavior.
 import crypto from "node:crypto";
 import {
   callGatewayTool,

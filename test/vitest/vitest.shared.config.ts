@@ -1,3 +1,4 @@
+// Vitest shared config wires the shared test shard.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };

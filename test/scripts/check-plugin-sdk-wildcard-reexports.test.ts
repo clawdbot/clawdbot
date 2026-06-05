@@ -1,3 +1,4 @@
+// Check Plugin Sdk Wildcard Reexports tests cover check plugin sdk wildcard reexports script behavior.
 import { describe, expect, it } from "vitest";
 import { findPluginSdkWildcardReexports } from "../../scripts/check-plugin-sdk-wildcard-reexports.mjs";
 

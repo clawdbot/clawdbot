@@ -1,3 +1,4 @@
+// Msteams plugin module implements cloud behavior.
 import type { MSTeamsConfig } from "../runtime-api.js";
 
 export type MSTeamsCloudName = "Public" | "USGov" | "USGovDoD" | "China";

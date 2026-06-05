@@ -1,3 +1,5 @@
+// Node invoke approval-bypass tests protect signed node identity checks so
+// unpaired or spoofed devices cannot receive forwarded invoke requests.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";

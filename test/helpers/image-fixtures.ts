@@ -1,3 +1,4 @@
+// Image fixture helper re-exports shared media fixture paths.
 export {
   createGrayscaleAlphaPngBuffer,
   createNoisyPngBuffer,

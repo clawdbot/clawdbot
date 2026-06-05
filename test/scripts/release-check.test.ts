@@ -1,3 +1,4 @@
+// Release Check tests cover release check script behavior.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

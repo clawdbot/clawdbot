@@ -1,3 +1,4 @@
+// Secret input helpers normalize credential prompt definitions for plugin setup flows.
 import { z } from "zod";
 import {
   hasConfiguredSecretInput,

@@ -1,3 +1,5 @@
+// Gateway auth tests cover shared-secret, Tailscale, loopback, forwarded-header,
+// control-UI, and HTTP/WebSocket authorization decisions.
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";

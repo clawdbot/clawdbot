@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Runs grouped Vitest plans for one or more bundled plugins.
 import path from "node:path";
 import {
   listTrackedTestFilesForRoots,
@@ -22,6 +23,9 @@ function printUsage() {
   );
 }
 
+/**
+ * Parses comma-separated plugin ids and separates Vitest passthrough args.
+ */
 export function parseExtensionIds(rawArgs) {
   const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const separatorIndex = normalizedArgs.indexOf("--");
@@ -46,6 +50,9 @@ export function parseExtensionIds(rawArgs) {
   };
 }
 
+/**
+ * Resolves bounded parallelism for extension test config groups.
+ */
 export function resolveExtensionBatchParallelism(groupCount, env = process.env) {
   const raw = env[PARALLEL_ENV_KEY]?.trim();
   const override = raw ? parsePositiveInt(raw, PARALLEL_ENV_KEY) : 1;
@@ -104,6 +111,9 @@ function isExactExcludePath(inputPath) {
   return !/[*!?[\]{}]/u.test(inputPath);
 }
 
+/**
+ * Collects exact --exclude paths so empty groups can be reported accurately.
+ */
 export function parseExactVitestExcludePaths(vitestArgs) {
   const excludePaths = new Set();
   for (let index = 0; index < vitestArgs.length; index += 1) {
@@ -163,6 +173,9 @@ async function runPlanGroup(group, params) {
   });
 }
 
+/**
+ * Runs a resolved extension batch plan, optionally in parallel config groups.
+ */
 export async function runExtensionBatchPlan(batchPlan, params = {}) {
   const env = params.env ?? process.env;
   const vitestArgs = params.vitestArgs ?? [];

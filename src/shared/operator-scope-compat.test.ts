@@ -1,3 +1,4 @@
+// Operator scope compatibility tests cover legacy operator scope normalization.
 import { describe, expect, it } from "vitest";
 import {
   resolveMissingRequestedScope,

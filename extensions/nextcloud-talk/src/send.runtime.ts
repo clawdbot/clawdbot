@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements send behavior.
 export { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";

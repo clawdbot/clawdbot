@@ -1,3 +1,4 @@
+// Turn kernel tests cover channel turn orchestration, dispatch, and completion behavior.
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";

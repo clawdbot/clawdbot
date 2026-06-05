@@ -1,3 +1,4 @@
+/** Cron job scheduling, validation, creation, and patch helpers. */
 import crypto from "node:crypto";
 import {
   normalizeOptionalString,
@@ -343,6 +344,7 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     return;
   }
   if (job.delivery.mode === "webhook") {
+    // Webhook delivery is standalone and does not need an isolated chat target.
     return;
   }
   const isIsolatedLike =
@@ -844,6 +846,8 @@ export function applyJobPatch(
     );
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+    // Main-session jobs cannot auto-announce; keep only an empty failure
+    // destination object when the patch is clearing nested fields.
     const failureDestination = job.delivery?.failureDestination;
     job.delivery =
       failureDestination && !hasConcreteFailureDestination(failureDestination)

@@ -1,3 +1,4 @@
+// Test routing roots for miscellaneous provider/tool extension suites.
 export const miscExtensionTestRoots = [
   "extensions/arcee",
   "extensions/brave",

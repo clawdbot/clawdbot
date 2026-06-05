@@ -1,3 +1,4 @@
+// Prompt Snapshots tests cover prompt snapshots script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

@@ -1,3 +1,8 @@
+/**
+ * Projects agent tool schemas into JSON-safe runtime shapes and diagnostics.
+ * Provider/runtime dispatch uses this module to drop incompatible tools before
+ * sending schemas to model APIs.
+ */
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */

@@ -1,3 +1,4 @@
+// Control UI component implements the resizable divider element.
 import { LitElement, css, nothing } from "lit";
 import { property } from "lit/decorators.js";
 

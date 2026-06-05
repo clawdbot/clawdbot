@@ -1,3 +1,4 @@
+// Account helper tests cover channel account normalization and lookup helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";

@@ -1,12 +1,14 @@
+/**
+ * Session-store maintenance protection for subagent runs.
+ * Preserves child session keys while runs are active, pending delivery, or
+ * awaiting completion announces so pruning cannot delete needed transcripts.
+ */
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-// Session maintenance must preserve child sessions that are active, awaiting a
-// completion announce, or suspended for later delivery. Completed cleanup rows
-// no longer need to pin their session keys.
 function isCleanupCompleteForMaintenance(entry: SubagentRunRecord): boolean {
   return typeof entry.cleanupCompletedAt === "number";
 }

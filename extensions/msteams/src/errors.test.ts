@@ -1,3 +1,4 @@
+// Msteams tests cover errors plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyMSTeamsSendError,

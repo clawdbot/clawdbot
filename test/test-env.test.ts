@@ -1,3 +1,4 @@
+// Test environment tests validate shared env setup helpers.
 import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";

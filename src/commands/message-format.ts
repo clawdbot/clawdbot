@@ -1,3 +1,4 @@
+/** Human-readable formatter for `openclaw message` action results. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -326,7 +327,8 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return [ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
-  // channel actions (non-send/poll)
+  // Channel actions share the generic plugin-action payload shape, so format
+  // known read/reaction shapes first and fall back to a compact object table.
   const payload = result.payload;
   const lines: string[] = [];
 

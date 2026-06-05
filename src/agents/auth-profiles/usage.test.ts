@@ -1,3 +1,8 @@
+/**
+ * Usage-state and failure cooldown tests for auth profiles.
+ * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
+ * persistence hooks without contacting real providers.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";

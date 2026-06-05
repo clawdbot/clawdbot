@@ -1,3 +1,4 @@
+// Covers locating OpenClaw docs and source paths from package roots.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,8 @@ import {
 } from "./docs-path.js";
 
 async function makePackageRoot(prefix: string): Promise<string> {
+  // Tests create minimal package roots so path resolution is checked without
+  // depending on this checkout's real docs or git state.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
   return root;
@@ -39,6 +42,8 @@ describe("resolveOpenClawDocsPath", () => {
   });
 
   it("does not accept incomplete template-only docs directories", async () => {
+    // Template folders alone are not published docs; docs.json is the canonical
+    // marker that the path is usable for model reference context.
     const root = await makePackageRoot("openclaw-docs-incomplete-");
     await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
 
@@ -55,6 +60,7 @@ describe("resolveOpenClawSourcePath", () => {
   });
 
   it("omits source path for npm-style package installs", async () => {
+    // npm installs may contain package files but not source checkout metadata.
     const root = await makePackageRoot("openclaw-source-npm-");
 
     await expect(resolveOpenClawSourcePath({ cwd: root })).resolves.toBeNull();

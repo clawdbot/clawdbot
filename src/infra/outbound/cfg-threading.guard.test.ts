@@ -1,3 +1,5 @@
+// Guards outbound/channel entrypoints from runtime config reads that would
+// force plugin discovery or filesystem scans on standard message actions.
 import { spawnSync } from "node:child_process";
 import fs, { existsSync, readFileSync } from "node:fs";
 import path from "node:path";

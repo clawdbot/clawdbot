@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager sync control behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.polling.media reply plugin behavior.
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";

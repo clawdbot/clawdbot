@@ -1,3 +1,4 @@
+// Xai plugin module implements web search behavior.
 import type {
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,

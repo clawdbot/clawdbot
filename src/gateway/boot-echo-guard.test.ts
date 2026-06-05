@@ -1,3 +1,5 @@
+// Boot echo guard tests protect session-scoped prompt tracking and outbound text
+// stripping that prevents internal BOOT context from being sent back to users.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearBootEchoContextForSession,

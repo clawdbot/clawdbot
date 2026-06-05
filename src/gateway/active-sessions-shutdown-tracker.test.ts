@@ -1,3 +1,5 @@
+// Active-session shutdown tracker tests protect the in-memory drain list used
+// when gateway shutdown, restart, or lifecycle cleanup must emit one session_end.
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

@@ -1,3 +1,4 @@
+// Plugin SDK index tests cover SDK export baselines and public subpath availability.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

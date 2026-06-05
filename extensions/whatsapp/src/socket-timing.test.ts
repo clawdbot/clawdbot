@@ -1,3 +1,4 @@
+// Whatsapp tests cover socket timing plugin behavior.
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING, resolveWhatsAppSocketTiming } from "./socket-timing.js";
 

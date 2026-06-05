@@ -1,3 +1,4 @@
+/** Normalizes cron webhook destination URLs. */
 function isAllowedWebhookProtocol(protocol: string) {
   return protocol === "http:" || protocol === "https:";
 }

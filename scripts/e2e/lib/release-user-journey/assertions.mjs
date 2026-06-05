@@ -1,3 +1,4 @@
+// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

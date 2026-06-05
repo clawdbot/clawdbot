@@ -1,3 +1,4 @@
+// Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

@@ -1,3 +1,6 @@
+/**
+ * Browser tab listing, opening, labeling, and alias management for one profile.
+ */
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
@@ -170,6 +173,7 @@ function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[])
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
+/** Builds list/open/label tab operations for one resolved browser profile. */
 export function createProfileTabOps({
   profile,
   state,

@@ -1,3 +1,6 @@
+/**
+ * Normalizes OpenAI Responses reasoning/tool-call history for safe replay.
+ */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "../runtime/index.js";
 

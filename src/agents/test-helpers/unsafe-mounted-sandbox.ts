@@ -1,3 +1,8 @@
+/**
+ * Unsafe sandbox mount fixture.
+ *
+ * Simulates a filesystem bridge that exposes host paths outside the workspace for boundary tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

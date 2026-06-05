@@ -1,3 +1,4 @@
+// Agent Workspace script supports OpenClaw repository automation.
 export function posixAgentWorkspaceScript(purpose: string): string {
   return `set -eu
 workspace="\${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"

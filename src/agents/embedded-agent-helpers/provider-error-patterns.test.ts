@@ -1,3 +1,4 @@
+// Covers provider-specific error-pattern classification hooks.
 import { describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -28,6 +29,8 @@ import {
 
 describe("matchesProviderContextOverflow", () => {
   it("skips provider hook dispatch for unrelated errors", () => {
+    // Avoid calling plugin hooks for obviously unrelated text so classifier hot
+    // paths stay cheap and side-effect free.
     hoisted.matchesProviderContextOverflowWithPlugin.mockClear();
 
     expect(
@@ -151,6 +154,8 @@ describe("classifyFailoverReason with provider patterns", () => {
   });
 
   it("classifies xAI 429 credit exhaustion as billing before resource-exhausted rate limits", () => {
+    // xAI uses resource-exhausted language for credit failures, so billing must
+    // win before generic 429/rate-limit handling.
     expect(
       classifyFailoverReason(
         '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
@@ -190,6 +195,8 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   });
 
   it("classifies Cloudflare HTML 503 with rate-limit text as timeout", () => {
+    // CDN HTML wrappers are upstream availability failures even when the page
+    // body contains generic rate-limit words.
     expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("timeout");
   });
 

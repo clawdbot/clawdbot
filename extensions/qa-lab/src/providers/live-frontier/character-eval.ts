@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements character eval behavior.
 import type { QaThinkingLevel } from "../../qa-thinking.js";
 
 type QaFrontierCharacterModelOptions = {

@@ -1,3 +1,4 @@
+// Coverage for cron before_agent_reply hook handling before embedded attempts.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -12,6 +13,8 @@ import {
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
 function firstBeforeAgentReplyCall() {
+  // Helper keeps assertions on the hook payload and context close to the tests
+  // without leaking mock tuple details into every case.
   const call = mockedGlobalHookRunner.runBeforeAgentReply.mock.calls[0];
   if (!call) {
     throw new Error("expected before_agent_reply hook call");
@@ -43,6 +46,8 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
   });
 
   it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {
+    // Cron hooks can fully handle maintenance prompts before the model is
+    // invoked, which avoids unnecessary prompt-cache and setup work.
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
     );
@@ -134,6 +139,8 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
   });
 
   it("forwards one-shot model-run flags into the embedded attempt", async () => {
+    // Model-run mode is request-scoped; it must pass through to the first
+    // attempt without becoming a persistent session setting.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedAgent({

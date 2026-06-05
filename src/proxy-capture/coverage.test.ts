@@ -1,3 +1,4 @@
+// Proxy capture coverage tests cover capture coverage accounting and summaries.
 import { describe, expect, it } from "vitest";
 import { buildDebugProxyCoverageReport } from "./coverage.js";
 

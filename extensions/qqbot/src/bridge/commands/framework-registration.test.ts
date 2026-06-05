@@ -1,3 +1,4 @@
+// Qqbot tests cover framework registration plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,

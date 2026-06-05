@@ -1,3 +1,4 @@
+/** Tracks in-process cron executions so schedulers and wake paths avoid duplicate runs. */
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CronActiveJobState = {

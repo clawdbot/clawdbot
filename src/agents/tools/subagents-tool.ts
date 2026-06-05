@@ -1,3 +1,8 @@
+/**
+ * subagents built-in tool.
+ *
+ * Lists active and recent subagents controlled by the caller's session tree.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
@@ -11,12 +16,6 @@ import { buildSubagentList } from "../subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 
-/**
- * Factory for the `subagents` status/debugging tool.
- *
- * The tool is intentionally read-only; spawning and completion handoff live in
- * sessions_spawn/sessions_yield so polling loops are discouraged.
- */
 const SUBAGENT_ACTIONS = ["list"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 

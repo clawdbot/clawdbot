@@ -1,3 +1,4 @@
+/** Tests ACP translator session-list cursor and page-size helpers. */
 import { describe, expect, it } from "vitest";
 import {
   ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements capture saved view behavior.
 import type { CaptureSavedView } from "./ui-render.js";
 
 const MAX_SAVED_VIEWS = 12;

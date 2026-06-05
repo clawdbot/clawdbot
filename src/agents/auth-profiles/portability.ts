@@ -1,3 +1,8 @@
+/**
+ * Auth profile portability for agent-local copies.
+ * Decides which credentials can be copied to spawned agents without leaking or
+ * duplicating unsafe OAuth refresh material.
+ */
 import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileSecretsStore, AuthProfileStore } from "./types.js";
 

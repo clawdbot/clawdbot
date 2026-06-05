@@ -1,3 +1,4 @@
+// Anthropic OAuth tests cover token exchange and refresh behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { anthropicOAuthProvider, refreshAnthropicToken } from "./anthropic.js";
 

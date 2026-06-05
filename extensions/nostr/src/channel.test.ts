@@ -1,3 +1,4 @@
+// Nostr tests cover channel plugin behavior.
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,

@@ -1,3 +1,4 @@
+// DashScope-compatible video provider adapts DashScope-style generation APIs.
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";

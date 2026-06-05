@@ -1,3 +1,5 @@
+// MCP HTTP tests cover gateway-scoped tool listing and invocation over the
+// JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";

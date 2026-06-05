@@ -1,3 +1,4 @@
+// Codex tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";

@@ -1,3 +1,4 @@
+// Imessage tests cover conversation route plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   testing as sessionBindingTesting,

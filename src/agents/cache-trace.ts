@@ -1,3 +1,6 @@
+/**
+ * Optional JSONL diagnostics for agent cache/session/prompt tracing.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -11,8 +14,8 @@ import type { AgentMessage, StreamFn } from "./runtime/index.js";
 import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
-// Optional cache-trace diagnostics for prompt/session/cache debugging. Payloads
-// are redacted before JSONL output while stable digests preserve correlation.
+// Payloads are redacted before JSONL output while stable digests preserve
+// correlation across prompt/session/cache stages.
 type CacheTraceStage =
   | "cache:result"
   | "cache:state"

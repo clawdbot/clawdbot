@@ -1,3 +1,4 @@
+// ACPX tests cover claude agent acp completion plugin behavior.
 import { ClaudeAcpAgent } from "@agentclientprotocol/claude-agent-acp";
 import { describe, expect, it, vi } from "vitest";
 

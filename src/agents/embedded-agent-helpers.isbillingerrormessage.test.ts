@@ -1,3 +1,4 @@
+// Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
 import {
   classifyProviderRuntimeFailureKind,
@@ -56,12 +57,15 @@ function expectMessageMatches(
   samples: readonly string[],
   expected: boolean,
 ) {
+  // Keep table cases terse while still showing the sample that failed.
   for (const sample of samples) {
     expect(matcher(sample), sample).toBe(expected);
   }
 }
 
 function expectTimeoutFailoverSamples(samples: readonly string[]) {
+  // Timeout samples must agree across the raw matcher, failover classifier, and
+  // broader failover predicate.
   for (const sample of samples) {
     expect(isTimeoutErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -186,7 +190,7 @@ describe("isBillingErrorMessage", () => {
   });
 
   it("does not false-positive on long assistant responses mentioning billing keywords", () => {
-    // Simulate a multi-paragraph assistant response that mentions billing terms
+    // Simulate a multi-paragraph assistant response that mentions billing terms.
     const longResponse =
       "Sure! Here's how to set up billing for your SaaS application.\n\n" +
       "## Payment Integration\n\n" +
@@ -219,6 +223,8 @@ describe("isBillingErrorMessage", () => {
     expect(classifyFailoverReason(msg)).toBe("billing");
   });
   it("matches provider spending-limit exhaustion messages", () => {
+    // Provider wording often omits HTTP 402 while still describing a billing
+    // exhaustion state that should route to billing copy/failover.
     const msg =
       "Your team has either used all available credits or reached its monthly spending limit.";
     expect(isBillingErrorMessage(msg)).toBe(true);
@@ -301,6 +307,7 @@ describe("isCloudflareOrHtmlErrorPage", () => {
   });
 
   it("detects standalone Cloudflare challenge HTML pages", () => {
+    // HTML challenge pages are provider transport failures, not model text.
     const htmlError = `<!DOCTYPE html>
 <html lang="en-US">
   <head><title>Just a moment...</title></head>
@@ -428,7 +435,7 @@ describe("isContextOverflowError", () => {
   });
 
   it("ignores normal conversation text mentioning context overflow", () => {
-    // These are legitimate conversation snippets, not error messages
+    // These are legitimate conversation snippets, not error messages.
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);

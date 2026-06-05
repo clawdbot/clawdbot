@@ -1,3 +1,4 @@
+// Crestodian audit tests cover filesystem-backed rescue audit scenarios.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

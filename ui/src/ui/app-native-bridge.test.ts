@@ -1,3 +1,4 @@
+// Control UI tests cover app native bridge behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initNativeBridge, isWebView2, sendToNative } from "./app-native-bridge.ts";
 import {

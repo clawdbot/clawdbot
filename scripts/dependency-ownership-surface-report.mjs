@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reports dependency ownership, closure, and risk surface from lockfile data.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +37,9 @@ function normalizeDependencies(record = {}) {
   return entries.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
+/**
+ * Extracts the package name from a pnpm lockfile package key.
+ */
 export function packageNameFromLockKey(lockKey) {
   const peerSuffixIndex = lockKey.indexOf("(");
   const baseKey = peerSuffixIndex >= 0 ? lockKey.slice(0, peerSuffixIndex) : lockKey;
@@ -143,6 +147,9 @@ function collectReportTarget({ repoRoot, packageJson, ownershipPath }) {
   };
 }
 
+/**
+ * Collects dependency ownership and transitive surface metadata.
+ */
 export function collectDependencyOwnershipSurfaceReport(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
@@ -262,6 +269,9 @@ export function collectDependencyOwnershipSurfaceReport(params = {}) {
   };
 }
 
+/**
+ * Collects policy errors from a dependency ownership surface report.
+ */
 export function collectDependencyOwnershipSurfaceCheckErrors(report) {
   return report.ownershipGaps.map(
     (name) => `root dependency '${name}' is missing from ${DEFAULT_OWNERSHIP_PATH}`,
@@ -289,6 +299,9 @@ function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/**
+ * Renders a dependency ownership surface report as Markdown.
+ */
 export function renderDependencyOwnershipSurfaceMarkdownReport(report) {
   const lines = [
     "# Dependency Ownership and Install Surface Report",

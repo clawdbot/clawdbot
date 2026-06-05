@@ -1,3 +1,4 @@
+// Memory Core provider module implements model/runtime integration.
 import {
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,

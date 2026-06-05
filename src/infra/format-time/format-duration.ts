@@ -1,3 +1,5 @@
+// Duration formatting helpers produce compact, precise, and human display
+// strings from millisecond values.
 export type FormatDurationSecondsOptions = {
   decimals?: number;
   unit?: "s" | "seconds";

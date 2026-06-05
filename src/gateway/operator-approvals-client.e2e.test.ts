@@ -1,3 +1,4 @@
+// Operator approvals client e2e tests verify requester/approver scope behavior through a real gateway server.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

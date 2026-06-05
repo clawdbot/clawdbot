@@ -1,3 +1,4 @@
+// Gateway WebSocket connection tests cover handshake auth, shared sessions, and message-handler attachment.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import {

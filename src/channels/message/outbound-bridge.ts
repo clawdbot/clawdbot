@@ -1,3 +1,8 @@
+/**
+ * Legacy outbound bridge adapter.
+ *
+ * Wraps old channel send functions in the newer channel message adapter contract.
+ */
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
 import type {
   ChannelMessageAdapterShape,

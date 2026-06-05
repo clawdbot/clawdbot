@@ -1,3 +1,4 @@
+// Startup policy helpers for config guards, plugin loading, banners, and CLI path checks.
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
@@ -36,6 +37,7 @@ function shouldLoadPlugins(params: {
   jsonOutputMode: boolean;
   loadPlugins: CliCommandPluginLoadPolicy;
 }): boolean {
+  // Some commands need plugin text/help in human output but not in JSON mode.
   const loadPlugins = params.loadPlugins;
   if (typeof loadPlugins === "function") {
     return loadPlugins({

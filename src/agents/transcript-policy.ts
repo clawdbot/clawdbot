@@ -1,3 +1,8 @@
+/**
+ * Transcript replay policy resolution.
+ * Combines provider plugin replay hooks with core transport fallbacks so chat
+ * history sanitization, tool IDs, thinking blocks, and turn validation align.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -10,8 +15,10 @@ import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
 import { normalizeProviderId } from "./model-selection.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
+/** Scope of transcript content sanitization before provider replay. */
 export type TranscriptSanitizeMode = "full" | "images-only";
 
+/** Effective replay policy applied before sending transcript history to a provider. */
 export type TranscriptPolicy = {
   sanitizeMode: TranscriptSanitizeMode;
   sanitizeToolCallIds: boolean;
@@ -34,10 +41,12 @@ export type TranscriptPolicy = {
 
 const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
 
+/** Return true when a provider family owns signed thinking blocks. */
 export function providerRequiresSignedThinking(provider?: string | null): boolean {
   return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
 }
 
+/** Decide whether signed thinking can be replayed under the current provider policy. */
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -285,6 +294,7 @@ function resolveTranscriptPolicyCacheKey(params: {
   });
 }
 
+/** Resolve and cache the effective replay policy for a provider/model/config tuple. */
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;

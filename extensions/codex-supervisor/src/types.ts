@@ -1,3 +1,7 @@
+/**
+ * Public Codex Supervisor endpoint, session, and JSON-RPC connection types.
+ */
+/** Configured transport target for a Codex app-server endpoint. */
 export type CodexSupervisorEndpoint =
   | {
       id: string;
@@ -15,10 +19,13 @@ export type CodexSupervisorEndpoint =
       authTokenEnv?: string;
     };
 
+/** Send behavior requested by supervisor write tools. */
 export type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 
+/** App-server thread status string, preserved for forward compatibility. */
 export type CodexSupervisorThreadStatus = string;
 
+/** Normalized session summary returned by supervisor list operations. */
 export type CodexSupervisorSession = {
   endpointId: string;
   threadId: string;
@@ -32,6 +39,7 @@ export type CodexSupervisorSession = {
   humanAttached?: boolean;
 };
 
+/** Result returned after starting or steering a Codex turn. */
 export type CodexSupervisorSendResult = {
   endpointId: string;
   threadId: string;
@@ -40,18 +48,21 @@ export type CodexSupervisorSendResult = {
   status?: string;
 };
 
+/** Minimal JSON-RPC connection contract used by the supervisor. */
 export type CodexJsonRpcConnection = {
   request(method: string, params?: Record<string, unknown>): Promise<unknown>;
   notify(method: string, params?: Record<string, unknown>): void;
   close(): Promise<void>;
 };
 
+/** Health result for one configured supervisor endpoint. */
 export type CodexSupervisorEndpointHealth = {
   endpointId: string;
   ok: boolean;
   detail?: string;
 };
 
+/** Session list plus endpoint errors for tool-friendly structured output. */
 export type CodexSupervisorSessionListResult = {
   sessions: CodexSupervisorSession[];
   errors: CodexSupervisorEndpointHealth[];

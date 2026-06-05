@@ -1,3 +1,4 @@
+// File Transfer tests cover dir fetch plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

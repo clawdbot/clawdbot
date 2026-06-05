@@ -1,3 +1,4 @@
+// Reply payload tests cover reply target parsing, media payloads, and approval metadata.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTtsSupplementMediaPayload,

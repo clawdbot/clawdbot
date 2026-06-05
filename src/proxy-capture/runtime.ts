@@ -1,3 +1,4 @@
+// Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";

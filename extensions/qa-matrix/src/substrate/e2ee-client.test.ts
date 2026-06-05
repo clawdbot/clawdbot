@@ -1,3 +1,4 @@
+// Qa Matrix tests cover e2ee client plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { testing } from "./e2ee-client.js";

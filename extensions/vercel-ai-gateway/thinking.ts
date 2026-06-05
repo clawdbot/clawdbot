@@ -1,3 +1,4 @@
+// Vercel Ai Gateway plugin module implements thinking behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/core";
 import {
   matchesExactOrPrefix,

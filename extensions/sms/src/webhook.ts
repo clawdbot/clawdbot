@@ -1,3 +1,4 @@
+// Sms plugin module implements webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";

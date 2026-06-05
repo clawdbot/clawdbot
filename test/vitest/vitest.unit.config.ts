@@ -1,3 +1,4 @@
+// Vitest unit config wires the unit test shard.
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";

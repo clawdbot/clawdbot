@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager reindex state behavior.
 import {
   hashText,
   normalizeExtraMemoryPaths,

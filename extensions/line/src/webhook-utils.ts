@@ -1,3 +1,4 @@
+// Line helper module supports webhook utils behavior.
 import type { webhook } from "@line/bot-sdk";
 export { validateLineSignature } from "./signature.js";
 

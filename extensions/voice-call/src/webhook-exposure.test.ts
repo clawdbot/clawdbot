@@ -1,3 +1,4 @@
+// Voice Call tests cover webhook exposure plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isLocalOnlyWebhookHost, isProviderUnreachableWebhookUrl } from "./webhook-exposure.js";
 

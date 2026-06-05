@@ -1,3 +1,4 @@
+// Whatsapp tests cover document filename plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 

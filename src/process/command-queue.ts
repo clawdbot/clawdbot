@@ -1,3 +1,4 @@
+// Command queue serializes and limits process execution for shared command lanes.
 import {
   diagnosticLogger as diag,
   logLaneDequeue,

@@ -1,3 +1,5 @@
+// Plugin/channel activation config merge helpers.
+// Carries activation enablement into runtime config without copying stale state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 

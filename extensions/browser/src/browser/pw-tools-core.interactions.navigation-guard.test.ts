@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.navigation guard plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreNavigationGuardMocks,

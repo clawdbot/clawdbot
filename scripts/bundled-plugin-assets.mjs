@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Discovers and runs bundled plugin package asset hooks.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -57,6 +58,9 @@ function resolveAssetCommand(packageJson, phase) {
   return typeof command === "string" && command.trim() ? command.trim() : null;
 }
 
+/**
+ * Reads bundled plugin asset hook commands for a build or copy phase.
+ */
 export async function readBundledPluginAssetHooks(options = {}) {
   const repoRoot = options.rootDir ?? rootDir;
   const phase = options.phase;
@@ -108,6 +112,9 @@ export async function readBundledPluginAssetHooks(options = {}) {
   return hooks.toSorted((left, right) => left.pluginDir.localeCompare(right.pluginDir));
 }
 
+/**
+ * Runs bundled plugin asset hook commands for the selected phase/plugins.
+ */
 export async function runBundledPluginAssetHooks(options = {}) {
   const phase = options.phase;
   const hooks = await readBundledPluginAssetHooks(options);
@@ -131,6 +138,9 @@ export async function runBundledPluginAssetHooks(options = {}) {
   }
 }
 
+/**
+ * Parses `--phase` and repeated `--plugin` flags for asset hook scripts.
+ */
 export function parseBundledPluginAssetArgs(argv) {
   const args = [...argv];
   const plugins = [];

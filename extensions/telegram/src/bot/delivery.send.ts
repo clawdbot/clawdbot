@@ -1,3 +1,4 @@
+// Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

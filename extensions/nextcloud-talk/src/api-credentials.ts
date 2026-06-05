@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements api credentials behavior.
 import { readFileSync } from "node:fs";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 

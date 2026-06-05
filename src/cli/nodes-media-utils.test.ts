@@ -1,3 +1,4 @@
+// Nodes media utility tests cover media argument helpers for node CLI commands.
 import { describe, expect, it } from "vitest";
 import {
   asBoolean,

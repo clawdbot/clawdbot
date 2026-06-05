@@ -1,11 +1,10 @@
+/**
+ * web_fetch extraction utilities.
+ *
+ * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
+ */
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
-/**
- * Lightweight HTML/text extraction utilities for the web_fetch tool.
- *
- * This intentionally handles common markup without a heavy renderer so provider
- * responses stay bounded and deterministic.
- */
 /** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 

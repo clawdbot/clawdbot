@@ -1,3 +1,4 @@
+// Registry Jiti mock helpers install Vitest mocks for plugin registry import tests.
 import { vi } from "vitest";
 
 const registryJitiMocks = vi.hoisted(() => ({

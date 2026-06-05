@@ -1,3 +1,4 @@
+// Slack tests cover scopes plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createSlackWebClientMock = vi.hoisted(() => vi.fn());

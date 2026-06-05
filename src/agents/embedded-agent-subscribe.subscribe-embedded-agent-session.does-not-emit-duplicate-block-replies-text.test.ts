@@ -1,3 +1,5 @@
+// Duplicate block reply tests cover repeated text_end and message_end events
+// from providers that replay assistant snapshots.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -85,6 +87,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
   it("populates assistantTexts for non-streaming models with chunking enabled", () => {
+    // Non-streaming providers may only send message_end; assistantTexts still
+    // needs the final visible reply even when block chunking is enabled.
     // Non-streaming models (e.g. zai/glm-4.7): no text_delta events; message_end
     // must still populate assistantTexts so providers can deliver a final reply.
     const { session, emit } = createStubSessionHarness();

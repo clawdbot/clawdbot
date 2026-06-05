@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor resources behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

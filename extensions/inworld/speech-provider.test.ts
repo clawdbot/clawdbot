@@ -1,3 +1,4 @@
+// Inworld tests cover speech provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({

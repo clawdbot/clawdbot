@@ -1,3 +1,4 @@
+// Runtime system helpers expose host system operations to activated plugin runtimes.
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";

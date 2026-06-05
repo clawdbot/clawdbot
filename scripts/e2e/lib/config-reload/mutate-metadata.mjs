@@ -1,3 +1,4 @@
+// Mutates plugin metadata fixtures for config reload E2E scenarios.
 import fs from "node:fs";
 
 const configPath = process.env.OPENCLAW_CONFIG_PATH;

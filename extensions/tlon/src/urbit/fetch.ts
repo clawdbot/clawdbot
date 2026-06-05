@@ -1,3 +1,4 @@
+// Tlon plugin module implements fetch behavior.
 import {
   fetchWithSsrFGuard,
   type LookupFn,

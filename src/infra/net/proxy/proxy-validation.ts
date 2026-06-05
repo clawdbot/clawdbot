@@ -1,3 +1,5 @@
+// Proxy validation resolves operator config and probes allowed, denied, and
+// APNs destinations through an explicit HTTP(S) forward proxy.
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
@@ -453,6 +455,8 @@ async function runDeniedCheck(params: {
       params.target.expectedCanaryToken !== undefined &&
       result.deniedCanaryToken !== params.target.expectedCanaryToken
     ) {
+      // A blocked loopback canary may return a denial status; only a matching
+      // token proves the proxy actually forwarded the forbidden loopback URL.
       if (result.ok) {
         return {
           kind: "denied",

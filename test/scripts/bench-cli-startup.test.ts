@@ -1,3 +1,4 @@
+// Bench Cli Startup tests cover bench cli startup script behavior.
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 

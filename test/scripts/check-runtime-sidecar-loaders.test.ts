@@ -1,3 +1,4 @@
+// Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,

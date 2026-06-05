@@ -1,3 +1,4 @@
+// Google tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 

@@ -1,3 +1,5 @@
+// Image resize utility tests cover Rastermill probing/encoding decisions,
+// base64 byte budgets, and coordinate notes for resized inline images.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -54,6 +56,8 @@ describe("image resize utility", () => {
   });
 
   it("uses Rastermill limits, base64 budget, and orientation-aware source dimensions", async () => {
+    // EXIF orientation swaps source dimensions before coordinate mapping so UI
+    // click coordinates can be translated back to the original image.
     const inputBuffer = Buffer.from("large image");
     const outputBuffer = Buffer.from("jpeg output");
     mocks.probe.mockResolvedValue({

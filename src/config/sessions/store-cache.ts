@@ -1,3 +1,4 @@
+// Session store caches share parsed stores, immutable snapshots, and serialized JSON.
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
@@ -186,6 +187,7 @@ export function cloneSessionStoreRecord(
   store: Record<string, SessionEntry>,
   serialized?: string,
 ): Record<string, SessionEntry> {
+  // When serialized JSON is already available, parse it instead of deep-cloning field-by-field.
   const cloned =
     serialized === undefined
       ? cloneJsonLikeValue(store)
@@ -220,6 +222,7 @@ function cloneJsonLikeValue<T>(value: T): T {
     }
     const clonedChild = cloneJsonLikeValue(child);
     if (key === "__proto__") {
+      // Preserve JSON object shape without letting `__proto__` mutate the clone prototype.
       Object.defineProperty(cloned, key, {
         value: clonedChild,
         enumerable: true,
@@ -303,6 +306,7 @@ function pruneSerializedSessionStoreCache(): void {
     (SESSION_STORE_SERIALIZED_CACHE.size > maxEntries ||
       sessionStoreSerializedCacheBytes > maxBytes)
   ) {
+    // Map insertion order gives us a tiny LRU-ish eviction policy without extra bookkeeping.
     const oldestKey = SESSION_STORE_SERIALIZED_CACHE.keys().next().value;
     if (typeof oldestKey !== "string") {
       break;
@@ -378,6 +382,7 @@ export function readSessionStoreSnapshotCache(params: {
     return null;
   }
   if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+    // Object and snapshot caches share file identity; a stat mismatch invalidates both views.
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
@@ -450,6 +455,7 @@ export function writeSessionStoreCache(params: {
   bumpSessionStoreCacheVersion(params.storePath);
   const store =
     params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
+  // Ownership is only taken for freshly parsed store objects that no caller will mutate afterward.
   if (params.takeOwnership === true) {
     internSessionStoreLargeStrings(store);
   }

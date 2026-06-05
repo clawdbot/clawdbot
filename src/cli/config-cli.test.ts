@@ -1,3 +1,4 @@
+// Config CLI tests cover config command registration, reads, writes, and output modes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2265,10 +2266,7 @@ describe("config cli", () => {
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
       try {
         writeSecurePluginEntrypoint(path.join(rootDir, "index.js"), "export default {};\n");
-        writeSecurePluginEntrypoint(
-          path.join(rootDir, "resolve.mjs"),
-          "process.stdin.resume();\n",
-        );
+        writeSecurePluginEntrypoint(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
         const resolved = {
           secrets: {
             providers: {},

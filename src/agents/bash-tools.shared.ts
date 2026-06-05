@@ -1,3 +1,8 @@
+/**
+ * Shared helpers for bash exec/process tools.
+ * Owns sandbox workdir mapping, Docker exec argument construction, output
+ * slicing, environment coercion, and compact session labels.
+ */
 import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
@@ -9,6 +14,7 @@ import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
+/** Sandbox metadata needed to map host workspaces into container exec calls. */
 export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
@@ -28,6 +34,7 @@ export type BashSandboxConfig = {
   }) => Promise<void>;
 };
 
+/** Builds the environment passed into sandboxed exec calls. */
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
@@ -47,6 +54,7 @@ export function buildSandboxEnv(params: {
   return env;
 }
 
+/** Coerces process/env-like records to string-only environment variables. */
 export function coerceEnv(env?: NodeJS.ProcessEnv | Record<string, string>) {
   const record: Record<string, string> = {};
   if (!env) {
@@ -60,6 +68,7 @@ export function coerceEnv(env?: NodeJS.ProcessEnv | Record<string, string>) {
   return record;
 }
 
+/** Builds `docker exec` arguments while preserving container PATH behavior. */
 export function buildDockerExecArgs(params: {
   containerName: string;
   command: string;
@@ -100,6 +109,7 @@ export function buildDockerExecArgs(params: {
   return args;
 }
 
+/** Resolves a requested workdir to both host and container paths for a sandbox. */
 export async function resolveSandboxWorkdir(params: {
   workdir: string;
   sandbox: BashSandboxConfig;
@@ -169,6 +179,7 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
+/** Resolves a host workdir, falling back to a safe cwd/home path with a warning. */
 export function resolveWorkdir(workdir: string, warnings: string[]) {
   const current = safeCwd();
   const fallback = current ?? homedir();
@@ -208,11 +219,13 @@ export function clampWithDefault(
   return Math.min(Math.max(value, min), max);
 }
 
+/** Reads a strict integer from the preferred env var or one legacy alias. */
 export function readEnvInt(key: string, legacyKey?: string) {
   const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
   return parseStrictInteger(raw);
 }
 
+/** Splits large output into fixed-size UTF-16 chunks for transport. */
 export function chunkString(input: string, limit = CHUNK_LIMIT) {
   const chunks: string[] = [];
   for (let i = 0; i < input.length; i += limit) {
@@ -221,6 +234,7 @@ export function chunkString(input: string, limit = CHUNK_LIMIT) {
   return chunks;
 }
 
+/** Truncates long labels in the middle while preserving UTF-16 boundaries. */
 export function truncateMiddle(str: string, max: number) {
   if (str.length <= max) {
     return str;
@@ -229,6 +243,7 @@ export function truncateMiddle(str: string, max: number) {
   return `${sliceUtf16Safe(str, 0, half)}...${sliceUtf16Safe(str, -half)}`;
 }
 
+/** Returns a line-based log slice plus original line/character counts. */
 export function sliceLogLines(
   text: string,
   offset?: number,
@@ -257,6 +272,7 @@ export function sliceLogLines(
   return { slice: lines.slice(start, end).join("\n"), totalLines, totalChars };
 }
 
+/** Derives a compact human label from a shell command. */
 export function deriveSessionName(command: string): string | undefined {
   const tokens = tokenizeCommand(command);
   if (tokens.length === 0) {
@@ -290,6 +306,7 @@ function stripQuotes(value: string): string {
   return trimmed;
 }
 
+/** Right-pads a string for aligned plain-text process output. */
 export function pad(str: string, width: number) {
   if (str.length >= width) {
     return str;

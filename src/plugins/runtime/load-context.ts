@@ -1,3 +1,4 @@
+// Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";

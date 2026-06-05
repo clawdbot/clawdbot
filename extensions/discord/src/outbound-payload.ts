@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound payload behavior.
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,

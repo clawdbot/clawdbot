@@ -1,3 +1,5 @@
+// Message-action param key screening prevents plugin discovery when only
+// standard send/media/threading params are present.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([

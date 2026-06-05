@@ -1,3 +1,7 @@
+/**
+ * Bridges Codex native hook callbacks into OpenClaw's native hook relay so
+ * app-server tool events can still run OpenClaw policy and diagnostics.
+ */
 import { createHash } from "node:crypto";
 import {
   registerNativeHookRelay,
@@ -12,6 +16,7 @@ import {
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
+/** Codex hook events that can be registered through OpenClaw's native relay. */
 export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "pre_tool_use",
   "post_tool_use",
@@ -22,6 +27,7 @@ export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
 const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
   CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
+/** Extra relay lifetime after the expected turn budget, preventing late hook drops. */
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
@@ -35,6 +41,7 @@ type PendingCodexNativeHookRelayUnregister = {
 
 const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
 
+/** Defers relay unregister so late native hook subprocesses can still resolve. */
 export function scheduleCodexNativeHookRelayUnregister(params: {
   relay: NativeHookRelayRegistrationHandle;
   hookTimeoutSec?: number;
@@ -60,6 +67,7 @@ export function scheduleCodexNativeHookRelayUnregister(params: {
   timeout.unref();
 }
 
+/** Computes the delayed unregister window from Codex's hook timeout. */
 export function resolveCodexNativeHookRelayUnregisterGraceMs(
   hookTimeoutSec: number | undefined,
 ): number {
@@ -73,6 +81,7 @@ export function resolveCodexNativeHookRelayUnregisterGraceMs(
   );
 }
 
+/** Runs all pending unregister callbacks immediately for timer-sensitive tests. */
 export function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
   while (pendingCodexNativeHookRelayUnregisters.size > 0) {
     const pending = pendingCodexNativeHookRelayUnregisters.values().next().value;
@@ -84,6 +93,7 @@ export function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
   }
 }
 
+/** Clears pending unregister timers without invoking relay unregister callbacks. */
 export function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
   for (const pending of pendingCodexNativeHookRelayUnregisters) {
     clearTimeout(pending.timeout);
@@ -91,6 +101,7 @@ export function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
   pendingCodexNativeHookRelayUnregisters.clear();
 }
 
+/** Registers an OpenClaw native hook relay for a Codex app-server turn. */
 export function createCodexNativeHookRelay(params: {
   options:
     | {
@@ -150,6 +161,7 @@ export function createCodexNativeHookRelay(params: {
   });
 }
 
+/** Selects the native hook events Codex should install for the current approval mode. */
 export function resolveCodexNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
@@ -166,6 +178,7 @@ export function resolveCodexNativeHookRelayEvents(params: {
     : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
 }
 
+/** Derives the native hook relay TTL from the turn budget unless explicitly configured. */
 export function resolveCodexNativeHookRelayTtlMs(params: {
   explicitTtlMs: number | undefined;
   attemptTimeoutMs: number;
@@ -183,6 +196,7 @@ export function resolveCodexNativeHookRelayTtlMs(params: {
   return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
 }
 
+/** Builds a stable relay id scoped to the agent and session identity. */
 export function buildCodexNativeHookRelayId(params: {
   agentId: string | undefined;
   sessionId: string;
@@ -216,6 +230,7 @@ const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
   "<session-flags>/config.toml",
 ] as const;
 
+/** Builds the Codex config overlay that installs trusted command hooks for relay events. */
 export function buildCodexNativeHookRelayConfig(params: {
   relay: NativeHookRelayRegistrationHandle;
   events?: readonly NativeHookRelayEvent[];
@@ -281,6 +296,7 @@ export function buildCodexNativeHookRelayConfig(params: {
   return config;
 }
 
+/** Builds a Codex config overlay that disables native hooks and clears hook arrays. */
 export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
   return {
     "features.hooks": false,

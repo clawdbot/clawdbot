@@ -1,8 +1,11 @@
+// Coverage for explicit resource-loader wiring during attempt session creation.
 import { describe, expect, it, vi } from "vitest";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 
 describe("runEmbeddedAttempt resource loader wiring", () => {
   it("passes an explicit resourceLoader to createAgentSession even without extension factories", async () => {
+    // The resource loader is an explicit runtime dependency; it must be passed
+    // even when no inline extension factories are present.
     const resourceLoader = { reload: vi.fn() };
     const createAgentSession = vi.fn(async () => ({ session: { id: "session" } }));
 

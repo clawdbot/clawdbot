@@ -1,3 +1,4 @@
+// Whatsapp tests cover approval handler plugin behavior.
 import { describe, expect, it } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
 

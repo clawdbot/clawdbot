@@ -1,3 +1,4 @@
+// Msteams tests cover graph teams plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getChannelInfoMSTeams, listChannelsMSTeams } from "./graph-teams.js";

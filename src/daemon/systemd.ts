@@ -1,3 +1,4 @@
+/** Linux systemd user service installer, parser, and lifecycle controls. */
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -111,6 +112,8 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   unitName: string;
   unitPath: string;
 } | null> {
+  // System-scope installs may use non-canonical names; inspect marker-owned
+  // units before declaring no installed service exists.
   const { findSystemGatewayServices } = await import("./inspect.js");
   let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
   try {
@@ -329,6 +332,8 @@ function sanitizeSystemdUnitBackupContent(params: {
   if (params.fileManagedKeys.size === 0) {
     return params.content;
   }
+  // Backups should not retain file-managed secrets that OpenClaw moved into the
+  // generated EnvironmentFile during this rewrite.
   const sanitizedLines: string[] = [];
   for (const rawLine of params.content.split("\n")) {
     const line = rawLine.trim();
@@ -659,6 +664,8 @@ function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
     return processEnv;
   }
 
+  // In non-login shells the bus socket can exist while DBUS_SESSION_BUS_ADDRESS
+  // is missing. Fill it so systemctl --user reaches the right user manager.
   return {
     ...processEnv,
     XDG_RUNTIME_DIR: runtimeDir,

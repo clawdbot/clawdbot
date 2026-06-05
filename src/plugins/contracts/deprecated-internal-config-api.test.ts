@@ -1,3 +1,4 @@
+// Deprecated internal config API tests cover forbidden legacy plugin config API usage.
 import { beforeAll, describe, expect, it } from "vitest";
 import { collectDeprecatedInternalConfigApiViolations } from "../../../scripts/lib/deprecated-config-api-guard.mjs";
 

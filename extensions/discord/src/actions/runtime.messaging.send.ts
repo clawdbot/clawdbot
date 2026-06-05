@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   assertMediaNotDataUrl,

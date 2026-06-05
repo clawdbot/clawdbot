@@ -1,3 +1,4 @@
+// Deepseek API module exposes the plugin public contract.
 export {
   buildDeepSeekModelDefinition,
   DEEPSEEK_BASE_URL,

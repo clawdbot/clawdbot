@@ -1,3 +1,4 @@
+// Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
   TAB_GROUPS,

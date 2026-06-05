@@ -1,3 +1,4 @@
+// Msteams plugin module implements setup core behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createStandardChannelSetupStatus,

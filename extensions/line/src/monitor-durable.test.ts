@@ -1,3 +1,4 @@
+// Line tests cover monitor durable plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Runs the tsdown build with output cleanup, stale chunk pruning, and bounded
+// child-process diagnostics.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -68,6 +70,9 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
+/**
+ * Removes build output roots while preserving explicitly protected artifacts.
+ */
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;

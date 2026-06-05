@@ -1,3 +1,4 @@
+// Diffs tests cover render plugin behavior.
 import {
   disposeHighlighter,
   RegisteredCustomThemes,

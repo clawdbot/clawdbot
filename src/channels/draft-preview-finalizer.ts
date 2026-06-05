@@ -1,3 +1,8 @@
+/**
+ * Deprecated draft preview finalizer facade.
+ *
+ * Forwards legacy draft-preview callers to live preview finalization helpers.
+ */
 import {
   deliverFinalizableLivePreview,
   type LivePreviewFinalizerDraft,

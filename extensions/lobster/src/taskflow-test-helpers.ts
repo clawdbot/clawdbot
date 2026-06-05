@@ -1,3 +1,4 @@
+// Lobster helper module supports taskflow test helpers behavior.
 import { vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 

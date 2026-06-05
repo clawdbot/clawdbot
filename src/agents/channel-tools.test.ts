@@ -1,3 +1,4 @@
+/** Tests channel action discovery from plugin message-tool descriptors. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -14,6 +15,8 @@ describe("channel tools", () => {
   const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
 
   beforeEach(() => {
+    // A throwing plugin verifies discovery degrades and logs once instead of
+    // making all channel tooling unavailable.
     const plugin: ChannelPlugin = {
       id: "test",
       meta: {

@@ -1,3 +1,4 @@
+// Voice Call tests cover timer delays plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {

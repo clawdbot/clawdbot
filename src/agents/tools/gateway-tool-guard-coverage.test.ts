@@ -1,3 +1,5 @@
+// Gateway config mutation guard coverage keeps agent-driven config edits inside
+// the documented low-risk allowlist.
 import { describe, expect, it } from "vitest";
 import {
   ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST,
@@ -58,6 +60,8 @@ function expectAllowedApply(
 
 describe("gateway config mutation guard coverage", () => {
   it("keeps a narrow allowlist of agent-tunable config paths", () => {
+    // This list is the contract between the public gateway tool and protected
+    // operator-owned config surfaces.
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.promptOverlays");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).not.toContain("agents.defaults.model");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
@@ -477,6 +481,8 @@ describe("gateway config mutation guard coverage", () => {
   });
 
   it("allows reordering agents when a dangerous per-agent sandbox flag is already enabled", () => {
+    // Reorders should not be interpreted as a fresh dangerous enablement when
+    // the exact agent record already carried the protected value.
     expectAllowedApply(
       {
         agents: {

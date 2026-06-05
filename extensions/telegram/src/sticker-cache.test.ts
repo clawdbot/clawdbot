@@ -1,3 +1,4 @@
+// Telegram tests cover sticker cache plugin behavior.
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,

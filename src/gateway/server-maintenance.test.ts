@@ -1,3 +1,5 @@
+// Gateway maintenance tests cover periodic cleanup for media, dedupe records,
+// stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";

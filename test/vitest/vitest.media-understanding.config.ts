@@ -1,3 +1,4 @@
+// Vitest media understanding config wires the media understanding test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createMediaUnderstandingVitestConfig(env?: Record<string, string | undefined>) {

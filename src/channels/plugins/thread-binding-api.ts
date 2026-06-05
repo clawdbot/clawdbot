@@ -1,9 +1,10 @@
+/**
+ * Bundled channel thread-binding public artifact loader.
+ *
+ * Reads lightweight thread placement and inbound conversation hooks without full plugin loading.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-
-/**
- * Lightweight thread-binding public artifact loader for bundled channels.
- */
 
 type ThreadBindingPlacement = "current" | "child";
 

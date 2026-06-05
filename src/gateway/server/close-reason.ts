@@ -1,3 +1,4 @@
+// Close reason helpers keep WebSocket handshake failure text within RFC byte limits.
 import { Buffer } from "node:buffer";
 
 /**

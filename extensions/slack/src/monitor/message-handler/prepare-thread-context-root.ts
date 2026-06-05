@@ -1,3 +1,4 @@
+// Slack plugin module implements prepare thread context root behavior.
 export type SlackBotAuthorIdentity = {
   botUserId?: string;
   botId?: string;

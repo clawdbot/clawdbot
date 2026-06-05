@@ -1,3 +1,4 @@
+// Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishCommand,

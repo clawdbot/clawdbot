@@ -1,3 +1,4 @@
+// Skill index tests cover normalized skill names and discovery index behavior.
 import { describe, expect, it } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {

@@ -1,3 +1,4 @@
+// OpenClaw state database tests cover state DB migrations and persistence.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

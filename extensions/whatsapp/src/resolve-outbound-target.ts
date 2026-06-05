@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements resolve outbound target behavior.
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {

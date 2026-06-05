@@ -1,3 +1,4 @@
+// Matrix plugin module implements location behavior.
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,

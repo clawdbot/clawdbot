@@ -1,3 +1,5 @@
+// Gateway shared request-state types.
+// Defines cached dedupe entries for idempotent Gateway method calls.
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 
 // Dedupe entries cache recent request results so repeated gateway calls can

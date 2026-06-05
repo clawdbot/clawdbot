@@ -1,3 +1,4 @@
+// Issue 78851 Model Resolution script supports OpenClaw repository automation.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as inspector from "node:inspector";
 import { tmpdir } from "node:os";

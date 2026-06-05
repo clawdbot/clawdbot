@@ -1,3 +1,4 @@
+// Tool result cap advice helpers format doctor guidance for capped outputs.
 import {
   calculateMaxToolResultCharsWithCap,
   resolveAutoLiveToolResultMaxChars,

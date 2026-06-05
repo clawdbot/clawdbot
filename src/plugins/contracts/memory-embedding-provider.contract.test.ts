@@ -1,3 +1,4 @@
+// Memory embedding provider contract tests cover memory plugin embedding provider behavior.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,

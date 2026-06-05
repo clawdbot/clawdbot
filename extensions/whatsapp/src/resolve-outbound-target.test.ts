@@ -1,3 +1,4 @@
+// Whatsapp tests cover resolve outbound target plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as normalize from "./normalize-target.js";
 

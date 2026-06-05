@@ -1,3 +1,4 @@
+// Doctor auth profile-health tests cover stale profile detection, repair notes, and store health.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

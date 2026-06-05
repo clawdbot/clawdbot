@@ -1,3 +1,4 @@
+// Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
 import {
   normalizeLowercaseStringOrEmpty,

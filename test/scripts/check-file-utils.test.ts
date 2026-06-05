@@ -1,3 +1,4 @@
+// Check File Utils tests cover check file utils script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

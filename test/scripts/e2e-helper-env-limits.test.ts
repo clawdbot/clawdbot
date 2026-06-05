@@ -1,3 +1,4 @@
+// E2E Helper Env Limits tests cover e2e helper env limits script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";

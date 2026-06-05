@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover read file shared behavior.
 import { describe, expect, it } from "vitest";
 import { buildMemoryReadResult, buildMemoryReadResultFromSlice } from "./read-file-shared.js";
 

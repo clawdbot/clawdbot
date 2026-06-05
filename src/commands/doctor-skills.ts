@@ -1,3 +1,4 @@
+/** Doctor checks and repair prompts for unavailable configured skills. */
 import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -57,10 +58,12 @@ function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
   };
 }
 
+/** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
 }
 
+/** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
 export function describeGhConfigDirHintFromDiscovery(
   skills: SkillStatusEntry[],
   discoveryInput: GhConfigDiscoveryInput,
@@ -84,6 +87,7 @@ export function describeGhConfigDirHintFromDiscovery(
   return formatGhConfigDirMismatchHint(result);
 }
 
+/** Formats doctor note lines for skills that are allowed but unavailable. */
 export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
   const lines: string[] = [
     "Some skills are allowed for this agent but are not usable in the current runtime environment.",
@@ -99,6 +103,7 @@ export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): s
   return lines;
 }
 
+/** Checks default-agent skill readiness and optionally disables unavailable skills in config. */
 export async function maybeRepairSkillReadiness(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

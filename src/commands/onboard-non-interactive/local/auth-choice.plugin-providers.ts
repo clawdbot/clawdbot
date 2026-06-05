@@ -1,3 +1,9 @@
+/**
+ * Applies non-interactive setup for provider plugins.
+ *
+ * This path resolves trusted plugin providers, delegates setup to their
+ * non-interactive method, and installs runtime plugins required by the model.
+ */
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -36,6 +42,7 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
 
+/** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
   authChoice: string;
@@ -66,6 +73,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
+  // Provider discovery is lazy so non-plugin auth choices do not pull plugin
+  // runtime code into the basic non-interactive setup path.
   const {
     resolveOwningPluginIdsForProviderRef,
     resolveProviderPluginChoice,
@@ -90,6 +99,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   });
   if (!providerChoice) {
     if (prefixedProviderId) {
+      // Explicit provider-plugin choices are user intent; fail closed if the
+      // target provider is unavailable rather than falling back to core auth.
       params.runtime.error(
         [
           `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
@@ -113,6 +124,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         includeUntrustedWorkspacePlugins: true,
       });
     if (untrustedOnlyManifestMatch) {
+      // Manifest metadata can identify untrusted matches without loading the
+      // plugin implementation, preserving workspace trust boundaries.
       params.runtime.error(
         [
           `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
@@ -139,6 +152,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
 
   const method = providerChoice.method;
   if (!method.runNonInteractive) {
+    // Interactive-only plugin setup methods may prompt, so non-interactive
+    // setup must reject them before entering plugin code.
     params.runtime.error(
       [
         `Auth choice "${params.authChoice}" requires interactive mode.`,
@@ -167,6 +182,8 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   if (!selectedModel) {
     return result;
   }
+  // Model selection can imply a runtime plugin even when auth setup belonged to
+  // a provider plugin; install those runtimes before persisting the config.
   const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
     params.runtime,
     (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,

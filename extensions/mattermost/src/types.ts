@@ -1,3 +1,4 @@
+// Mattermost type declarations define plugin contracts.
 import type {
   ChannelPreviewStreamingConfig,
   StreamingMode,

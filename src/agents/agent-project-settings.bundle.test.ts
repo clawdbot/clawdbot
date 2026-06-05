@@ -1,3 +1,4 @@
+/** Tests bundle plugin settings contribution and project settings policy behavior. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

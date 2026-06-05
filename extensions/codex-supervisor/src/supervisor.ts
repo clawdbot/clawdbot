@@ -1,3 +1,7 @@
+/**
+ * Codex app-server supervisor that lists sessions, reads transcripts, and
+ * starts/steers/interrupts turns across configured endpoints.
+ */
 import { connectCodexAppServerEndpoint } from "./json-rpc-client.js";
 import type {
   CodexJsonRpcConnection,
@@ -109,6 +113,7 @@ function isLoadedThreadReadMiss(error: unknown): boolean {
   return message.includes("thread not found") || message.includes("thread not loaded");
 }
 
+/** High-level supervisor facade used by OpenClaw tools and MCP tools. */
 export class CodexSupervisor {
   private readonly connections = new Map<string, Promise<CodexJsonRpcConnection>>();
 
@@ -117,10 +122,12 @@ export class CodexSupervisor {
     private readonly connector: EndpointConnector = connectCodexAppServerEndpoint,
   ) {}
 
+  /** Returns configured endpoint definitions without opening connections. */
   listEndpoints(): CodexSupervisorEndpoint[] {
     return this.endpoints;
   }
 
+  /** Closes all open app-server connections owned by this supervisor. */
   async close(): Promise<void> {
     const settled = await Promise.allSettled(this.connections.values());
     this.connections.clear();
@@ -133,6 +140,7 @@ export class CodexSupervisor {
     );
   }
 
+  /** Checks whether each endpoint can service a lightweight thread list call. */
   async probeEndpoints(): Promise<CodexSupervisorEndpointHealth[]> {
     return await Promise.all(
       this.endpoints.map(async (endpoint) => {
@@ -152,12 +160,14 @@ export class CodexSupervisor {
     );
   }
 
+  /** Lists sessions, returning only the session array for agent-tool callers. */
   async listSessions(
     params: { includeStored?: boolean; maxStoredSessions?: number } = {},
   ): Promise<CodexSupervisorSession[]> {
     return (await this.listSessionSnapshot(params)).sessions;
   }
 
+  /** Lists sessions plus endpoint errors for structured tool output. */
   async listSessionSnapshot(
     params: { includeStored?: boolean; maxStoredSessions?: number } = {},
   ): Promise<CodexSupervisorSessionListResult> {
@@ -178,6 +188,7 @@ export class CodexSupervisor {
     return { sessions, errors };
   }
 
+  /** Reads a single Codex session transcript from the resolved endpoint. */
   async readSession(params: {
     endpointId?: string;
     threadId: string;
@@ -201,6 +212,7 @@ export class CodexSupervisor {
     }
   }
 
+  /** Starts a new turn or steers an active turn depending on requested mode. */
   async sendToSession(params: {
     endpointId?: string;
     threadId: string;
@@ -224,6 +236,8 @@ export class CodexSupervisor {
       if (mode === "steer" || status === "active") {
         const detailed = await this.readThread(connection, params.threadId, true);
         const detailedThread = extractThread(detailed);
+        // Active-turn ids may appear in full thread turns or the summary API;
+        // try both before failing so steering handles materialized and lazy turns.
         const turnId =
           (detailedThread ? findInProgressTurnId(detailedThread) : undefined) ??
           findInProgressTurnId(thread) ??
@@ -247,6 +261,7 @@ export class CodexSupervisor {
     }
   }
 
+  /** Interrupts an active Codex turn, resolving the turn id when omitted. */
   async interruptSession(params: {
     endpointId?: string;
     threadId: string;
@@ -285,6 +300,8 @@ export class CodexSupervisor {
         endpoint,
         params.maxStoredSessions,
       )) {
+        // Loaded sessions are authoritative for attachment/status; append stored
+        // history only for threads that are not already live.
         if (!sessions.some((session) => session.threadId === stored.threadId)) {
           sessions.push(stored);
         }

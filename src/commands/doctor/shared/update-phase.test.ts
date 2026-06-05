@@ -1,3 +1,4 @@
+// Update phase tests cover doctor behavior during staged update phases.
 import { describe, expect, it } from "vitest";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,

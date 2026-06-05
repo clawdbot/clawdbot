@@ -1,3 +1,4 @@
+// Firecrawl plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { createFirecrawlWebFetchProvider } from "./src/firecrawl-fetch-provider.js";
 import { createFirecrawlScrapeTool } from "./src/firecrawl-scrape-tool.js";

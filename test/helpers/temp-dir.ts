@@ -1,3 +1,4 @@
+// Test temp directory helper creates and cleans up temporary directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

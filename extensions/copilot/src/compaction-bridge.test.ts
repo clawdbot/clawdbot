@@ -1,3 +1,4 @@
+// Copilot tests cover compaction bridge plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createInfiniteSessionConfig } from "./compaction-bridge.js";
 

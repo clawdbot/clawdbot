@@ -1,3 +1,4 @@
+// iOS version test support provides shared fixtures for iOS script tests.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach } from "vitest";

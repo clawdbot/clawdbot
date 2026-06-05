@@ -1,3 +1,4 @@
+// Canvas tests cover cli helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   canvasSnapshotTempPath,

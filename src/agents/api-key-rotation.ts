@@ -1,3 +1,8 @@
+/**
+ * Provider API-key rotation wrapper.
+ * Runs provider calls across configured keys on rate-limit failures and keeps
+ * same-key transient retries separate from key rotation.
+ */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,8 +15,6 @@ import {
 } from "../provider-runtime/operation-retry.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
-// API-key rotation wrapper for provider calls. It tries configured keys in order
-// on rate-limit-like failures and can also retry transient errors on the same key.
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;

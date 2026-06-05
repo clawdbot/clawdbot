@@ -1,3 +1,4 @@
+// Mattermost helper module supports reactions helpers behavior.
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { MattermostFetch } from "./client.js";

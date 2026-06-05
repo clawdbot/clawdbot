@@ -1,3 +1,5 @@
+// Runtime-state test helpers hold hoisted mutable mocks shared by gateway
+// Vitest suites and module mocks.
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";

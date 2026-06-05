@@ -1,3 +1,4 @@
+/** Tests ACP translator prompt-size hardening. */
 import { describe, it, vi } from "vitest";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 

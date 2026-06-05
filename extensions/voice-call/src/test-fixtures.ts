@@ -1,3 +1,4 @@
+// Voice Call plugin module implements test fixtures behavior.
 import type { VoiceCallConfig } from "./config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 

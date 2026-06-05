@@ -1,3 +1,4 @@
+// Control UI controller manages workboard gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 

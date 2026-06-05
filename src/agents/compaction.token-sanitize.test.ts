@@ -1,3 +1,4 @@
+// Verifies compaction token planning strips private/non-model fields first.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -22,6 +23,8 @@ import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compactio
 
 describe("compaction token accounting sanitization", () => {
   it("does not pass toolResult.details into per-message token estimates", () => {
+    // details can contain raw tool payloads or private diagnostics; token
+    // estimates should account only for model-visible message content.
     const messages: AgentMessage[] = [
       {
         role: "toolResult",
@@ -51,6 +54,8 @@ describe("compaction token accounting sanitization", () => {
   });
 
   it("projects worker inputs to planning-safe messages before cloning", () => {
+    // Worker input is cloned across threads, so sanitize before clone to remove
+    // hidden runtime context and oversized diagnostic details.
     const messages: AgentMessage[] = [
       {
         role: "toolResult",

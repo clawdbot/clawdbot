@@ -1,3 +1,8 @@
+/**
+ * Session compaction compatibility bridge over the shared agent-core implementation.
+ *
+ * Local callers keep the historic throwing API while agent-core returns explicit Result objects.
+ */
 import type { StreamFn as CoreStreamFn } from "../../../../packages/llm-core/src/index.js";
 import type { Model } from "../../../llm/types.js";
 import {
@@ -24,11 +29,6 @@ import {
 import type { AgentMessage, StreamFn, ThinkingLevel } from "../../runtime/index.js";
 import type { SessionEntry } from "../session-manager.js";
 
-/**
- * Session compaction compatibility bridge over the shared agent-core implementation.
- *
- * Local callers keep the historic throwing API while agent-core returns explicit Result objects.
- */
 export {
   calculateContextTokens,
   DEFAULT_COMPACTION_SETTINGS,

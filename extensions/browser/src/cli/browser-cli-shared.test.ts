@@ -1,3 +1,4 @@
+// Browser tests cover browser cli shared plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { callGatewayFromCli } from "./core-api.js";
 

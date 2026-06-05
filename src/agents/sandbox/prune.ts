@@ -1,3 +1,8 @@
+/**
+ * Sandbox registry pruning.
+ *
+ * Removes stale runtime containers and browser bridges on a best-effort schedule.
+ */
 import { getRuntimeConfig } from "../../config/config.js";
 import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,11 +20,6 @@ import {
 } from "./registry.js";
 import type { SandboxConfig } from "./types.js";
 
-/**
- * Periodically prunes stale sandbox containers and browser bridge runtimes.
- *
- * Pruning is best-effort: failed removals are logged and do not block later entries.
- */
 let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<

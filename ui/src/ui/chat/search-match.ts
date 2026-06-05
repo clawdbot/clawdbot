@@ -1,3 +1,4 @@
+// Control UI chat module implements search match behavior.
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractTextCached } from "./message-extract.ts";
 

@@ -1,3 +1,4 @@
+// Limits shared by gateway network E2E fixtures.
 function readPositiveIntEnv(name, fallback, env) {
   const text = String(env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {

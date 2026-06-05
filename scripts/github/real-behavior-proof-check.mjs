@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks PR real-behavior proof labels/comments and writes GitHub Action outputs.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {

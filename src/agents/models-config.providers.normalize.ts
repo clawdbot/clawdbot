@@ -1,3 +1,6 @@
+/**
+ * Normalizes configured provider model rows for runtime/discovery use.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";

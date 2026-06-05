@@ -1,3 +1,4 @@
+// Qqbot tests cover remind logic plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseRelativeTime,

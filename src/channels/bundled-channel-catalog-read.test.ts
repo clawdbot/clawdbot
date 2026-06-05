@@ -1,3 +1,4 @@
+// Bundled channel catalog read tests cover catalog loading from bundled channel metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

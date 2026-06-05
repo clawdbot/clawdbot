@@ -1,3 +1,4 @@
+// Summarize Cpuprofile tests cover summarize cpuprofile script behavior.
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/perf/summarize-cpuprofile.mjs";
 

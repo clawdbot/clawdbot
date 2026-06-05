@@ -1,3 +1,4 @@
+// Tool payload tests cover model tool-call schema conversion and compatibility payloads.
 import { describe, expect, it } from "vitest";
 import {
   extractToolPayload,

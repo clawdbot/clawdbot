@@ -1,3 +1,4 @@
+// Routing session key helpers build stable session keys from route targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import {

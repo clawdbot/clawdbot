@@ -1,3 +1,4 @@
+// Telegram tests cover fetch plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

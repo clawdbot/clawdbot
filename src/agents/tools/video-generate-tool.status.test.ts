@@ -1,3 +1,5 @@
+// Video generation status tests cover duplicate guards and explicit status
+// actions for background video tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import {
@@ -148,6 +150,8 @@ describe("createVideoGenerateTool status actions", () => {
   });
 
   it("returns recent succeeded video status instead of starting a duplicate generation", () => {
+    // A recently completed request is still a duplicate from the user's
+    // perspective; report status instead of spending another provider call.
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main:discord:direct:123",

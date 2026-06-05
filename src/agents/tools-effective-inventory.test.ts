@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for effective tool inventory resolution.
+ * Verifies grouped tool sources, plugin registry inputs, and session-context filters.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";

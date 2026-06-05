@@ -1,3 +1,6 @@
+/**
+ * Browser tab selection operations for default tab choice, focus, and close.
+ */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
@@ -26,6 +29,7 @@ type SelectionOps = {
   closeTab: (targetId: string) => Promise<void>;
 };
 
+/** Builds tab selection/focus/close operations for one resolved browser profile. */
 export function createProfileSelectionOps({
   profile,
   getProfileState,

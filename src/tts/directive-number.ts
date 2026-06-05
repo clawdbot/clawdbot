@@ -1,3 +1,4 @@
+// TTS directive number helpers parse strict numeric directive values.
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type {
   SpeechDirectiveTokenParseContext,

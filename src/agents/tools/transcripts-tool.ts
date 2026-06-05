@@ -1,3 +1,8 @@
+/**
+ * transcripts built-in tool.
+ *
+ * Manages live capture, manual import, summarization, and process-local transcript sessions.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -21,8 +26,6 @@ import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcript
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
 
-// Transcript tool runtime for live capture, manual import, summarization, and
-// auto-started meeting sources. Active sessions are process-local live handles.
 type TranscriptsLogger = {
   warn: (message: string) => void;
 };

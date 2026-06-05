@@ -1,3 +1,8 @@
+/**
+ * Channel message capability derivation.
+ *
+ * Computes durable-final delivery requirements from a concrete outbound payload.
+ */
 import type {
   DeriveDurableFinalDeliveryRequirementsParams,
   DurableFinalDeliveryCapability,

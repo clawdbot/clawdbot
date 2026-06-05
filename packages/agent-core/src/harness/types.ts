@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type {
   ImageContent,
   Model,

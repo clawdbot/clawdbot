@@ -1,3 +1,4 @@
+// Proxy capture runtime tests cover session creation and capture lifecycle.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DebugProxySettings } from "./env.js";
 import {

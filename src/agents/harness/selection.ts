@@ -1,3 +1,6 @@
+/**
+ * Selects and invokes native agent harnesses for embedded run attempts.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createChildDiagnosticTraceContext,

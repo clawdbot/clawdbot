@@ -1,3 +1,4 @@
+// Discord tests cover receive recovery plugin behavior.
 import { OpusError } from "libopus-wasm";
 import { describe, expect, it, vi } from "vitest";
 import {

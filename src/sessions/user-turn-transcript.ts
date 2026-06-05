@@ -1,3 +1,4 @@
+// User turn transcript helpers extract user-turn text from session transcripts.
 import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../agents/runtime/index.js";

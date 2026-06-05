@@ -1,3 +1,4 @@
+// Message receipt tests cover receipt state and acknowledgement metadata for channel messages.
 import { describe, expect, it } from "vitest";
 import {
   createMessageReceiptFromOutboundResults,

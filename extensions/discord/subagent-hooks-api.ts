@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
 type DiscordSubagentHooksModule = typeof import("./src/subagent-hooks.js");

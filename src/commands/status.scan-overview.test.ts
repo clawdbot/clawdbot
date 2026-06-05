@@ -1,3 +1,4 @@
+// Status scan overview tests cover overview collection and gateway/runtime summary inputs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 

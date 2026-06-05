@@ -1,3 +1,4 @@
+// Models CLI tests cover model listing command registration and provider output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";

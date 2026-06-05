@@ -1,3 +1,8 @@
+/**
+ * OpenAI provider routing decisions shared by model selection, auth profiles, and runtime setup.
+ *
+ * Custom OpenAI-compatible base URLs intentionally bypass Codex-runtime defaults.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

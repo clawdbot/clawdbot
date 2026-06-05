@@ -1,3 +1,4 @@
+// Dev gateway bootstrap for a local loopback config and seeded dev workspace.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+  // Template frontmatter is metadata only; workspace files receive the body content.
   try {
     const templateDirs = await resolveWorkspaceTemplateSearchDirs();
     for (const templateDir of templateDirs) {

@@ -1,3 +1,7 @@
+/**
+ * Doctor contract hooks for Codex plugin config migrations and session-route
+ * ownership warnings.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
 
@@ -17,6 +21,7 @@ function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
+/** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config"],
@@ -26,6 +31,9 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
+/**
+ * Removes retired Codex plugin config keys while preserving unrelated config.
+ */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
@@ -56,6 +64,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   };
 }
 
+/** Session/auth ownership metadata used by doctor route-state checks. */
 export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
   {
     id: "codex",

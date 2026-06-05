@@ -1,3 +1,4 @@
+// Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
@@ -79,6 +80,7 @@ function collectPluginRegistryState(
   };
 }
 
+/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -89,6 +91,7 @@ export function isStalePluginAutoRepairBlocked(
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
+/** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
 export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -305,6 +308,7 @@ function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
   return `- ${hit.pathLabel}: model override references missing channel plugin "${hit.pluginId}".`;
 }
 
+/** Format warnings for stale plugin config hits. */
 export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
@@ -326,6 +330,7 @@ export function collectStalePluginConfigWarnings(params: {
   return lines.map((line) => sanitizeForLog(line));
 }
 
+/** Remove stale plugin ids and dangling channel references when discovery is healthy. */
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,

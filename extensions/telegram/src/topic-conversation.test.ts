@@ -1,3 +1,4 @@
+// Telegram tests cover topic conversation plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 

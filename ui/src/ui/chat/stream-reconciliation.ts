@@ -1,3 +1,4 @@
+// Control UI chat module implements stream reconciliation behavior.
 import { resetToolStream } from "../app-tool-stream.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractText } from "./message-extract.ts";

@@ -1,3 +1,5 @@
+// Gateway integration test module mocks.
+// Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
 import {
@@ -26,9 +28,6 @@ import {
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
 
-/**
- * Central Vitest module mock setup for gateway integration tests.
- */
 export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
 export {
   agentCommand,

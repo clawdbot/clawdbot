@@ -1,3 +1,4 @@
+// Slack tests cover members plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({

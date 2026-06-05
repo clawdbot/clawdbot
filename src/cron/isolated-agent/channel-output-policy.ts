@@ -1,3 +1,4 @@
+/** Reads channel plugin output/threading policy for isolated cron delivery. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 

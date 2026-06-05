@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Production dependency audit helper using pnpm lock data and npm bulk advisories.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -8,6 +9,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+/** Maximum advisory error body characters retained in messages. */
 export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 export const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 export const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;

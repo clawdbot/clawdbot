@@ -1,3 +1,9 @@
+/**
+ * Browser profile capability resolution.
+ *
+ * Derives transport and driver capability flags used by routes and the Browser
+ * tool to choose CDP, Playwright, or Chrome MCP behavior.
+ */
 import type { ResolvedBrowserProfile } from "./config.js";
 
 type BrowserProfileMode = "local-managed" | "local-existing-session" | "remote-cdp";
@@ -14,6 +20,7 @@ type BrowserProfileCapabilities = {
   supportsManagedTabLimit: boolean;
 };
 
+/** Return feature capabilities for a resolved browser profile. */
 export function getBrowserProfileCapabilities(
   profile: ResolvedBrowserProfile,
 ): BrowserProfileCapabilities {
@@ -55,6 +62,7 @@ export function getBrowserProfileCapabilities(
   };
 }
 
+/** Resolve the default snapshot format for a profile and available drivers. */
 export function resolveDefaultSnapshotFormat(params: {
   profile: ResolvedBrowserProfile;
   hasPlaywright: boolean;
@@ -76,6 +84,7 @@ export function resolveDefaultSnapshotFormat(params: {
   return params.hasPlaywright ? "ai" : "aria";
 }
 
+/** Return true when screenshots should use Playwright for the profile. */
 export function shouldUsePlaywrightForScreenshot(params: {
   profile: ResolvedBrowserProfile;
   wsUrl?: string;
@@ -85,6 +94,7 @@ export function shouldUsePlaywrightForScreenshot(params: {
   return !params.wsUrl || Boolean(params.ref) || Boolean(params.element);
 }
 
+/** Return true when ARIA snapshots should use Playwright for the profile. */
 export function shouldUsePlaywrightForAriaSnapshot(params: {
   profile: ResolvedBrowserProfile;
   wsUrl?: string;

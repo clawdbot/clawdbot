@@ -1,3 +1,4 @@
+// Control UI tests cover app renderreaming behavior.
 import { describe, expect, it } from "vitest";
 import { formatDreamNextCycle } from "./app-render.ts";
 

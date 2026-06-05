@@ -1,3 +1,4 @@
+// MiniMax stream wrapper normalizes MiniMax streamed text and reasoning output.
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import { streamSimple } from "../../stream.js";
 

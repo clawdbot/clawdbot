@@ -1,3 +1,4 @@
+// Memory Core tests cover manager embedding cache plugin behavior.
 import {
   ensureMemoryIndexSchema,
   requireNodeSqlite,

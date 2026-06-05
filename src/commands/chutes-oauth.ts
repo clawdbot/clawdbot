@@ -1,3 +1,4 @@
+// Chutes OAuth login flow with loopback callback handling and manual paste fallback.
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -154,6 +155,7 @@ async function waitForLocalCallback(params: {
   });
 }
 
+/** Run a PKCE OAuth login for Chutes and exchange the resulting code for credentials. */
 export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;

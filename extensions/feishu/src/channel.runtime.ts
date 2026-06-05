@@ -1,3 +1,4 @@
+// Feishu plugin module implements channel behavior.
 import {
   getChatInfo as getChatInfoImpl,
   getChatMembers as getChatMembersImpl,

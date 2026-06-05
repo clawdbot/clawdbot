@@ -1,3 +1,4 @@
+// Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,3 +1,4 @@
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
 import {
   normalizeInboundTextNewlines,

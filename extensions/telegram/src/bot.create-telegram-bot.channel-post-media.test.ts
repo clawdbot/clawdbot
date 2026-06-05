@@ -1,3 +1,4 @@
+// Telegram tests cover bot.create telegram bot.channel post media plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

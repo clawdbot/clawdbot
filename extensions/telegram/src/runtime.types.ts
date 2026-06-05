@@ -1,3 +1,4 @@
+// Telegram type declarations define plugin contracts.
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { TelegramMonitorFn } from "./monitor.types.js";

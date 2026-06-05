@@ -1,3 +1,4 @@
+// Verifies restart recovery marks and resumes interrupted main-agent sessions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,8 @@ async function writeTranscript(
 }
 
 function cleanedLockForPath(lockPath: string): SessionLockInspection {
+  // Simulates lock cleanup after process restart: stale lock removed, owning
+  // PID dead, and the transcript path available for recovery.
   return {
     lockPath,
     pid: 999_999,
@@ -67,6 +70,8 @@ function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspect
 }
 
 function firstGatewayParams(): Record<string, unknown> {
+  // Recovery resumes through the gateway. Narrow the first mock call so tests
+  // assert request payloads without depending on the gateway return type.
   const call = vi.mocked(callGateway).mock.calls[0];
   if (!call) {
     throw new Error("expected gateway call");
@@ -80,6 +85,8 @@ function firstGatewayParams(): Record<string, unknown> {
 
 describe("main-session-restart-recovery", () => {
   it("marks only matching running main sessions by active session key", async () => {
+    // Only top-level running main sessions are restart-recoverable. Completed,
+    // child, cron, and non-active sessions must not be marked.
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -165,6 +172,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("uses active session ids to avoid marking stale duplicate keys in another store", async () => {
+    // Custom and default stores can contain the same session key. Active ids
+    // keep restart marking tied to the store that owned the interrupted run.
     const defaultSessionsDir = await makeSessionsDir();
     await writeStore(defaultSessionsDir, {
       "agent:main:issue-82433": {

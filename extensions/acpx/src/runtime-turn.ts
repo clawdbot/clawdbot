@@ -1,3 +1,7 @@
+/**
+ * ACPX turn adapters. Modern runtimes can expose startTurn directly; legacy
+ * runtimes that only stream runTurn events are adapted to the newer contract.
+ */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -153,10 +157,12 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
   };
 }
 
+/** Start an ACP turn, adapting legacy runTurn-only runtimes when needed. */
 export function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
   return runtime.startTurn?.(input) ?? legacyRunTurnAsStartTurn(runtime, input);
 }
 
+/** Start an ACP turn through a lazy runtime resolver. */
 export function lazyStartRuntimeTurn(
   resolveRuntime: () => Promise<AcpRuntime>,
   input: AcpRuntimeTurnInput,

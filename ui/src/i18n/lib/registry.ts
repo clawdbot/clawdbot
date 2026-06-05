@@ -1,3 +1,4 @@
+// Control UI i18n module implements registry behavior.
 import type { Locale, TranslationMap } from "./types.ts";
 
 type LazyLocale = Exclude<Locale, "en">;

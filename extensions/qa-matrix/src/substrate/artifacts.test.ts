@@ -1,3 +1,4 @@
+// Qa Matrix tests cover artifacts plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMatrixQaObservedEventsArtifact } from "./artifacts.js";
 

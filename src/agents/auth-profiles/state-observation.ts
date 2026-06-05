@@ -1,3 +1,7 @@
+/**
+ * Structured logging for auth profile failure state changes.
+ * Log payloads keep machine-readable fields while redacting console-facing ids.
+ */
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeForConsole } from "../console-sanitize.js";

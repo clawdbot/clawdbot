@@ -1,3 +1,4 @@
+// Slack plugin module implements interactive replies behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {

@@ -1,3 +1,4 @@
+// Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 

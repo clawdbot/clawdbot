@@ -1,3 +1,4 @@
+// Model special token helpers strip model control tokens outside code regions.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.

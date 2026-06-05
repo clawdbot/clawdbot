@@ -1,3 +1,4 @@
+// Delivery context helpers normalize target and route metadata for delivery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeMessageChannel } from "./message-channel.js";

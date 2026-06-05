@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for PTY key encoding and DSR stripping.
+ * Protects terminal control bytes used by process send-keys and PTY sessions.
+ */
 import { expect, test } from "vitest";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import {

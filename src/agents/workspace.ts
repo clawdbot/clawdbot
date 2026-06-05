@@ -1,3 +1,8 @@
+/**
+ * Workspace bootstrap, template, state, and attestation helpers. This module
+ * creates and reads AGENTS/SOUL/TOOLS-style bootstrap files while guarding
+ * filesystem boundaries and recently-attested workspaces.
+ */
 import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";

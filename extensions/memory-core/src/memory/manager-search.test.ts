@@ -1,3 +1,4 @@
+// Memory Core tests cover manager search plugin behavior.
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,

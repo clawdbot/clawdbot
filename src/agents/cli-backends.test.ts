@@ -1,3 +1,4 @@
+/** Tests CLI backend config resolution, normalization, and live-test defaults. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
@@ -39,6 +40,8 @@ function createBackendEntry(params: {
     context?: CliBackendNormalizeConfigContext,
   ) => CliBackendConfig;
 }) {
+  // Runtime/setup backend entries share most shape; tests build both from one
+  // helper so registry behavior stays aligned.
   return {
     pluginId: params.pluginId,
     source: "test",
@@ -152,6 +155,7 @@ function normalizeTestClaudeArgs(
   args: string[] | undefined,
   permission: { mode?: string; overrideExisting: boolean },
 ): string[] | undefined {
+  // Mirrors Claude backend normalization without loading the bundled runtime.
   if (!args) {
     return permission.mode ? ["--permission-mode", permission.mode] : args;
   }

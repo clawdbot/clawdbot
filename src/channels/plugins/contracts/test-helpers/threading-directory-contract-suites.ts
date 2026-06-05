@@ -1,3 +1,8 @@
+/**
+ * Threading and directory channel contract assertions.
+ *
+ * Verifies optional directory/threading hooks return normalized public shapes.
+ */
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
@@ -9,8 +14,6 @@ import type {
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
 
-// Shared threading/directory contract assertions for bundled channel plugins.
-// The runtime proxy fails fast if a directory helper unexpectedly needs IO.
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
     throw new Error(`Directory contract unexpectedly accessed runtime.${String(property)}`);

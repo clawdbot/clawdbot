@@ -1,3 +1,4 @@
+// Line plugin module implements group policy behavior.
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { resolveExactLineGroupConfigKey, type OpenClawConfig } from "./channel-api.js";
 

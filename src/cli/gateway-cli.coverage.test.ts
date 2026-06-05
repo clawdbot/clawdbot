@@ -1,3 +1,4 @@
+// Gateway CLI coverage tests cover gateway command branches and output modes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

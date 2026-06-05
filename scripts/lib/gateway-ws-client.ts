@@ -1,3 +1,4 @@
+// Gateway Ws Client script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 

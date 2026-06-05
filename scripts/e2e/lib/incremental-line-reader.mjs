@@ -1,3 +1,4 @@
+// Incremental line reader for streaming E2E logs.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 

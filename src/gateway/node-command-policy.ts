@@ -1,3 +1,5 @@
+// Gateway node command policy.
+// Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -292,6 +294,8 @@ function filterApprovedRuntimeCommands(params: {
   if (!isDesktopPlatformId(params.platformId)) {
     return [];
   }
+  // Desktop host commands are not default-enabled for normal node sessions.
+  // A live node can still expose approved commands from its runtime handshake.
   return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
 }
 
@@ -338,6 +342,8 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  // Dangerous plugin commands are excluded from plugin defaults. Explicit
+  // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
     [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())

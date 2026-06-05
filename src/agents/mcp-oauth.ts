@@ -1,3 +1,7 @@
+/**
+ * MCP OAuth credential store and login helpers. Credentials are stored in the
+ * private OpenClaw state directory with one hashed file per MCP server URL.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +35,7 @@ type McpOAuthConfig = {
   clientMetadataUrl?: unknown;
 };
 
+/** Persisted OAuth credential presence flags for one MCP server. */
 export type McpOAuthCredentialsStatus = {
   hasTokens: boolean;
   hasClientInformation: boolean;
@@ -75,6 +80,7 @@ function buildOAuthClientMetadata(config: McpOAuthConfig): OAuthClientMetadata {
   };
 }
 
+/** Creates the MCP SDK OAuth provider backed by OpenClaw's private store. */
 export function createMcpOAuthClientProvider(params: {
   serverName: string;
   serverUrl: string;
@@ -168,6 +174,7 @@ export function createMcpOAuthClientProvider(params: {
   };
 }
 
+/** Deletes stored OAuth credentials for one MCP server. */
 export async function clearMcpOAuthCredentials(params: {
   serverName: string;
   serverUrl: string;
@@ -175,6 +182,7 @@ export async function clearMcpOAuthCredentials(params: {
   await fs.rm(oauthStorePath(params.serverName, params.serverUrl), { force: true });
 }
 
+/** Reads stored OAuth credential presence without exposing credential values. */
 export async function readMcpOAuthCredentialsStatus(params: {
   serverName: string;
   serverUrl: string;
@@ -189,6 +197,7 @@ export async function readMcpOAuthCredentialsStatus(params: {
   };
 }
 
+/** Runs the MCP OAuth login flow, returning whether it authorized or needs redirect. */
 export async function runMcpOAuthLogin(params: {
   serverName: string;
   serverUrl: string;

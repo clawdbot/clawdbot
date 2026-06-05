@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover embeddings remote fetch behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 

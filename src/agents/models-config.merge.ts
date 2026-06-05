@@ -1,3 +1,8 @@
+/**
+ * Merges generated model-provider config with explicit user config and
+ * preserved secret fields. Setup and doctor flows use this boundary to update
+ * model catalogs without discarding existing credentials.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";

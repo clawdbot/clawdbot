@@ -1,3 +1,4 @@
+// Device bootstrap profile tests cover profile normalization for paired devices.
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,

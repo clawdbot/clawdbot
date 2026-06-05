@@ -1,3 +1,4 @@
+// Whatsapp tests cover index plugin behavior.
 import { assertBundledChannelEntries } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
 import { whatsappPlugin } from "./channel-plugin-api.js";

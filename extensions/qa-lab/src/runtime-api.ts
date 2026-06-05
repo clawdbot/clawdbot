@@ -1,3 +1,4 @@
+// Qa Lab API module exposes the plugin public contract.
 export type { Command } from "commander";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

@@ -1,3 +1,4 @@
+// Xai tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
 

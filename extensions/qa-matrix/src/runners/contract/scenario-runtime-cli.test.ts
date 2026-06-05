@@ -1,3 +1,4 @@
+// Qa Matrix tests cover scenario runtime cli plugin behavior.
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";

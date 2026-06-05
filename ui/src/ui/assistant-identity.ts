@@ -1,3 +1,4 @@
+// Control UI module implements assistant identity behavior.
 import { coerceIdentityValue } from "../../../src/shared/assistant-identity-values.js";
 
 const MAX_ASSISTANT_NAME = 50;

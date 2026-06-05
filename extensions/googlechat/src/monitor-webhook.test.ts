@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor webhook plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { FixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -295,6 +296,84 @@ describe("googlechat monitor webhook", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
+  });
+
+  it("normalizes add-on card-click payloads for approval actions", async () => {
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "chat-app" },
+      },
+      runtime: { error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([target]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: {
+          hostApp: "CHAT",
+          parameters: {
+            openclaw_action: "approval",
+            token: "token-1",
+          },
+        },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          buttonClickedPayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/1" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const targetLocal of targets) {
+        if (await isMatch(targetLocal)) {
+          return targetLocal;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const { processEvent, res } = await runWebhookHandler();
+
+    expect(verifyGoogleChatRequest).toHaveBeenCalledWith({
+      bearer: "addon-token",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+      expectedAddOnPrincipal: "chat-app",
+    });
+    expect(processEvent).toHaveBeenCalledWith(
+      {
+        type: "CARD_CLICKED",
+        space: { name: "spaces/AAA" },
+        message: { name: "spaces/AAA/messages/1" },
+        user: { name: "users/123" },
+        eventTime: "2026-03-22T00:00:00.000Z",
+        action: {
+          parameters: [
+            { key: "openclaw_action", value: "approval" },
+            { key: "token", value: "token-1" },
+          ],
+        },
+        commonEventObject: {
+          parameters: {
+            openclaw_action: "approval",
+            token: "token-1",
+          },
+        },
+      },
+      target,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("logs WARN with reason when verification fails (missing token)", async () => {
@@ -432,6 +511,8 @@ describe("googlechat monitor webhook", () => {
 
     expect(logFn).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("does not log failed candidate targets when another target verifies", async () => {
@@ -498,6 +579,8 @@ describe("googlechat monitor webhook", () => {
       targetB,
     );
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("rejects missing add-on bearer tokens before dispatch", async () => {

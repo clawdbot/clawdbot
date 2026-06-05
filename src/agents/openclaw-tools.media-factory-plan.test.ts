@@ -1,3 +1,4 @@
+// Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,6 +31,7 @@ async function createOpenClawToolsForTest(options?: CreateOpenClawToolsOptions) 
 }
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
+  // Auth facts are provider-key based; profile ids only need deterministic defaults.
   return {
     version: 1,
     profiles: Object.fromEntries(
@@ -116,6 +118,7 @@ function installSnapshot(
     .map((plugin) => plugin.id),
   workspaceDir?: string,
 ) {
+  // Builds the current plugin metadata snapshot used by factory planning.
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
     ...(workspaceDir ? { workspaceDir } : {}),
@@ -233,6 +236,7 @@ describe("optional media tool factory planning", () => {
   });
 
   it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
+    // Workspace snapshots are process-local facts and must not leak to unrelated runs.
     const config: OpenClawConfig = {};
     setBundledPluginsDirOverrideForTest("/nonexistent/bundled/plugins");
     installSnapshot(

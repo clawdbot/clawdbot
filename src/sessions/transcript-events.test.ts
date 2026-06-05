@@ -1,3 +1,4 @@
+// Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitSessionTranscriptUpdate, onSessionTranscriptUpdate } from "./transcript-events.js";
 

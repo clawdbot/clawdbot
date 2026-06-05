@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements process message behavior.
 import {
   logAckFailure,
   removeAckReactionHandleAfterReply,

@@ -1,3 +1,4 @@
+// Imessage API module exposes the plugin public contract.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,

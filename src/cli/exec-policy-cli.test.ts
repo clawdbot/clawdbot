@@ -1,3 +1,4 @@
+// Exec policy CLI tests cover execution policy command behavior and persistence.
 import crypto from "node:crypto";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

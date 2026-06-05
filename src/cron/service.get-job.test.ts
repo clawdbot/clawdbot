@@ -1,3 +1,4 @@
+// Cron get-job tests cover lookup behavior for scheduled jobs.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {

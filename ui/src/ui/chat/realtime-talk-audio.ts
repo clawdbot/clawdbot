@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk audio behavior.
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;

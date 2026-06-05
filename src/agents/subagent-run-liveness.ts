@@ -1,9 +1,12 @@
+/**
+ * Subagent run liveness policy.
+ *
+ * Ages out stale unended runs while keeping recent/composed child links visible.
+ */
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDurationMs } from "./subagent-run-timeout.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
-// Liveness policy for subagent registry records. Unended runs age out after a
-// conservative cutoff, while recent/composed child links remain visible.
 export const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 export const RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS = 30 * 60 * 1_000;
 const EXPLICIT_TIMEOUT_STALE_GRACE_MS = 60_000;

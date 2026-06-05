@@ -1,3 +1,4 @@
+// Doctor missing-state e2e tests cover warning output when the state directory is absent.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

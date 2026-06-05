@@ -1,3 +1,5 @@
+// Gateway chat display projection.
+// Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
@@ -35,6 +37,7 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -55,6 +58,7 @@ function truncateChatHistoryText(
   };
 }
 
+/** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;

@@ -1,3 +1,4 @@
+// Google stream wrapper tests cover Gemini stream payload normalization.
 import { describe, expect, it } from "vitest";
 import { sanitizeGoogleThinkingPayload } from "./google.js";
 

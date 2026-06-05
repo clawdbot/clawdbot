@@ -1,3 +1,4 @@
+// Coverage for Tool Search control planning and allowlist accounting.
 import { describe, expect, it } from "vitest";
 import {
   buildAutoAddedToolSearchControlNamesForAllowlistCheck,
@@ -7,6 +8,8 @@ import {
 
 describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
   it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
+    // Auto-added controls are not real callable tools when the backing catalog
+    // is empty.
     expect(
       buildCallableToolNamesForEmptyAllowlistCheck({
         effectiveToolNames: ["tool_search_code"],
@@ -59,6 +62,8 @@ describe("buildAutoAddedToolSearchControlNamesForAllowlistCheck", () => {
 
 describe("buildToolSearchRunPlan", () => {
   it("keeps compact visible names separate from replay-safe names", () => {
+    // Visible compacted tools can be narrower than replay-safe names needed for
+    // existing transcript tool calls.
     const plan = buildToolSearchRunPlan({
       visibleTools: [{ name: "tool_search_code" }] as never,
       uncompactedTools: [

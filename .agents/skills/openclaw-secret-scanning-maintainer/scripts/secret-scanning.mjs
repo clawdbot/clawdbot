@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Secret scanning alert handler for OpenClaw maintainers.
-// Usage: node secret-scanning.mjs <command> [options]
+/**
+ * Secret scanning alert handler for OpenClaw maintainers.
+ * Usage: node secret-scanning.mjs <command> [options]
+ */
 
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -57,6 +59,7 @@ function isBodyLocationType(locationType) {
   return locationType === "issue_body" || locationType === "pull_request_body";
 }
 
+/** Decides whether redacting an issue/PR body requires notifying the reporter. */
 export function decideBodyRedaction(currentBody, redactedBody) {
   const bodyChanged = String(currentBody) !== String(redactedBody);
   return {
@@ -65,6 +68,7 @@ export function decideBodyRedaction(currentBody, redactedBody) {
   };
 }
 
+/** Loads redaction-result metadata for issue/PR body secret locations. */
 export function loadBodyRedactionResult(locationType, resultFile) {
   if (!isBodyLocationType(locationType)) {
     return { notify_required: true };

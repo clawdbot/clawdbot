@@ -1,3 +1,4 @@
+// Xai tests cover xai user agent plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { xaiUserAgent, xaiUserAgentHeaderFor } from "./xai-user-agent.js";
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds an HTML/manifest evidence bundle from Telegram Desktop proof artifacts.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,6 +160,9 @@ function laneArtifactEntries() {
   ]);
 }
 
+/**
+ * Builds the manifest for paired baseline/candidate Telegram Desktop proof artifacts.
+ */
 export function buildTelegramDesktopProofManifest({
   baseline,
   baselineRef,

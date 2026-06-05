@@ -1,3 +1,4 @@
+// Feishu tests cover media plugin behavior.
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

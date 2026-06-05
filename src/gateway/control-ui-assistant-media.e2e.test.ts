@@ -1,3 +1,4 @@
+// Control UI assistant media e2e tests verify scoped media-ticket access through gateway HTTP routes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test } from "vitest";

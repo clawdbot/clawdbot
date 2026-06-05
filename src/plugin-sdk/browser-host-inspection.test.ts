@@ -1,3 +1,4 @@
+// Browser host inspection tests cover browser host discovery and inspection helpers.
 import { beforeEach, describe, it, vi } from "vitest";
 import {
   expectBrowserHostInspectionDelegation,

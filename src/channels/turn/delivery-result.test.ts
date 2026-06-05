@@ -1,3 +1,4 @@
+// Delivery result tests cover channel turn delivery result normalization.
 import { describe, expect, it } from "vitest";
 import { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 

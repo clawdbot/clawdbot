@@ -1,3 +1,4 @@
+/** CLI entrypoint for channel message actions. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -51,6 +52,7 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
+/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -93,6 +95,8 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
   const run = async () =>
     await runMessageAction({
       cfg,

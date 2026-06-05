@@ -1,3 +1,4 @@
+// Msteams plugin module implements user agent behavior.
 import { createRequire } from "node:module";
 import { getMSTeamsRuntime } from "./runtime.js";
 

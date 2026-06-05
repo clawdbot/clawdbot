@@ -1,3 +1,4 @@
+// Browser tests cover server.agent contract form layout act commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

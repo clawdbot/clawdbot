@@ -1,3 +1,8 @@
+/**
+ * Channel inbound media normalization.
+ *
+ * Converts plugin attachment metadata into aligned prompt/context media payload fields.
+ */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import type { InboundMediaFacts } from "../turn/types.js";

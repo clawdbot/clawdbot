@@ -1,3 +1,4 @@
+// Matrix tests cover tool actions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";

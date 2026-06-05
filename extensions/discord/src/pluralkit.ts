@@ -1,3 +1,4 @@
+// Discord plugin module implements pluralkit behavior.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 
 const PLURALKIT_API_BASE = "https://api.pluralkit.me/v2";

@@ -1,3 +1,6 @@
+// Generic text-report primitives for status command output.
+// Callers assemble typed sections; this file owns heading insertion and table rendering order.
+
 import type { RenderTableOptions, TableColumn } from "../../../packages/terminal-core/src/table.js";
 
 type HeadingFn = (text: string) => string;
@@ -26,6 +29,7 @@ export type StatusReportSection =
       skipIfEmpty?: boolean;
     };
 
+/** Appends a blank-line-separated section heading. */
 export function appendStatusSectionHeading(params: {
   lines: string[];
   heading: HeadingFn;
@@ -68,6 +72,7 @@ function appendStatusTableSection<Row extends Record<string, string>>(params: {
   );
 }
 
+/** Appends all non-empty report sections in display order. */
 export function appendStatusReportSections(params: {
   lines: string[];
   heading: HeadingFn;

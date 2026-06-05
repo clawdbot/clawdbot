@@ -1,3 +1,4 @@
+// Diagnostic phase tests cover phase timing and diagnostic event emission.
 import { describe, expect, it } from "vitest";
 import {
   getRecentDiagnosticPhases,

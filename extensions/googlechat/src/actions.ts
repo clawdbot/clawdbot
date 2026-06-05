@@ -1,3 +1,4 @@
+// Googlechat plugin module implements actions behavior.
 import {
   createActionGate,
   jsonResult,

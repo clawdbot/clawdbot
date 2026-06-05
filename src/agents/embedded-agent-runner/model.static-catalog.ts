@@ -1,3 +1,6 @@
+/**
+ * Resolves bundled static catalog rows for embedded-agent model selection.
+ */
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

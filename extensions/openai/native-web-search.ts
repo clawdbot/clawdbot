@@ -1,3 +1,4 @@
+// Openai plugin module implements native web search behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { streamSimple } from "openclaw/plugin-sdk/llm";

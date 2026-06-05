@@ -1,3 +1,4 @@
+// Builds balanced Vitest shard plans for plugin contract tests.
 import { listTrackedTestFiles } from "./list-test-files.mjs";
 
 function listContractTestFiles(rootDir = "src/plugins/contracts") {
@@ -32,6 +33,7 @@ function resolveContractFileWeight(file) {
   return CONTRACT_FILE_WEIGHTS.get(name) ?? 10;
 }
 
+/** Create balanced plugin contract test shards for CI check planning. */
 export function createPluginContractTestShards() {
   const suffixes = ["a", "b"];
   const groups = Object.fromEntries(

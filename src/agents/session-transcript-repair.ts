@@ -1,3 +1,8 @@
+/**
+ * Transcript repair helpers for tool-call replay.
+ *
+ * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
+ */
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeOptionalString,

@@ -1,3 +1,4 @@
+// Covers provider-key canonicalization plus secret marker persistence safeguards.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ vi.mock("./models-config.providers.policy.runtime.js", () => {
       providerKey: string,
       provider: { baseUrl?: unknown } | undefined,
     ) =>
+      // Keep the test focused on normalizeProviders while preserving LM Studio policy behavior.
       providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
         ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
         : undefined,
@@ -33,6 +35,7 @@ describe("normalizeProviders", () => {
       NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"][number]
     > = {},
   ) => ({
+    // Compact default model row reused by normalization cases that only vary ids.
     id: "config-model",
     name: "Config model",
     input: ["text"] as Array<"text" | "image">,
@@ -193,6 +196,7 @@ describe("normalizeProviders", () => {
       const normalized = normalizeProviders({ providers, agentDir });
 
       expect(normalized?.google?.models).toHaveLength(1);
+      // The first normalized row wins so explicit config details are not replaced by discovery.
       const model = normalized?.google?.models?.[0];
       expect(model?.id).toBe("gemini-3.1-pro-preview");
       expect(model?.name).toBe("Pinned Gemini");
@@ -337,6 +341,7 @@ describe("normalizeProviders", () => {
         providers,
         agentDir,
       });
+      // Env refs persist the env-name marker; non-env refs collapse to a non-secret sentinel.
       expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
       expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
     } finally {

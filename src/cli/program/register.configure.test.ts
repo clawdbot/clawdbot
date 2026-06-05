@@ -1,3 +1,4 @@
+// Register configure tests cover configure command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerConfigureCommand } from "./register.configure.js";

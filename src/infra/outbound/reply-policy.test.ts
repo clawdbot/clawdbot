@@ -1,3 +1,5 @@
+// Covers reply-to fanout and delivery policy consumption for explicit,
+// implicit, single-use, and disabled reply modes.
 import { describe, expect, it } from "vitest";
 import { createReplyToFanout } from "./reply-policy.js";
 

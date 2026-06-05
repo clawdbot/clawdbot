@@ -1,3 +1,4 @@
+// JSON schema default helpers fill object values from TypeBox schema defaults.
 import { Compile } from "typebox/compile";
 import type { JsonSchemaObject } from "./json-schema.types.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";

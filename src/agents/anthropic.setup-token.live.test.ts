@@ -1,3 +1,8 @@
+/**
+ * Live Anthropic setup-token validation.
+ * Exercises token discovery, profile storage, and model access only when live
+ * setup-token credentials are explicitly provided.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,7 @@
+/**
+ * Host-side Code Mode controller for isolated QuickJS execution with bridged
+ * tool search/call/yield support.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,8 +56,6 @@ export {
   isCodeModeControlTool,
 } from "./code-mode-control-tools.js";
 
-// Host-side Code Mode controller. It compacts tool catalogs, starts the QuickJS
-// worker, stores suspended snapshots, and resumes pending bridged tool calls.
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -194,6 +196,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   return languages.length > 0 ? uniqueValues(languages) : ["javascript", "typescript"];
 }
 
+/** Resolves Code Mode runtime limits and language support from config. */
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId);
   const maxSearchLimit = clampInteger(
@@ -1262,6 +1265,7 @@ export function addClientToolsToCodeModeCatalog(params: {
   });
 }
 
+/** Test-only hooks and state accessors for Code Mode worker orchestration. */
 export const testing = {
   activeRuns,
   resumingRunIds,

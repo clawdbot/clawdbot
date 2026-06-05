@@ -1,3 +1,4 @@
+// Memory Host SDK helper module supports batch error utils behavior.
 import { formatErrorMessage } from "./error-utils.js";
 
 // Extracts provider batch error text from output and unavailable error files.

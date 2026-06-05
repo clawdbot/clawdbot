@@ -1,3 +1,4 @@
+// Qa Lab tests cover agentic parity report plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildQaAgenticParityComparison,

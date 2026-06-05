@@ -1,3 +1,4 @@
+// Control UI view renders nodes screen content.
 import { html, nothing } from "lit";
 import {
   resolvePendingDeviceApprovalState,

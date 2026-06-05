@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.append upsert support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {

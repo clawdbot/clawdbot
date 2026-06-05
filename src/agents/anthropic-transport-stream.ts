@@ -1,3 +1,8 @@
+/**
+ * Native Anthropic Messages streaming transport.
+ * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
+ * back into runtime output blocks, and applies provider request policy.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
@@ -536,10 +541,12 @@ function mapStopReason(reason: string | undefined): string {
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
+/** Resolve the effective Anthropic API base URL from model or environment. */
 export function resolveAnthropicBaseUrl(baseUrl?: string): string {
   return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
 }
 
+/** Resolve the Anthropic Messages endpoint URL for the effective base URL. */
 export function resolveAnthropicMessagesUrl(baseUrl?: string): string {
   const normalized = resolveAnthropicBaseUrl(baseUrl).replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
@@ -947,6 +954,7 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
+/** Create the stream function used by Anthropic Messages transport models. */
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = withEffectiveAnthropicBaseUrl(rawModel as AnthropicTransportModel);

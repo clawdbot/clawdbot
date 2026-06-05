@@ -1,3 +1,4 @@
+// Launchd restart handoff tests cover restart coordination on macOS.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());

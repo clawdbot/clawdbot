@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+// Ts Topology script supports OpenClaw repository automation.
 import path from "node:path";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { analyzeTopology } from "./lib/ts-topology/analyze.js";
 import { renderTextReport } from "./lib/ts-topology/reports.js";
 import {
@@ -8,7 +10,6 @@ import {
   createPluginSdkScope,
 } from "./lib/ts-topology/scope.js";
 import type { TopologyReportName, TopologyScope } from "./lib/ts-topology/types.js";
-import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const VALID_REPORTS = new Set<TopologyReportName>([
   "public-surface-usage",

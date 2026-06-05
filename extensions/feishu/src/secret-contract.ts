@@ -1,3 +1,4 @@
+// Feishu plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,

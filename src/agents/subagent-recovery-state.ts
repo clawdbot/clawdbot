@@ -1,7 +1,10 @@
+/**
+ * Subagent orphan recovery gate.
+ *
+ * Bounds automatic recovery attempts and tombstones repeatedly wedged session entries.
+ */
 import type { SessionEntry } from "../config/sessions.js";
 
-// Automatic orphan recovery is intentionally bounded. Repeated quick resumes
-// mark the session wedged so maintenance/doctor can reconcile durable state.
 const SUBAGENT_RECOVERY_MAX_AUTOMATIC_ATTEMPTS = 2;
 const SUBAGENT_RECOVERY_REWEDGE_WINDOW_MS = 2 * 60_000;
 

@@ -1,3 +1,5 @@
+// Subagent spawn context tests cover isolated, forked, lightweight, and
+// thread-bound bootstrap context preparation for child sessions.
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +44,8 @@ describe("sessions_spawn context modes", () => {
   });
 
   function usePersistentStoreMock(store: SessionStore) {
+    // The spawn path mutates the session store in-place; this mock keeps that
+    // contract visible without touching disk.
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
       if (typeof mutator !== "function") {
         throw new Error("missing session store mutator");
@@ -198,6 +202,8 @@ describe("sessions_spawn context modes", () => {
   });
 
   it("falls back to isolated context when requested fork is too large", async () => {
+    // Forking very large transcripts would create expensive child context, so
+    // the accepted run records the downgrade in its note.
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",

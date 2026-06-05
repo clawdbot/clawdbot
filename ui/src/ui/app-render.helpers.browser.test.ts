@@ -1,3 +1,4 @@
+// Control UI tests cover app render behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";

@@ -1,3 +1,4 @@
+/** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -52,6 +53,12 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   );
 }
 
+/**
+ * Probes gateway status and reports user-facing connection/auth/channel warnings.
+ *
+ * A credentials-required gateway still counts as healthy but unauthenticated when the preauth
+ * probe confirms the server is reachable.
+ */
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
@@ -127,6 +134,7 @@ export async function checkGatewayHealth(params: {
   return { healthOk, authenticated: false, status };
 }
 
+/** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;

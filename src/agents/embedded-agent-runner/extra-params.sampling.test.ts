@@ -1,3 +1,4 @@
+// Coverage for sampling, token, and response-format extra parameter precedence.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
@@ -9,6 +10,8 @@ import {
 } from "./extra-params.js";
 
 vi.mock("./logger.js", () => ({
+  // Sampling tests assert call options only; silence warning/debug output from
+  // invalid or provider-specific extra params.
   log: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -123,6 +126,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("canonicalizes token aliases with config precedence before preparing stream params", () => {
+    // Canonicalization happens before provider preparation so plugins receive a
+    // single maxTokens field with agent-level precedence already applied.
     const resolved = resolveExtraParams({
       cfg: {
         agents: {
@@ -159,6 +164,8 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
   });
 
   it("lets runtime options override the wrapper sampling defaults", () => {
+    // Runtime call options are closest to the request and must beat configured
+    // defaults injected by the extra-params wrapper.
     const underlying = vi.fn(() => ({
       push: vi.fn(),
       result: vi.fn(async () => undefined),

@@ -1,3 +1,8 @@
+/**
+ * Persistent sandbox registry storage.
+ *
+ * Tracks runtime and browser containers with sharded JSON files plus migration support for legacy registries.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -12,12 +17,6 @@ import {
 } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
 
-/**
- * Persistent sandbox registry storage for runtime and browser containers.
- *
- * Entries are sharded by container-name hash to avoid a single hot JSON file while preserving
- * migration support for older monolithic registry files.
- */
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;

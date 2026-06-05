@@ -1,3 +1,8 @@
+/**
+ * Tests shared OAuth credential overlay/replacement policy.
+ * Covers runtime-only provenance, cloned store isolation, and stale credential
+ * replacement decisions.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {

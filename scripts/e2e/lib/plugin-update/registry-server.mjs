@@ -1,3 +1,4 @@
+// Fixture npm registry server for plugin update E2E scenarios.
 import http from "node:http";
 
 const metadata = {

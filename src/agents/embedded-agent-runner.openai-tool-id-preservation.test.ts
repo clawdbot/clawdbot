@@ -1,3 +1,4 @@
+// Covers OpenAI replay tool-call id preservation and downgrade rules.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +26,8 @@ vi.mock(
         provider === "openai"
           ? {
               buildReplayPolicy: (context?: { modelApi?: string }) => ({
+                // Completions APIs need strict ids; Responses can preserve richer
+                // call_id|fc_id pairs when reasoning metadata is replayable.
                 sanitizeMode: "images-only",
                 sanitizeToolCallIds: context?.modelApi === "openai-completions",
                 ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
@@ -47,6 +50,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
   });
 
   const makeSessionManager = () =>
+    // Snapshot entry supplies model API context used by replay-policy lookup.
     makeInMemorySessionManager([
       makeModelSnapshotEntry({
         provider: "openai",
@@ -92,6 +96,8 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       expectedToolId: "call_123|fc_123",
     },
   ])("$name", async ({ withReasoning, expectedToolId }) => {
+    // Reasoning metadata proves the item id half is replayable; without it we
+    // downgrade to the canonical call id.
     const result = await sanitizeSessionHistory({
       messages: makeMessages(withReasoning),
       modelApi: "openai-responses",
@@ -110,6 +116,8 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
   });
 
   it("repairs displaced tool results before downgrading openai pairing ids", async () => {
+    // Pairing repair must run before id downgrade so toolResult follows the
+    // correct assistant call after normalization.
     const result = await sanitizeSessionHistory({
       messages: [
         castAgentMessage({

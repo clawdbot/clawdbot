@@ -1,3 +1,5 @@
+// execCommand tests cover child-process output retention, limits, and timeout
+// termination semantics used by agent sessions.
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,6 +53,8 @@ describe("execCommand", () => {
   });
 
   it("bounds retained stdout and stderr independently", async () => {
+    // stdout and stderr are separate buffers; a noisy stream must not evict the
+    // diagnostic tail from the other stream.
     const child = createStubChild();
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
@@ -111,6 +115,8 @@ describe("execCommand", () => {
   });
 
   it("escalates timed-out commands to SIGKILL after the grace period", async () => {
+    // SIGTERM gives child processes a chance to clean up; SIGKILL is the
+    // bounded fallback so an ignored signal cannot hang the session.
     vi.useFakeTimers();
     const child = createStubChild();
     const wait = createDeferred<number | null>();

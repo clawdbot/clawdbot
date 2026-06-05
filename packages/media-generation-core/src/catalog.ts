@@ -1,3 +1,4 @@
+// Media Generation Core module implements catalog behavior.
 import { uniqueTrimmedStrings } from "./string.js";
 
 // Shared media-generation catalog contracts and static entry synthesis.

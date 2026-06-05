@@ -1,3 +1,4 @@
+// Msteams tests cover thread parent context plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 import {

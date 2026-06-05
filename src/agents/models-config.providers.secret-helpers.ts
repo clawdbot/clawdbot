@@ -1,3 +1,6 @@
+/**
+ * Resolves configured provider secrets from env, profiles, and SecretRefs.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";

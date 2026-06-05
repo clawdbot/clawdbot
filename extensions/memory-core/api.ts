@@ -1,3 +1,4 @@
+// Memory Core API module exposes the plugin public contract.
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type {
   MemoryEmbeddingProbeResult,

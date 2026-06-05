@@ -1,3 +1,4 @@
+// Label Open Issues tests cover label open issues script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/label-open-issues.ts";
 

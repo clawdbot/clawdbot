@@ -1,3 +1,4 @@
+// Memory Wiki tests cover source sync plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 

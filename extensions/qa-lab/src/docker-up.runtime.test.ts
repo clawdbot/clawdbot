@@ -1,3 +1,4 @@
+// Qa Lab tests cover docker up plugin behavior.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";

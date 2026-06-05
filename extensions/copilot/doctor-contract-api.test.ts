@@ -1,3 +1,4 @@
+// Copilot tests cover doctor contract api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   legacyConfigRules,

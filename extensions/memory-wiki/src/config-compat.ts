@@ -1,3 +1,4 @@
+// Memory Wiki helper module supports config compat behavior.
 import type { OpenClawConfig } from "../api.js";
 
 type LegacyConfigRule = {

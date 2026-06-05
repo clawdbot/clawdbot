@@ -1,3 +1,4 @@
+// Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,

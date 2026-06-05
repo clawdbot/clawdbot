@@ -1,3 +1,5 @@
+// Capability registry used to decide which shared media model entries are
+// eligible for image/audio/video understanding.
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";

@@ -1,3 +1,4 @@
+// Agent session command tests cover session resolution, agent scoping, and temp-home session stores.
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";

@@ -1,3 +1,4 @@
+// Qa Lab tests cover node exec plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 

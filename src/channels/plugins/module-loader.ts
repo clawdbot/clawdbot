@@ -1,3 +1,8 @@
+/**
+ * Channel plugin module loader.
+ *
+ * Loads JavaScript or source plugin modules through native require or cached TS loaders.
+ */
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";

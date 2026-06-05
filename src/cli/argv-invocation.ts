@@ -1,3 +1,4 @@
+// Normalized argv invocation summary used before Commander command dispatch.
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -13,6 +14,7 @@ export type CliArgvInvocation = {
   isRootHelpInvocation: boolean;
 };
 
+/** Resolves command path and help/version mode from a raw process argv array. */
 export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
   return {
     argv,

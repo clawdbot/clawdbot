@@ -1,3 +1,4 @@
+// Coverage for converting sensitive/unhandled stop reasons into assistant errors.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -15,6 +16,8 @@ const anthropicModel = {
 
 describe("wrapStreamFnHandleSensitiveStopReason", () => {
   it("rewrites unhandled stop-reason errors into structured assistant errors", async () => {
+    // Some providers surface unhandled stop reasons as stream errors; convert
+    // them into a normal assistant error so fallback/retry paths can inspect it.
     const baseStreamFn: StreamFn = () => {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {

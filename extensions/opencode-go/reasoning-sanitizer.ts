@@ -1,3 +1,4 @@
+// Opencode Go plugin module implements reasoning sanitizer behavior.
 const REASONING_REPLAY_FIELDS = [
   "reasoning_details",
   "reasoning_content",

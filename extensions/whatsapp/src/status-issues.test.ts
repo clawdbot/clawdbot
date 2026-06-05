@@ -1,3 +1,4 @@
+// Whatsapp tests cover status issues plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 

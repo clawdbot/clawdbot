@@ -1,3 +1,4 @@
+// Reset command tests cover cleanup runtime behavior, workspace attestations, and reset prompts.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,

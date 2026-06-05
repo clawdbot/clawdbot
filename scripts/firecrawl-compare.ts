@@ -1,3 +1,4 @@
+// Firecrawl Compare script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
 import { extractReadableContent } from "../src/agents/tools/web-tools.js";

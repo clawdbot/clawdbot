@@ -1,3 +1,4 @@
+// Venice setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,

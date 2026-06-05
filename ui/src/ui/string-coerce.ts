@@ -1,3 +1,4 @@
+// Control UI module implements string coerce behavior.
 export {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

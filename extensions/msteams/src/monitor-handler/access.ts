@@ -1,3 +1,4 @@
+// Msteams plugin module implements access behavior.
 import {
   channelIngressRoutes,
   resolveStableChannelMessageIngress,

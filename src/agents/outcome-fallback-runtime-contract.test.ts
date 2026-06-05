@@ -1,3 +1,4 @@
+// Verifies embedded runtime outcome classifications drive model fallback correctly.
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
@@ -11,6 +12,7 @@ vi.mock("./auth-profiles/source-check.js", () => ({
 }));
 
 const contractFallbackOverride = [
+  // Keep fallback target aligned with the plugin-sdk runtime contract fixture.
   `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
 ];
 
@@ -164,6 +166,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   ];
 
   it("does not classify terminal results with visible output or side effects as fallbacks", () => {
+    // Any visible reply or out-of-band side effect is a successful terminal outcome.
     for (const contractCase of nonFallbackCases) {
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({

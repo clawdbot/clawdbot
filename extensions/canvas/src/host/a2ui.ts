@@ -1,3 +1,6 @@
+/**
+ * HTTP handler for serving bundled A2UI assets through Canvas host routes.
+ */
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -77,6 +80,7 @@ async function resolveA2uiRootReal(): Promise<string | null> {
   return resolvingA2uiRoot;
 }
 
+/** Handles one HTTP request for the hosted A2UI asset surface. */
 export async function handleA2uiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,

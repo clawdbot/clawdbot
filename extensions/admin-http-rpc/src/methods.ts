@@ -1,3 +1,7 @@
+/**
+ * Method allowlist for Admin HTTP RPC. Only methods listed here can cross the
+ * trusted operator HTTP surface.
+ */
 const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
   gateway: [
     "health",
@@ -54,10 +58,12 @@ const ADMIN_HTTP_RPC_ALLOWED_METHODS: ReadonlySet<string> = new Set(
   Object.values(ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS).flat(),
 );
 
+/** Return whether an admin RPC method is exposed over HTTP. */
 export function isAdminHttpRpcAllowedMethod(method: string): boolean {
   return ADMIN_HTTP_RPC_ALLOWED_METHODS.has(method);
 }
 
+/** List all admin RPC methods exposed over HTTP. */
 export function listAdminHttpRpcAllowedMethods(): string[] {
   return Array.from(ADMIN_HTTP_RPC_ALLOWED_METHODS);
 }

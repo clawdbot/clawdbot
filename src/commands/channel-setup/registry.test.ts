@@ -1,3 +1,4 @@
+// Channel setup registry tests cover adapter construction and pass-through setup wizard surfaces.
 import { describe, expect, it } from "vitest";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../channels/plugins/setup-wizard.js";

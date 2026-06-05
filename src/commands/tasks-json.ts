@@ -1,12 +1,12 @@
+// JSON-only task command helpers.
+// These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
+
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
-import {
-  listTaskAuditFindings,
-  summarizeTaskAuditFindings,
-} from "../tasks/task-registry.audit.js";
+import { listTaskAuditFindings, summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditFindings,
@@ -79,6 +79,7 @@ function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   });
   const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
+  // Preserve the legacy task-only summary while adding combined task-flow counts.
   const legacySummary = summarizeTaskAuditFindings(taskFindings);
   return {
     count: allFindings.length,
@@ -102,6 +103,7 @@ function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   };
 }
 
+/** Writes task list JSON without triggering task maintenance. */
 export async function tasksListJsonCommand(
   opts: TasksListJsonArgs,
   runtime: RuntimeEnv,
@@ -109,6 +111,7 @@ export async function tasksListJsonCommand(
   writeRuntimeJson(runtime, buildTasksListJsonPayload(opts));
 }
 
+/** Writes task audit JSON with combined task/task-flow findings. */
 export async function tasksAuditJsonCommand(
   opts: TasksAuditJsonArgs,
   runtime: RuntimeEnv,

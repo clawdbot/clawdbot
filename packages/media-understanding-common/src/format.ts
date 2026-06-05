@@ -1,3 +1,4 @@
+// Media Understanding Common helper module supports format behavior.
 import type { MediaUnderstandingOutput } from "./types.js";
 
 const MEDIA_PLACEHOLDER_RE = /^<media:[^>]+>(\s*\([^)]*\))?$/i;

@@ -1,8 +1,11 @@
+/**
+ * Tool description summary helpers.
+ *
+ * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
-// Summarizes verbose tool descriptions for compact tool listings. Long schema
-// sections are skipped so users see the human-facing intro first.
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }

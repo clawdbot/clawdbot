@@ -1,3 +1,4 @@
+// Codex native asset tests cover doctor detection of native Codex asset state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

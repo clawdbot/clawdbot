@@ -1,3 +1,4 @@
+/** Doctor checks and repair effects for cached shell completion setup. */
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -86,6 +87,7 @@ export async function checkShellCompletionStatus(
   };
 }
 
+/** Converts shell completion status into health findings shown by check flows. */
 export function shellCompletionStatusToHealthFindings(
   status: ShellCompletionStatus,
 ): readonly HealthFinding[] {
@@ -116,6 +118,7 @@ export function shellCompletionStatusToHealthFindings(
   return [];
 }
 
+/** Converts shell completion status into dry-run repair effects for health check reporting. */
 export function shellCompletionStatusToRepairEffects(
   status: ShellCompletionStatus,
 ): readonly HealthRepairEffect[] {
@@ -151,10 +154,10 @@ export type DoctorCompletionOptions = {
 };
 
 /**
- * Doctor check for shell completion.
- * - If profile uses slow dynamic pattern: upgrade to cached version
- * - If profile has completion but no cache: auto-generate cache and upgrade profile
- * - If no completion at all: prompt to install (with user confirmation)
+ * Repairs shell completion setup when doctor runs interactively.
+ *
+ * Slow dynamic profiles are upgraded to cached completion; configured profiles with a missing
+ * cache regenerate it; missing completion prompts unless non-interactive mode is active.
  */
 export async function doctorShellCompletion(
   _runtime: RuntimeEnv,
@@ -164,14 +167,13 @@ export async function doctorShellCompletion(
   const cliName = resolveCliName();
   const status = await checkShellCompletionStatus(cliName);
 
-  // Profile uses slow dynamic pattern - upgrade to cached version
+  // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (status.usesSlowPattern) {
     note(
       `Your ${status.shell} profile uses slow dynamic completion (source <(...)).\nUpgrading to cached completion for faster shell startup...`,
       "Shell completion",
     );
 
-    // Ensure cache exists first
     if (!status.cacheExists) {
       const generated = await generateCompletionCache();
       if (!generated) {
@@ -183,13 +185,11 @@ export async function doctorShellCompletion(
       }
     }
 
-    // Upgrade profile to use cached file
     await installCompletion(status.shell, true, cliName);
     note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     return;
   }
 
-  // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
     note(
       `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
@@ -207,10 +207,8 @@ export async function doctorShellCompletion(
     return;
   }
 
-  // No completion at all - prompt to install
   if (!status.profileInstalled) {
     if (options.nonInteractive) {
-      // In non-interactive mode, just note that completion is not installed
       return;
     }
 
@@ -220,7 +218,6 @@ export async function doctorShellCompletion(
     });
 
     if (shouldInstall) {
-      // First generate the cache
       const generated = await generateCompletionCache();
       if (!generated) {
         note(
@@ -230,18 +227,13 @@ export async function doctorShellCompletion(
         return;
       }
 
-      // Then install to profile
       await installCompletion(status.shell, true, cliName);
       note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
     }
   }
 }
 
-/**
- * Ensure completion cache exists. Used during setup/update to fix
- * cases where profile has completion but no cache.
- * This is a silent fix - no prompts.
- */
+/** Ensures the shell completion cache exists without prompting during setup/update flows. */
 export async function ensureCompletionCacheExists(binName = "openclaw"): Promise<boolean> {
   const shell = resolveShellFromEnv() as CompletionShell;
   const cacheExists = await completionCacheExists(shell, binName);

@@ -1,3 +1,4 @@
+// Configure wizard Gateway port, bind, auth, and Tailscale prompts.
 import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
 import {
   normalizeOptionalString,
@@ -38,6 +39,7 @@ function validateGatewayPortInput(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Prompt for local Gateway network/auth settings and return config plus call token. */
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,

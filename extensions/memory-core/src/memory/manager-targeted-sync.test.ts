@@ -1,3 +1,4 @@
+// Memory Core tests cover manager targeted sync plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   clearMemorySyncedSessionFiles,

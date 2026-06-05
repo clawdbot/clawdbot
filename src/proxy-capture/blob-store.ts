@@ -1,3 +1,4 @@
+// Proxy capture blob store persists captured request and response bodies by hash.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

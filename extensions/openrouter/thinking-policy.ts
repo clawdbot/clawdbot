@@ -1,3 +1,4 @@
+// Openrouter plugin module implements thinking policy behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 

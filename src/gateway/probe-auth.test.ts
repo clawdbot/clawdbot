@@ -1,3 +1,5 @@
+// Probe auth tests cover safe credential resolution, unresolved-secret warnings,
+// local/remote target selection, and redacted auth payload handling.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

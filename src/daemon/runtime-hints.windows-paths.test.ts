@@ -1,3 +1,4 @@
+// Windows runtime hint tests cover path guidance for Windows daemon setup.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const resolveGatewayLogPathsMock = vi.fn(() => ({

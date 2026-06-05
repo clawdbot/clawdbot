@@ -1,3 +1,7 @@
+/**
+ * Browser runtime API barrel. It exposes the full Browser runtime surface for
+ * plugin consumers while keeping the entrypoint itself declarative.
+ */
 export { createBrowserTool } from "./src/browser-tool.js";
 export {
   applyBrowserProxyPaths,

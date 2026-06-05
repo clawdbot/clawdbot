@@ -1,3 +1,4 @@
+// Slack tests cover actions.reactions plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";

@@ -1,3 +1,4 @@
+// Line tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { LineConfigSchema } from "./config-schema.js";
 

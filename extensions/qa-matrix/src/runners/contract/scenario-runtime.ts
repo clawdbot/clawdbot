@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime behavior.
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_SECONDARY_ROOM_KEY,

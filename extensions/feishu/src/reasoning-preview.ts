@@ -1,3 +1,4 @@
+// Feishu plugin module implements reasoning preview behavior.
 import { resolveFeishuConfigReasoningDefault } from "./agent-config.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";

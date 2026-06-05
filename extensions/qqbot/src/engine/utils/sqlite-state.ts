@@ -1,3 +1,4 @@
+// Qqbot plugin module implements sqlite state behavior.
 import crypto from "node:crypto";
 import type {
   OpenKeyedStoreOptions,

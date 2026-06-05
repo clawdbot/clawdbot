@@ -1,3 +1,5 @@
+// Error-context helper tests keep failure metadata pointed at the model that
+// actually failed, even when the embedded harness wraps the provider call.
 import { describe, expect, it } from "vitest";
 import { resolveActiveErrorContext } from "./helpers.js";
 
@@ -24,6 +26,8 @@ describe("resolveActiveErrorContext", () => {
   });
 
   it("ignores the embedded OpenClaw harness provider when the model provider is known", () => {
+    // The OpenClaw harness id is a transport wrapper, not the provider users
+    // need in diagnostics when a concrete upstream model ref is available.
     const result = resolveActiveErrorContext({
       provider: "openrouter",
       model: "openai/gpt-5.4",

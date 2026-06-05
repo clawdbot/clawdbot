@@ -1,3 +1,5 @@
+// Compaction handler tests cover session-store reconciliation and lifecycle
+// logging for automatic and manual embedded run compactions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +24,8 @@ function createCompactionContext(params: {
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
 }): EmbeddedAgentSubscribeContext {
+  // Minimal context preserves only the compaction counters and callbacks the
+  // handlers mutate, making store reconciliation assertions direct.
   let compactionCount = params.initialCount;
   return {
     params: {
@@ -57,6 +61,7 @@ function createCompactionContext(params: {
 }
 
 function loggedInfoMetaAt(info: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  // Logging assertions need structured metadata, not just console strings.
   const [, meta] = info.mock.calls[index] ?? [];
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     throw new Error(`expected info metadata for call ${index + 1}`);
@@ -78,6 +83,8 @@ afterEach(async () => {
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {
+    // Store count can lag the in-memory count after async writes; reconciliation
+    // moves it forward without double-counting.
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-reconcile-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";

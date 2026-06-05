@@ -1,3 +1,4 @@
+/** Tests ACP setSessionMode request translation and error propagation. */
 import type { SetSessionModeRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it } from "vitest";

@@ -1,3 +1,4 @@
+// Migrate Hermes tests cover provider plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";

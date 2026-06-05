@@ -1,4 +1,6 @@
+// Model list status tests cover status column construction and auth/probe summaries.
 import { describe, expect, it, type Mock, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -433,18 +435,10 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
     const localRuntime = createRuntime();
-    const previous = process.env.OPENCLAW_AGENT_DIR;
-    process.env.OPENCLAW_AGENT_DIR = "/tmp/openclaw-isolated-agent";
     mocks.resolveAgentDir.mockClear();
-    try {
+    await withEnvAsync({ OPENCLAW_AGENT_DIR: "/tmp/openclaw-isolated-agent" }, async () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previous;
-      }
-    }
+    });
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
@@ -455,25 +449,16 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("honors deprecated PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
     const localRuntime = createRuntime();
-    const previousOpenClaw = process.env.OPENCLAW_AGENT_DIR;
-    const previousPi = process.env.PI_CODING_AGENT_DIR;
-    delete process.env.OPENCLAW_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = "/tmp/openclaw-legacy-agent";
     mocks.resolveAgentDir.mockClear();
-    try {
-      await modelsStatusCommand({ json: true }, localRuntime as never);
-    } finally {
-      if (previousOpenClaw === undefined) {
-        delete process.env.OPENCLAW_AGENT_DIR;
-      } else {
-        process.env.OPENCLAW_AGENT_DIR = previousOpenClaw;
-      }
-      if (previousPi === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPi;
-      }
-    }
+    await withEnvAsync(
+      {
+        OPENCLAW_AGENT_DIR: undefined,
+        PI_CODING_AGENT_DIR: "/tmp/openclaw-legacy-agent",
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+      },
+    );
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");

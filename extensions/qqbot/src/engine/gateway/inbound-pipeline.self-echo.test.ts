@@ -1,3 +1,4 @@
+// Qqbot tests cover inbound pipeline.self echo plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";

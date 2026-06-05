@@ -1,3 +1,4 @@
+// Voice Call tests cover telephony audio plugin behavior.
 import { describe, expect, it } from "vitest";
 import { convertPcmToMulaw8k, resamplePcmTo8k } from "./telephony-audio.js";
 

@@ -1,3 +1,5 @@
+// Proxy fetch helpers build undici proxy-aware fetch functions with managed TLS
+// options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
@@ -46,6 +48,8 @@ function normalizeInitForUndici(
   init: RequestInit | undefined,
   UndiciFormData: UndiciFormDataCtor,
 ): RequestInit | undefined {
+  // Proxy fetch also uses undici runtime FormData; rebuild global FormData and
+  // drop caller-supplied multipart headers so undici owns the boundary.
   if (!init) {
     return init;
   }

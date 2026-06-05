@@ -1,3 +1,5 @@
+// Model pricing cache tests protect provider/model normalization, manifest
+// metadata lookup, fetch preconnect behavior, cache refresh, and logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";

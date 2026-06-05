@@ -1,3 +1,4 @@
+// Post-install migration helpers guide users through setup after package install.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";

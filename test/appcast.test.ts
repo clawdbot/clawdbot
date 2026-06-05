@@ -1,3 +1,4 @@
+// Appcast tests validate generated update appcast metadata.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canonicalSparkleBuildFromVersion } from "../scripts/sparkle-build.ts";

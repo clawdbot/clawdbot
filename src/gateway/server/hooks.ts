@@ -1,3 +1,4 @@
+// Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
 import {
   resolveDateTimestampMs,

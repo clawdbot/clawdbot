@@ -1,3 +1,4 @@
+/** Resolves configured model refs and tags for model-list rows. */
 import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
@@ -15,6 +16,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
+/** Returns canonical configured model entries with default/fallback/image/configured tags. */
 export function resolveConfiguredEntries(
   cfg: OpenClawConfig,
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
@@ -47,6 +49,8 @@ export function resolveConfiguredEntries(
     const key = modelKey(canonicalRef.provider, canonicalRef.model);
     const originalKey = modelKey(ref.provider, ref.model);
     if (originalKey !== key) {
+      // Preserve aliases attached to pre-canonical provider keys so display rows
+      // still show user-facing aliases after catalog provider canonicalization.
       const aliases = aliasesByKey.get(originalKey);
       if (aliases) {
         aliasesByKey.set(key, [...new Set([...(aliasesByKey.get(key) ?? []), ...aliases])]);

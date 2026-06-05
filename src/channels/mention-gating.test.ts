@@ -1,3 +1,4 @@
+// Mention gating tests cover channel mention requirements before inbound messages trigger agents.
 import { describe, expect, it } from "vitest";
 import {
   implicitMentionKindWhen,

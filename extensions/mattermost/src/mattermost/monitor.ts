@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor behavior.
 import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,

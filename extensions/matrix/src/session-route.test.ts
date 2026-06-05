@@ -1,3 +1,4 @@
+// Matrix tests cover session route plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

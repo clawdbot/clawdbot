@@ -1,3 +1,4 @@
+/** Prevents daemon write actions when the config belongs to a newer OpenClaw. */
 import { readConfigFileSnapshot } from "../config/config.js";
 import {
   formatFutureConfigActionBlock,

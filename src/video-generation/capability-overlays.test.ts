@@ -1,3 +1,4 @@
+// Video capability overlay tests cover config-driven capability overrides.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {

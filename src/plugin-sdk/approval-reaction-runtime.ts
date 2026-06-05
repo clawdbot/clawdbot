@@ -67,6 +67,7 @@ export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   expiresAtMs?: number;
 };
 
+/** Resolved approval target and decision produced from a reaction event. */
 export type ApprovalReactionTargetResolution<TRoute = unknown> =
   ApprovalReactionDecisionResolution & {
     approvalId: string;
@@ -74,11 +75,13 @@ export type ApprovalReactionTargetResolution<TRoute = unknown> =
     route?: TRoute;
   };
 
+/** Reply payload enriched with reaction decision metadata. */
 export type ApprovalReactionPromptPayload = ReplyPayload & {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   reactionBindings: readonly ApprovalReactionDecisionBinding[];
 };
 
+/** Pair of reaction-enabled and manual-fallback approval prompt payloads. */
 export type ApprovalReactionPendingContent = {
   reactionPayload: ApprovalReactionPromptPayload;
   manualFallbackPayload: ReplyPayload;
@@ -339,6 +342,7 @@ function buildMetadataPayload(params: {
   );
 }
 
+/** Build an approval prompt payload with reaction bindings for a prepared view. */
 export function buildApprovalPendingPromptPayload(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
@@ -363,6 +367,7 @@ export function buildApprovalPendingPromptPayload(params: {
   };
 }
 
+/** Build an approval prompt payload with reaction bindings directly from a request. */
 export function buildApprovalReactionPromptPayloadForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
@@ -378,6 +383,7 @@ function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: stri
   return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
 }
 
+/** Build reaction and manual-fallback pending approval content for a prepared view. */
 export function buildApprovalReactionPendingContent(params: {
   request: ApprovalRequest;
   view: PendingApprovalView;
@@ -418,6 +424,7 @@ export function buildApprovalReactionPendingContent(params: {
   return { reactionPayload, manualFallbackPayload };
 }
 
+/** Build reaction and manual-fallback pending approval content directly from a request. */
 export function buildApprovalReactionPendingContentForRequest(params: {
   request: ApprovalRequest;
   nowMs: number;
@@ -429,6 +436,7 @@ export function buildApprovalReactionPendingContentForRequest(params: {
   });
 }
 
+/** Create an approval target store backed by memory with optional persistent storage. */
 export function createApprovalReactionTargetStore<TTarget>(params: {
   namespace: string;
   maxEntries: number;

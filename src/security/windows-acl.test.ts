@@ -4,6 +4,7 @@ import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
   resetWindowsInstallRootsForTests,
 } from "../infra/windows-install-roots.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
@@ -33,7 +34,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  vi.unstubAllEnvs();
   resetWindowsInstallRootsForTests();
 });
 
@@ -512,22 +512,23 @@ Successfully processed 1 files`;
 
     it("uses the discovered process SystemRoot when env options are omitted", async () => {
       resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
-      vi.stubEnv("SystemRoot", "D:\\Windows");
 
       const mockExec = vi.fn().mockResolvedValue({
         stdout: "C:\\test\\file.txt *S-1-5-18:(F)",
         stderr: "",
       });
 
-      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
-        exec: mockExec,
-      });
+      await withEnvAsync({ SystemRoot: "D:\\Windows" }, async () => {
+        const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+          exec: mockExec,
+        });
 
-      expectInspectSuccess(result, 1);
-      expect(mockExec).toHaveBeenCalledWith("D:\\Windows\\System32\\icacls.exe", [
-        "C:\\test\\file.txt",
-        "/sid",
-      ]);
+        expectInspectSuccess(result, 1);
+        expect(mockExec).toHaveBeenCalledWith("D:\\Windows\\System32\\icacls.exe", [
+          "C:\\test\\file.txt",
+          "/sid",
+        ]);
+      });
     });
 
     it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {

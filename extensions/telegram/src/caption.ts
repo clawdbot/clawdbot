@@ -1,3 +1,4 @@
+// Telegram plugin module implements caption behavior.
 export const TELEGRAM_MAX_CAPTION_LENGTH = 1024;
 
 export function splitTelegramCaption(text?: string): {

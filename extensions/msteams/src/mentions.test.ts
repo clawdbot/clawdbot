@@ -1,3 +1,4 @@
+// Msteams tests cover mentions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMentionEntities, formatMentionText, parseMentions } from "./mentions.js";
 

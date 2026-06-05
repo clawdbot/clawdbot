@@ -1,3 +1,4 @@
+// CLI config readiness guard, legacy-state migration routing, and invalid-config allowances.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -97,6 +98,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
 }
 
 function hasLegacyStateMigrationInputs(): boolean {
+  // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
   const oauthDir = resolveOAuthDir(process.env, stateDir);
   if (

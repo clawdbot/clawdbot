@@ -1,3 +1,5 @@
+// Verifies conversation id derivation from explicit thread ids, target prefixes,
+// Discord mentions, and numeric destinations.
 import { describe, expect, it } from "vitest";
 import { resolveConversationIdFromTargets } from "./conversation-id.js";
 

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live artifacts behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const REDACTED_QA_LIVE_LANE_ISSUE_DETAILS =

@@ -1,3 +1,4 @@
+// Discord tests cover threading.parent info plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";

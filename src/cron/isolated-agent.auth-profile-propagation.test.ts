@@ -1,3 +1,4 @@
+// Auth profile propagation tests cover isolated agent auth profile forwarding.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,

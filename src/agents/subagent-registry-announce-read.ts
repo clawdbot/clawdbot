@@ -1,3 +1,8 @@
+/**
+ * Read-side helpers for subagent completion announcements. These wrappers keep
+ * announce delivery code on normalized registry snapshots instead of reaching
+ * into persistence or mutation paths.
+ */
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";

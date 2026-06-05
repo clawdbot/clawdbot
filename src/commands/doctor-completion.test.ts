@@ -1,3 +1,4 @@
+// Doctor completion tests cover final doctor status summaries and completion messaging.
 import { describe, expect, it } from "vitest";
 import {
   shellCompletionStatusToHealthFindings,

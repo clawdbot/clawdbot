@@ -1,3 +1,4 @@
+// Open policy allow-from tests cover doctor handling of open allowlist policy.
 import { describe, expect, it, vi } from "vitest";
 import {
   collectOpenPolicyAllowFromWarnings,

@@ -1,3 +1,4 @@
+// Mattermost plugin module implements secret contract behavior.
 import {
   collectSimpleChannelFieldAssignments,
   getChannelSurface,

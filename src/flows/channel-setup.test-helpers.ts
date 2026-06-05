@@ -1,3 +1,4 @@
+// Channel setup test helpers build channel metadata and prompt fixtures.
 type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
 type ChannelPluginCatalogEntry = import("../channels/plugins/catalog.js").ChannelPluginCatalogEntry;
 type ResolveChannelSetupEntries =

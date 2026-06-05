@@ -1,3 +1,4 @@
+// Control UI module implements lazy view behavior.
 import { html } from "lit";
 import { t } from "../i18n/index.ts";
 

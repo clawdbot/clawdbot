@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements lab server ui behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";

@@ -1,3 +1,8 @@
+/**
+ * Tests apply_patch destination path extraction.
+ * Ensures pre-execution policy checks see add/update/delete/move paths in
+ * host and sandbox forms without requiring full parser success.
+ */
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";

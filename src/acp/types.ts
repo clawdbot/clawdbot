@@ -1,3 +1,4 @@
+/** ACP server option re-exports and OpenClaw agent identity metadata. */
 export type { AcpProvenanceMode, AcpServerOptions, AcpSession } from "@openclaw/acp-core/types";
 export { normalizeAcpProvenanceMode } from "@openclaw/acp-core/types";
 import { VERSION } from "../version.js";

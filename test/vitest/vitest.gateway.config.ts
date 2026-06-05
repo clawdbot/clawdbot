@@ -1,3 +1,4 @@
+// Vitest gateway config wires the gateway test shard.
 import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 

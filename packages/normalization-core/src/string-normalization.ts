@@ -1,3 +1,4 @@
+// Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 /** Coerces entries to strings, trims them, and drops empty results. */

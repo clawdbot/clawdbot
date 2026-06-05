@@ -1,3 +1,4 @@
+// Secret input normalization tests cover trimming and empty-value handling.
 import { describe, expect, it } from "vitest";
 import { normalizeOptionalSecretInput, normalizeSecretInput } from "./normalize-secret-input.js";
 

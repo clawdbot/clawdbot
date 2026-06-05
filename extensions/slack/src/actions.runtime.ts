@@ -1,3 +1,4 @@
+// Slack plugin module implements actions behavior.
 export {
   deleteSlackMessage,
   downloadSlackFile,

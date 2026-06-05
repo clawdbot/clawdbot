@@ -1,3 +1,5 @@
+// Source-delivery plans decide whether final output is visible through the
+// message tool, direct fallback delivery, both, or neither.
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";

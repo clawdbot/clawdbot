@@ -1,8 +1,10 @@
+/**
+ * Filesystem tool assertion helpers for tests.
+ *
+ * Extracts text result blocks and asserts common read/write/edit tool bundles.
+ */
 import { expect } from "vitest";
 
-/**
- * Assertion helpers for built-in filesystem tool tests.
- */
 type TextResultBlock = { type: string; text?: string };
 
 /** Extracts the first text block from a tool result. */

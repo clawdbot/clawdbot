@@ -1,3 +1,4 @@
+// Feishu helper module supports tools config behavior.
 import type { FeishuToolsConfig } from "./types.js";
 
 /**

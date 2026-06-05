@@ -1,3 +1,8 @@
+/**
+ * Channel config-write contract suites.
+ *
+ * Proves origin and target channel/account policy before plugin writes mutate config.
+ */
 import { describe, expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../../utils/message-channel.js";
 import {
@@ -8,8 +13,6 @@ import {
   resolveConfigWriteTargetFromPath,
 } from "../../config-writes.js";
 
-// Reusable config-write authorization contract suites. They prove origin and
-// target channel/account policy are resolved before plugin writes mutate config.
 const demoOriginChannelId = "demo-origin";
 const demoTargetChannelId = "demo-target";
 

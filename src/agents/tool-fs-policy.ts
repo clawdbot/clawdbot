@@ -1,3 +1,8 @@
+/**
+ * Tool filesystem policy resolver.
+ *
+ * Combines global and agent fs/tool policy into workspace-only and root-expansion decisions.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks extension media downloads keep helper-read/save calls close together.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 

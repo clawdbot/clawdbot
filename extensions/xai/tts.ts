@@ -1,3 +1,4 @@
+// Xai plugin module implements tts behavior.
 import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech";

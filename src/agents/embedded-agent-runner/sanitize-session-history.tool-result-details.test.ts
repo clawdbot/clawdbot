@@ -1,3 +1,5 @@
+// Session-history sanitization tests ensure replay strips tool-result internals
+// before provider validation sees transcript messages.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
@@ -6,6 +8,8 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { sanitizeSessionHistory } from "./replay-history.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
+  // Provider plugins are not part of this boundary test; the local sanitizer
+  // contract should strip details before any plugin-specific behavior matters.
   resolveProviderRuntimePlugin: () => undefined,
   sanitizeProviderReplayHistoryWithPlugin: () => undefined,
   validateProviderReplayTurnsWithPlugin: () => undefined,
@@ -17,6 +21,8 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
 
 describe("sanitizeSessionHistory toolResult details stripping", () => {
   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
+    // details can contain raw tool metadata or untrusted data; only normalized
+    // tool content should be replayed to the model.
     const sm = SessionManager.inMemory();
 
     const messages: AgentMessage[] = [

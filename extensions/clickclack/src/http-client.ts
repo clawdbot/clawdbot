@@ -1,3 +1,7 @@
+/**
+ * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
+ * delivery code.
+ */
 import { WebSocket } from "ws";
 import type {
   ClickClackChannel,
@@ -13,6 +17,9 @@ type ClientOptions = {
   fetch?: typeof fetch;
 };
 
+/**
+ * Creates a typed client for the ClickClack API using bearer-token auth.
+ */
 export function createClickClackClient(options: ClientOptions) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const fetcher = options.fetch ?? fetch;
@@ -137,4 +144,5 @@ export function createClickClackClient(options: ClientOptions) {
   };
 }
 
+/** Client shape returned by `createClickClackClient`. */
 export type ClickClackClient = ReturnType<typeof createClickClackClient>;

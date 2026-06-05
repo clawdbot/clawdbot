@@ -1,3 +1,4 @@
+// Device auth store tests cover persisted paired-device auth state.
 import { describe, expect, it, vi } from "vitest";
 import {
   clearDeviceAuthTokenFromStore,

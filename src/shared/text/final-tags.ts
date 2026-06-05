@@ -1,3 +1,4 @@
+// Final tag helpers detect final-answer tag regions in assistant text.
 export type FinalTagMatch = {
   index: number;
   text: string;

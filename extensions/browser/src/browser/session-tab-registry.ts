@@ -1,3 +1,7 @@
+/**
+ * In-memory registry that associates browser tabs with OpenClaw sessions for
+ * cleanup on session end or idle sweeps.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -91,6 +95,7 @@ function isIgnorableCloseError(err: unknown): boolean {
   );
 }
 
+/** Starts tracking a browser tab for later session cleanup. */
 export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
@@ -115,6 +120,7 @@ export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams):
   });
 }
 
+/** Updates last-used time for a tracked browser tab. */
 export function touchSessionBrowserTab(
   params: SessionBrowserTabIdentityParams & { now?: number },
 ): void {
@@ -137,6 +143,7 @@ export function touchSessionBrowserTab(
   });
 }
 
+/** Removes a browser tab from session cleanup tracking. */
 export function untrackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
@@ -211,6 +218,7 @@ async function closeTrackedTabs(params: {
   return closed;
 }
 
+/** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(params: {
   sessionKeys: Array<string | undefined>;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
@@ -289,6 +297,7 @@ function takeStaleTrackedTabs(params: {
   return tabsToClose;
 }
 
+/** Closes and untracks stale or excess browser tabs across tracked sessions. */
 export async function sweepTrackedBrowserTabs(params: {
   now?: number;
   idleMs?: number;
@@ -309,10 +318,12 @@ export async function sweepTrackedBrowserTabs(params: {
   });
 }
 
+/** Clears tracked tab state for tests. */
 export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
 }
 
+/** Counts tracked tabs for one session or all sessions in tests. */
 export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;

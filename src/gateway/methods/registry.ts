@@ -1,3 +1,4 @@
+// Gateway method registry normalizes method descriptors, enforces unique names, and exposes dispatch policy metadata.
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
 import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";

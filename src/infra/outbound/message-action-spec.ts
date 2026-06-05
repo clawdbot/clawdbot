@@ -1,3 +1,5 @@
+// Message-action specs describe which actions need destinations and which
+// legacy/plugin aliases count as an existing target.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

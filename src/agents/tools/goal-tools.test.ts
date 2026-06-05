@@ -1,3 +1,5 @@
+// Goal tool tests cover goal accounting projection and correct session-store
+// routing for global and scoped sessions.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +20,8 @@ async function createStoreConfig(): Promise<{ config: OpenClawConfig; template: 
 
 describe("goal tools", () => {
   it("keeps get_goal read-only when accounting changes are projected", async () => {
+    // Budget-limited status can be derived for display without mutating the
+    // stored active goal record.
     const { config, template } = await createStoreConfig();
     const storePath = resolveStorePath(template, { agentId: "research" });
     await upsertSessionEntry({

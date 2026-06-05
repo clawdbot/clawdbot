@@ -1,3 +1,4 @@
+// Telegram plugin module implements lane delivery behavior.
 export {
   isPotentialTruncatedFinal,
   selectLongerFinalText,

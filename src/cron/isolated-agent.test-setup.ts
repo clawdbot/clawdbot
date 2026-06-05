@@ -1,3 +1,4 @@
+// Isolated agent test setup centralizes common mocks for cron agent tests.
 import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";

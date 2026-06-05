@@ -1,3 +1,4 @@
+// Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";

@@ -1,3 +1,4 @@
+// Regression coverage for pruning duplicate user turns before compaction.
 import { describe, expect, it } from "vitest";
 import {
   collectDuplicateUserMessageEntryIdsForCompaction,
@@ -6,6 +7,8 @@ import {
 
 describe("compaction duplicate user message pruning", () => {
   it("drops identical long user messages inside the duplicate window", () => {
+    // Whitespace-normalized duplicates inside the short window are transport
+    // artifacts; keeping both wastes compaction budget and distorts summaries.
     const first = {
       role: "user",
       content: "please run the deployment status check for production",
@@ -29,6 +32,8 @@ describe("compaction duplicate user message pruning", () => {
   });
 
   it("keeps short repeated acknowledgements and distant repeats", () => {
+    // Short repeats and distant repeats are plausible user intent, so only
+    // high-confidence duplicated long prompts are removed.
     const short = { role: "user", content: "next", timestamp: 1_000 } as const;
     const shortAgain = { role: "user", content: "next", timestamp: 2_000 } as const;
     const long = {

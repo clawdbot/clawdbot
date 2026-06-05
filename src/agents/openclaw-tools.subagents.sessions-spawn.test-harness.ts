@@ -1,3 +1,4 @@
+// Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
 import { vi, type Mock } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
@@ -42,6 +43,7 @@ type EventWaiter = {
 };
 
 const hoisted = vi.hoisted(() => {
+  // Hoisted state backs module mocks that must exist before test imports resolve.
   const callGatewayMock = vi.fn();
   const sessionStore: Record<string, TestSessionEntry> = {};
   let nextRunId = 0;
@@ -146,6 +148,7 @@ export async function waitForSessionsSpawnEvent(
   predicate: () => boolean,
   timeoutMs = 5_000,
 ): Promise<void> {
+  // Lifecycle assertions wait on explicit predicates instead of fixed sleeps.
   if (predicate()) {
     return;
   }
@@ -186,6 +189,7 @@ export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFl
 }
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
+  // Lazily installs test deps before constructing the real sessions_spawn tool.
   if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
     const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
       await Promise.all([import("./subagent-spawn.js"), import("./subagent-registry.js")]);

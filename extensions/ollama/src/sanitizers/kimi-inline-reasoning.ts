@@ -1,3 +1,4 @@
+// Ollama plugin module implements kimi inline reasoning behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   OllamaVisibleContentSanitizer,

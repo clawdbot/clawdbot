@@ -1,3 +1,4 @@
+// Cron shared tests cover shared cron CLI parsing, display, and error helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";

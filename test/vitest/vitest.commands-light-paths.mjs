@@ -1,3 +1,4 @@
+// Test routing map for lightweight command tests and their source triggers.
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const commandsLightEntries = [

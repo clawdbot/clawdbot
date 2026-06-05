@@ -1,3 +1,4 @@
+// Codex plugin module implements conversation binding behavior.
 import {
   formatErrorMessage,
   resolveSandboxContext,

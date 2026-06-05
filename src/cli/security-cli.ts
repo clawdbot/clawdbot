@@ -1,3 +1,4 @@
+// Security CLI for local/deep audits and safe remediation.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -43,6 +44,7 @@ function buildAuditGatewayAuthOverride(params: {
   token?: string;
   password?: string;
 }) {
+  // Explicit runtime auth overrides must include the matching credential.
   if (!params.mode) {
     return undefined;
   }

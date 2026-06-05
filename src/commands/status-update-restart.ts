@@ -1,3 +1,6 @@
+// Formats update-restart sentinel state for status reports.
+// The sentinel is written by update flows; status only turns it into operator-facing hints.
+
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
@@ -16,6 +19,7 @@ function readAfterVersion(payload: RestartSentinelPayload): string | null {
   return typeof version === "string" && version.trim().length > 0 ? version : null;
 }
 
+/** Returns the one-line update restart status value, or null when no update sentinel applies. */
 export function formatUpdateRestartStatusValue(
   payload: RestartSentinelPayload | null | undefined,
   opts: {
@@ -47,9 +51,11 @@ export function formatUpdateRestartStatusValue(
 
   if (payload.status === "skipped") {
     if (reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
+      // Handoff already started in the control plane; gateway restart should not be duplicated.
       return warn(`handoff running · gateway restart pending · run openclaw update status${age}`);
     }
     if (reason === CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON) {
+      // Restart completed enough to defer, but health proof still needs a deep gateway check.
       return warn(`restart pending health verification · run openclaw gateway status --deep${age}`);
     }
     return muted(`skipped · ${reason ?? "restart skipped"}${age}`);
@@ -59,6 +65,7 @@ export function formatUpdateRestartStatusValue(
   return ok(`verified${version ? ` · gateway ${version}` : ""}${age}`);
 }
 
+/** Returns follow-up action lines for update restart failures or pending handoffs. */
 export function formatUpdateRestartActionLines(
   payload: RestartSentinelPayload | null | undefined,
 ): string[] {

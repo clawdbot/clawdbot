@@ -1,3 +1,4 @@
+// Sandbox formatter tests cover duration, mismatch, and sandbox diagnostic display helpers.
 import { describe, expect, it } from "vitest";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import {

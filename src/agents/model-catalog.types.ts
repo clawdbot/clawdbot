@@ -1,7 +1,11 @@
+/**
+ * Shared model catalog row types.
+ * Used by discovery, browsing, visibility, and provider-auth code so renderers
+ * and filters agree on stable model metadata.
+ */
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 
-// Public catalog row shape shared by browse/search/provider-auth code. Keep this
-// narrow: fields here are the stable model facts consumers can render or filter.
+/** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
 /** Normalized model metadata exposed by the agent model catalog. */

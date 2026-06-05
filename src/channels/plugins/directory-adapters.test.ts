@@ -1,3 +1,4 @@
+// Directory adapter tests cover channel directory adapter contracts and result normalization.
 import { describe, expect, it } from "vitest";
 import {
   createChannelDirectoryAdapter,

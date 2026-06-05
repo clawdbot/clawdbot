@@ -1,3 +1,4 @@
+// Status message helpers read and format stored status messages.
 import fs from "node:fs";
 import {
   normalizeLowercaseStringOrEmpty,

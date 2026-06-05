@@ -1,3 +1,4 @@
+/** Tests ACP translator session setup constraints and initial updates. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";

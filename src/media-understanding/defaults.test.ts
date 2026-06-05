@@ -1,3 +1,5 @@
+// Media-understanding defaults tests keep bundled provider metadata priorities,
+// default models, and native document support aligned with manifests.
 import { describe, expect, it, vi } from "vitest";
 
 const mediaMetadataPlugins = vi.hoisted(() => [

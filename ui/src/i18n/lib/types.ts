@@ -1,3 +1,4 @@
+// Control UI type declarations define types contracts.
 export type TranslationMap = { [key: string]: string | TranslationMap };
 
 export type Locale =

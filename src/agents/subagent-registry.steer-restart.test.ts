@@ -1,3 +1,5 @@
+// Subagent registry steer-restart tests cover replacing child runs after steer
+// commands while preserving lifecycle hooks and completion delivery.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 
@@ -195,6 +197,8 @@ describe("subagent registry steer restarts", () => {
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
+    // Deferred announce lets tests observe registry state while delivery is
+    // still in flight, then release the promise deterministically.
     let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>

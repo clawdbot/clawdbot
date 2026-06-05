@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel actions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeWhatsAppMessageActions,

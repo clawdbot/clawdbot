@@ -1,3 +1,4 @@
+// Control UI chat module implements side result behavior.
 import { normalizeOptionalString } from "../string-coerce.ts";
 
 export type ChatSideResult = {

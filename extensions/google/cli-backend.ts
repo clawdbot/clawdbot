@@ -1,3 +1,4 @@
+// Google plugin module implements cli backend behavior.
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,

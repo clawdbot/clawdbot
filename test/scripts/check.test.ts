@@ -1,3 +1,4 @@
+// Check tests cover check script behavior.
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../../scripts/check.mjs";

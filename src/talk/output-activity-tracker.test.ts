@@ -1,3 +1,4 @@
+// Output activity tracker tests cover realtime output activity detection.
 import { describe, expect, it } from "vitest";
 import { createRealtimeVoiceOutputActivityTracker } from "./output-activity-tracker.js";
 

@@ -1,3 +1,9 @@
+/**
+ * Browser profile service.
+ *
+ * Implements profile listing, creation, and deletion using browser config
+ * mutation helpers and route context runtime state.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +24,7 @@ import { isValidProfileName } from "./profiles.js";
 import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
+/** Input accepted when creating a browser profile. */
 export type CreateProfileParams = {
   name: string;
   color?: string;
@@ -26,6 +33,7 @@ export type CreateProfileParams = {
   driver?: "openclaw" | "existing-session";
 };
 
+/** Result returned after creating a browser profile. */
 export type CreateProfileResult = {
   ok: true;
   profile: string;
@@ -37,6 +45,7 @@ export type CreateProfileResult = {
   isRemote: boolean;
 };
 
+/** Result returned after deleting a browser profile. */
 export type DeleteProfileResult = {
   ok: true;
   profile: string;
@@ -45,6 +54,7 @@ export type DeleteProfileResult = {
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
+/** Create a profile service bound to one browser route context. */
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     return await ctx.listProfiles();

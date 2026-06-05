@@ -1,3 +1,4 @@
+// Codex plugin module implements side question behavior.
 import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,

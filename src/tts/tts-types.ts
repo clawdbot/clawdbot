@@ -1,3 +1,4 @@
+// TTS shared types describe speech requests, responses, and runtime config.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ResolvedTtsPersona,

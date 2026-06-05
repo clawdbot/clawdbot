@@ -1,3 +1,4 @@
+// Memory Core plugin module implements public artifacts behavior.
 import {
   listMemoryHostPublicArtifacts,
   type MemoryPluginPublicArtifact,

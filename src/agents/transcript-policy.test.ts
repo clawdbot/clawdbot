@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for transcript replay policy resolution.
+ * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";

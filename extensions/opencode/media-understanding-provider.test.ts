@@ -1,3 +1,4 @@
+// Opencode tests cover media understanding provider plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   opencodeMediaUnderstandingProvider,

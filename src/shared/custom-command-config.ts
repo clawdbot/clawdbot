@@ -1,3 +1,4 @@
+// Custom command config helpers normalize command configuration records.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Raw custom slash-command entry from config. */

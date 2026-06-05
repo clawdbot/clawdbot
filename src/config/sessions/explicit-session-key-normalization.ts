@@ -1,3 +1,4 @@
+// Explicit session keys are normalized by the channel that owns their opaque id shape.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

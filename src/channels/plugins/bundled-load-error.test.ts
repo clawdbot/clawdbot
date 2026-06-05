@@ -1,3 +1,4 @@
+// Bundled load error tests cover diagnostics when bundled channel plugins fail to load.
 import { describe, it, expect } from "vitest";
 import { describeBundledChannelLoadError } from "./bundled.js";
 

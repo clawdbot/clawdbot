@@ -1,3 +1,4 @@
+// Coverage for OpenRouter Anthropic cache_control payload rewriting.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
@@ -14,6 +15,8 @@ function runOpenRouterPayload(
   modelId: string,
   streamOptions: Parameters<StreamFn>[2] = {},
 ) {
+  // The wrapper mutates provider payloads via onPayload; capture the final body
+  // directly so assertions match transport-facing JSON.
   const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
@@ -91,6 +94,8 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
   });
 
   it("skips new cache markers when OpenRouter Anthropic cache retention is none", () => {
+    // Disabling retention must remove stale thinking-block cache markers too;
+    // OpenRouter rejects those markers on reasoning content.
     const payload = {
       messages: [
         { role: "system", content: "You are a helpful assistant." },

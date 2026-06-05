@@ -1,3 +1,5 @@
+// TTS tool tests cover guidance, speech runtime arguments, delivery metadata,
+// timeout validation, and reply-directive defusing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
 import { createTtsTool } from "./tts-tool.js";
@@ -12,6 +14,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function latestTextToSpeechArgs(): Record<string, unknown> {
+  // Speech runtime args are the public handoff between the model-facing tool
+  // and provider-specific synthesis backends.
   return requireRecord(textToSpeechSpy.mock.calls.at(-1)?.[0], "text-to-speech args");
 }
 

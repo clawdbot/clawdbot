@@ -1,3 +1,4 @@
+// Daemon service env tests cover environment variable assembly for services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

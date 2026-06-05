@@ -1,3 +1,4 @@
+// Telegram tests cover bot message contextm topic threadid plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRecordedUpdateLastRoute,

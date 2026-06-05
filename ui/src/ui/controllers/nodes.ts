@@ -1,3 +1,4 @@
+// Control UI controller manages nodes gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 
 export type NodesState = {

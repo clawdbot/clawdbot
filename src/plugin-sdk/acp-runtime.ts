@@ -34,6 +34,7 @@ export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
 // Keep test helpers off the hot init path. Eagerly merging them here can
 // create a back-edge through the bundled ACP runtime chunk before the imported
 // testing bindings finish initialization.
+/** Lazy ACP test helper facade combining control-plane and runtime registry helpers. */
 export const testing = new Proxy({} as typeof managerTesting & typeof registryTesting, {
   get(_target, prop, receiver) {
     if (Reflect.has(managerTesting, prop)) {

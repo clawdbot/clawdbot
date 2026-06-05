@@ -1,3 +1,4 @@
+// Plugin registry CLI tests cover registry loading, command integration, and reset behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 

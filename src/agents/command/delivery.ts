@@ -1,3 +1,6 @@
+/**
+ * Normalizes and delivers agent command results to outbound channels.
+ */
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -37,8 +40,10 @@ import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
 
+/** Per-payload durable delivery status. */
 export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
 
+/** Delivery outcome for one normalized outbound payload. */
 export type AgentCommandDeliveryPayloadOutcome = {
   index: number;
   status: AgentCommandDeliveryPayloadStatus;
@@ -53,6 +58,7 @@ export type AgentCommandDeliveryPayloadOutcome = {
   };
 };
 
+/** Aggregate delivery status for an agent command result. */
 export type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
@@ -68,6 +74,7 @@ export type AgentCommandDeliveryStatus = {
   payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
 };
 
+/** Agent command result after payload normalization and optional delivery. */
 export type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
   meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
@@ -343,6 +350,7 @@ async function normalizeReplyMediaPathsForDelivery(params: {
   return result;
 }
 
+/** Normalizes reply payloads and media paths before delivery. */
 export function normalizeAgentCommandReplyPayloads(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
@@ -414,6 +422,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
+/** Delivers an agent command result or records why delivery was skipped. */
 export async function deliverAgentCommandResult(
   params: DeliverAgentCommandResultParams,
 ): Promise<AgentCommandDeliveryResult> {

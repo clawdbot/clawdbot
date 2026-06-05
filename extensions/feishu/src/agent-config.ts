@@ -1,3 +1,4 @@
+// Feishu helper module supports agent config behavior.
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 
 type ReasoningDefault = "on" | "stream" | "off";

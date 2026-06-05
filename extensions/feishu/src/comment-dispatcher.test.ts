@@ -1,3 +1,4 @@
+// Feishu tests cover comment dispatcher plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());

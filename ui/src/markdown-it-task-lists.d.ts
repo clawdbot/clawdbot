@@ -1,3 +1,4 @@
+// Control UI type declarations define markdown it task lists contracts.
 declare module "markdown-it-task-lists" {
   import type MarkdownIt from "markdown-it";
   interface TaskListsOptions {

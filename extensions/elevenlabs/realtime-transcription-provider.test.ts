@@ -1,3 +1,4 @@
+// Elevenlabs tests cover realtime transcription provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {

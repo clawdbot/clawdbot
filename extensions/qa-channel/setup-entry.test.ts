@@ -1,3 +1,4 @@
+// Qa Channel tests cover setup entry plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import setupEntry from "./setup-entry.js";
 

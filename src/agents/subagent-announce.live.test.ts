@@ -1,3 +1,5 @@
+// Live subagent announce E2E tests exercise real gateway, session, and provider
+// flows for subagent completion delivery.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,6 +69,8 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 }
 
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
+  // Live E2E runs need the provider credential that matches the selected model
+  // family; fail early before gateway startup.
   expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
 }
 
@@ -621,14 +625,23 @@ describeLive("subagent announce live", () => {
       });
 
       const completedDispatch = await waitFor(
-        "in-process subagent completion agent dispatch",
+        "in-process subagent completion agent dispatch with parent token",
         () => {
           if (initialError) {
             throw toLintErrorObject(initialError, "Non-Error thrown");
           }
-          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+          return inProcessAgentDispatches.find(
+            (entry) => entry.phase === "completed" && entry.resultText.includes(parentToken),
+          );
         },
-      );
+      ).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for parent token in completion dispatch; dispatches=${JSON.stringify(
+            inProcessAgentDispatches,
+          )}`,
+          { cause: error },
+        );
+      });
       expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {

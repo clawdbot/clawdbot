@@ -1,3 +1,5 @@
+// Gateway hooks tests cover token extraction, target agent resolution, payload
+// normalization, allowed-agent checks, and channel alias handling.
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

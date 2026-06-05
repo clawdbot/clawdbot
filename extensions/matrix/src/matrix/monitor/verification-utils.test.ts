@@ -1,3 +1,4 @@
+// Matrix tests cover verification utils plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isMatrixVerificationEventType,

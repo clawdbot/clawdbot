@@ -1,3 +1,4 @@
+// Proxy CLI runtime tests cover proxy runtime process handling and lifecycle events.
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";

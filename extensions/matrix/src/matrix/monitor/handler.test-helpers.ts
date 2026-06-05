@@ -1,3 +1,4 @@
+// Matrix helper module supports handler helpers behavior.
 import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";

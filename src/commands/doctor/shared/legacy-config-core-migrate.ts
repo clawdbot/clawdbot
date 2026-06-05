@@ -1,3 +1,4 @@
+// Core doctor compatibility migration pipeline for current config objects.
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -42,6 +43,7 @@ function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): 
   };
 }
 
+/** Normalize current config through core, plugin setup, channel, and secret-ref migrations. */
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

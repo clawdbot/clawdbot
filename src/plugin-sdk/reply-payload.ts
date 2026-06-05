@@ -1,3 +1,4 @@
+// Reply payload helpers normalize plugin reply targets, text, media, and approval metadata.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
@@ -8,6 +9,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+/** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
@@ -18,6 +20,7 @@ export {
   markReplyPayloadAsTtsSupplement,
 } from "../auto-reply/reply-payload.js";
 
+/** Normalized outbound reply payload accepted by channel send helpers. */
 export type OutboundReplyPayload = {
   /** Plain text reply body. */
   text?: string;
@@ -39,6 +42,7 @@ export type OutboundReplyPayload = {
   replyToId?: string;
 };
 
+/** Minimal payload shape used to identify reasoning/thinking replies. */
 export type ReasoningReplyPayload = {
   /** Reply text that may carry hidden reasoning markers. */
   text?: string;
@@ -46,6 +50,7 @@ export type ReasoningReplyPayload = {
   isReasoning?: boolean;
 };
 
+/** Derived sendability facts for text/media outbound payload delivery. */
 export type SendableOutboundReplyParts = {
   /** Raw text selected for delivery before trimming. */
   text: string;
@@ -80,6 +85,7 @@ function trimLeadingMarkdownQuoteMarkers(text: string): string {
   return candidate;
 }
 
+/** Detect reasoning replies from explicit flags or common reasoning text prefixes. */
 export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean {
   if (payload.isReasoning === true) {
     return true;
@@ -444,6 +450,7 @@ export async function sendMediaWithLeadingCaption(params: {
   return true;
 }
 
+/** Deliver media with leading caption when possible, otherwise fall back to chunked text. */
 export async function deliverTextOrMediaReply(params: {
   payload: OutboundReplyPayload;
   text: string;
@@ -485,6 +492,7 @@ export async function deliverTextOrMediaReply(params: {
   return sentText ? "text" : "empty";
 }
 
+/** Send text with attachment links appended for channels without native media upload. */
 export async function deliverFormattedTextWithAttachments(params: {
   payload: OutboundReplyPayload;
   send: (params: { text: string; replyToId?: string }) => Promise<void>;

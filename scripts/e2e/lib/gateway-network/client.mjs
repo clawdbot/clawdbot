@@ -1,3 +1,4 @@
+// WebSocket client helpers for gateway network E2E scenarios.
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { waitForWebSocketOpen } from "../websocket-open.mjs";

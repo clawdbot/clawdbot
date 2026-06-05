@@ -1,3 +1,4 @@
+// Qqbot plugin module implements message queue behavior.
 import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_GLOBAL_QUEUE_SIZE = 1000;

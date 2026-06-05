@@ -1,3 +1,4 @@
+// Zalo tests cover status issues plugin behavior.
 import { expectOpenDmPolicyConfigIssue } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, it } from "vitest";
 import { collectZaloStatusIssues } from "./status-issues.js";

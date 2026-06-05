@@ -1,3 +1,4 @@
+// Migration provider tests cover provider-specific option shaping.
 import { describe, expect, it } from "vitest";
 import { buildMigrationProviderOptions } from "./providers.js";
 

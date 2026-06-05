@@ -1,3 +1,4 @@
+// Verifies OpenAI strict tool schema normalization and cache behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearOpenAIToolSchemaCacheForTest,
@@ -35,6 +36,7 @@ describe("OpenAI strict tool schema normalization", () => {
   });
 
   it("does not close permissive nested object schemas implicitly", () => {
+    // Nested permissive objects stay incompatible unless callers make them strict.
     const schema = {
       type: "object",
       properties: {
@@ -69,6 +71,7 @@ describe("OpenAI strict tool schema normalization", () => {
   });
 
   it("reuses normalized strict schemas for stable tool schema objects", () => {
+    // Cache keys include unsupported-keyword policy, not just object identity.
     const schema = {
       type: "object",
       properties: {

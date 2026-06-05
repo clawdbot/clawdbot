@@ -1,3 +1,4 @@
+// Live Ollama image tool smoke test for providerless local vision-model config.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,8 @@ const OLLAMA_BASE_URL =
 const OLLAMA_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OLLAMA_IMAGE_MODEL?.trim() || "qwen2.5vl:7b";
 
 function resolveLiveNumCtx(): number {
+  // Ollama vision models can fail with tiny context windows; clamp live smoke
+  // config to a usable minimum while still letting operators override it.
   const parsed = Number.parseInt(process.env.OPENCLAW_LIVE_OLLAMA_IMAGE_NUM_CTX ?? "2048", 10);
   return Number.isFinite(parsed) ? Math.max(512, parsed) : 2048;
 }

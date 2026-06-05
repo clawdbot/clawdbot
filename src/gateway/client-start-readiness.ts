@@ -1,3 +1,5 @@
+// Server-side gateway client readiness adapter.
+// Defers client start until the shared event-loop readiness probe succeeds.
 import type {
   GatewayClientStartable,
   GatewayClientStartReadinessOptions,

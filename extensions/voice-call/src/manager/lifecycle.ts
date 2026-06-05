@@ -1,3 +1,4 @@
+// Voice Call plugin module implements lifecycle behavior.
 import type { CallRecord, EndReason } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { transitionState } from "./state.js";

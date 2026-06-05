@@ -1,3 +1,6 @@
+/**
+ * Releases attempt resources when an embedded-agent run aborts.
+ */
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 
 type AbortLockReleaseLog = {

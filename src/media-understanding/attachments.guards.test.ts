@@ -1,3 +1,5 @@
+// Attachment selection guard tests cover malformed attachment containers and
+// invalid entry shapes.
 import { describe, expect, it } from "vitest";
 import { selectAttachments } from "./attachments.js";
 import type { MediaAttachment } from "./types.js";

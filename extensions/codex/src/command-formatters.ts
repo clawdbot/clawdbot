@@ -1,3 +1,7 @@
+/**
+ * Formats Codex command responses for safe chat display, including status,
+ * lists, account summaries, and user-facing help text.
+ */
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -17,6 +21,7 @@ type CodexStatusProbes = {
   skills: SafeValue<JsonValue | undefined>;
 };
 
+/** Formats the combined `/codex status` probe result. */
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
     probes.models.ok || probes.account.ok || probes.limits.ok || probes.mcps.ok || probes.skills.ok;
@@ -64,6 +69,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
   return lines.join("\n");
 }
 
+/** Formats Codex model-list results for `/codex models`. */
 export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
@@ -80,6 +86,7 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   return lines.join("\n");
 }
 
+/** Formats Codex thread-list responses with safe resume hints. */
 export function formatThreads(response: JsonValue | undefined): string {
   const threads = extractArray(response);
   if (threads.length === 0) {
@@ -104,6 +111,7 @@ export function formatThreads(response: JsonValue | undefined): string {
   ].join("\n");
 }
 
+/** Formats account and rate-limit output for `/codex account`. */
 export function formatAccount(
   account: SafeValue<JsonValue | undefined>,
   limits: SafeValue<JsonValue | undefined>,
@@ -154,6 +162,7 @@ function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): str
   return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
 }
 
+/** Formats Codex Computer Use readiness and plugin/MCP availability. */
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
@@ -183,6 +192,7 @@ function computerUsePluginState(status: CodexComputerUseStatus): string {
   return status.pluginEnabled ? "installed" : "installed, disabled";
 }
 
+/** Formats generic array-like Codex app-server responses. */
 export function formatList(response: JsonValue | undefined, label: string): string {
   const entries = extractArray(response);
   if (entries.length === 0) {
@@ -199,6 +209,7 @@ export function formatList(response: JsonValue | undefined, label: string): stri
   ].join("\n");
 }
 
+/** Formats Codex skills grouped by scope, omitting disabled entries. */
 export function formatSkills(response: JsonValue | undefined): string {
   const groups = isJsonObject(response) && Array.isArray(response.data) ? response.data : [];
   if (groups.length === 0) {
@@ -251,6 +262,7 @@ function formatCodexResumeHint(threadId: string): string {
   return `/codex resume ${safe}`;
 }
 
+/** Escapes Codex-originated text so it is safe to render in chat command output. */
 export function formatCodexDisplayText(value: string): string {
   return escapeCodexChatText(formatCodexTextForDisplay(value));
 }
@@ -277,6 +289,8 @@ function sanitizeCodexTextForDisplay(value: string): string {
 }
 
 function escapeCodexChatText(value: string): string {
+  // Command output is public chat text. Escape markdown/control triggers and
+  // mention characters so Codex data cannot ping users or inject formatting.
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -338,6 +352,7 @@ function isUnsafeDisplayCodePoint(codePoint: number): boolean {
   );
 }
 
+/** Builds the portable `/codex` command help text. */
 export function buildHelp(): string {
   return [
     "Codex commands:",
@@ -492,6 +507,7 @@ function extractArray(value: JsonValue | undefined): JsonValue[] {
   return [];
 }
 
+/** Reads and trims a non-empty string field from a JSON object. */
 export function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

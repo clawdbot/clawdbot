@@ -1,3 +1,4 @@
+/** Tests CLI auth epoch stability across token refreshes and identity changes. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -15,6 +16,8 @@ describe("resolveCliAuthEpoch", () => {
     epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
     label = "auth epoch",
   ): asserts epoch is string {
+    // Epochs are cache/session keys, so tests assert hash shape without caring
+    // about the exact digest value.
     expect(typeof epoch, label).toBe("string");
     expect(epoch, label).toMatch(/^[a-f0-9]{64}$/);
   }

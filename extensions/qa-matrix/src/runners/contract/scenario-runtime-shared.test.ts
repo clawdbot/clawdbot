@@ -1,3 +1,4 @@
+// Qa Matrix tests cover scenario runtime shared plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixQaNoReplyWindowMs } from "./scenario-runtime-shared.js";
 

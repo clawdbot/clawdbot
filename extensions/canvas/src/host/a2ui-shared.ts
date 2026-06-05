@@ -1,15 +1,23 @@
+/**
+ * Shared A2UI/Canvas host paths and live-reload injection helpers.
+ */
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+/** Hosted path prefix for bundled A2UI assets. */
 export const A2UI_PATH = "/__openclaw__/a2ui";
 
+/** Hosted path prefix for Canvas document/static assets. */
 export const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
+/** Hosted WebSocket path for Canvas live reload. */
 export const CANVAS_WS_PATH = "/__openclaw__/ws";
 
+/** Returns whether a URL path targets the hosted A2UI asset surface. */
 export function isA2uiPath(pathname: string): boolean {
   return pathname === A2UI_PATH || pathname.startsWith(`${A2UI_PATH}/`);
 }
 
+/** Injects Canvas bridge helpers and live-reload WebSocket code into HTML. */
 export function injectCanvasLiveReload(html: string): string {
   const snippet = `
 <script>

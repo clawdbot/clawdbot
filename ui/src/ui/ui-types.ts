@@ -1,3 +1,4 @@
+// Control UI module implements ui types behavior.
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;

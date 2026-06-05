@@ -1,3 +1,4 @@
+// Agent Core helper module supports file loader utils behavior.
 import { parse } from "yaml";
 import { type ExecutionEnv, type FileInfo, type Result, toError } from "./types.js";
 

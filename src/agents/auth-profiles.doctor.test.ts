@@ -1,3 +1,7 @@
+/**
+ * Auth-profile doctor copy tests.
+ * Covers provider-specific repair hints without invoking real auth flows.
+ */
 import { beforeAll, describe, expect, it } from "vitest";
 import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";

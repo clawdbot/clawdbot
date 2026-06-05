@@ -1,3 +1,4 @@
+// Plugin test API helpers construct SDK-shaped host APIs for plugin unit tests.
 import {
   attachPluginApiFacades,
   type OpenClawPluginApiWithoutFacades,

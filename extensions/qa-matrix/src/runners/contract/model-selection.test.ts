@@ -1,3 +1,4 @@
+// Qa Matrix tests cover model selection plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadQaRuntimeModule = vi.hoisted(() => vi.fn());

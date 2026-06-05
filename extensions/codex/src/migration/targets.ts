@@ -1,3 +1,4 @@
+// Codex plugin module implements targets behavior.
 import path from "node:path";
 import {
   resolveAgentConfig,

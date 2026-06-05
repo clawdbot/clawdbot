@@ -1,3 +1,4 @@
+// Allow-from fallback migration tests cover doctor repair of legacy sender allowlists.
 import { describe, expect, it, vi } from "vitest";
 import { maybeRepairGroupAllowFromFallback } from "./allowfrom-fallback-migration.js";
 

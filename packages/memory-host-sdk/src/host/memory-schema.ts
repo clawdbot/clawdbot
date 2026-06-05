@@ -1,3 +1,4 @@
+// Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 

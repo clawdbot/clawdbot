@@ -1,3 +1,4 @@
+// Prepares package manifests for npm Telegram live E2E scenarios.
 import fs from "node:fs";
 
 for (const packageJsonPath of process.argv.slice(2)) {

@@ -1,3 +1,4 @@
+// Control UI module implements sidebar content behavior.
 export type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;

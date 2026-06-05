@@ -1,3 +1,4 @@
+// Imessage tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 

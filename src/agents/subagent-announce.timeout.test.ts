@@ -1,3 +1,5 @@
+// Subagent announce timeout tests cover retry timing and fallback requester
+// resolution when completion delivery cannot finish immediately.
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
@@ -110,6 +112,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
+    // Retry behavior is modeled here because the outer announce flow only sees
+    // whether direct delivery eventually succeeded or failed.
     const buildRequest = () => ({
       method: "agent",
       expectFinal: true,

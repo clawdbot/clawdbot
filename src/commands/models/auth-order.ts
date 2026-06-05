@@ -1,3 +1,4 @@
+/** Commands for viewing and editing per-agent provider auth profile order. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -48,6 +49,7 @@ async function resolveAuthOrderContext(
   return { cfg, agentId, agentDir, provider };
 }
 
+/** Shows the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
@@ -75,6 +77,7 @@ export async function modelsAuthOrderGetCommand(
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
+/** Clears the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
@@ -96,6 +99,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log("Cleared per-agent order override.");
 }
 
+/** Sets the provider auth profile priority order after validating each profile id. */
 export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,

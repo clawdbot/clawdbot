@@ -1,3 +1,4 @@
+// Fireworks provider module implements model/runtime integration.
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,

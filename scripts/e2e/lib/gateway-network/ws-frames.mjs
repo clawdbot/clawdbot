@@ -1,3 +1,4 @@
+// WebSocket frame helpers for gateway network E2E fixtures.
 function formatCloseValue(value) {
   if (value === undefined || value === null) {
     return "";

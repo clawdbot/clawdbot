@@ -1,3 +1,4 @@
+// OC Path module implements ast behavior.
 import type { Document, LineCounter } from "yaml";
 
 export interface YamlAst {

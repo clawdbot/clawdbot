@@ -1,3 +1,8 @@
+/**
+ * Channel setup wizard helper functions.
+ *
+ * Prompts account ids, credentials, allowlists, and account-scoped setup config updates.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,

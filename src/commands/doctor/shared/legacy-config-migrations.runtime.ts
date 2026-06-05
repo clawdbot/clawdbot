@@ -1,3 +1,4 @@
+// Aggregated runtime legacy config migration specs across agents, gateway, models, and tools.
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS } from "./legacy-config-migrations.runtime.agents.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS } from "./legacy-config-migrations.runtime.diagnostics.js";
@@ -8,6 +9,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS } from "./legacy-config-migr
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
 
+/** Ordered runtime legacy config migrations applied by doctor. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS,

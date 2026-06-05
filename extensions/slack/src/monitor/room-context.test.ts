@@ -1,3 +1,4 @@
+// Slack tests cover room context plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackRoomContextHints } from "./room-context.js";
 

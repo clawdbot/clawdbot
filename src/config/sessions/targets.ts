@@ -1,3 +1,4 @@
+// Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -95,6 +96,8 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   const storePath = path.join(params.sessionsDir, "sessions.json");
   try {
     const stat = fsSync.lstatSync(storePath);
+    // Discovered stores must be real files under the agents root; symlinked stores could escape
+    // the managed agent tree.
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
@@ -147,6 +150,8 @@ function resolveSessionStoreDiscoveryState(
     }
   }
   agentsRoots.add(path.join(resolveStateDir(env), "agents"));
+  // Search both configured template roots and the default state root so retired/manual agents are
+  // visible even when no longer listed in config.
   return {
     configuredTargets,
     agentsRoots: [...agentsRoots],
@@ -196,6 +201,8 @@ export function resolveAllAgentSessionStoreTargetsSync(
   };
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
     const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
+    // Configured explicit non-agent paths are accepted as-is; only agent-tree paths need
+    // containment validation.
     if (!agentsRoot) {
       return [target];
     }

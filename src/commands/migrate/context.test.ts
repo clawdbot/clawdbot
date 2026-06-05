@@ -1,3 +1,4 @@
+// Migration context tests cover report directory naming and timestamp fallback behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildMigrationReportDir } from "./context.js";

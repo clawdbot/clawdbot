@@ -1,5 +1,5 @@
+// Msteams plugin module implements pending uploads fs behavior.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
@@ -7,8 +7,6 @@ import {
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
 } from "./sqlite-state.js";
-import { resolveMSTeamsStorePath } from "./storage.js";
-import { readJsonFile } from "./store-fs.js";
 
 /** TTL for persisted pending uploads (matches in-memory store). */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
@@ -20,10 +18,8 @@ const MAX_PENDING_UPLOAD_CHUNK_ROWS = 45_000;
 const RAW_CHUNK_BYTES = 36 * 1024;
 const PENDING_UPLOAD_META_MAX_ENTRIES = MAX_PENDING_UPLOADS + 100;
 
-const STORE_FILENAME = "msteams-pending-uploads.json";
 const PENDING_UPLOAD_META_NAMESPACE = "pending-uploads";
 const PENDING_UPLOAD_CHUNKS_NAMESPACE = "pending-upload-chunks";
-const PENDING_UPLOAD_MIGRATIONS_NAMESPACE = "pending-upload-migrations";
 const PENDING_UPLOAD_LOCK_FILENAME = "msteams-pending-uploads.sqlite.lock";
 
 type PendingUploadFsRecord = {
@@ -47,13 +43,6 @@ type PendingUploadFs = {
   createdAt: number;
 };
 
-type PendingUploadStoreData = {
-  version: 1;
-  uploads: Record<string, PendingUploadFsRecord>;
-};
-
-const empty: PendingUploadStoreData = { version: 1, uploads: {} };
-
 type PendingUploadMetaRecord = Omit<PendingUploadFsRecord, "bufferBase64"> & {
   chunkCount: number;
   byteLength: number;
@@ -65,10 +54,6 @@ type PendingUploadChunkRecord = {
   dataBase64: string;
 };
 
-type PendingUploadMigrationMarker = {
-  importedAt: string;
-};
-
 type PendingUploadsFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -76,16 +61,6 @@ type PendingUploadsFsOptions = {
   storePath?: string;
   ttlMs?: number;
 };
-
-function resolveLegacyFilePath(options: PendingUploadsFsOptions | undefined): string {
-  return resolveMSTeamsStorePath({
-    filename: STORE_FILENAME,
-    env: options?.env,
-    homedir: options?.homedir,
-    stateDir: options?.stateDir,
-    storePath: options?.storePath,
-  });
-}
 
 function createMetaStore(
   options: PendingUploadsFsOptions | undefined,
@@ -107,16 +82,6 @@ function createChunkStore(
   });
 }
 
-function createMigrationStore(
-  options: PendingUploadsFsOptions | undefined,
-): PluginStateKeyedStore<PendingUploadMigrationMarker> {
-  return getMSTeamsRuntime().state.openKeyedStore<PendingUploadMigrationMarker>({
-    namespace: PENDING_UPLOAD_MIGRATIONS_NAMESPACE,
-    maxEntries: 100,
-    env: resolveMSTeamsSqliteStateEnv(options),
-  });
-}
-
 function buildUploadKey(id: string): string {
   return `upload:${createHash("sha256").update(id).digest("hex")}`;
 }
@@ -127,45 +92,6 @@ function buildMetaKey(id: string): string {
 
 function buildChunkKey(id: string, index: number): string {
   return `${buildUploadKey(id)}:chunk:${String(index).padStart(4, "0")}`;
-}
-
-function buildMigrationKey(filePath: string): string {
-  return `legacy-json:${createHash("sha256").update(filePath).digest("hex")}`;
-}
-
-function buildMigrationContentKey(filePath: string, value: unknown): string {
-  return `legacy-json-content:${createHash("sha256")
-    .update(filePath)
-    .update("\0")
-    .update(JSON.stringify(value) ?? "undefined")
-    .digest("hex")}`;
-}
-
-function pruneExpired(
-  uploads: Record<string, PendingUploadFsRecord>,
-  nowMs: number,
-  ttlMs: number,
-): Record<string, PendingUploadFsRecord> {
-  const kept: Record<string, PendingUploadFsRecord> = {};
-  for (const [id, record] of Object.entries(uploads)) {
-    if (nowMs - record.createdAt <= ttlMs) {
-      kept[id] = record;
-    }
-  }
-  return kept;
-}
-
-function pruneToLimit(
-  uploads: Record<string, PendingUploadFsRecord>,
-): Record<string, PendingUploadFsRecord> {
-  const entries = Object.entries(uploads);
-  if (entries.length <= MAX_PENDING_UPLOADS) {
-    return uploads;
-  }
-  // Oldest createdAt first; drop the oldest until we fit.
-  entries.sort((a, b) => a[1].createdAt - b[1].createdAt);
-  const keep = entries.slice(entries.length - MAX_PENDING_UPLOADS);
-  return Object.fromEntries(keep);
 }
 
 function recordToUpload(
@@ -181,63 +107,6 @@ function recordToUpload(
     consentCardActivityId: record.consentCardActivityId,
     createdAt: record.createdAt,
   };
-}
-
-function isValidStore(value: unknown): value is PendingUploadStoreData {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<PendingUploadStoreData>;
-  return (
-    candidate.version === 1 &&
-    typeof candidate.uploads === "object" &&
-    candidate.uploads !== null &&
-    !Array.isArray(candidate.uploads)
-  );
-}
-
-function normalizeLegacyUploadRecord(value: unknown): PendingUploadFsRecord | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as Partial<PendingUploadFsRecord>;
-  if (
-    typeof record.id !== "string" ||
-    !record.id ||
-    typeof record.bufferBase64 !== "string" ||
-    typeof record.filename !== "string" ||
-    !record.filename ||
-    typeof record.conversationId !== "string" ||
-    !record.conversationId ||
-    typeof record.createdAt !== "number" ||
-    !Number.isFinite(record.createdAt)
-  ) {
-    return null;
-  }
-  return {
-    id: record.id,
-    bufferBase64: record.bufferBase64,
-    filename: record.filename,
-    contentType: typeof record.contentType === "string" ? record.contentType : undefined,
-    conversationId: record.conversationId,
-    consentCardActivityId:
-      typeof record.consentCardActivityId === "string" ? record.consentCardActivityId : undefined,
-    createdAt: record.createdAt,
-  };
-}
-
-function normalizeLegacyUploads(value: unknown): Record<string, PendingUploadFsRecord> {
-  if (!isValidStore(value)) {
-    return {};
-  }
-  const uploads: Record<string, PendingUploadFsRecord> = {};
-  for (const record of Object.values(value.uploads)) {
-    const normalized = normalizeLegacyUploadRecord(record);
-    if (normalized) {
-      uploads[normalized.id] = normalized;
-    }
-  }
-  return uploads;
 }
 
 async function deleteUploadRows(
@@ -302,54 +171,11 @@ async function registerUploadRows(
   );
 }
 
-async function importLegacyStore(
-  options: PendingUploadsFsOptions | undefined,
-  metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
-  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
-  ttlMs: number,
-): Promise<void> {
-  const legacyFilePath = resolveLegacyFilePath(options);
-  const migrationStore = createMigrationStore(options);
-  const migrationKey = buildMigrationKey(legacyFilePath);
-  const imported = (await migrationStore.lookup(migrationKey)) !== undefined;
-  const { value, exists } = await readJsonFile<unknown>(legacyFilePath, empty);
-  if (!exists) {
-    if (!imported) {
-      await migrationStore.register(migrationKey, { importedAt: new Date().toISOString() });
-    }
-    return;
-  }
-  const contentKey = buildMigrationContentKey(legacyFilePath, value);
-  if (await migrationStore.lookup(contentKey)) {
-    return;
-  }
-  const legacy = pruneToLimit(pruneExpired(normalizeLegacyUploads(value), Date.now(), ttlMs));
-  for (const record of Object.values(legacy)) {
-    await registerUploadRows(record, metaStore, chunkStore, ttlMs, false);
-  }
-  await migrationStore.register(contentKey, { importedAt: new Date().toISOString() });
-  if (!imported) {
-    await migrationStore.register(migrationKey, { importedAt: new Date().toISOString() });
-  }
-  await fs.rm(legacyFilePath, { force: true }).catch(() => {});
-}
-
 async function withPendingUploadLock<T>(
   options: PendingUploadsFsOptions | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
   return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_LOCK_FILENAME, run);
-}
-
-async function ensureLegacyImported(
-  options: PendingUploadsFsOptions | undefined,
-  metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
-  chunkStore: PluginStateKeyedStore<PendingUploadChunkRecord>,
-  ttlMs: number,
-): Promise<void> {
-  await withPendingUploadLock(options, () =>
-    importLegacyStore(options, metaStore, chunkStore, ttlMs),
-  );
 }
 
 async function readUploadRows(
@@ -432,7 +258,6 @@ export async function storePendingUploadFs(
   const metaStore = createMetaStore(options);
   const chunkStore = createChunkStore(options);
   await withPendingUploadLock(options, async () => {
-    await importLegacyStore(options, metaStore, chunkStore, ttlMs);
     await registerUploadRows(
       {
         id: upload.id,
@@ -465,7 +290,6 @@ export async function getPendingUploadFs(
   const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
   const metaStore = createMetaStore(options);
   const chunkStore = createChunkStore(options);
-  await ensureLegacyImported(options, metaStore, chunkStore, ttlMs);
   const upload = await readUploadRows(id, metaStore, chunkStore);
   if (!upload) {
     return undefined;
@@ -488,11 +312,9 @@ export async function removePendingUploadFs(
   if (!id) {
     return;
   }
-  const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
   const metaStore = createMetaStore(options);
   const chunkStore = createChunkStore(options);
   await withPendingUploadLock(options, async () => {
-    await importLegacyStore(options, metaStore, chunkStore, ttlMs);
     await deleteUploadRows(id, metaStore, chunkStore);
   });
 }
@@ -508,9 +330,7 @@ export async function setPendingUploadActivityIdFs(
 ): Promise<void> {
   const ttlMs = options?.ttlMs ?? PENDING_UPLOAD_TTL_MS;
   const metaStore = createMetaStore(options);
-  const chunkStore = createChunkStore(options);
   await withPendingUploadLock(options, async () => {
-    await importLegacyStore(options, metaStore, chunkStore, ttlMs);
     const record = await metaStore.lookup(buildMetaKey(id));
     if (!record || Date.now() - record.createdAt > ttlMs) {
       return;

@@ -1,3 +1,4 @@
+// Msteams tests cover message handler.thread session plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 

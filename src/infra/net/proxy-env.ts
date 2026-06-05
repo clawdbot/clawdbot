@@ -1,3 +1,5 @@
+// Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
+// adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
 export const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -19,6 +21,8 @@ export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
+  // Empty lowercase env vars intentionally shadow uppercase values, matching
+  // undici's EnvHttpProxyAgent precedence.
   if (typeof value !== "string") {
     return undefined;
   }

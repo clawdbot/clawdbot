@@ -1,3 +1,4 @@
+// CommonJS root alias for plugin SDK and workspace package subpath loading.
 "use strict";
 
 const path = require("node:path");

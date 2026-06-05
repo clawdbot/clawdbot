@@ -1,3 +1,4 @@
+// File Transfer tests cover params plugin behavior.
 import { describe, expect, it } from "vitest";
 import { readClampedInt, readGatewayCallOptions } from "./params.js";
 

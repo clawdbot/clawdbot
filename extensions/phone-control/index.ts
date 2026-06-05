@@ -1,3 +1,4 @@
+// Phone Control plugin entrypoint registers its OpenClaw integration.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

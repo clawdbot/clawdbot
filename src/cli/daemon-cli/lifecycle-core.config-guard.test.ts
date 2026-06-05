@@ -1,3 +1,4 @@
+// Daemon lifecycle config guard tests cover config checks before service lifecycle actions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../../version.js";
 import {

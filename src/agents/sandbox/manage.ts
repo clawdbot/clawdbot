@@ -1,3 +1,8 @@
+/**
+ * CLI-facing sandbox management helpers.
+ *
+ * Lists and removes registered runtime and browser containers using backend manager status.
+ */
 import { getRuntimeConfig } from "../../config/config.js";
 import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { getSandboxBackendManager } from "./backend.js";
@@ -13,9 +18,6 @@ import {
 } from "./registry.js";
 import { resolveSandboxAgentId } from "./shared.js";
 
-/**
- * CLI-facing sandbox management helpers for listing and removing runtime/browser containers.
- */
 export type SandboxContainerInfo = SandboxRegistryEntry & {
   running: boolean;
   imageMatch: boolean;

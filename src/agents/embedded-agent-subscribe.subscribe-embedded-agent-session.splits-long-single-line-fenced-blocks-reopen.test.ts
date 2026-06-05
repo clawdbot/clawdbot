@@ -1,3 +1,5 @@
+// Long fenced block and compaction retry tests cover Markdown-safe chunking and
+// subscription state reset around automatic compaction retries.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +29,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expectFencedChunks(onBlockReply.mock.calls, "```json");
   });
   it("waits for auto-compaction retry and clears buffered text", async () => {
+    // A retrying compaction invalidates any assistant text buffered from the
+    // failed attempt; waiters resolve only after the retry path reaches agent_end.
     const listeners: SessionEventHandler[] = [];
     const session = {
       subscribe: (listener: SessionEventHandler) => {
@@ -119,6 +123,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("resets assistant usage to a zero snapshot after compaction without retry", () => {
+    // When compaction ends the active assistant message is synthetic, so usage
+    // should reset to a zero snapshot instead of carrying stale token totals.
     const listeners: SessionEventHandler[] = [];
     const session = {
       messages: [

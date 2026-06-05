@@ -1,3 +1,4 @@
+// Nodes CLI coverage tests cover node command branches and output formatting.
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";

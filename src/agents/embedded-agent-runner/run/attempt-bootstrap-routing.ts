@@ -1,3 +1,6 @@
+/**
+ * Resolves bootstrap context targets for one embedded-agent attempt.
+ */
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";

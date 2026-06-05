@@ -1,3 +1,4 @@
+// Device auth tests cover role and scope normalization for paired devices.
 import { describe, expect, it } from "vitest";
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 

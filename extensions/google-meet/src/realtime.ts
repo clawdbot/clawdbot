@@ -1,3 +1,4 @@
+// Google Meet plugin module implements realtime behavior.
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

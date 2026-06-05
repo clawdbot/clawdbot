@@ -1,3 +1,4 @@
+// Qa Coverage Report script supports OpenClaw repository automation.
 import { runQaCoverageReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mjs";
 

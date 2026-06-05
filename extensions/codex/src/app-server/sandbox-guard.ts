@@ -1,3 +1,7 @@
+/**
+ * Blocks direct Codex app-server requests that would bypass OpenClaw sandbox or
+ * node-exec routing guarantees.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -65,6 +69,7 @@ const NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS = new Set<string>([
   "config/mcpServer/reload",
 ]);
 
+/** Returns a block message when a direct app-server method would bypass OpenClaw execution policy. */
 export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   method: string;
   requestParams?: unknown;
@@ -117,6 +122,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   return sandboxBlock;
 }
 
+/** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
 export function resolveCodexNativeExecutionBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -126,6 +132,7 @@ export function resolveCodexNativeExecutionBlock(params: {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 
+/** Returns a block message when native Codex execution cannot honor active sandboxing. */
 export function resolveCodexNativeSandboxBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;

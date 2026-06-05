@@ -1,3 +1,4 @@
+// Media Generation Core module implements capability model ref behavior.
 import { normalizeOptionalString } from "./string.js";
 
 /** Provider catalog entry shape used when resolving capability-scoped model references. */

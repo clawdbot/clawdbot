@@ -1,3 +1,4 @@
+// Runs child commands with process-group signal forwarding and Windows shell normalization.
 import { spawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
@@ -8,6 +9,8 @@ const managedChildren = new Set();
 const signalHandlers = new Map();
 
 /**
+ * Return conventional shell exit code for a signal.
+ *
  * @param {NodeJS.Signals} signal
  * @returns {number}
  */
@@ -45,6 +48,8 @@ function terminateManagedChild(child, signal = "SIGTERM") {
 }
 
 /**
+ * Run a child command while forwarding termination signals to the managed process group.
+ *
  * @param {{
  *   bin: string;
  *   args?: string[];
@@ -113,6 +118,8 @@ export async function runManagedCommand({
 }
 
 /**
+ * Build the spawn command, args, and options used by managed command execution.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
@@ -125,6 +132,8 @@ function addManagedChild(managedChild) {
 }
 
 /**
+ * Build a normalized command invocation, including cmd.exe wrapping on Windows.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;

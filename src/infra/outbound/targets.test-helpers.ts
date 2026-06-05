@@ -1,3 +1,5 @@
+// Shared outbound target test fixtures provide deterministic channel plugins,
+// target parsing, and session-route behavior.
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,

@@ -1,3 +1,4 @@
+// Coverage for registry-backed model forward-compatibility fallbacks.
 import { describe, it, vi } from "vitest";
 import {
   buildForwardCompatTemplate,
@@ -78,6 +79,8 @@ const ZAI_GLM5_CASE = {
 } as const;
 
 function createRuntimeHooks() {
+  // Provider runtime mock supplies dynamic fallbacks for future ids while the
+  // local registry supplies older template rows.
   return createProviderRuntimeTestMock({
     handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai"],
   });
@@ -86,6 +89,7 @@ function createRuntimeHooks() {
 function createRegistry(
   entries: Array<{ provider: string; modelId: string; model: Record<string, unknown> }>,
 ) {
+  // Minimal registry contract used by resolveModelWithRegistry.
   return {
     find(provider: string, modelId: string) {
       const match = entries.find(
@@ -135,6 +139,8 @@ function runAnthropicSonnetForwardCompatFallback() {
 }
 
 function runClaudeCliSonnetForwardCompatFallback() {
+  // claude-cli uses Anthropic templates but must preserve the requested provider
+  // so downstream auth/transport stays on the CLI integration.
   expectResolvedForwardCompatFallbackWithRegistryResult({
     result: resolveModelWithRegistry({
       provider: "claude-cli",

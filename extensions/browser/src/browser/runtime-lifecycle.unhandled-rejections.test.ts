@@ -1,3 +1,4 @@
+// Browser tests cover runtime lifecycle.unhandled rejections plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, resetHandlers } =

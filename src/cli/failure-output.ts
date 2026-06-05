@@ -1,3 +1,4 @@
+// Shared root CLI failure formatting with debug stack gating and recovery hints.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { formatCliCommand } from "./command-format.js";
@@ -27,6 +28,7 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
+  // Default output stays terse; stack traces require explicit debug intent.
   const env = options.env ?? process.env;
   const lines = [
     `[openclaw] ${options.title}`,

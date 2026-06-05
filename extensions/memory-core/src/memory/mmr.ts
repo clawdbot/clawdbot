@@ -1,3 +1,4 @@
+// Memory Core plugin module implements mmr behavior.
 import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
 
 /**

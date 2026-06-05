@@ -1,3 +1,5 @@
+// Global Undici dispatcher setup keeps process-wide proxy routing, HTTP/1-only
+// enforcement, and long stream timeouts aligned across root fetch imports.
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
@@ -112,6 +114,8 @@ function createTimedProxylineManagedDispatcher(
         return value;
       }
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
+        // Lifecycle calls must hit the original dispatcher so close/destroy do
+        // not recurse through helper methods that intentionally see the proxy.
         return value.bind(target);
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {

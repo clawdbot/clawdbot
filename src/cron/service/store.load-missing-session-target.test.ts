@@ -1,3 +1,4 @@
+// Missing session target tests cover loading legacy cron state without targets.
 import { describe, expect, it } from "vitest";
 import { assertSupportedJobSpec } from "./jobs.js";
 

@@ -1,3 +1,7 @@
+/**
+ * Resolves whether Codex app-server native execution can own shell/file work,
+ * or whether OpenClaw must keep exec/process on a configured node host.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -18,6 +22,7 @@ const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
 const LEADING_DASH_PATTERN = /^-+/;
 const TRAILING_DASH_PATTERN = /-+$/;
 
+/** Effective execution-host policy for the Codex app-server native tool surface. */
 export type CodexNativeExecutionPolicy = {
   nativeToolSurfaceAllowed: boolean;
   requestedExecHost: ExecTarget;
@@ -26,6 +31,7 @@ export type CodexNativeExecutionPolicy = {
   blockReason?: string;
 };
 
+/** Resolves node/gateway/sandbox execution ownership from overrides, session, agent, and config. */
 export function resolveCodexNativeExecutionPolicy(params: {
   config?: OpenClawConfig;
   sessionEntry?: SessionEntry;
@@ -84,6 +90,7 @@ export function resolveCodexNativeExecutionPolicy(params: {
   };
 }
 
+/** Formats the user-facing explanation shown when native tools are blocked by exec host=node. */
 export function formatCodexNativeNodeExecBlock(params: {
   surface: string;
   reason?: string;

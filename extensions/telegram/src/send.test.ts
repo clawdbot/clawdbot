@@ -1,3 +1,4 @@
+// Telegram tests cover send plugin behavior.
 import fs from "node:fs";
 import type { Bot } from "grammy";
 import {

@@ -1,3 +1,4 @@
+// Test Support provider module implements model/runtime integration.
 import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type {
   ProviderCatalogContext,

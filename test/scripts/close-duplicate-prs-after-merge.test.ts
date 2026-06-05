@@ -1,3 +1,4 @@
+// Close Duplicate Prs After Merge tests cover close duplicate prs after merge script behavior.
 import { describe, expect, it } from "vitest";
 import {
   applyClosePlan,

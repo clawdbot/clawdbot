@@ -1,3 +1,5 @@
+// Verifies managed proxy CA trust is attached only to matching Undici proxy
+// options, including child-process env inheritance.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";

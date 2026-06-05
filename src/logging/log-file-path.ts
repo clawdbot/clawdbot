@@ -1,3 +1,4 @@
+// Log file path helpers resolve log output paths for local runtime logs.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import {

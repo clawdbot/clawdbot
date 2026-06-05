@@ -1,3 +1,4 @@
+// Image Generation Core API module exposes the plugin public contract.
 export {
   generateImage,
   listRuntimeImageGenerationProviders,

@@ -1,3 +1,4 @@
+// Talk provider resolver tests cover provider selection from config.
 import { describe, expect, it } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "./provider-resolver.js";

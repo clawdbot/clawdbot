@@ -1,3 +1,4 @@
+// Discord plugin module implements capture state behavior.
 import type { Readable } from "node:stream";
 
 type VoiceCaptureEntry = {

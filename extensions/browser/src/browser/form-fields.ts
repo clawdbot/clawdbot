@@ -1,6 +1,13 @@
+/**
+ * Browser form field normalization.
+ *
+ * Converts model/client fill field payloads into the compact field shape used
+ * by Playwright and Chrome MCP fill actions.
+ */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserFormField } from "./client-actions.types.js";
 
+/** Default field type for fill actions when no type is provided. */
 export const DEFAULT_FILL_FIELD_TYPE = "text";
 
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
@@ -14,12 +21,14 @@ function normalizeBrowserFormFieldType(value: unknown): string {
   return type || DEFAULT_FILL_FIELD_TYPE;
 }
 
+/** Normalize a form field value to the types accepted by fill actions. */
 export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? value
     : undefined;
 }
 
+/** Normalize one form field descriptor from untrusted route/tool input. */
 export function normalizeBrowserFormField(
   record: Record<string, unknown>,
 ): BrowserFormField | null {

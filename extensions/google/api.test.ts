@@ -1,3 +1,4 @@
+// Google tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,

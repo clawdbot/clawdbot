@@ -1,3 +1,4 @@
+// Terminal Core tests cover prompt select styled behavior.
 import { describe, expect, it } from "vitest";
 import { styleSelectParams } from "./prompt-select-styled-params.js";
 

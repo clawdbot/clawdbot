@@ -1,3 +1,8 @@
+/**
+ * Plugin-defined text replacement transforms for stream boundaries.
+ *
+ * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
+ */
 import type { AssistantMessageEvent } from "../llm/types.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import type { StreamFn } from "./runtime/index.js";

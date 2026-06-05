@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements runtime tool metadata behavior.
 import {
   asBoolean as readBoolean,
   isRecord,

@@ -1,3 +1,8 @@
+/**
+ * Tests effective OAuth credential selection.
+ * Ensures external CLI bootstrap credentials are used only when local OAuth
+ * state is unusable and identity-safe.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import type { OAuthCredential } from "./types.js";

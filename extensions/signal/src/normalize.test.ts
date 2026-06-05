@@ -1,3 +1,4 @@
+// Signal tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 

@@ -1,3 +1,4 @@
+// Qa Lab tests cover capture saved view plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 

@@ -1,3 +1,8 @@
+/**
+ * Host/container path safety guard for the sandbox filesystem bridge.
+ *
+ * Proves requested container paths stay inside allowed mounts before host paths are opened or mutated.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
@@ -9,12 +14,6 @@ import {
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 
-/**
- * Host/container path safety guard for the sandbox fs bridge.
- *
- * Every bridge operation must prove the requested container path resolves inside
- * an allowed mount before the host path is opened or mutated.
- */
 type BoundaryAllowedType = "file" | "directory";
 
 /** Caller-provided path safety requirements for one fs bridge operation. */

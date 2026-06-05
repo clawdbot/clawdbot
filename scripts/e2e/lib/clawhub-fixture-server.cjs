@@ -1,3 +1,4 @@
+// CommonJS fixture server for ClawHub package/install E2E scenarios.
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");

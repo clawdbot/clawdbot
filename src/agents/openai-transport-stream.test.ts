@@ -1,3 +1,4 @@
+// Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +100,7 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
 }
 
 function neverYieldsStream(): AsyncIterable<unknown> {
+  // Simulates an HTTP stream that opened but never delivered the first SSE event.
   return {
     [Symbol.asyncIterator]() {
       return {
@@ -116,6 +118,7 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Shared assertion helper for parsed transport payload/event records.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -141,6 +144,7 @@ describe("openai transport stream", () => {
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
+    // Observation should preserve hashes/metadata shape while dropping raw request ids.
     const model = createAzureResponsesModel();
     const event = {
       type: "response.failed",

@@ -1,3 +1,4 @@
+// Legacy cron `notify: true` migration to explicit webhook/completion delivery.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -9,6 +10,7 @@ export type LegacyNotifyMigrationOutcome = {
   warnings: string[];
 };
 
+/** Migrate legacy notify fallback flags into explicit delivery destinations when possible. */
 export function migrateLegacyNotifyFallback(params: {
   jobs: Array<Record<string, unknown>>;
   legacyWebhook?: string;

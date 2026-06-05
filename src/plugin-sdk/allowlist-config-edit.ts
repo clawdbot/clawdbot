@@ -1,3 +1,4 @@
+// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";

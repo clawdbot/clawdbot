@@ -1,3 +1,4 @@
+// Verifies plugin loading needed before agent harness selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -129,6 +130,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
   });
 
   it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
+    // A configured harness can request loading, but explicit plugin allowlists
+    // remain the operator's boundary and are not widened implicitly.
     await ensureSelectedAgentHarnessPlugin({
       provider: "github-copilot",
       modelId: "gpt-4o",
@@ -203,6 +206,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
   });
 
   it("does not auto-activate untrusted provider owners for Codex harness loads", async () => {
+    // Provider owner activation is limited to bundled-compatible/activatable
+    // owners so workspace plugins are not enabled just because Codex was chosen.
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai", "workspace-openai"]);
     mocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce([]);

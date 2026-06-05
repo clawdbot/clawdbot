@@ -1,9 +1,8 @@
+// Connected Gateway server test helpers.
+// Provides reusable websocket server fixtures for Control UI/Gateway tests.
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { connectOk, startServerWithClient, testState } from "./test-helpers.js";
 
-/**
- * Test helpers for running code against a connected gateway WebSocket server.
- */
 type StartServerWithClient = typeof startServerWithClient;
 type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
 type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];

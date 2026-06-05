@@ -1,3 +1,4 @@
+/** Tests merging bundled MCP defaults with OpenClaw user MCP configuration. */
 import { describe, expect, it, vi } from "vitest";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
 

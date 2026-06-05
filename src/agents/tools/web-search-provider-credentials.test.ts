@@ -1,3 +1,5 @@
+// Web search credential tests cover precedence between configured credentials,
+// SecretRefs, and ambient environment fallbacks.
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveWebSearchProviderCredential } from "./web-search-provider-credentials.js";
@@ -32,6 +34,8 @@ describe("resolveWebSearchProviderCredential", () => {
   });
 
   it("does not override missing env SecretRefs with ambient env fallback", () => {
+    // An explicit SecretRef means "use this credential"; falling back to a
+    // different env var can silently route requests through the wrong account.
     withEnv(
       { TEST_WEB_SEARCH_REF_KEY: undefined, TEST_WEB_SEARCH_KEY: "ambient-test-value" },
       () => {

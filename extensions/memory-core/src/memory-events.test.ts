@@ -1,3 +1,4 @@
+// Memory Core tests cover memory events plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";

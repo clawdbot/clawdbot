@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements agent tools login behavior.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,

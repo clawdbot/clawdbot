@@ -1,3 +1,6 @@
+/**
+ * Looks up model catalog entries and input capability support.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,

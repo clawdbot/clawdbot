@@ -1,3 +1,8 @@
+/**
+ * Provider auth alias resolution.
+ * Maps deprecated and plugin-defined provider IDs to canonical credential
+ * providers, with trusted workspace plugin handling and process-stable caching.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,9 +17,7 @@ import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 
-// Provider auth aliases map deprecated or plugin-defined provider IDs to the
-// canonical provider used for credential lookup. Plugin origin priority keeps
-// configured aliases ahead of bundled/global/workspace aliases.
+/** Inputs that control plugin metadata and trust scope for auth alias lookup. */
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;

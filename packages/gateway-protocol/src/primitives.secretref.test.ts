@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover primitives.secretref behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import {

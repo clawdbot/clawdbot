@@ -1,3 +1,8 @@
+/**
+ * Tool image output sanitizer.
+ *
+ * Downscales and recompresses oversized base64 image blocks before provider replay.
+ */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ImageContent } from "../llm/types.js";
@@ -20,12 +25,8 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
-// Anthropic Messages API limitations (observed in OpenClaw sessions):
-// - Images over ~2000px per side can fail in multi-image requests.
-// - Images over 5MB are rejected by the API.
-//
-// To keep sessions resilient (and avoid "silent" WhatsApp non-replies), we auto-downscale
-// and recompress base64 image blocks when they exceed these limits.
+// Anthropic Messages API rejects oversized images; sanitize here so replayed
+// tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");

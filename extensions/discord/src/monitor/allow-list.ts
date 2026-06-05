@@ -1,3 +1,4 @@
+// Discord plugin module implements allow list behavior.
 import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,

@@ -1,3 +1,4 @@
+// Discord plugin module implements native command reply behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   resolveSendableOutboundReplyParts,

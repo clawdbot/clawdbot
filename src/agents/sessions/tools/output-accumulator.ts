@@ -1,11 +1,16 @@
+/**
+ * Streaming output accumulator for tool execution.
+ *
+ * Keeps bounded display tails in memory while spilling full output to private temp files when needed.
+ */
 import type { WriteStream } from "node:fs";
+import { createPrivateTempWriteStream } from "./private-temp-file.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   type TruncationResult,
   truncateTail,
 } from "./truncate.js";
-import { createPrivateTempWriteStream } from "./private-temp-file.js";
 
 export interface OutputAccumulatorOptions {
   maxLines?: number;

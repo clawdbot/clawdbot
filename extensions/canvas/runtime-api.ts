@@ -1,3 +1,7 @@
+/**
+ * Runtime API exports for Canvas plugin host, document, CLI, and capability
+ * helpers.
+ */
 export {
   canvasConfigSchema,
   isCanvasHostEnabled,

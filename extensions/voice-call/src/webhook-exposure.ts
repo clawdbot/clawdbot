@@ -1,3 +1,4 @@
+// Voice Call plugin module implements webhook exposure behavior.
 import { isBlockedHostnameOrIp } from "../api.js";
 
 // Webhook exposure checks for providers that must reach local voice-call webhooks.

@@ -1,3 +1,6 @@
+/**
+ * Resolves provider stream functions and API keys for embedded agents.
+ */
 import { getApiProvider } from "../../llm/api-registry.js";
 import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";

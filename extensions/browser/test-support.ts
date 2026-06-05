@@ -1,3 +1,6 @@
+/**
+ * Browser test-support re-exports from shared plugin-sdk test fixtures.
+ */
 export {
   createCliRuntimeCapture,
   expectGeneratedTokenPersistedToGatewayAuth,

@@ -1,3 +1,4 @@
+// Pnpm Runner.D script supports OpenClaw repository automation.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 export type PnpmRunnerParams = {

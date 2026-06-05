@@ -1,3 +1,4 @@
+// Voice Call plugin module implements store behavior.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";

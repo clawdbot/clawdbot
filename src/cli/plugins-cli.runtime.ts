@@ -208,6 +208,7 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "policy-changed",
+    invalidateRuntimeCache: false,
     policyPluginIds: [enableResult.pluginId],
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
@@ -249,6 +250,7 @@ export async function runPluginsDisableCommand(idInput: string): Promise<void> {
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "policy-changed",
+    invalidateRuntimeCache: false,
     policyPluginIds: [id],
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
@@ -265,7 +267,7 @@ export async function runPluginsInstallAction(
     "install command",
     async () => {
       const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-      await runPluginInstallCommand({ raw, opts });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     },
     { command: "install" },
   );

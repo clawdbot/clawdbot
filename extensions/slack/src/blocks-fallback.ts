@@ -1,3 +1,4 @@
+// Slack plugin module implements blocks fallback behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 
 type PlainTextObject = { text?: string };

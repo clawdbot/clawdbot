@@ -1,3 +1,4 @@
+// Slack plugin module implements sent thread cache behavior.
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalSlackRuntime } from "./runtime.js";
 

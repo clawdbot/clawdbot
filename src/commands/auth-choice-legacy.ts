@@ -1,3 +1,4 @@
+// Legacy auth-choice alias handling for CLI/onboarding compatibility.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveManifestDeprecatedProviderAuthChoice,
@@ -25,6 +26,7 @@ function resolveReplacementLabel(choiceLabel: string): string {
   return choiceLabel.trim() || "the replacement auth choice";
 }
 
+/** List deprecated CLI auth-choice aliases that manifest providers still recognize. */
 export function resolveLegacyAuthChoiceAliasesForCli(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -37,6 +39,7 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
   return Array.from(new Set(manifestCliAliases));
 }
 
+/** Map old onboard auth choices to their current provider-backed choices. */
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
@@ -57,6 +60,7 @@ export function normalizeLegacyOnboardAuthChoice(
   return authChoice;
 }
 
+/** Return true when an auth choice is a deprecated provider alias. */
 export function isDeprecatedAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
@@ -70,6 +74,7 @@ export function isDeprecatedAuthChoice(
   );
 }
 
+/** Resolve the current replacement and warning text for a deprecated auth choice. */
 export function resolveDeprecatedAuthChoiceReplacement(
   authChoice: AuthChoice,
   params?: {
@@ -97,6 +102,7 @@ export function resolveDeprecatedAuthChoiceReplacement(
   };
 }
 
+/** Format the non-interactive error shown when a deprecated auth choice was supplied. */
 export function formatDeprecatedNonInteractiveAuthChoiceError(
   authChoice: AuthChoice,
   params?: {

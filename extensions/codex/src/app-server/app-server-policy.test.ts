@@ -1,3 +1,4 @@
+// Codex tests cover app server policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveCodexAppServerForOpenClawToolPolicy } from "./app-server-policy.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";

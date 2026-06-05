@@ -1,3 +1,5 @@
+// Verifies command explanation spans are reduced to executable highlights and
+// suppressed for unsupported shell-wrapper grammars.
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "./extract.js";
 import { formatCommandSpans } from "./format.js";

@@ -1,3 +1,4 @@
+// Gateway run option collision tests cover gateway run flag registration boundaries.
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

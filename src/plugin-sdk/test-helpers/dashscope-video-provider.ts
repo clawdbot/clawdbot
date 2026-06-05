@@ -1,3 +1,4 @@
+// Dashscope video provider test helpers mock video provider runtime behavior.
 import { expect, vi } from "vitest";
 import type { VideoGenerationResult } from "../video-generation.js";
 

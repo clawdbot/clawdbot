@@ -1,3 +1,8 @@
+/**
+ * Embedded runner E2E fixture helpers.
+ *
+ * Creates temporary agent/workspace directories and OpenAI-compatible mock config.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

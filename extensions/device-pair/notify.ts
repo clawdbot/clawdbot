@@ -1,3 +1,4 @@
+// Device Pair plugin module implements notify behavior.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";

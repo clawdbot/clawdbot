@@ -1,3 +1,4 @@
+// Agent database path helpers resolve per-agent persisted database paths.
 import path from "node:path";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";

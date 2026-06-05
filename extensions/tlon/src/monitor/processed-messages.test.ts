@@ -1,3 +1,4 @@
+// Tlon tests cover processed messages plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   createProcessedMessageTracker,

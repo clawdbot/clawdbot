@@ -1,3 +1,4 @@
+// Nostr tests cover channel.inbound plugin behavior.
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";

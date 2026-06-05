@@ -1,3 +1,4 @@
+// Feishu tests cover comment shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseCommentContentElements,

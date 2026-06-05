@@ -1,3 +1,4 @@
+// Queue helper tests cover queue ordering and dedupe utility behavior.
 import { describe, expect, it } from "vitest";
 import {
   applyQueueRuntimeSettings,

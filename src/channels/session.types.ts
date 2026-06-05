@@ -1,9 +1,8 @@
+// Shared channel session recording contracts for inbound dispatch and metadata writers.
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution, SessionEntry } from "../config/sessions/types.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 
-// Channel session recording contracts shared by inbound dispatch and session
-// metadata writers. These types describe updates, not persistence mechanics.
 export type InboundLastRouteUpdate = {
   sessionKey: string;
   channel: SessionEntry["lastChannel"];

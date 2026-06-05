@@ -1,6 +1,8 @@
+// Run command helpers execute plugin commands with normalized errors and captured output.
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
+/** Captured process result returned by plugin command execution helpers. */
 export type PluginCommandRunResult = {
   /** Process exit code, with `1` used when the command failed before spawning or did not report one. */
   code: number;

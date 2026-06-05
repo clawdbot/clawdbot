@@ -1,3 +1,4 @@
+// Discord plugin module implements model picker preferences behavior.
 import { createHash } from "node:crypto";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import {

@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   validatePrivateKey,

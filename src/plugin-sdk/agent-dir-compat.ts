@@ -1,3 +1,4 @@
+// Agent directory compatibility helpers resolve legacy and current agent directory locations.
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveUserPath } from "../utils.js";
 

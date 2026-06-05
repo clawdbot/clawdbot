@@ -1,3 +1,4 @@
+// Status-all report-lines tests verify rendered report structure and diagnosis section integration.
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { buildStatusAllReportLines } from "./report-lines.js";

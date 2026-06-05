@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements qa driver behavior.
 import type { WAMessage } from "baileys";
 import { extractText } from "./inbound/extract.js";
 import { createWebSendApi } from "./inbound/send-api.js";
@@ -126,27 +127,13 @@ export async function startWhatsAppQaDriverSession(params: {
   };
 
   sock.ev.on("messages.upsert", onMessagesUpsert);
-  let connectionTimeout: NodeJS.Timeout | undefined;
   try {
-    await Promise.race([
-      waitForWaConnection(sock),
-      new Promise<never>((_, reject) => {
-        connectionTimeout = setTimeout(
-          () => reject(new Error("timed out waiting for WhatsApp QA driver session")),
-          params.connectionTimeoutMs ?? 45_000,
-        );
-        connectionTimeout.unref?.();
-      }),
-    ]);
+    await waitForWaConnection(sock, { timeoutMs: params.connectionTimeoutMs ?? 45_000 });
   } catch (error) {
     closeSessionResources(
       error instanceof Error ? error : new Error("failed starting WhatsApp QA driver session"),
     );
     throw error;
-  } finally {
-    if (connectionTimeout) {
-      clearTimeout(connectionTimeout);
-    }
   }
 
   const sendApi = createWebSendApi({

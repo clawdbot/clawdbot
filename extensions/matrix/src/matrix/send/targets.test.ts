@@ -1,3 +1,4 @@
+// Matrix tests cover targets plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { EventType } from "./types.js";

@@ -1,3 +1,4 @@
+// Agent Core module implements compaction behavior.
 import type {
   AssistantMessage,
   Context,

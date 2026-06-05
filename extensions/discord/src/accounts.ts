@@ -1,3 +1,4 @@
+// Discord plugin module implements accounts behavior.
 import {
   createAccountActionGate,
   createAccountListHelpers,

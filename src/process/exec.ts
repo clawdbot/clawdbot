@@ -1,3 +1,4 @@
+// Exec helpers run subprocesses with normalized output, timeout, and abort handling.
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

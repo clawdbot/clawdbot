@@ -1,3 +1,4 @@
+// Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { MatrixConfigSchema } from "./config-schema.js";
 

@@ -1,3 +1,4 @@
+// Ios Team Id tests cover ios team id script behavior.
 import { execFileSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";

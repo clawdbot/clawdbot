@@ -1,3 +1,6 @@
+/**
+ * Test fixtures for embedded-run overflow compaction scenarios.
+ */
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 

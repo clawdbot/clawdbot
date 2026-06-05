@@ -1,3 +1,4 @@
+// Tlon tests cover sse client plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";

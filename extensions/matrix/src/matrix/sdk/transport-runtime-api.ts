@@ -1,3 +1,4 @@
+// Matrix API module exposes the plugin public contract.
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import {
   closeDispatcher,

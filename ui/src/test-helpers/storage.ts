@@ -1,3 +1,4 @@
+// Control UI test helper supports storage setup.
 export function createStorageMock(): Storage {
   const store = new Map<string, string>();
   return {

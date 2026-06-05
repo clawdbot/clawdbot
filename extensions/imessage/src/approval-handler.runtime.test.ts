@@ -1,3 +1,4 @@
+// Imessage tests cover approval handler plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { imessageApprovalNativeRuntime } from "./approval-handler.runtime.js";
 

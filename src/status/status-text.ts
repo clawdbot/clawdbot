@@ -1,3 +1,4 @@
+// Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {

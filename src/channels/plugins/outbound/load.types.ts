@@ -1,3 +1,8 @@
+/**
+ * Lazy outbound adapter loader type.
+ *
+ * Describes the minimal async boundary used by channel delivery code.
+ */
 import type { ChannelId } from "../channel-id.types.js";
 import type { ChannelOutboundAdapter } from "../outbound.types.js";
 

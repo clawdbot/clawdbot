@@ -1,3 +1,4 @@
+// Runtime model auth tests cover provider auth resolution inside plugin runtime loading.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({

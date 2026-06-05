@@ -162,6 +162,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
 5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app's user name.
+6. When an exec or plugin approval request starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native Google Chat approval card in the originating space or thread. The card buttons use opaque callback tokens, and the manual `/approve <id> <decision>` prompt is only shown when native approval delivery is unavailable.
 
 ## Targets
 
@@ -214,8 +215,9 @@ Notes:
 - Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
+- Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `dm.allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.
-- `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
+- `typingIndicator` supports `message` (default), `none`, and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 - Bot-authored Google Chat messages are ignored by default. If you intentionally set `allowBots: true`, accepted bot-authored messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection` when one space needs a different budget.
 

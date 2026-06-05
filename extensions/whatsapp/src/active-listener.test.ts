@@ -1,3 +1,4 @@
+// Whatsapp tests cover active listener plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener, resolveWebAccountId } from "./active-listener.js";
 

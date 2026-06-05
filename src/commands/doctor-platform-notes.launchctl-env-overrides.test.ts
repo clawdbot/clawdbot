@@ -1,3 +1,4 @@
+// Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

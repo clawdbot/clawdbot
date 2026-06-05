@@ -1,3 +1,8 @@
+/**
+ * Runtime context resolver for OpenClaw plugin tools.
+ *
+ * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";

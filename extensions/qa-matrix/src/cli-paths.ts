@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements cli paths behavior.
 import path from "node:path";
 
 export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {

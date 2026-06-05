@@ -1,3 +1,4 @@
+// Memory Core plugin module implements flush plan behavior.
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,

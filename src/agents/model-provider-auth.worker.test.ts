@@ -1,3 +1,4 @@
+// Verifies provider-auth warm worker input preserves runtime-only profile stores.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +12,8 @@ const tempDirs: string[] = [];
 const envKeys = ["OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY", "OPENCLAW_STATE_DIR"] as const;
 
 function restoreEnv(previous: Record<(typeof envKeys)[number], string | undefined>): void {
+  // Worker tests mutate process env to isolate state/plugin registry paths;
+  // restore exact previous values after each case.
   for (const key of envKeys) {
     if (previous[key] === undefined) {
       delete process.env[key];
@@ -30,6 +33,8 @@ describe("provider auth warm worker", () => {
   });
 
   it("preserves runtime-only auth profile snapshots in the worker warm input", async () => {
+    // Runtime-only profiles are not persisted to disk, so the worker input must
+    // carry them explicitly or warming loses provider availability.
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-provider-auth-worker-"));
     tempDirs.push(root);
     const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]])) as Record<

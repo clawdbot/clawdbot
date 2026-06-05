@@ -1,3 +1,5 @@
+// Gateway config runtime test mock.
+// Wraps config IO with mutable test runtime state for integration tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -13,9 +15,6 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
-/**
- * Config module mock factory used by gateway integration tests.
- */
 type GatewayConfigModule = typeof import("../config/config.js");
 
 /** Wraps the real config module with gateway-test runtime overrides. */

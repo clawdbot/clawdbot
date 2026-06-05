@@ -1,3 +1,4 @@
+// Msteams plugin module implements outbound behavior.
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,

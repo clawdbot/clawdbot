@@ -1,3 +1,7 @@
+/**
+ * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
+ * approval tool and maps gateway decisions back to Codex outcomes.
+ */
 import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
@@ -10,6 +14,7 @@ const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+/** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
   | "approved-once"
   | "approved-session"
@@ -27,6 +32,7 @@ type ApprovalWaitResult = {
   decision?: ExecApprovalDecision | null;
 };
 
+/** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   title: string;
@@ -59,6 +65,7 @@ export async function requestPluginApproval(params: {
   ) as Promise<ApprovalRequestResult | undefined>;
 }
 
+/** Detects the gateway's explicit null-decision marker for unavailable approvals. */
 export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
   if (result === null || result === undefined || typeof result !== "object") {
     return false;
@@ -72,6 +79,7 @@ export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
   return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
 }
 
+/** Waits for the gateway's final approval decision, respecting turn aborts. */
 export async function waitForPluginApprovalDecision(params: {
   approvalId: string;
   signal?: AbortSignal;
@@ -103,6 +111,7 @@ export async function waitForPluginApprovalDecision(params: {
   }
 }
 
+/** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
 ): AppServerApprovalOutcome {

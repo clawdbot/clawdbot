@@ -1,3 +1,4 @@
+// Imessage plugin module implements runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type {

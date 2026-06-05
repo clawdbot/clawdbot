@@ -1,3 +1,4 @@
+// Proxy capture SQLite store persists capture metadata and replayable exchanges.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";

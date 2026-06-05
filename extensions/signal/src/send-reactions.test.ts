@@ -1,3 +1,4 @@
+// Signal tests cover send reactions plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const rpcMock = vi.fn();

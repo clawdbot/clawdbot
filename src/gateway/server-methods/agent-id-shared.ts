@@ -1,3 +1,5 @@
+// Shared agent-id resolution for gateway handlers that accept optional agent ids
+// and must reject unknown explicit ids consistently.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

@@ -1,3 +1,4 @@
+// Bundled root cache tests cover cached bundled channel root resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

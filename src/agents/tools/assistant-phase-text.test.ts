@@ -1,3 +1,5 @@
+// Assistant phase text tests cover extracting final-answer text from signed
+// assistant message phases.
 import { describe, expect, it } from "vitest";
 import { extractAssistantText as extractChatHistoryAssistantText } from "./chat-history-text.js";
 import { extractAssistantText as extractSessionAssistantText } from "./session-message-text.js";
@@ -52,6 +54,8 @@ describe("phase-aware assistant text helpers", () => {
   }
 
   it("does not fall back to commentary when an explicit final_answer is empty", () => {
+    // An explicit empty final answer means there is no publishable response;
+    // commentary should stay private.
     const message = assistantMessage(
       assistantTextPart("commentary", "commentary", "Need simpler use cat overwrite full file."),
       assistantTextPart("final", "final_answer", "   "),

@@ -1,3 +1,5 @@
+// Gateway websocket E2E harness.
+// Starts an unauthenticated loopback gateway and opens connected test clients.
 import { WebSocket } from "ws";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -19,6 +21,7 @@ export type GatewayServerHarness = {
   close: () => Promise<void>;
 };
 
+/** Start a loopback Gateway server with a helper for opening authenticated test clients. */
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   delete process.env.OPENCLAW_GATEWAY_TOKEN;

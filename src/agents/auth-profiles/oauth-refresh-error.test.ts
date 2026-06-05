@@ -1,3 +1,8 @@
+/**
+ * Tests refresh_token_reused error detection.
+ * Protects the recovery path that adopts a winner's fresh token instead of
+ * failing over after concurrent refresh races.
+ */
 import { describe, expect, it } from "vitest";
 import {
   makeSeededRandom,
@@ -5,11 +10,6 @@ import {
   randomlyCased,
 } from "./oauth-test-utils.js";
 import { isRefreshTokenReusedError } from "./oauth.js";
-
-// Direct tests for the refresh_token_reused classifier. This is the gate that
-// triggers the retry/adoption recovery path; a false negative here means we
-// fail over to an expensive model instead of adopting the winner's fresh
-// token.
 
 describe("isRefreshTokenReusedError", () => {
   describe("positive cases", () => {

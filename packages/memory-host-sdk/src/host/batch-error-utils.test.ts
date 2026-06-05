@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover batch error utils behavior.
 import { describe, expect, it } from "vitest";
 import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 

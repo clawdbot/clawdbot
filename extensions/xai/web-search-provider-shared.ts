@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,

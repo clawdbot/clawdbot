@@ -1,3 +1,4 @@
+// Telegram tests cover polling status plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 

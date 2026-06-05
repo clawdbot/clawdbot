@@ -1,3 +1,4 @@
+// Architecture smell tests flag unwanted dependency and layout patterns.
 import { describe, expect, it } from "vitest";
 import { collectArchitectureSmells, main } from "../scripts/check-architecture-smells.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";

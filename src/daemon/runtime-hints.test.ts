@@ -1,3 +1,4 @@
+// Daemon runtime hint tests cover platform-specific daemon guidance.
 import { describe, expect, it } from "vitest";
 import { buildPlatformRuntimeLogHints, buildPlatformServiceStartHints } from "./runtime-hints.js";
 

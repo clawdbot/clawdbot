@@ -1,3 +1,4 @@
+// Environment limit helpers for E2E subprocess scenarios.
 export function readPositiveIntEnv(name, fallback, env = process.env) {
   const raw = env[name] ?? fallback;
   const text = raw == null ? "unset" : String(raw).trim();

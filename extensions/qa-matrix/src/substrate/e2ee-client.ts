@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements e2ee client behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";

@@ -1,3 +1,5 @@
+// Tool-result context guard tests cover live replay truncation, mid-turn
+// prechecks, and context-engine loop hooks for oversized tool outputs.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -55,6 +57,8 @@ function makeLegacyToolResult(id: string, text: string): AgentMessage {
 }
 
 function makeToolResultWithDetails(id: string, text: string, detailText: string): AgentMessage {
+  // details can be much larger than replay content; guards should drop them
+  // only when rewriting the visible tool result.
   return castAgentMessage({
     role: "toolResult",
     toolCallId: id,
@@ -119,6 +123,8 @@ async function applyMidTurnPrecheckGuardToContext(
     systemPrompt?: string;
   } = {},
 ) {
+  // Mid-turn precheck simulates a new tool result being appended after the
+  // original prompt fence; it raises structured signals instead of mutating history.
   const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
   installToolResultContextGuard({
     agent,
@@ -199,6 +205,8 @@ describe("installToolResultContextGuard", () => {
   });
 
   it("returns a cloned guarded context so original oversized tool output stays visible", async () => {
+    // Provider replay gets a truncated clone; callers retain full live output
+    // for UI, transcript, and later persisted truncation decisions.
     const agent = makeGuardableAgent();
     const contextForNextCall = [makeToolResult("call_big", "z".repeat(5_000))];
 
@@ -318,6 +326,8 @@ describe("installToolResultContextGuard", () => {
   });
 
   it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
+    // The signal carries route metadata so the run loop can compact/truncate
+    // without guessing from a generic overflow error.
     const agent = makeGuardableAgent();
     const contextForNextCall = [
       makeUser("prompt already in history"),
@@ -430,6 +440,8 @@ function makeMockEngine(
     omitIngestBatch?: boolean;
   } = {},
 ): MockedEngine {
+  // Mock engines default to owning compaction and echoing inputs, letting each
+  // test opt into assembly/ingest failures without building a real engine.
   const defaultAfterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
   const defaultAssemble = vi.fn<ContextEngine["assemble"]>(
     async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
@@ -523,6 +535,8 @@ describe("installContextEngineLoopHook", () => {
       toolResultMaxChars?: number;
     } = {},
   ): () => void {
+    // Install engine assembly before the generic guard to prove owner compaction
+    // can resolve pressure before fallback truncation checks run.
     const removeEngineHook = installHook(agent, engine, options.prePromptCount);
     const removeGuard = installToolResultContextGuard({
       agent,

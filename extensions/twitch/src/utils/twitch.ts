@@ -1,3 +1,4 @@
+// Twitch plugin module implements twitch behavior.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 

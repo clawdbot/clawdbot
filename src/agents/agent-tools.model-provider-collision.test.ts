@@ -1,3 +1,8 @@
+/**
+ * Tests provider-native tool collision policy.
+ * Protects OpenClaw web_search routing when provider/model compatibility also
+ * advertises native search support.
+ */
 import { describe, expect, it } from "vitest";
 import { testing } from "./agent-tools.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";

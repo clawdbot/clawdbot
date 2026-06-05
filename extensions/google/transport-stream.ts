@@ -1,3 +1,4 @@
+// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,

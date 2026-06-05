@@ -1,3 +1,5 @@
+// Session patch tests cover model/provider edits, subagent patching, provider
+// aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test } from "vitest";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";

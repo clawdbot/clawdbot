@@ -1,3 +1,4 @@
+// Matrix helper module supports config schema behavior.
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import {
   AllowFromListSchema,

@@ -1,3 +1,6 @@
+/**
+ * Steers active embedded sessions and waits for transcript commits when needed.
+ */
 import { log } from "../logger.js";
 
 /**

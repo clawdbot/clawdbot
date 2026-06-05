@@ -1,3 +1,5 @@
+// Covers gateway protected-path canonicalization for repeated encoding,
+// malformed encodings, dot segments, and plugin route prefixes.
 import { describe, expect, it } from "vitest";
 import {
   PROTECTED_PLUGIN_ROUTE_PREFIXES,

@@ -1,3 +1,4 @@
+// Slack tests cover subteam mentions plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {

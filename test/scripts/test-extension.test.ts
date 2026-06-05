@@ -1,3 +1,4 @@
+// Test Extension tests cover test extension script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

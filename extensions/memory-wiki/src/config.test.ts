@@ -1,3 +1,4 @@
+// Memory Wiki tests cover config plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {

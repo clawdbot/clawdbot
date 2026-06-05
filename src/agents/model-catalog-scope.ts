@@ -1,3 +1,6 @@
+/**
+ * Resolves model catalog scope from config and discovery options.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

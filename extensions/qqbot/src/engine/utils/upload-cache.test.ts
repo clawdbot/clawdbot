@@ -1,3 +1,4 @@
+// Qqbot tests cover upload cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./upload-cache.js";
 

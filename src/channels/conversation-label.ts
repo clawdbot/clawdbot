@@ -1,3 +1,8 @@
+/**
+ * Conversation label resolver.
+ *
+ * Builds readable labels from inbound context while preserving useful id disambiguators.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -5,8 +10,6 @@ import {
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
-// Many channel ids are compound strings such as channel:thread:id. The label suffix only
-// needs the final stable id segment when the friendly name alone may be ambiguous.
 function extractConversationId(from?: string): string | undefined {
   const trimmed = normalizeOptionalString(from);
   if (!trimmed) {

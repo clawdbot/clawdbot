@@ -1,3 +1,4 @@
+// Anthropic tests cover cli shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {

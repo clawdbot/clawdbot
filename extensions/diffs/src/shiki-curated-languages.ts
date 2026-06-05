@@ -1,3 +1,4 @@
+// Diffs plugin module implements shiki curated languages behavior.
 const javascript = () => import("@shikijs/langs/javascript");
 const typescript = () => import("@shikijs/langs/typescript");
 const tsx = () => import("@shikijs/langs/tsx");

@@ -1,3 +1,4 @@
+/** Platform-specific doctor notes for macOS gateway launchd state and startup tuning. */
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +19,7 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
+/** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
 export function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
@@ -42,6 +44,7 @@ export function collectMacLaunchAgentOverrideWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits the macOS LaunchAgent override warning when present. */
 export async function noteMacLaunchAgentOverrides() {
   const warning = collectMacLaunchAgentOverrideWarning();
   if (warning) {
@@ -49,6 +52,7 @@ export async function noteMacLaunchAgentOverrides() {
   }
 }
 
+/** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
 export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
@@ -80,6 +84,7 @@ export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits stale updater launchd job notes using the gateway service environment when available. */
 export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
@@ -122,6 +127,7 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   );
 }
 
+/** Returns a warning for host-wide launchctl gateway auth env overrides. */
 export async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
   deps?: {
@@ -171,6 +177,7 @@ export async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
+/** Emits macOS launchctl gateway auth override warnings. */
 export async function noteMacLaunchctlGatewayEnvOverrides(
   cfg: OpenClawConfig,
   deps?: {
@@ -200,6 +207,7 @@ async function resolveGatewayServiceEnvForPlatformNotes(deps?: {
     : baseEnv;
 }
 
+/** Collects all macOS gateway platform warnings without emitting notes. */
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
   deps?: {
@@ -246,6 +254,7 @@ function isTmpCompileCachePath(cachePath: string): boolean {
   );
 }
 
+/** Emits startup tuning hints for low-power Linux hosts when env settings are suboptimal. */
 export function noteStartupOptimizationHints(
   env: NodeJS.ProcessEnv = process.env,
   deps?: {

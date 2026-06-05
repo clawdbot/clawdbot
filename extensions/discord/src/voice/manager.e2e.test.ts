@@ -1,3 +1,4 @@
+// Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

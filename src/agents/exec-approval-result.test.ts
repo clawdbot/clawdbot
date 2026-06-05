@@ -1,3 +1,5 @@
+// Exec approval result tests cover parsing gateway/node approval payloads and
+// mapping denied metadata to safe user-facing copy.
 import { describe, expect, it } from "vitest";
 import {
   formatExecDeniedUserMessage,
@@ -30,6 +32,8 @@ describe("parseExecApprovalResultText", () => {
   });
 
   it("parses denied results with the canonical colon-separated deniedReason", () => {
+    // Colon-separated metadata avoids ambiguity with nested parentheses in
+    // human-readable denial reasons.
     // Producer (src/agents/bash-tools.exec-host-gateway.ts) emits a colon
     // separator instead of nested parens to keep the (...)-delimited wire
     // format unambiguous. This is the format real timeouts now produce.
@@ -91,6 +95,8 @@ describe("parseExecApprovalResultText", () => {
   ])(
     "returns other when metadata is not gateway/node sourced (CWE-841 spoof guard): %s",
     (input) => {
+      // Only gateway/node-sourced payloads get parsed as approval results; prose
+      // that looks similar must not spoof command approval state.
       expect(parseExecApprovalResultText(input)).toEqual({
         kind: "other",
         raw: input,

@@ -1,3 +1,5 @@
+// Verifies generic current-conversation binding persistence, TTL pruning,
+// capability discovery, touch, list, and unbind behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

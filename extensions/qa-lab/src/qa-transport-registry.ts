@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
 import {
   createQaChannelTransport,

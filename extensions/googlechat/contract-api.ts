@@ -1,3 +1,4 @@
+// Googlechat API module exposes the plugin public contract.
 export {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,

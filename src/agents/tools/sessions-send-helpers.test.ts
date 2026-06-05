@@ -1,3 +1,5 @@
+// sessions_send helper tests cover session-key target parsing and ping-pong
+// turn limits for agent-to-agent announce flows.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
@@ -40,6 +42,8 @@ describe("resolveAnnounceTargetFromKey", () => {
   });
 
   it("preserves colon-delimited matrix ids for channel and thread targets", () => {
+    // Matrix room/thread ids can contain colons, so parsing must split only on
+    // known wrappers instead of generic colon segments.
     expect(
       resolveAnnounceTargetFromKey(
         "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",

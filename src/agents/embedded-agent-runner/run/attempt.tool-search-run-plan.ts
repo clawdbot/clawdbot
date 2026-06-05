@@ -1,3 +1,6 @@
+/**
+ * Builds tool-search execution plans from allowlists and available controls.
+ */
 import { normalizeToolName } from "../../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,

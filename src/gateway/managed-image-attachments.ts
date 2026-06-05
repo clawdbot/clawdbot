@@ -1,3 +1,5 @@
+// Gateway managed image attachment store.
+// Validates, stores, serves, and cleans up outgoing image attachments.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
