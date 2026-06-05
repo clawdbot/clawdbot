@@ -95,10 +95,7 @@ function stableJsonString(value: unknown): string {
 }
 
 function cloneSchemaValue(value: unknown): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 function cloneToolParametersForCache(tools: AgentTool[]): CachedProviderToolSchemaBundle | null {

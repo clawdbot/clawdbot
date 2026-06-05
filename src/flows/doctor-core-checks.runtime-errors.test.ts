@@ -40,6 +40,7 @@ vi.mock("../agents/agent-tools.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
+  resolveProviderToolSchemaNormalizeCacheKey: () => null,
 }));
 
 const { collectRuntimeToolSchemaFindings } = await import("./doctor-core-checks.runtime.js");

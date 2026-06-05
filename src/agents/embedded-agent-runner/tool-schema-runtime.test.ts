@@ -450,7 +450,9 @@ describe("tool schema runtime cache", () => {
       modelApi: "openai-responses",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
-    (second[0]?.parameters as { properties?: Record<string, unknown> }).properties = {};
+    const secondTool = second[0];
+    expect(secondTool).toBeDefined();
+    (secondTool.parameters as { properties?: Record<string, unknown> }).properties = {};
     const third = normalizeProviderToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
