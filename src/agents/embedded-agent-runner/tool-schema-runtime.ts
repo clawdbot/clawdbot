@@ -9,6 +9,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import {
   inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin,
+  resolveProviderToolSchemaNormalizeHookIdentity,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
@@ -160,11 +161,13 @@ function buildProviderToolSchemaCacheKey(
   params: ProviderToolSchemaParams,
   provider: string,
   family: string,
+  hookIdentity: string,
 ): string | null {
   try {
     return createPluginCacheKey([
       "provider-tool-schema",
       PROVIDER_TOOL_SCHEMA_CACHE_VERSION,
+      hookIdentity,
       family,
       provider,
       normalizeCacheString(params.modelId),
@@ -214,9 +217,18 @@ export function normalizeProviderToolSchemas<
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const provider = params.provider.trim();
   const cacheFamily = resolveProviderToolSchemaCacheFamily(params);
+  const cacheEnabled = !!cacheFamily && isProviderToolSchemaCacheEnabled(params.env);
+  const hookIdentity = cacheEnabled
+    ? resolveProviderToolSchemaNormalizeHookIdentity({
+        provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })
+    : null;
   const cacheKey =
-    cacheFamily && isProviderToolSchemaCacheEnabled(params.env)
-      ? buildProviderToolSchemaCacheKey(params, provider, cacheFamily)
+    cacheFamily && hookIdentity
+      ? buildProviderToolSchemaCacheKey(params, provider, cacheFamily, hookIdentity)
       : null;
   if (cacheKey) {
     const cached = providerToolSchemaCache.get(cacheKey);
