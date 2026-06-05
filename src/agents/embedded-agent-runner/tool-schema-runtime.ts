@@ -163,6 +163,10 @@ function buildProviderToolSchemaCacheKey(
   }
 }
 
+function canResolveProviderToolSchemaCacheKey(params: ProviderToolSchemaParams): boolean {
+  return params.allowRuntimePluginLoad !== false || params.runtimeHandle !== undefined;
+}
+
 export function resetProviderToolSchemaCacheForTest(): void {
   providerToolSchemaCache.clear();
   providerToolSchemaCache.setMaxEntriesForTest();
@@ -196,16 +200,17 @@ export function normalizeProviderToolSchemas<
   const provider = params.provider.trim();
   const context = buildProviderToolSchemaContext(params, provider);
   const cacheEnabled = isProviderToolSchemaCacheEnabled(params.env);
-  const hookCacheKey = cacheEnabled
-    ? resolveProviderToolSchemaNormalizeCacheKey({
-        provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        runtimeHandle: params.runtimeHandle,
-        context,
-      })
-    : null;
+  const hookCacheKey =
+    cacheEnabled && canResolveProviderToolSchemaCacheKey(params)
+      ? resolveProviderToolSchemaNormalizeCacheKey({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          runtimeHandle: params.runtimeHandle,
+          context,
+        })
+      : null;
   const cacheKey = hookCacheKey
     ? buildProviderToolSchemaCacheKey(params, provider, hookCacheKey)
     : null;

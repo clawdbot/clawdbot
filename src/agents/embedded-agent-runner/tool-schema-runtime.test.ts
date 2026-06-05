@@ -92,6 +92,33 @@ describe("tool schema runtime diagnostics", () => {
     );
   });
 
+  it("does not resolve cache keys by loading runtime plugins when loading is disabled", () => {
+    const tools = [{ name: "alpha" }] as never;
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(tools);
+
+    expect(
+      normalizeProviderToolSchemas({
+        provider: "example",
+        tools,
+        allowRuntimePluginLoad: false,
+      }),
+    ).toBe(tools);
+
+    expect(mocks.resolveProviderToolSchemaNormalizeCacheKey).not.toHaveBeenCalled();
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "example",
+        allowRuntimePluginLoad: false,
+      }),
+    );
+    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
+      bypass: 1,
+      hit: 0,
+      miss: 0,
+      store: 0,
+    });
+  });
+
   it("logs one summarized warning for provider tool schema diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
       { toolName: "alpha", toolIndex: 0, violations: ["one", "two"] },
