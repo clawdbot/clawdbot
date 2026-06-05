@@ -202,6 +202,7 @@ export function normalizeProviderToolSchemas<
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        runtimeHandle: params.runtimeHandle,
         context,
       })
     : null;

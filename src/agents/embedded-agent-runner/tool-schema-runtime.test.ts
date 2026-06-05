@@ -256,6 +256,67 @@ describe("tool schema runtime cache", () => {
     });
   });
 
+  it("keys cache entries by the prepared provider runtime handle", () => {
+    const firstRuntimeHandle = {
+      provider: "example",
+      plugin: {
+        id: "example",
+        pluginId: "plugin-a",
+      },
+    };
+    const secondRuntimeHandle = {
+      provider: "example",
+      plugin: {
+        id: "example",
+        pluginId: "plugin-b",
+      },
+    };
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockImplementation(
+      ({ runtimeHandle }: { runtimeHandle?: { plugin?: { pluginId?: string } } }) =>
+        `hook:${runtimeHandle?.plugin?.pluginId ?? "missing"}`,
+    );
+    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(
+      ({
+        context,
+        runtimeHandle,
+      }: {
+        context: { tools: MockProviderTool[] };
+        runtimeHandle?: { plugin?: { pluginId?: string } };
+      }) =>
+        context.tools.map((tool) => ({
+          ...tool,
+          parameters: {
+            type: "object",
+            properties: {
+              plugin: { const: runtimeHandle?.plugin?.pluginId },
+            },
+          },
+        })),
+    );
+
+    normalizeProviderToolSchemas({
+      provider: "example",
+      runtimeHandle: firstRuntimeHandle as never,
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    const second = normalizeProviderToolSchemas({
+      provider: "example",
+      runtimeHandle: secondRuntimeHandle as never,
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+
+    expect(second[0]?.parameters).toEqual({
+      type: "object",
+      properties: { plugin: { const: "plugin-b" } },
+    });
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
+    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
+      hit: 0,
+      miss: 2,
+      store: 2,
+    });
+  });
+
   it("caches provider hooks that opt into a hook-owned cache key", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
     mocks.resolveProviderToolSchemaNormalizeCacheKey.mockImplementation(
