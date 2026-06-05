@@ -20,6 +20,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBuffered
       ctx: params.ctx,
       cfg: params.cfg,
       dispatcherOptions: params.dispatcherOptions,
+      toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
       replyOptions: params.replyOptions,
     });
@@ -31,6 +32,7 @@ export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (p
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcherOptions: params.dispatcherOptions,
+    toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
   });

@@ -50,7 +50,11 @@ import {
   findMissingLiveTransportStandardScenarios,
 } from "../../shared/live-transport-scenarios.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
-import { MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES } from "./scenario-media-fixtures.js";
+import {
+  MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES,
+  MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
+  MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
+} from "./scenario-media-fixtures.js";
 import {
   testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
@@ -383,6 +387,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-room-image-understanding-attachment",
       "matrix-room-generated-image-delivery",
       "matrix-media-type-coverage",
+      "matrix-voice-preflight-mention",
       "matrix-attachment-only-ignored",
       "matrix-unsupported-media-safe",
       "matrix-dm-reply-shape",
@@ -4566,6 +4571,129 @@ describe("matrix live qa scenarios", () => {
         body: ` ${firstToken}\n`,
       }),
     ).toBe(true);
+  });
+
+  it("sends voice preflight audio without a text mention and waits for the transcribed reply", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendMediaMessage = vi.fn().mockResolvedValue("$voice-preflight");
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const callIndex = waitForRoomEvent.mock.calls.length - 1;
+      if (callIndex === 0) {
+        return {
+          event: {
+            kind: "message",
+            roomId: "!media:matrix-qa.test",
+            eventId: "$voice-preflight",
+            sender: "@driver:matrix-qa.test",
+            type: "m.room.message",
+            msgtype: "m.audio",
+            attachment: {
+              kind: "audio",
+              filename: MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
+            },
+          },
+          since: "driver-sync-attachment",
+        };
+      }
+      return {
+        event: {
+          kind: "message",
+          roomId: "!media:matrix-qa.test",
+          eventId: "$voice-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: `Sure: ${MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER}.`,
+        },
+        since: "driver-sync-reply",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendMediaMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-voice-preflight-mention");
+    expect(scenario.configOverrides?.audio?.enabled).toBe(true);
+    expect(scenario.configOverrides?.groupMentionPatterns).toEqual(["\\S"]);
+
+    const result = await runMatrixQaScenario(scenario, {
+      baseUrl: "http://127.0.0.1:28008/",
+      canary: undefined,
+      driverAccessToken: "driver-token",
+      driverUserId: "@driver:matrix-qa.test",
+      observedEvents: [],
+      observerAccessToken: "observer-token",
+      observerUserId: "@observer:matrix-qa.test",
+      roomId: "!main:matrix-qa.test",
+      restartGateway: undefined,
+      syncState: {},
+      sutAccessToken: "sut-token",
+      sutUserId: "@sut:matrix-qa.test",
+      timeoutMs: 8_000,
+      topology: {
+        defaultRoomId: "!main:matrix-qa.test",
+        defaultRoomKey: "main",
+        rooms: [
+          {
+            key: scenarioTesting.MATRIX_QA_MEDIA_ROOM_KEY,
+            kind: "group",
+            memberRoles: ["driver", "observer", "sut"],
+            memberUserIds: [
+              "@driver:matrix-qa.test",
+              "@observer:matrix-qa.test",
+              "@sut:matrix-qa.test",
+            ],
+            name: "Media",
+            requireMention: true,
+            roomId: "!media:matrix-qa.test",
+          },
+        ],
+      },
+    });
+
+    const mediaMessage = mockObjectArg(sendMediaMessage, "sendMediaMessage") as {
+      body?: unknown;
+      buffer?: Buffer;
+      contentType?: unknown;
+      fileName?: unknown;
+      kind?: unknown;
+      mentionUserIds?: unknown;
+      roomId?: unknown;
+    };
+    expect(mediaMessage.body).toBeUndefined();
+    expect(mediaMessage.buffer?.byteLength).toBeGreaterThan(1_000);
+    expect(mediaMessage.contentType).toBe("audio/wav");
+    expect(mediaMessage.fileName).toBe(MATRIX_QA_VOICE_PREFLIGHT_FILENAME);
+    expect(mediaMessage.kind).toBe("audio");
+    expect(mediaMessage.mentionUserIds).toBeUndefined();
+    expect(mediaMessage.roomId).toBe("!media:matrix-qa.test");
+
+    const replyWait = mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1) as {
+      predicate: (event: MatrixQaObservedEvent) => boolean;
+    };
+    expect(
+      replyWait.predicate({
+        kind: "message",
+        roomId: "!media:matrix-qa.test",
+        eventId: "$voice-reply",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: ` ${MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER.toLowerCase()}!\n`,
+      }),
+    ).toBe(true);
+
+    const artifacts = result.artifacts as {
+      attachmentFilename?: unknown;
+      driverEventId?: unknown;
+      expectedMarker?: unknown;
+      reply?: { eventId?: unknown };
+    };
+    expect(artifacts.attachmentFilename).toBe(MATRIX_QA_VOICE_PREFLIGHT_FILENAME);
+    expect(artifacts.driverEventId).toBe("$voice-preflight");
+    expect(artifacts.expectedMarker).toBe(MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
+    expect(artifacts.reply?.eventId).toBe("$voice-reply");
   });
 
   it("uses DM thread override scenarios against the provisioned DM room", async () => {

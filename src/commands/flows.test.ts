@@ -1,5 +1,5 @@
 // Flows command tests cover task creation, task execution, and runtime command output.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
@@ -12,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
@@ -19,8 +20,6 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
 }));
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function jsonRoundTrip<T>(value: T): T {
   const serialized = JSON.stringify(value);
@@ -84,12 +83,14 @@ async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>)
 }
 
 describe("flows commands", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });

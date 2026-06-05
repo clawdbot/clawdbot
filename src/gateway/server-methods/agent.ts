@@ -30,6 +30,7 @@ import {
   consumeExecApprovalFollowupRuntimeHandoff,
   parseExecApprovalFollowupApprovalId,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
@@ -51,7 +52,9 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
+  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   mergeSessionEntry,
+  resolveTerminalMainSessionTranscriptRegistryCheck,
   resolveChannelResetConfig,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -1634,7 +1637,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               agentId: canonicalSessionAgentId,
             })
           : undefined;
-        const freshness = entry
+        let freshness = entry
           ? evaluateSessionFreshness({
               updatedAt: entry.updatedAt,
               ...lifecycleTimestamps,
@@ -1642,25 +1645,62 @@ export const agentHandlers: GatewayRequestHandlers = {
               policy: resetPolicy,
             })
           : undefined;
-        let failedSessionTranscriptMissing = false;
-        if (entry?.status === "failed" && entry.sessionId?.trim()) {
+        const resolveFailedSessionTranscriptMissingForEntry = (
+          candidateEntry: SessionEntry | undefined,
+        ) => {
+          if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
+            return false;
+          }
           try {
             const sessionPathOpts = resolveSessionFilePathOptions({
               storePath,
               agentId: canonicalSessionAgentId,
             });
-            failedSessionTranscriptMissing = !existsSync(
-              resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+            return !existsSync(
+              resolveSessionFilePath(candidateEntry.sessionId, candidateEntry, sessionPathOpts),
             );
           } catch {
-            failedSessionTranscriptMissing = true;
+            return true;
           }
-        }
+        };
+        const failedSessionTranscriptMissing = resolveFailedSessionTranscriptMissingForEntry(entry);
+        const mainSessionKeyForRequest = resolveAgentMainSessionKey({
+          cfg: cfgLocal,
+          agentId: canonicalSessionAgentId,
+        });
+        const isSystemGatewayRun =
+          request.bootstrapContextRunKind === "cron" ||
+          request.bootstrapContextRunKind === "heartbeat";
+        const requestedSessionMatchesEntry = Boolean(
+          requestedSessionId && entry?.sessionId?.trim() === requestedSessionId,
+        );
+        const terminalMainTranscriptCheck =
+          isSystemGatewayRun || requestedSessionMatchesEntry
+            ? undefined
+            : resolveTerminalMainSessionTranscriptRegistryCheck({
+                entry,
+                sessionScope: cfgLocal.session?.scope,
+                sessionKey: canonicalKey,
+                agentId: canonicalSessionAgentId,
+                mainKey: cfgLocal.session?.mainKey,
+                storePath,
+              });
+        const terminalMainTranscriptNewerThanRegistry = terminalMainTranscriptCheck
+          ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+              entry,
+              sessionScope: cfgLocal.session?.scope,
+              sessionKey: canonicalKey,
+              agentId: canonicalSessionAgentId,
+              mainKey: cfgLocal.session?.mainKey,
+              storePath,
+            })
+          : false;
         const canReuseSession =
           Boolean(entry?.sessionId) &&
           (freshness?.fresh ?? false) &&
-          !failedSessionTranscriptMissing;
-        const usableRequestedSessionId =
+          !failedSessionTranscriptMissing &&
+          !terminalMainTranscriptNewerThanRegistry;
+        let usableRequestedSessionId =
           requestedSessionId && (!entry?.sessionId || canReuseSession)
             ? requestedSessionId
             : undefined;
@@ -1671,11 +1711,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           !entry ||
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
-        const rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction =
-          request.bootstrapContextRunKind !== "cron" &&
-          request.bootstrapContextRunKind !== "heartbeat" &&
-          !request.internalEvents?.length;
+        let rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
+        const touchInteraction = !isSystemGatewayRun && !request.internalEvents?.length;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -1684,6 +1721,10 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupChannel: string | undefined;
           groupSpace: string | undefined;
           freshSessionRotatedSinceLoad: boolean;
+          isNewSession: boolean;
+          rotatedSessionId: boolean;
+          usableRequestedSessionId: string | undefined;
+          freshness: typeof freshness;
         };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
@@ -1776,12 +1817,69 @@ export const agentHandlers: GatewayRequestHandlers = {
           const freshSessionRotatedSinceLoad = Boolean(
             entry?.sessionId && freshEntry?.sessionId && freshEntry.sessionId !== entry.sessionId,
           );
-          const patchSessionId = freshSessionRotatedSinceLoad ? freshEntry?.sessionId : sessionId;
-          const shouldClearRotatedState = rotatedSessionId && !freshSessionRotatedSinceLoad;
+          const freshLifecycleTimestamps = freshEntry
+            ? resolveSessionLifecycleTimestamps({
+                entry: freshEntry,
+                storePath,
+                agentId: sessionAgent,
+              })
+            : undefined;
+          const freshFreshness = freshEntry
+            ? evaluateSessionFreshness({
+                updatedAt: freshEntry.updatedAt,
+                ...freshLifecycleTimestamps,
+                now,
+                policy: resetPolicy,
+              })
+            : undefined;
+          const freshRequestedSessionMatchesEntry = Boolean(
+            requestedSessionId && freshEntry?.sessionId?.trim() === requestedSessionId,
+          );
+          const freshTerminalMainTranscriptNewerThanRegistry =
+            isSystemGatewayRun || freshRequestedSessionMatchesEntry
+              ? false
+              : hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+                  entry: freshEntry,
+                  sessionScope: cfgLocal.session?.scope,
+                  sessionKey: canonicalKey,
+                  agentId: sessionAgent,
+                  mainKey: cfgLocal.session?.mainKey,
+                  storePath,
+                });
+          const freshFailedSessionTranscriptMissing =
+            resolveFailedSessionTranscriptMissingForEntry(freshEntry);
+          const freshCanReuseSession =
+            Boolean(freshEntry?.sessionId) &&
+            (freshFreshness?.fresh ?? false) &&
+            !freshFailedSessionTranscriptMissing &&
+            !freshTerminalMainTranscriptNewerThanRegistry;
+          const freshUsableRequestedSessionId =
+            requestedSessionId && (!freshEntry?.sessionId || freshCanReuseSession)
+              ? requestedSessionId
+              : undefined;
+          const freshSessionId = freshUsableRequestedSessionId
+            ? freshUsableRequestedSessionId
+            : ((freshCanReuseSession ? freshEntry?.sessionId : undefined) ?? sessionId);
+          const freshIsNewSession =
+            !freshEntry ||
+            (!freshCanReuseSession && !freshUsableRequestedSessionId) ||
+            Boolean(
+              freshUsableRequestedSessionId &&
+              freshEntry?.sessionId !== freshUsableRequestedSessionId,
+            );
+          const freshRotatedSessionId = Boolean(
+            freshEntry?.sessionId && freshEntry.sessionId !== freshSessionId,
+          );
+          const patchSessionId = freshSessionRotatedSinceLoad
+            ? freshEntry?.sessionId
+            : freshSessionId;
+          const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
-            ...(isNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: now } : {}),
+            ...(freshIsNewSession && !freshSessionRotatedSinceLoad
+              ? { sessionStartedAt: now }
+              : {}),
             ...(touchInteraction ? { lastInteractionAt: now } : {}),
             ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
             ...(effectiveDeliveryFields.deliveryContext
@@ -1815,6 +1913,9 @@ export const agentHandlers: GatewayRequestHandlers = {
                 }
               : {}),
           };
+          if (shouldClearRotatedState) {
+            clearAllCliSessions(patch);
+          }
           return {
             patch,
             spawnedBy: freshSpawnedBy,
@@ -1822,19 +1923,24 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             groupSpace: nextGroup.groupSpace,
             freshSessionRotatedSinceLoad,
+            isNewSession: freshIsNewSession,
+            rotatedSessionId: freshRotatedSessionId,
+            usableRequestedSessionId: freshUsableRequestedSessionId,
+            freshness: freshFreshness,
           };
         };
         let patchBuild = buildSessionPatch(entry);
+        isNewSession = patchBuild.isNewSession;
+        rotatedSessionId = patchBuild.rotatedSessionId;
+        usableRequestedSessionId = patchBuild.usableRequestedSessionId;
+        freshness = patchBuild.freshness;
         sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
         resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
         const canonicalSessionKey = canonicalKey;
         resolvedSessionKey = canonicalSessionKey;
         const sessionAgentId = canonicalSessionAgentId;
         resolvedSessionAgentId = sessionAgentId;
-        const mainSessionKey = resolveAgentMainSessionKey({
-          cfg: cfgLocal,
-          agentId: sessionAgentId,
-        });
+        const mainSessionKey = mainSessionKeyForRequest;
         // Legacy stores may lack sessionStartedAt entirely. Pre-compute a
         // JSONL-transcript-derived candidate outside the store lock; the
         // updater below only writes it when the freshly-loaded store still
@@ -1933,6 +2039,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             return;
           }
         }
+        isNewSession = patchBuild.isNewSession;
+        rotatedSessionId = patchBuild.rotatedSessionId;
+        usableRequestedSessionId = patchBuild.usableRequestedSessionId;
+        freshness = patchBuild.freshness;
         spawnedByValue = patchBuild.spawnedBy;
         resolvedGroupId = patchBuild.groupId;
         resolvedGroupChannel = patchBuild.groupChannel;

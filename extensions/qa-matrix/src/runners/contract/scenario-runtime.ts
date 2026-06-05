@@ -77,6 +77,7 @@ import {
   runImageUnderstandingAttachmentScenario,
   runMediaTypeCoverageScenario,
   runUnsupportedMediaSafeScenario,
+  runVoicePreflightMentionScenario,
 } from "./scenario-runtime-media.js";
 import {
   runReactionNotAReplyScenario,
@@ -248,6 +249,8 @@ export async function runMatrixQaScenario(
       return await runGeneratedImageDeliveryScenario(context);
     case "matrix-media-type-coverage":
       return await runMediaTypeCoverageScenario(context);
+    case "matrix-voice-preflight-mention":
+      return await runVoicePreflightMentionScenario(context);
     case "matrix-attachment-only-ignored":
       return await runAttachmentOnlyIgnoredScenario(context);
     case "matrix-unsupported-media-safe":

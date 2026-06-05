@@ -240,6 +240,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
+        threadId: readStringParam(params, "threadId"),
       });
     }
 

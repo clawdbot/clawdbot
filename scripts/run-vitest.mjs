@@ -22,7 +22,7 @@ const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 /** Default watchdog timeout for Vitest runs that stop producing output. */
 export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
 /** Default heartbeat interval while waiting on silent Vitest output. */
-export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 60_000;
+export const DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS = 30_000;
 /** Longer watchdog timeout for known long-running Vitest configs. */
 export const DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";

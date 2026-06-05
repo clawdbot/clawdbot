@@ -4677,6 +4677,7 @@ public struct ModelChoice: Codable, Sendable {
     public let name: String
     public let provider: String
     public let alias: String?
+    public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
 
@@ -4685,6 +4686,7 @@ public struct ModelChoice: Codable, Sendable {
         name: String,
         provider: String,
         alias: String?,
+        available: Bool? = nil,
         contextwindow: Int?,
         reasoning: Bool?)
     {
@@ -4692,6 +4694,7 @@ public struct ModelChoice: Codable, Sendable {
         self.name = name
         self.provider = provider
         self.alias = alias
+        self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
     }
@@ -4701,6 +4704,7 @@ public struct ModelChoice: Codable, Sendable {
         case name
         case provider
         case alias
+        case available
         case contextwindow = "contextWindow"
         case reasoning
     }

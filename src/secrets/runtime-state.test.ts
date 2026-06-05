@@ -1,5 +1,6 @@
 /** Tests secrets runtime state clone isolation and refresh context. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshot,
@@ -9,15 +10,15 @@ import {
 } from "./runtime-state.js";
 
 describe("secrets runtime state", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    envSnapshot.restore();
   });
 
   it("exposes the active config pair for hot paths without requiring the full snapshot", () => {

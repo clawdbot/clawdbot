@@ -15,7 +15,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry, updateSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -299,9 +299,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  return await runWithOwnedSessionTranscriptWriteLock(
+  let transcriptMarkerUpdatedAt: number | undefined;
+  const result = await runWithOwnedSessionTranscriptWriteLock<SessionTranscriptAppendResult>(
     { sessionFile, sessionKey: resolved.normalizedKey },
-    async () => {
+    async (): Promise<SessionTranscriptAppendResult> => {
       const explicitIdempotencyKey =
         params.idempotencyKey ??
         ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
@@ -340,6 +341,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       if (!appended) {
         return { ok: true, sessionFile, messageId };
       }
+      transcriptMarkerUpdatedAt = Date.now();
 
       switch (params.updateMode ?? "inline") {
         case "inline":
@@ -364,6 +366,15 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       return { ok: true, sessionFile, messageId };
     },
   );
+  if (result.ok && transcriptMarkerUpdatedAt !== undefined) {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: resolved.normalizedKey,
+      update: (current) =>
+        current.sessionId === entry.sessionId ? { updatedAt: transcriptMarkerUpdatedAt } : null,
+    });
+  }
+  return result;
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

@@ -138,6 +138,91 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("advances the session registry marker after managed transcript appends", async () => {
+    const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
+    const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
+    const sessionFile = "managed-marker.jsonl";
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(appendedAt);
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello with registry marker",
+        storePath: fixture.storePath(),
+      });
+
+      expect(result.ok).toBe(true);
+      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
+        string,
+        { updatedAt?: number; status?: string }
+      >;
+      expect(store[sessionKey]?.updatedAt).toBe(appendedAt);
+      expect(store[sessionKey]?.status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not advance the registry marker for duplicate delivery mirror replays", async () => {
+    const updatedAt = Date.parse("2026-05-18T10:00:00.000Z");
+    const firstAppendAt = Date.parse("2026-05-18T10:05:00.000Z");
+    const duplicateReplayAt = Date.parse("2026-05-18T10:10:00.000Z");
+    const sessionFile = "duplicate-marker.jsonl";
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(firstAppendAt);
+      const first = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Replay-safe marker",
+        storePath: fixture.storePath(),
+      });
+      expect(first.ok).toBe(true);
+
+      vi.setSystemTime(duplicateReplayAt);
+      const duplicate = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Replay-safe marker",
+        storePath: fixture.storePath(),
+      });
+      expect(duplicate.ok).toBe(true);
+
+      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
+        string,
+        { updatedAt?: number }
+      >;
+      expect(store[sessionKey]?.updatedAt).toBe(firstAppendAt);
+      if (first.ok && duplicate.ok) {
+        expect(duplicate.messageId).toBe(first.messageId);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses spawned cwd when creating a missing transcript header", async () => {
     const taskCwd = path.join(fixture.sessionsDir(), "task-repo");
     fs.mkdirSync(taskCwd, { recursive: true });

@@ -693,30 +693,62 @@ describe("CLI attempt execution", () => {
 
   it("persists CLI replies into the session transcript", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript";
+    const sessionFile = path.join(tmpDir, "session-cli-transcript.jsonl");
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-transcript",
-      updatedAt: Date.now(),
+      sessionFile,
+      updatedAt: 1,
+      status: "running",
+      startedAt: 2,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-
-    const updatedEntry = await persistCliTurnTranscript({
-      body: "persist this",
-      result: makeCliResult("hello from cli"),
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
+    await fs.writeFile(
       storePath,
-      sessionAgentId: "main",
-      sessionCwd: tmpDir,
-      config: {},
-    });
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            ...sessionEntry,
+            updatedAt: 5,
+            status: "done",
+            endedAt: 4,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
-    const sessionFile = updatedEntry?.sessionFile;
-    if (!sessionFile) {
+    const nowCalls: number[] = [];
+    let nextNow = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      nextNow += 1_000;
+      nowCalls.push(nextNow);
+      return nextNow;
+    });
+    let updatedEntry: SessionEntry | undefined;
+    try {
+      updatedEntry = await persistCliTurnTranscript({
+        body: "persist this",
+        result: makeCliResult("hello from cli"),
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: "main",
+        sessionCwd: tmpDir,
+        config: {},
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const updatedSessionFile = updatedEntry?.sessionFile;
+    if (!updatedSessionFile) {
       throw new Error("expected CLI transcript persistence to create a session file");
     }
+    expect(updatedSessionFile).toBe(sessionFile);
     const entries = await readSessionFileEntries(sessionFile);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
@@ -744,6 +776,18 @@ describe("CLI attempt execution", () => {
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
     });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
+    expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
+    expect(persisted[sessionKey]?.status).toBe("done");
+    expect(persisted[sessionKey]?.endedAt).toBe(4);
+    expect(persisted[sessionKey]?.startedAt).toBe(2);
+    expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
   it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {

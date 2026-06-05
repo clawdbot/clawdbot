@@ -11,7 +11,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
-import { type AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
+import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -120,6 +120,13 @@ function resolveAcpTurnText(params: {
     ].join(" "),
   );
   return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
+}
+
+function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
+  if (toolsAllow === undefined) {
+    return false;
+  }
+  return !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*");
 }
 
 async function hasBoundConversationForSession(params: {
@@ -361,6 +368,7 @@ export async function tryDispatchAcpReply(params: {
   dispatcher: ReplyDispatcher;
   runId?: string;
   sessionKey?: string;
+  toolsAllow?: string[];
   images?: Array<{ data: string; mimeType: string }>;
   abortSignal?: AbortSignal;
   inboundAudio: boolean;
@@ -504,6 +512,12 @@ export async function tryDispatchAcpReply(params: {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
       throw dispatchPolicyError;
+    }
+    if (isRestrictiveRuntimeToolsAllow(params.toolsAllow)) {
+      throw new AcpRuntimeError(
+        "ACP_DISPATCH_DISABLED",
+        "ACP dispatch cannot enforce runtime toolsAllow for this session; use an embedded runtime for restricted tool policy.",
+      );
     }
     if (acpResolution.kind === "stale") {
       await maybeUnbindStaleBoundConversations({

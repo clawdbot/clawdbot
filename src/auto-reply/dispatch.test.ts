@@ -270,6 +270,31 @@ describe("withReplyDispatcher", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("passes runtime toolsAllow from buffered dispatch into reply resolution", async () => {
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      toolsAllow: ["message"],
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+    });
+
+    const params = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
+    expect(params?.replyOptions?.toolsAllow).toEqual(["message"]);
+  });
+
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
     const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({

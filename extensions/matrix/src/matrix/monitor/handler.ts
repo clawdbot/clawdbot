@@ -63,6 +63,7 @@ import {
   formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
+  isLikelyBareFilename,
   resolveMatrixMessageAttachment,
   resolveMatrixMessageBody,
 } from "../media-text.js";
@@ -90,10 +91,16 @@ import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import {
+  formatMatrixAudioTranscript,
+  isMatrixAudioContent,
+  resolveMatrixPreflightAudioTranscript,
+  sendMatrixPreflightAudioTranscriptEcho,
+} from "./preflight-audio.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
-import type { HistoryEntry } from "./room-history.js";
+import type { HistoryEntry, ReservedHistorySlot } from "./room-history.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import {
@@ -400,6 +407,46 @@ function resolveMatrixPendingHistoryText(params: {
   );
 }
 
+function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {
+  const tools = cfg.tools as
+    | {
+        media?: {
+          audio?: {
+            enabled?: boolean;
+          };
+        };
+      }
+    | undefined;
+  return tools?.media?.audio?.enabled !== false;
+}
+
+function shouldDeferMatrixAudioPreflightForRoomIngress(params: {
+  content: RoomMessageEventContent;
+  cfg: CoreConfig;
+}): boolean {
+  if (!isMatrixAudioMediaEnabled(params.cfg)) {
+    return false;
+  }
+  const content = params.content;
+  const contentUrl = "url" in content && typeof content.url === "string" ? content.url : undefined;
+  const contentFile =
+    "file" in content && content.file && typeof content.file === "object"
+      ? content.file
+      : undefined;
+  const mediaUrl = contentUrl ?? contentFile?.url;
+  const contentInfo =
+    "info" in content && content.info && typeof content.info === "object"
+      ? (content.info as { mimetype?: string })
+      : undefined;
+  return (
+    mediaUrl?.startsWith("mxc://") === true &&
+    isMatrixAudioContent({
+      msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
+      mimetype: contentInfo?.mimetype,
+    })
+  );
+}
+
 function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBotsMode {
   if (value === true) {
     return "all";
@@ -679,17 +726,41 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return { content, isDirectMessage, locationPayload, selfUserId };
       };
       const continueIngress = async (paramsLocal: {
+        audioPreflightMode?: "defer" | "run";
         content: RoomMessageEventContent;
         isDirectMessage: boolean;
         locationPayload: MatrixLocationPayload | null;
+        reservedHistorySlot?: ReservedHistorySlot;
         selfUserId: string;
       }) => {
         let content = paramsLocal.content;
         const isDirectMessage = paramsLocal.isDirectMessage;
         const isRoom = !isDirectMessage;
-        const { locationPayload, selfUserId } = paramsLocal;
-        if (isRoom && groupPolicy === "disabled") {
+        const { audioPreflightMode, locationPayload, reservedHistorySlot, selfUserId } =
+          paramsLocal;
+        const messageId = event.event_id ?? "";
+        const threadRootId = resolveMatrixThreadRootId({ event, content });
+        const thread = resolveMatrixThreadRouting({
+          isDirectMessage,
+          threadReplies,
+          dmThreadReplies,
+          messageId,
+          threadRootId,
+        });
+        const historyThreadId = threadRootId ? thread.threadId : undefined;
+        let reservedHistorySlotConsumed = false;
+        const discardReservedHistorySlot = () => {
+          if (reservedHistorySlot && !reservedHistorySlotConsumed) {
+            roomHistoryTracker.discardPending(roomId, reservedHistorySlot, historyThreadId);
+            reservedHistorySlotConsumed = true;
+          }
+        };
+        const commitInboundEventIfClaimedAndDiscardReserved = async () => {
+          discardReservedHistorySlot();
           await commitInboundEventIfClaimed();
+        };
+        if (isRoom && groupPolicy === "disabled") {
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
 
@@ -722,7 +793,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           logVerboseMessage(
             `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
           );
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         const botLoopProtection: ChannelBotLoopProtectionFacts | undefined =
@@ -744,18 +815,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
           logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         if (isRoom && groupPolicy === "allowlist") {
           if (!roomConfigInfo?.allowlistConfigured) {
             logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
-            await commitInboundEventIfClaimed();
+            await commitInboundEventIfClaimedAndDiscardReserved();
             return undefined;
           }
           if (!roomConfig) {
             logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
-            await commitInboundEventIfClaimed();
+            await commitInboundEventIfClaimedAndDiscardReserved();
             return undefined;
           }
         }
@@ -811,7 +882,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         if (isDirectMessage) {
           if (!dmEnabled || dmPolicy === "disabled") {
-            await commitInboundEventIfClaimed();
+            await commitInboundEventIfClaimedAndDiscardReserved();
             return undefined;
           }
           const senderReason = messageIngress.senderAccess.reasonCode;
@@ -851,20 +922,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   await commitInboundEventIfClaimed();
                 } catch (err) {
                   logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
+                  discardReservedHistorySlot();
                   return undefined;
                 }
               } else {
                 logVerboseMessage(
                   `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
                 );
-                await commitInboundEventIfClaimed();
+                await commitInboundEventIfClaimedAndDiscardReserved();
               }
             }
             if (isReactionEvent || dmPolicy !== "pairing") {
               logVerboseMessage(
                 `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, reason=${senderReason})`,
               );
-              await commitInboundEventIfClaimed();
+              await commitInboundEventIfClaimedAndDiscardReserved();
             }
             return undefined;
           }
@@ -874,7 +946,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           logVerboseMessage(
             `matrix: blocked sender ${senderId} (ingress=${ingressDecision.reasonCode}, ${roomMatchMeta})`,
           );
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         if (isRoom) {
@@ -897,7 +969,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isDirectMessage,
             logVerboseMessage,
           });
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
 
@@ -929,6 +1001,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             ? content.file
             : undefined;
         const mediaUrl = contentUrl ?? contentFile?.url;
+        const earlyContentInfo =
+          "info" in content && content.info && typeof content.info === "object"
+            ? (content.info as { mimetype?: string; size?: number })
+            : undefined;
+        const earlyContentType = earlyContentInfo?.mimetype;
+        const earlyContentSize =
+          typeof earlyContentInfo?.size === "number" ? earlyContentInfo.size : undefined;
+        const earlyContentBody = typeof content.body === "string" ? content.body.trim() : "";
+        const earlyContentFilename =
+          typeof content.filename === "string" ? content.filename.trim() : "";
+        const earlyOriginalFilename = earlyContentFilename || earlyContentBody || undefined;
         const pendingHistoryText = resolveMatrixPendingHistoryText({
           mentionPrecheckText,
           content,
@@ -939,19 +1022,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             ? (await getPollSnapshot())?.text
             : "";
         if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
 
-        const messageId = event.event_id ?? "";
-        const threadRootId = resolveMatrixThreadRootId({ event, content });
-        const thread = resolveMatrixThreadRouting({
-          isDirectMessage,
-          threadReplies,
-          dmThreadReplies,
-          messageId,
-          threadRootId,
-        });
+        let preflightMedia: {
+          path: string;
+          contentType?: string;
+          placeholder: string;
+        } | null = null;
+        let preflightMediaDownloadFailed = false;
+        let preflightMediaSizeLimitExceeded = false;
+        let preflightAudioTranscript: string | undefined;
+
         const {
           route: _route,
           configuredBinding: _configuredBinding,
@@ -968,6 +1051,81 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
         const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
+        const preflightAudioMediaUrl = mediaUrl?.startsWith("mxc://") ? mediaUrl : undefined;
+        const shouldRunMatrixAudioPreflight =
+          isMatrixAudioContent({
+            msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
+            mimetype: earlyContentType,
+          }) &&
+          isMatrixAudioMediaEnabled(cfg) &&
+          preflightAudioMediaUrl !== undefined;
+        if (
+          shouldRunMatrixAudioPreflight &&
+          audioPreflightMode === "defer" &&
+          isRoom &&
+          historyLimit > 0 &&
+          !reservedHistorySlot
+        ) {
+          const reserved = roomHistoryTracker.reservePending(
+            _route.agentId,
+            roomId,
+            {
+              sender: senderId,
+              body: pendingHistoryText,
+              timestamp: eventTs ?? undefined,
+              messageId,
+            },
+            historyThreadId,
+          );
+          return {
+            deferredPrefix: {
+              ...paramsLocal,
+              audioPreflightMode: "run" as const,
+              reservedHistorySlot: reserved,
+            },
+          } as const;
+        }
+        if (shouldRunMatrixAudioPreflight) {
+          try {
+            preflightMedia = await downloadMatrixMedia({
+              client,
+              mxcUrl: preflightAudioMediaUrl,
+              contentType: earlyContentType,
+              sizeBytes: earlyContentSize,
+              maxBytes: mediaMaxBytes,
+              file: contentFile,
+              originalFilename: earlyOriginalFilename,
+            });
+          } catch (err) {
+            preflightMediaDownloadFailed = true;
+            if (isMatrixMediaSizeLimitError(err)) {
+              preflightMediaSizeLimitExceeded = true;
+            }
+            const errorText = formatMatrixErrorMessage(err);
+            logVerboseMessage(
+              `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
+            );
+            logger.warn("matrix media download failed", {
+              roomId,
+              eventId: event.event_id,
+              msgtype: content.msgtype,
+              encrypted: Boolean(contentFile),
+              error: errorText,
+            });
+          }
+          if (preflightMedia) {
+            preflightAudioTranscript = await resolveMatrixPreflightAudioTranscript({
+              mediaPath: preflightMedia.path,
+              mediaContentType: preflightMedia.contentType,
+              cfg,
+              accountId,
+              chatType: isDirectMessage ? "direct" : "channel",
+              originatingTo: `room:${roomId}`,
+              messageThreadId: thread.threadId,
+              sessionKey: _route.sessionKey,
+            });
+          }
+        }
         const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId, {
           provider: "matrix",
           conversationId: roomId,
@@ -976,11 +1134,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
           : undefined;
+        const mentionPrecheckTextWithTranscript = preflightAudioTranscript
+          ? [mentionPrecheckText, preflightAudioTranscript].filter(Boolean).join("\n").trim()
+          : mentionPrecheckText;
         const { wasMentioned, hasExplicitMention } = resolveMentions({
           content,
           userId: selfUserId,
           displayName: selfDisplayName,
-          text: mentionPrecheckText,
+          text: mentionPrecheckTextWithTranscript,
           mentionRegexes: agentMentionRegexes,
         });
         if (
@@ -992,7 +1153,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           logVerboseMessage(
             `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
           );
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
@@ -1025,7 +1186,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             reason: "control command (unauthorized)",
             target: senderId,
           });
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         const shouldRequireMention = isRoom
@@ -1047,7 +1208,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           hasControlCommandInMessage;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
         if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
-          const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;
+          const pendingHistoryBody = preflightAudioTranscript
+            ? formatMatrixAudioTranscript(preflightAudioTranscript)
+            : pendingHistoryText || pendingHistoryPollText;
           if (historyLimit > 0 && pendingHistoryBody) {
             const pendingEntry: HistoryEntry = {
               sender: senderId,
@@ -1055,16 +1218,36 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               timestamp: eventTs ?? undefined,
               messageId,
             };
-            roomHistoryTracker.recordPending(roomId, pendingEntry);
+            if (reservedHistorySlot) {
+              roomHistoryTracker.finalizePending(
+                roomId,
+                reservedHistorySlot,
+                pendingEntry,
+                historyThreadId,
+              );
+              reservedHistorySlotConsumed = true;
+            } else {
+              roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
+            }
           }
           logger.info("skipping room message", { roomId, reason: "no-mention" });
           await commitInboundEventIfClaimed();
           return undefined;
         }
+        if (preflightAudioTranscript) {
+          await sendMatrixPreflightAudioTranscriptEcho({
+            transcript: preflightAudioTranscript,
+            cfg,
+            accountId,
+            originatingTo: `room:${roomId}`,
+            messageThreadId: thread.threadId,
+          });
+        }
 
         if (isPollEvent) {
           const pollSnapshot = await getPollSnapshot();
           if (!pollSnapshot) {
+            discardReservedHistorySlot();
             return undefined;
           }
           content = {
@@ -1077,9 +1260,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           path: string;
           contentType?: string;
           placeholder: string;
-        } | null = null;
-        let mediaDownloadFailed = false;
-        let mediaSizeLimitExceeded = false;
+        } | null = preflightMedia;
+        let mediaDownloadFailed = preflightMediaDownloadFailed;
+        let mediaSizeLimitExceeded = preflightMediaSizeLimitExceeded;
         const finalContentUrl =
           "url" in content && typeof content.url === "string" ? content.url : undefined;
         const finalContentFile =
@@ -1096,7 +1279,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             : undefined;
         const contentType = contentInfo?.mimetype;
         const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
-        if (finalMediaUrl?.startsWith("mxc://")) {
+        if (!media && !mediaDownloadFailed && finalMediaUrl?.startsWith("mxc://")) {
           try {
             media = await downloadMatrixMedia({
               client,
@@ -1127,7 +1310,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
 
         const rawBody = locationPayload?.text ?? contentBody;
-        const bodyText = resolveMatrixInboundBodyText({
+        let bodyText = resolveMatrixInboundBodyText({
           rawBody,
           filename: typeof content.filename === "string" ? content.filename : undefined,
           mediaPlaceholder: media?.placeholder,
@@ -1136,8 +1319,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           mediaDownloadFailed,
           mediaSizeLimitExceeded,
         });
+        if (
+          preflightMedia &&
+          bodyText &&
+          bodyText !== preflightMedia.placeholder &&
+          isLikelyBareFilename(bodyText)
+        ) {
+          // Matrix voice clients commonly set body to the attachment filename.
+          bodyText = preflightMedia.placeholder;
+        }
+        if (preflightAudioTranscript) {
+          const transcriptBody = formatMatrixAudioTranscript(preflightAudioTranscript);
+          bodyText =
+            !bodyText || bodyText === media?.placeholder
+              ? transcriptBody
+              : `${bodyText}\n${transcriptBody}`;
+        }
         if (!bodyText) {
-          await commitInboundEventIfClaimed();
+          await commitInboundEventIfClaimedAndDiscardReserved();
           return undefined;
         }
         const commandBodyText = hasControlCommandInMessage ? commandCheckText : bodyText;
@@ -1155,6 +1354,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               reason: "configured ACP binding unavailable",
               target: _configuredBinding.spec.conversationId,
             });
+            discardReservedHistorySlot();
             return undefined;
           }
         }
@@ -1164,13 +1364,36 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const preparedTrigger =
           isRoom && historyLimit > 0
-            ? roomHistoryTracker.prepareTrigger(_route.agentId, roomId, historyLimit, {
-                sender: senderName,
-                body: bodyText,
-                timestamp: eventTs ?? undefined,
-                messageId,
-              })
+            ? reservedHistorySlot
+              ? roomHistoryTracker.prepareReservedTrigger(
+                  _route.agentId,
+                  roomId,
+                  historyLimit,
+                  reservedHistorySlot,
+                  {
+                    sender: senderName,
+                    body: bodyText,
+                    timestamp: eventTs ?? undefined,
+                    messageId,
+                  },
+                  historyThreadId,
+                )
+              : roomHistoryTracker.prepareTrigger(
+                  _route.agentId,
+                  roomId,
+                  historyLimit,
+                  {
+                    sender: senderName,
+                    body: bodyText,
+                    timestamp: eventTs ?? undefined,
+                    messageId,
+                  },
+                  historyThreadId,
+                )
             : undefined;
+        if (reservedHistorySlot && preparedTrigger) {
+          reservedHistorySlotConsumed = true;
+        }
         const inboundHistory = preparedTrigger
           ? buildInboundHistoryFromEntries({
               entries: preparedTrigger.history,
@@ -1195,6 +1418,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           bodyText,
           commandBodyText,
           media,
+          preflightAudioTranscript,
           locationPayload,
           messageId,
           triggerSnapshot,
@@ -1215,7 +1439,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               if (prefix.isDirectMessage) {
                 return { deferredPrefix: prefix } as const;
               }
-              return { ingressResult: await continueIngress(prefix) } as const;
+              const result = await continueIngress({
+                ...prefix,
+                audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
+                  content: prefix.content,
+                  cfg,
+                })
+                  ? "defer"
+                  : "run",
+              });
+              return result && "deferredPrefix" in result
+                ? { deferredPrefix: result.deferredPrefix }
+                : { ingressResult: result };
             })
           : undefined;
       const resolvedIngressResult =
@@ -1231,6 +1466,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return await continueIngress(prefix);
             })();
       if (!resolvedIngressResult) {
+        return;
+      }
+      if ("deferredPrefix" in resolvedIngressResult) {
         return;
       }
 
@@ -1250,6 +1488,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         bodyText,
         commandBodyText,
         media,
+        preflightAudioTranscript,
         locationPayload,
         messageId,
         triggerSnapshot,
@@ -1389,7 +1628,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
         media: toInboundMediaFacts(
           media
-            ? [{ path: media.path, url: media.path, contentType: media.contentType }]
+            ? [
+                {
+                  path: media.path,
+                  url: media.path,
+                  contentType: media.contentType,
+                  transcribed: preflightAudioTranscript !== undefined,
+                },
+              ]
             : undefined,
         ),
         messageId,
@@ -1865,6 +2111,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   textLimit,
                   replyToMode,
                   threadId: threadTarget,
+                  replyToId: threadTarget ?? replyToEventId ?? undefined,
                   accountId: _route.accountId,
                   mediaLocalRoots,
                   tableMode,
@@ -1974,6 +2221,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       textLimit,
                       replyToMode,
                       threadId: threadTarget,
+                      replyToId: threadTarget ?? replyToEventId ?? undefined,
                       accountId: _route.accountId,
                       mediaLocalRoots,
                       tableMode,
@@ -2041,6 +2289,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   textLimit,
                   replyToMode,
                   threadId: threadTarget,
+                  replyToId: threadTarget ?? replyToEventId ?? undefined,
                   accountId: _route.accountId,
                   mediaLocalRoots,
                   tableMode,
@@ -2065,6 +2314,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   textLimit,
                   replyToMode,
                   threadId: threadTarget,
+                  replyToId: threadTarget ?? replyToEventId ?? undefined,
                   accountId: _route.accountId,
                   mediaLocalRoots,
                   tableMode,
@@ -2096,6 +2346,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 textLimit,
                 replyToMode,
                 threadId: threadTarget,
+                replyToId: threadTarget ?? replyToEventId ?? undefined,
                 accountId: _route.accountId,
                 mediaLocalRoots,
                 tableMode,
@@ -2331,7 +2582,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Only advance to the snapshot position — messages added during async processing remain
       // visible for the next trigger.
       if (isRoom && triggerSnapshot) {
-        roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, messageId);
+        roomHistoryTracker.consumeHistory(
+          _route.agentId,
+          roomId,
+          triggerSnapshot,
+          messageId,
+          threadRootId ? thread.threadId : undefined,
+        );
       }
       if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
         await commitInboundEventIfClaimed();

@@ -36,7 +36,7 @@ function formatMatrixAttachmentMarker(params: {
   return params.unavailable ? `[matrix ${label} unavailable]` : `[matrix ${label}]`;
 }
 
-function isLikelyBareFilename(text: string): boolean {
+export function isLikelyBareFilename(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.includes("\n") || /\s/.test(trimmed)) {
     return false;

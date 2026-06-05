@@ -97,6 +97,59 @@ describe("event-helpers", () => {
     });
   });
 
+  it("preserves original thread relation when serializing edited current content", () => {
+    const event = {
+      getId: () => "$root",
+      getSender: () => "@alice:example.org",
+      getType: () => "m.room.message",
+      getTs: () => 1000,
+      getOriginalContent: () => ({
+        body: "original",
+        msgtype: "m.text",
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread",
+        },
+      }),
+      getContent: () => ({
+        body: "@bot edited",
+        "m.mentions": { user_ids: ["@bot:example.org"] },
+        msgtype: "m.text",
+      }),
+      getUnsigned: () => ({}),
+    } as unknown as MatrixEvent;
+
+    expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread",
+    });
+  });
+
+  it("preserves wire thread relation for decrypted encrypted events", () => {
+    const event = {
+      getId: () => "$encrypted",
+      getSender: () => "@alice:example.org",
+      getType: () => "m.room.message",
+      getTs: () => 1000,
+      getContent: () => ({
+        body: "decrypted edit",
+        msgtype: "m.text",
+      }),
+      getUnsigned: () => ({}),
+      getWireContent: () => ({
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread",
+        },
+      }),
+    } as unknown as MatrixEvent;
+
+    expect(matrixEventToRaw(event).content["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread",
+    });
+  });
+
   it("can serialize original content for inbound trigger filtering", () => {
     expect(matrixEventToRaw(makeEditedMessageEvent(), { contentMode: "original" })).toEqual({
       event_id: "$root",

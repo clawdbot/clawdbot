@@ -280,9 +280,17 @@ export function resolveIncompleteTurnPayloadText(params: {
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when unsigned thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787)
+  const unsignedThinkingOnlyTerminal =
+    params.payloadCount !== 0 &&
+    !joinAssistantTexts(params.attempt.assistantTexts).length &&
+    isUnsignedThinkingOnlyAssistantTurn(assistant);
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -314,9 +322,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
-    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
-  );
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
@@ -324,6 +330,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
+    !unsignedThinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -534,6 +541,20 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
+// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
+// so the content.length > 0 guard is required to distinguish the two cases.
+function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
+  if (message == null || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
+}
+
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
@@ -669,7 +690,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   if (assistant?.stopReason === "error") {
     return null;
   }
-  if (!isReasoningOnlyAssistantTurn(assistant)) {
+  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
     return null;
   }
 

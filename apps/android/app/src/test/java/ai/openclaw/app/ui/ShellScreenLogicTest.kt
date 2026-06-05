@@ -92,6 +92,21 @@ class ShellScreenLogicTest {
     assertEquals(emptyList<String>(), rows.map { it.title })
   }
 
+  @Test
+  fun homeAttentionRowsSurfaceExpiringProviderAuth() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        expiringProviderCount = 1,
+      )
+
+    assertEquals(listOf("Provider auth expires soon"), rows.map { it.subtitle })
+  }
+
   private fun emptyChannels(): GatewayChannelsSummary = GatewayChannelsSummary(channels = emptyList())
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())

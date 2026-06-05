@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
@@ -25,15 +25,9 @@ import {
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  try {
-    await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
-      process.env.OPENCLAW_STATE_DIR = tempDir;
-      await run();
-    });
-  } finally {
-    envSnapshot.restore();
-  }
+  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
+  });
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -186,10 +187,6 @@ beforeEach(() => {
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 function createRuntimeHooks() {
@@ -412,39 +409,44 @@ describe("resolveModel", () => {
 
   it("invalidates agent discovery stores when implicit main auth changes without config", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", rootDir);
     const agentDir = path.join(rootDir, "agents", "worker", "agent");
     const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(mainAgentDir, { recursive: true });
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      templateModel: {
-        provider: "openai",
-        ...makeModel("gpt-5.5"),
-      },
-    });
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: rootDir }, async () => {
+        mockDiscoveredModel(discoverModels, {
+          provider: "openai",
+          modelId: "gpt-5.5",
+          templateModel: {
+            provider: "openai",
+            ...makeModel("gpt-5.5"),
+          },
+        });
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
-      },
-      mainAgentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
-      runtimeHooks: createRuntimeHooks(),
-    });
+        const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+          runtimeHooks: createRuntimeHooks(),
+        });
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: { "openai:default": { type: "api_key", provider: "openai", key: "one" } },
+          },
+          mainAgentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
+        );
+        const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+          runtimeHooks: createRuntimeHooks(),
+        });
 
-    expectResolvedModel(first);
-    expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
-    expect(discoverModels).toHaveBeenCalledTimes(2);
+        expectResolvedModel(first);
+        expectResolvedModel(second);
+        expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+        expect(discoverModels).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("does not cache agent discovery stores while runtime auth snapshots are active", async () => {

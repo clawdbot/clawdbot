@@ -18,6 +18,7 @@ export const ModelChoiceSchema = Type.Object(
     name: NonEmptyString,
     provider: NonEmptyString,
     alias: Type.Optional(NonEmptyString),
+    available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
   },

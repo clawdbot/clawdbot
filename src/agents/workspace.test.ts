@@ -7,6 +7,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
@@ -27,19 +31,18 @@ import {
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
-let testStateDir: string | undefined;
+let testState: OpenClawTestState | undefined;
 
 beforeEach(async () => {
-  testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-state-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-workspace-state-",
+  });
 });
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
-  if (testStateDir) {
-    await fs.rm(testStateDir, { recursive: true, force: true });
-    testStateDir = undefined;
-  }
+  await testState?.cleanup();
+  testState = undefined;
 });
 
 describe("resolveDefaultAgentWorkspaceDir", () => {

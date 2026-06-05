@@ -184,6 +184,7 @@ export async function handleClickClackInbound(params: {
     recordInboundSession: runtime.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    toolsAllow: params.account.toolsAllow,
     delivery: {
       deliver: async (payload) => {
         const text =

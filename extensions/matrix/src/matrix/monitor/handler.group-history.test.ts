@@ -192,6 +192,72 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     expect(history[0]?.body).toContain("msg A");
   });
 
+  it('keeps threaded messages in parent history when threadReplies is "off"', async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      threadReplies: "off",
+      finalizeInboundContext,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$thread-plain",
+        content: {
+          msgtype: "m.text",
+          body: "thread plain",
+          "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
+        },
+      }),
+    );
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$main-trigger", body: "main trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "thread plain");
+  });
+
+  it('keeps top-level room history flat when threadReplies is "always"', async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createMatrixHandlerTestHarness({
+      historyLimit: 20,
+      groupPolicy: "open",
+      isDirectMessage: false,
+      threadReplies: "always",
+      finalizeInboundContext,
+      dispatchReplyFromConfig: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomPlainEvent({ eventId: "$top-level-plain", body: "top-level plain", ts: 1000 }),
+    );
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$top-level-trigger", body: "main trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "top-level plain");
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$top-level-trigger-2", body: "main trigger 2", ts: 3000 }),
+    );
+
+    expectNoBodyContaining(inboundHistoryBodies(finalizeInboundContext, 1), "top-level plain");
+  });
+
   it("multi-agent: each agent has an independent watermark", async () => {
     let currentAgentId = "agent_a";
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);

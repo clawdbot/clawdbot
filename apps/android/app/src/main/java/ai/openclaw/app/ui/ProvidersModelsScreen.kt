@@ -192,6 +192,9 @@ private data class ProviderSetupRow(
   val name: String,
   val subtitle: String,
   val ready: Boolean,
+  val available: Boolean,
+  val statusLabel: String,
+  val warning: Boolean,
 )
 
 private data class ProviderRow(
@@ -199,37 +202,60 @@ private data class ProviderRow(
   val name: String,
   val status: String,
   val ready: Boolean,
+  val available: Boolean,
+  val setupRequired: Boolean,
+  val warning: Boolean,
   val modelCount: Int,
 )
 
-/** Combines auth-provider readiness rows with catalog-only providers. */
+/** Combines auth-provider readiness rows with catalog-only browse providers. */
 private fun providerRows(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): List<ProviderRow> {
   val modelCounts = models.groupingBy { it.provider }.eachCount()
+  val availableProviderIds =
+    models
+      .filter(::modelAvailabilityUsable)
+      .map { it.provider.normalizedProviderId() }
+      .toSet()
   val authRows =
     providers.map { provider ->
-      val ready = modelProviderReady(provider.status)
+      val providerId = provider.id.normalizedProviderId()
+      val authReady = modelProviderReady(provider.status)
+      val expiring = modelProviderExpiring(provider.status)
+      val available = providerId in availableProviderIds
       ProviderRow(
         id = provider.id,
         name = provider.displayName,
-        status = if (ready) "Ready" else "Needs setup",
-        ready = ready,
+        status =
+          when {
+            authReady -> "Ready"
+            expiring -> "Expiring"
+            available -> "Available"
+            else -> "Needs setup"
+          },
+        ready = authReady,
+        available = available || authReady || expiring,
+        setupRequired = !authReady && !available && !expiring,
+        warning = expiring,
         modelCount = modelCounts[provider.id] ?: 0,
       )
     }
-  // Static/catalog-only providers may expose models without a matching auth
-  // provider row; keep them visible as ready providers.
+  // Catalog-only providers can be browsed but are not a readiness signal.
   val missingAuthRows =
     modelCounts.keys
       .filter { provider -> authRows.none { it.id == provider } }
       .map { provider ->
+        val available = provider.normalizedProviderId() in availableProviderIds
         ProviderRow(
           id = provider,
           name = providerDisplayName(provider),
-          status = "Ready",
-          ready = true,
+          status = if (available) "Available" else "Catalog",
+          ready = available,
+          available = available,
+          setupRequired = false,
+          warning = false,
           modelCount = modelCounts[provider] ?: 0,
         )
       }
@@ -245,6 +271,9 @@ private fun providerSetupRows(providerRows: List<ProviderRow>): List<ProviderSet
       name = providerDisplayName(id),
       subtitle = providerSetupSubtitle(id, row),
       ready = row?.ready == true,
+      available = row?.available == true,
+      statusLabel = providerSetupStatusLabel(row),
+      warning = row?.warning == true || row?.setupRequired == true || row == null,
     )
   }
 }
@@ -254,10 +283,22 @@ private fun providerSetupSubtitle(
   row: ProviderRow?,
 ): String =
   when {
+    row?.warning == true -> "Credential expires soon"
     row?.ready == true -> if (row.modelCount > 0) "${row.modelCount} models available" else "Ready"
-    row != null -> "Finish setup to use ${row.name}"
+    row?.available == true -> if (row.modelCount > 0) "${row.modelCount} models available" else "Available"
+    row?.setupRequired == true -> "Finish setup to use ${row.name}"
+    row != null && row.modelCount > 0 -> "${row.modelCount} catalog models"
     id == "ollama" -> "Use models running on your network"
     else -> "Add provider credentials on your Gateway"
+  }
+
+private fun providerSetupStatusLabel(row: ProviderRow?): String =
+  when {
+    row?.ready == true -> "Ready"
+    row?.warning == true -> "Expiring"
+    row?.available == true -> "Available"
+    row?.setupRequired == false -> "Catalog"
+    else -> "Setup"
   }
 
 /** Normalizes gateway provider status strings into a ready/not-ready boolean. */
@@ -269,6 +310,30 @@ internal fun modelProviderReady(status: String): Boolean {
     normalized == "configured" ||
     normalized == "static"
 }
+
+private fun modelProviderExpiring(status: String): Boolean = status.trim().lowercase() == "expiring"
+
+internal fun readyModelProviderCount(
+  providers: List<GatewayModelProviderSummary>,
+  models: List<GatewayModelSummary>,
+): Int {
+  val authReadyProviders = providers.filter { modelProviderReady(it.status) }.map { it.id.normalizedProviderId() }
+  val availableModelProviders = models.filter(::modelAvailabilityUsable).map { it.provider.normalizedProviderId() }
+  return (authReadyProviders + availableModelProviders).distinct().size
+}
+
+// Older gateways did not emit `available`; keep those rows on the legacy
+// readiness path while still honoring explicit false from upgraded gateways.
+internal fun modelAvailabilityUsable(model: GatewayModelSummary): Boolean = model.available != false
+
+internal fun expiringModelProviderCount(providers: List<GatewayModelProviderSummary>): Int =
+  providers
+    .filter { modelProviderExpiring(it.status) }
+    .map { it.id.normalizedProviderId() }
+    .distinct()
+    .size
+
+private fun String.normalizedProviderId(): String = trim().lowercase()
 
 /** Groups models by provider using the same display priority as provider rows. */
 private fun sortedModelGroups(models: List<GatewayModelSummary>): List<Pair<String, List<GatewayModelSummary>>> =
@@ -299,7 +364,18 @@ private fun ProviderList(
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       if (rows.isEmpty()) {
-        ProviderListRow(ProviderRow(id = "loading", name = "Provider catalog", status = if (refreshing) "Loading" else "No providers", ready = false, modelCount = 0))
+        ProviderListRow(
+          ProviderRow(
+            id = "loading",
+            name = "Provider catalog",
+            status = if (refreshing) "Loading" else "No providers",
+            ready = false,
+            available = false,
+            setupRequired = false,
+            warning = false,
+            modelCount = 0,
+          ),
+        )
       } else {
         val visibleRows = rows.take(5)
         visibleRows.forEachIndexed { index, row ->
@@ -322,12 +398,12 @@ private fun ProviderOverviewPanel(
   onRefresh: () -> Unit,
   onSetup: () -> Unit,
 ) {
-  val readyCount = providerRows.count { it.ready }
-  val needsSetupCount = providerRows.count { !it.ready }
+  val readyCount = providerRows.count { it.available }
+  val needsSetupCount = providerRows.count { it.setupRequired }
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ProviderMetricTile(label = "Ready", value = readyCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = "Available", value = readyCount.toString(), modifier = Modifier.weight(1f))
         ProviderMetricTile(label = "Models", value = modelCount.toString(), modifier = Modifier.weight(1f))
         ProviderMetricTile(label = "Setup", value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
       }
@@ -398,8 +474,14 @@ private fun ProviderSetupListRow(
         Text(text = row.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(if (row.ready) ClawTheme.colors.success else ClawTheme.colors.warning))
-        Text(text = if (row.ready) "Ready" else "Setup", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        val statusColor =
+          when {
+            row.warning -> ClawTheme.colors.warning
+            row.ready || row.available -> ClawTheme.colors.success
+            else -> ClawTheme.colors.textMuted
+          }
+        Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(statusColor))
+        Text(text = row.statusLabel, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open ${row.name}", modifier = Modifier.size(17.dp), tint = ClawTheme.colors.text)
       }
     }
@@ -415,7 +497,13 @@ private fun ProviderListRow(row: ProviderRow) {
       Text(text = if (row.modelCount > 0) "${row.modelCount} models" else "Provider setup", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (row.ready) ClawTheme.colors.success else ClawTheme.colors.warning))
+      val statusColor =
+        when {
+          row.warning || row.setupRequired -> ClawTheme.colors.warning
+          row.ready || row.available -> ClawTheme.colors.success
+          else -> ClawTheme.colors.textMuted
+        }
+      Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusColor))
       Text(text = row.status, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
     }
   }
@@ -491,12 +579,13 @@ private fun ModelGroup(
 
 @Composable
 private fun ModelRow(model: GatewayModelSummary) {
+  val available = modelAvailabilityUsable(model)
   Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(text = model.name, style = ClawTheme.type.mono, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     modelCapabilityLabels(model).take(3).forEach { label ->
       ProviderMiniTag(text = label)
     }
-    Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
+    Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (available) ClawTheme.colors.success else ClawTheme.colors.warning))
   }
 }
 

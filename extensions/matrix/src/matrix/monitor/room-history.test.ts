@@ -65,6 +65,223 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(retried.snapshotIdx).toBe(first.snapshotIdx);
   });
 
+  it("reserved triggers keep their arrival-order history window", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "before", messageId: "$before" });
+    const reserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder",
+      messageId: "$audio",
+    });
+    tracker.recordPending(ROOM, { sender: "user", body: "after", messageId: "$after" });
+
+    const prepared = tracker.prepareReservedTrigger(AGENT, ROOM, 100, reserved, {
+      sender: "user",
+      body: "audio trigger",
+      messageId: "$audio",
+    });
+
+    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["before"]);
+    tracker.consumeHistory(AGENT, ROOM, prepared, "$audio");
+    expect(
+      tracker.getPendingHistory(AGENT, ROOM, 100).map((entryValue) => entryValue.body),
+    ).toEqual(["after"]);
+  });
+
+  it("reserved pending slots are finalized in arrival order", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    const reserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder",
+      messageId: "$audio",
+    });
+    tracker.recordPending(ROOM, { sender: "user", body: "after", messageId: "$after" });
+    tracker.finalizePending(ROOM, reserved, {
+      sender: "user",
+      body: "audio final",
+      messageId: "$audio",
+    });
+
+    expect(
+      tracker.getPendingHistory(AGENT, ROOM, 100).map((entryValue) => entryValue.body),
+    ).toEqual(["audio final", "after"]);
+  });
+
+  it("discarded reserved slots do not leak into later history", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    const reserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "blocked",
+      body: "blocked audio",
+      messageId: "$blocked",
+    });
+    tracker.discardPending(ROOM, reserved);
+    tracker.recordPending(ROOM, { sender: "user", body: "after", messageId: "$after" });
+
+    const prepared = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "trigger",
+      messageId: "$trigger",
+    });
+
+    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["after"]);
+  });
+
+  it("reserved triggers use the arrival-time watermark even if a later trigger consumes history", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "before", messageId: "$before" });
+    const reserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder",
+      messageId: "$audio",
+    });
+    const later = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "later trigger",
+      messageId: "$later",
+    });
+    tracker.consumeHistory(AGENT, ROOM, later, "$later");
+
+    const prepared = tracker.prepareReservedTrigger(AGENT, ROOM, 100, reserved, {
+      sender: "user",
+      body: "audio trigger",
+      messageId: "$audio",
+    });
+
+    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["before"]);
+  });
+
+  it("does not let later triggers consume unfinalized reserved slots", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    const reserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder",
+      messageId: "$audio",
+    });
+    const later = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "later trigger",
+      messageId: "$later",
+    });
+    tracker.consumeHistory(AGENT, ROOM, later, "$later");
+    tracker.finalizePending(ROOM, reserved, {
+      sender: "user",
+      body: "audio transcript",
+      messageId: "$audio",
+    });
+
+    const followUp = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "follow up",
+      messageId: "$follow-up",
+    });
+
+    expect(followUp.history.map((entryValue) => entryValue.body)).toEqual(["audio transcript"]);
+  });
+
+  it("reserved trigger retries discard the extra placeholder slot", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "before", messageId: "$before" });
+    const firstReserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder",
+      messageId: "$audio",
+    });
+    const firstPrepared = tracker.prepareReservedTrigger(AGENT, ROOM, 100, firstReserved, {
+      sender: "user",
+      body: "audio trigger",
+      messageId: "$audio",
+    });
+
+    const retryReserved = tracker.reservePending(AGENT, ROOM, {
+      sender: "user",
+      body: "audio placeholder retry",
+      messageId: "$audio",
+    });
+    const retried = tracker.prepareReservedTrigger(AGENT, ROOM, 100, retryReserved, {
+      sender: "user",
+      body: "audio trigger",
+      messageId: "$audio",
+    });
+    tracker.consumeHistory(AGENT, ROOM, retried, "$audio");
+
+    expect(retried.snapshotIdx).toBe(firstPrepared.snapshotIdx);
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100)).toHaveLength(0);
+  });
+
+  it("keeps main-room and thread histories isolated", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("main-1"));
+    tracker.recordPending(ROOM, entry("thread-1"), "$thread");
+    tracker.recordPending(ROOM, entry("main-2"));
+
+    const mainPrepared = tracker.prepareTrigger(AGENT, ROOM, 100, entry("main-trigger"));
+    const threadPrepared = tracker.prepareTrigger(
+      AGENT,
+      ROOM,
+      100,
+      entry("thread-trigger"),
+      "$thread",
+    );
+
+    expect(mainPrepared.history.map((entryValue) => entryValue.body)).toEqual(["main-1", "main-2"]);
+    expect(threadPrepared.history.map((entryValue) => entryValue.body)).toEqual(["thread-1"]);
+  });
+
+  it("advances watermarks independently per thread", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("thread-a-1"), "$thread-a");
+    tracker.recordPending(ROOM, entry("thread-b-1"), "$thread-b");
+    const snapA = tracker.prepareTrigger(AGENT, ROOM, 100, entry("trigger-a"), "$thread-a");
+    tracker.consumeHistory(AGENT, ROOM, snapA, undefined, "$thread-a");
+
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-a")).toHaveLength(0);
+    expect(
+      tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-b").map((entryValue) => entryValue.body),
+    ).toEqual(["thread-b-1"]);
+  });
+
+  it("reserved thread triggers keep the thread arrival-order history window", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("main-before"));
+    tracker.recordPending(ROOM, entry("thread-before"), "$thread");
+    const reserved = tracker.reservePending(
+      AGENT,
+      ROOM,
+      {
+        sender: "user",
+        body: "audio placeholder",
+        messageId: "$audio",
+      },
+      "$thread",
+    );
+    tracker.recordPending(ROOM, entry("thread-after"), "$thread");
+    tracker.recordPending(ROOM, entry("main-after"));
+
+    const prepared = tracker.prepareReservedTrigger(
+      AGENT,
+      ROOM,
+      100,
+      reserved,
+      {
+        sender: "user",
+        body: "audio trigger",
+        messageId: "$audio",
+      },
+      "$thread",
+    );
+
+    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["thread-before"]);
+  });
+
   it("refreshes watermark recency before capped-map eviction", () => {
     const tracker = createRoomHistoryTrackerForTests(200, 10, 2);
     const room1 = "!room1:test";

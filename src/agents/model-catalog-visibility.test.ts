@@ -58,6 +58,12 @@ describe("resolveVisibleModelCatalog", () => {
         name: "GPT 5.5",
         api: "openai-responses",
       },
+      {
+        provider: "openai",
+        id: "gpt-5.4-codex",
+        name: "GPT 5.4 Codex",
+        api: "openai-responses",
+      },
     ];
 
     const result = await resolveVisibleModelCatalog({
@@ -71,8 +77,16 @@ describe("resolveVisibleModelCatalog", () => {
     expect(authChecker).toHaveBeenNthCalledWith(1, "openai", "openai-responses");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai", "openai-responses");
     expect(authChecker).toHaveBeenNthCalledWith(3, "openai", "openai-chatgpt-responses");
-    expect(authChecker).toHaveBeenCalledTimes(3);
+    expect(authChecker).toHaveBeenNthCalledWith(4, "openai", "openai-responses");
+    expect(authChecker).toHaveBeenNthCalledWith(5, "openai", "openai-chatgpt-responses");
+    expect(authChecker).toHaveBeenCalledTimes(5);
     expect(result).toEqual([
+      {
+        provider: "openai",
+        id: "gpt-5.4-codex",
+        name: "GPT 5.4 Codex",
+        api: "openai-responses",
+      },
       {
         provider: "openai",
         id: "gpt-5.5",

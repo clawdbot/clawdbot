@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
@@ -32,13 +33,13 @@ function makeTmpProbePath(prefix: string): string {
 
 async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promise<T>) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-media-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   try {
-    await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
-    return await run({ stateDir });
+    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
+      return await run({ stateDir });
+    });
   } finally {
-    vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }

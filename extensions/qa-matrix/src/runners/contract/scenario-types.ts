@@ -55,6 +55,7 @@ export type MatrixQaScenarioArtifacts = {
   editEventId?: string;
   editedToken?: string;
   expectedNoReplyWindowMs?: number;
+  expectedMarker?: string;
   firstDriverEventId?: string;
   firstReply?: MatrixQaReplyArtifact;
   firstToken?: string;

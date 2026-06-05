@@ -1528,6 +1528,63 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("surfaces stall on clean stop with only an unsigned thinking payload (payloadCount=1, no visible text)", () => {
+    // Regression: unsigned thinking payloads increment payloadCount but carry no
+    // user-visible content. The visible-text guard must not suppress incomplete-turn
+    // detection when the model produced only a thinking block and no answer. (#89787)
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "qwen3.6-35b-a3b",
+          content: [
+            {
+              type: "thinking",
+              thinking: "let me plan the tool calls I need to make...",
+              // no signature — unsigned thinking block
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("does not surface a stall when unsigned thinking accompanies visible text (payloadCount=1)", () => {
+    // When the model emits both a thinking block and a visible text answer, the turn
+    // succeeded and no stall should be surfaced even though thinking is unsigned.
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Here is the answer to your question."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "qwen3.6-35b-a3b",
+          content: [
+            {
+              type: "thinking",
+              thinking: "let me answer this...",
+            },
+            { type: "text", text: "Here is the answer to your question." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces an error for tool-use terminal turn with pre-tool text via runEmbeddedAgent (#76477)", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -1687,6 +1744,59 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               type: "thinking",
               thinking: "internal reasoning",
               thinkingSignature: JSON.stringify({ id: "ollama_rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries unsigned thinking-only turns via the reasoning-only path (openai-completions)", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "qwen3.6-35b-a3b",
+      modelApi: "openai-completions",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "qwen3.6-35b-a3b",
+          content: [
+            {
+              type: "thinking",
+              thinking: "let me plan the tool calls I need to make...",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries unsigned thinking-only Ollama turns via the reasoning-only path", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:31b",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "ollama",
+          model: "gemma4:31b",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],

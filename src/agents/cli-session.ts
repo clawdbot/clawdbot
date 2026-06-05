@@ -138,8 +138,13 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+type MutableCliSessionFields = Pick<
+  SessionEntry,
+  "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId"
+>;
+
 /** Remove every CLI session binding from a session entry. */
-export function clearAllCliSessions(entry: SessionEntry): void {
+export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): void {
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;

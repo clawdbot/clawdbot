@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   resolveAuthStatePath,
   resolveAuthStatePathForDisplay,
@@ -17,16 +17,13 @@ import {
 } from "./path-resolve.js";
 
 describe("path-resolve helpers (direct-import coverage attribution)", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let stateDir = "";
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-direct-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
   });
 
   afterEach(async () => {
-    envSnapshot.restore();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -40,9 +37,11 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
   it("resolveAuthStorePath falls back to the default agent dir when agentDir is omitted", () => {
     // Omitting agentDir exercises the default agent-dir branch. With
     // OPENCLAW_STATE_DIR set to our tempdir, the resolved path must live under it.
-    const resolved = resolveAuthStorePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
-    expect(path.basename(resolved)).toMatch(/auth-profiles/);
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const resolved = resolveAuthStorePath();
+      expect(resolved.startsWith(stateDir)).toBe(true);
+      expect(path.basename(resolved)).toMatch(/auth-profiles/);
+    });
   });
 
   it("resolveLegacyAuthStorePath joins agentDir with the legacy auth filename", () => {
@@ -53,8 +52,10 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
   });
 
   it("resolveLegacyAuthStorePath falls back to the default agent dir", () => {
-    const resolved = resolveLegacyAuthStorePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const resolved = resolveLegacyAuthStorePath();
+      expect(resolved.startsWith(stateDir)).toBe(true);
+    });
   });
 
   it("resolveAuthStatePath joins agentDir with the auth-state filename", () => {
@@ -64,8 +65,10 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
   });
 
   it("resolveAuthStatePath falls back to the default agent dir", () => {
-    const resolved = resolveAuthStatePath();
-    expect(resolved.startsWith(stateDir)).toBe(true);
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const resolved = resolveAuthStatePath();
+      expect(resolved.startsWith(stateDir)).toBe(true);
+    });
   });
 
   it("resolveAuthStorePathForDisplay returns the resolved path for a non-tilde input", () => {

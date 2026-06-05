@@ -144,12 +144,16 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
 
 export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
   const trimmed = threadId.trim();
-  return {
+  const relation: MatrixThreadRelation = {
     rel_type: RelationType.Thread,
     event_id: trimmed,
-    is_falling_back: true,
-    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
   };
+  const fallbackReplyToId = replyToId?.trim();
+  if (fallbackReplyToId) {
+    relation.is_falling_back = true;
+    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
+  }
+  return relation;
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {

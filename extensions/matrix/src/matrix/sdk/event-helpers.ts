@@ -19,12 +19,13 @@ export function matrixEventToRaw(
     opts.contentMode === "original"
       ? (eventWithOriginalContent.getOriginalContent?.() ?? event.getContent?.() ?? {})
       : (event.getContent?.() ?? eventWithOriginalContent.getOriginalContent?.() ?? {});
+  const normalizedContent = preserveMatrixRelation(event, content || {});
   const raw: MatrixRawEvent = {
     event_id: event.getId() ?? "",
     sender: event.getSender() ?? "",
     type: event.getType() ?? "",
     origin_server_ts: event.getTs() ?? 0,
-    content: content || {},
+    content: normalizedContent,
     unsigned,
   };
   const stateKey = resolveMatrixStateKey(event);
@@ -32,6 +33,39 @@ export function matrixEventToRaw(
     raw.state_key = stateKey;
   }
   return raw;
+}
+
+function preserveMatrixRelation(
+  event: MatrixEvent,
+  content: Record<string, unknown>,
+): Record<string, unknown> {
+  if (Object.hasOwn(content, "m.relates_to")) {
+    return content;
+  }
+  const relation = resolveMatrixRelation(event);
+  return relation ? { ...content, "m.relates_to": relation } : content;
+}
+
+function resolveMatrixRelation(event: MatrixEvent): unknown {
+  const originalContent = (
+    event as { getOriginalContent?: () => Record<string, unknown> | undefined }
+  ).getOriginalContent?.();
+  const originalRelation = originalContent?.["m.relates_to"];
+  if (originalRelation) {
+    return originalRelation;
+  }
+  const wireContent = (
+    event as { getWireContent?: () => Record<string, unknown> | undefined }
+  ).getWireContent?.();
+  const wireRelation = wireContent?.["m.relates_to"];
+  if (wireRelation) {
+    return wireRelation;
+  }
+  const rawContent = (event as { event?: { content?: unknown } }).event?.content;
+  if (rawContent && typeof rawContent === "object") {
+    return (rawContent as Record<string, unknown>)["m.relates_to"];
+  }
+  return undefined;
 }
 
 export function parseMxc(url: string): { server: string; mediaId: string } | null {
