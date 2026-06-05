@@ -61,6 +61,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
+      expect(typeof hooks.resolveToolSchemaCacheKey).toBe("function");
     }
   });
 
@@ -342,6 +343,45 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         tools: normalized,
       }),
     ).toStrictEqual([]);
+  });
+
+  it("returns stable hook-owned cache keys for bundled tool compat families", () => {
+    const deepseekHooks = buildProviderToolCompatFamilyHooks("deepseek");
+    expect(
+      deepseekHooks.resolveToolSchemaCacheKey({
+        provider: "deepseek",
+        tools: [],
+      }),
+    ).toEqual({ family: "deepseek" });
+
+    const geminiHooks = buildProviderToolCompatFamilyHooks("gemini");
+    expect(
+      geminiHooks.resolveToolSchemaCacheKey({
+        provider: "gemini",
+        tools: [],
+      }),
+    ).toEqual({ family: "gemini" });
+
+    const openaiHooks = buildProviderToolCompatFamilyHooks("openai");
+    expect(
+      openaiHooks.resolveToolSchemaCacheKey({
+        provider: "openai",
+        modelApi: "openai-responses",
+        model: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          id: "gpt-5.4",
+        } as never,
+        tools: [],
+      }),
+    ).toEqual({
+      family: "openai",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      applies: true,
+    });
   });
 
   it("normalizes parameter-free and typed-object schemas for the openai family", () => {

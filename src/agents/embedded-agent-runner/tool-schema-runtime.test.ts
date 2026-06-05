@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   // while each case controls plugin diagnostics.
   inspectProviderToolSchemasWithPlugin: vi.fn(),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
-  resolveProviderToolSchemaNormalizeHookIdentity: vi.fn(),
+  resolveProviderToolSchemaNormalizeCacheKey: vi.fn(),
   log: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -17,8 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: mocks.inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
-  resolveProviderToolSchemaNormalizeHookIdentity:
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity,
+  resolveProviderToolSchemaNormalizeCacheKey: mocks.resolveProviderToolSchemaNormalizeCacheKey,
 }));
 
 vi.mock("./logger.js", () => ({
@@ -52,8 +51,8 @@ describe("tool schema runtime diagnostics", () => {
     resetProviderToolSchemaCacheForTest();
     mocks.inspectProviderToolSchemasWithPlugin.mockReset();
     mocks.normalizeProviderToolSchemasWithPlugin.mockReset();
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReset();
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue("hook:default");
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReset();
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue("hook:default");
     mocks.log.info.mockReset();
     mocks.log.warn.mockReset();
   });
@@ -127,8 +126,8 @@ describe("tool schema runtime cache", () => {
     resetProviderToolSchemaCacheForTest();
     mocks.inspectProviderToolSchemasWithPlugin.mockReset();
     mocks.normalizeProviderToolSchemasWithPlugin.mockReset();
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReset();
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue("hook:default");
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReset();
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue("hook:default");
     mocks.log.info.mockReset();
     mocks.log.warn.mockReset();
   });
@@ -215,7 +214,7 @@ describe("tool schema runtime cache", () => {
     });
   });
 
-  it("changes cache keys for provider normalize hook identity", () => {
+  it("changes cache keys for provider-owned hook cache keys", () => {
     let normalizeCall = 0;
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(
       ({ context }: { context: { tools: MockProviderTool[] } }) => {
@@ -230,14 +229,14 @@ describe("tool schema runtime cache", () => {
       },
     );
 
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValueOnce("hook:first");
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValueOnce("hook:first");
     normalizeProviderToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValueOnce("hook:second");
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValueOnce("hook:second");
     const second = normalizeProviderToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -257,29 +256,40 @@ describe("tool schema runtime cache", () => {
     });
   });
 
-  it("caches third-party provider hooks without core provider family allowlists", () => {
+  it("caches provider hooks that opt into a hook-owned cache key", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockImplementation(
+      ({ context }: { context: { provider: string; workspaceDir?: string } }) =>
+        `hook-owned:${context.provider}:${context.workspaceDir ?? ""}`,
+    );
 
     normalizeProviderToolSchemas({
       provider: "example",
+      workspaceDir: "/tmp/work-a",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
     normalizeProviderToolSchemas({
       provider: "example",
+      workspaceDir: "/tmp/work-a",
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    normalizeProviderToolSchemas({
+      provider: "example",
+      workspaceDir: "/tmp/work-b",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
 
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(1);
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
     expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
       hit: 1,
-      miss: 1,
-      store: 1,
+      miss: 2,
+      store: 2,
     });
   });
 
-  it("bypasses the cache when no provider hook identity is available and when disabled", () => {
+  it("bypasses provider hooks that do not opt into hook-owned cache keys", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue(null);
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue(null);
 
     normalizeProviderToolSchemas({
       provider: "example",
@@ -289,7 +299,29 @@ describe("tool schema runtime cache", () => {
       provider: "example",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
-    mocks.resolveProviderToolSchemaNormalizeHookIdentity.mockReturnValue("hook:disabled");
+
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
+    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
+      bypass: 2,
+      hit: 0,
+      miss: 0,
+      store: 0,
+    });
+  });
+
+  it("bypasses the cache when no provider hook cache key is available and when disabled", () => {
+    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue(null);
+
+    normalizeProviderToolSchemas({
+      provider: "example",
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    normalizeProviderToolSchemas({
+      provider: "example",
+      tools: [makeTool("alpha", { type: "object" })] as never,
+    });
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue("hook:disabled");
     normalizeProviderToolSchemas({
       provider: "openai",
       env: { OPENCLAW_TOOL_SCHEMA_CACHE: "0" },

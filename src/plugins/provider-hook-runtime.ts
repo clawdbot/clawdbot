@@ -24,6 +24,7 @@ import {
   getPluginRegistryState,
 } from "./runtime-state.js";
 import type {
+  ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
   ProviderPrepareExtraParamsContext,
@@ -103,24 +104,38 @@ function resolveProviderHookFunctionIdentity(hook: unknown): string {
   return String(id);
 }
 
-export function resolveProviderToolSchemaNormalizeHookIdentity(
-  params: ProviderRuntimePluginLookupParams,
+export function resolveProviderToolSchemaNormalizeCacheKey(
+  params: ProviderRuntimePluginLookupParams & {
+    context: ProviderNormalizeToolSchemasContext;
+  },
 ): string | null {
   const plugin = resolveProviderRuntimePlugin(params);
-  if (!plugin?.normalizeToolSchemas) {
+  if (!plugin?.normalizeToolSchemas || !plugin.resolveToolSchemaCacheKey) {
     return null;
   }
-  return createPluginCacheKey([
-    "provider-tool-schema-normalize-hook",
-    resolveProviderRuntimePluginCacheKey(params),
-    {
-      pluginId: plugin.pluginId ?? "",
-      providerId: plugin.id,
-      aliases: [...(plugin.aliases ?? [])].toSorted(),
-      hookAliases: [...(plugin.hookAliases ?? [])].toSorted(),
-      normalizeToolSchemas: resolveProviderHookFunctionIdentity(plugin.normalizeToolSchemas),
-    },
-  ]);
+  try {
+    const hookCacheKey = plugin.resolveToolSchemaCacheKey(params.context);
+    if (hookCacheKey == null || hookCacheKey === false) {
+      return null;
+    }
+    return createPluginCacheKey([
+      "provider-tool-schema-normalize-hook-cache",
+      resolveProviderRuntimePluginCacheKey(params),
+      {
+        pluginId: plugin.pluginId ?? "",
+        providerId: plugin.id,
+        aliases: [...(plugin.aliases ?? [])].toSorted(),
+        hookAliases: [...(plugin.hookAliases ?? [])].toSorted(),
+        normalizeToolSchemas: resolveProviderHookFunctionIdentity(plugin.normalizeToolSchemas),
+        resolveToolSchemaCacheKey: resolveProviderHookFunctionIdentity(
+          plugin.resolveToolSchemaCacheKey,
+        ),
+        hookCacheKey,
+      },
+    ]);
+  } catch {
+    return null;
+  }
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
