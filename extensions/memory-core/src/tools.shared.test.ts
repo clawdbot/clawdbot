@@ -193,12 +193,14 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     registerMemoryCorpusSupplement(
       "string-throw",
       buildSupplement(async () => {
+        // oxlint-disable-next-line no-throw-literal -- testing non-Error path in handler
         throw "raw string failure";
       }),
     );
     registerMemoryCorpusSupplement(
       "object-throw",
       buildSupplement(async () => {
+        // oxlint-disable-next-line no-throw-literal -- testing structured non-Error path
         throw { code: "ESUPP", detail: "structured failure" };
       }),
     );
