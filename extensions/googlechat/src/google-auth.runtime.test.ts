@@ -53,6 +53,13 @@ let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogl
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
 
+type MockGoogleAuthTransport = {
+  interceptors: {
+    request: { add: ReturnType<typeof vi.fn> };
+    response: { add: ReturnType<typeof vi.fn> };
+  };
+};
+
 beforeAll(async () => {
   ({
     testing,
@@ -424,14 +431,16 @@ describe("googlechat google auth runtime", () => {
   it("keeps auth transports isolated from google-auth interceptor mutations", async () => {
     const first = await getGoogleAuthTransport();
     const second = await getGoogleAuthTransport();
+    const firstMockTransport = first as unknown as MockGoogleAuthTransport;
+    const secondMockTransport = second as unknown as MockGoogleAuthTransport;
 
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
     expect(mocks.directGaxiosCtor).not.toHaveBeenCalled();
-    expect(first.interceptors.request.add.mock.calls).toHaveLength(1);
-    expect(first.interceptors.response.add.mock.calls).toHaveLength(1);
-    expect(second.interceptors.request.add.mock.calls).toHaveLength(1);
-    expect(second.interceptors.response.add.mock.calls).toHaveLength(1);
+    expect(firstMockTransport.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(firstMockTransport.interceptors.response.add.mock.calls).toHaveLength(1);
+    expect(secondMockTransport.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(secondMockTransport.interceptors.response.add.mock.calls).toHaveLength(1);
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {
