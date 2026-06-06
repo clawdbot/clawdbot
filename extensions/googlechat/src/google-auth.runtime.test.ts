@@ -428,10 +428,10 @@ describe("googlechat google auth runtime", () => {
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
     expect(mocks.directGaxiosCtor).not.toHaveBeenCalled();
-    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(first.interceptors.response.add.mock.calls).toHaveLength(1);
+    expect(second.interceptors.request.add.mock.calls).toHaveLength(1);
+    expect(second.interceptors.response.add.mock.calls).toHaveLength(1);
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {
