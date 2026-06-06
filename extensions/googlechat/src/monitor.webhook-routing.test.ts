@@ -333,7 +333,7 @@ describe("Google Chat monitor inbound context", () => {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
         },
-        turn: {
+        inbound: {
           buildContext,
           run,
         },
@@ -448,7 +448,7 @@ describe("Google Chat monitor inbound context", () => {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
         },
-        turn: {
+        inbound: {
           buildContext,
           run,
         },
@@ -577,7 +577,7 @@ describe("Google Chat delivery thread routing", () => {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
         },
-        turn: {
+        inbound: {
           buildContext,
           run,
         },
