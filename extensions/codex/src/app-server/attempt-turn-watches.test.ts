@@ -89,6 +89,14 @@ describe("Codex app-server attempt turn watches", () => {
         idleMs: 10,
         timeoutMs: 10,
         lastActivityReason: "turn:start",
+        details: {
+          activeAppServerTurnRequests: 0,
+          activeTurnItemCount: 0,
+          terminalTurnNotificationQueued: false,
+          completionIdleWatchArmed: true,
+          assistantCompletionIdleWatchArmed: false,
+          terminalIdleWatchArmed: false,
+        },
       },
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_completion_idle_timeout");

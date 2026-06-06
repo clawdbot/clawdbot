@@ -1331,6 +1331,7 @@
                       "tools/kimi-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
+                      "tools/parallel-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
                       "tools/tavily"

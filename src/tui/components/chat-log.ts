@@ -198,10 +198,6 @@ export class ChatLog extends Container {
     return component;
   }
 
-  commitPendingUser(runId: string) {
-    return this.pendingUsers.delete(runId);
-  }
-
   dropPendingUser(runId: string) {
     const existing = this.pendingUsers.get(runId);
     if (!existing) {
@@ -212,8 +208,20 @@ export class ChatLog extends Container {
     return true;
   }
 
-  hasPendingUser(runId: string) {
-    return this.pendingUsers.has(runId);
+  // Re-key in place: the gateway can assign its own runId after the optimistic
+  // row is rendered. Swap the map key without re-mounting the component so the
+  // row keeps its transcript position even if a reply already rendered below it.
+  rekeyPendingUser(fromRunId: string, toRunId: string) {
+    if (fromRunId === toRunId) {
+      return false;
+    }
+    const existing = this.pendingUsers.get(fromRunId);
+    if (!existing) {
+      return false;
+    }
+    this.pendingUsers.delete(fromRunId);
+    this.pendingUsers.set(toRunId, existing);
+    return true;
   }
 
   reconcilePendingUsers(

@@ -169,7 +169,7 @@ openclaw --profile rescue browser status
 Interpretation:
 
 - `gateway status --deep` helps catch stale launchd/systemd/schtasks services from older installs.
-- `gateway probe` warning text such as `multiple reachable gateways detected` is expected only when you intentionally run more than one isolated gateway.
+- `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected only when you intentionally run more than one isolated gateway, or when OpenClaw cannot prove reachable probe targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
 
 ## Related
 

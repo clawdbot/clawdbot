@@ -107,6 +107,96 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
+    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    hasAvailableAuthForProvider.mockImplementation(async (params) => {
+      if (params.provider === "openai") {
+        return params.modelApi === undefined;
+      }
+      return params.provider === "mistral";
+    });
+    resolveApiKeyForProvider.mockImplementation(async (params) => ({
+      apiKey: `${params.provider}-key`,
+      source: "test",
+      mode: "api-key",
+    }));
+
+    try {
+      await withAudioFixture("openclaw-auto-audio-oauth-skip", async ({ ctx, media, cache }) => {
+        const openAiTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+          text: "openai",
+          model: req.model ?? "unknown",
+        }));
+        const mistralTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
+          text: `mistral:${req.apiKey}`,
+          model: req.model ?? "unknown",
+        }));
+
+        const result = await runCapability({
+          capability: "audio",
+          cfg: {
+            models: {
+              providers: {
+                openai: {
+                  models: [],
+                },
+                mistral: {
+                  models: [],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          ctx,
+          attachments: cache,
+          media,
+          providerRegistry: createProviderRegistry({
+            openai: {
+              id: "openai",
+              capabilities: ["audio"],
+              defaultModels: { audio: "gpt-4o-transcribe" },
+              transcribeAudio: openAiTranscribe,
+            },
+            mistral: {
+              id: "mistral",
+              capabilities: ["audio"],
+              defaultModels: { audio: "voxtral-mini-latest" },
+              transcribeAudio: mistralTranscribe,
+            },
+          }),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          provider: "mistral",
+          model: "voxtral-mini-latest",
+          text: "mistral:mistral-key",
+        });
+        expect(openAiTranscribe).not.toHaveBeenCalled();
+        expect(mistralTranscribe).toHaveBeenCalledTimes(1);
+      });
+
+      expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelApi: "openai-audio-transcriptions",
+        }),
+      );
+    } finally {
+      hasAvailableAuthForProvider.mockReset();
+      hasAvailableAuthForProvider.mockResolvedValue(true);
+      resolveApiKeyForProvider.mockReset();
+      resolveApiKeyForProvider.mockResolvedValue({
+        apiKey: "test-key",
+        source: "test",
+        mode: "api-key",
+      });
+    }
+  });
+
   it("passes workspaceDir to auto-selected audio provider execution auth", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);

@@ -167,8 +167,10 @@ What to expect:
 
 - `gateway status --deep` can report `Other gateway-like services detected (best effort)`
   and print cleanup hints when stale launchd/systemd/schtasks installs are still around.
-- `gateway probe` can warn about `multiple reachable gateways` when more than one target
-  answers.
+- `gateway probe` can warn about `multiple reachable gateway identities` when distinct
+  gateways answer, or when OpenClaw cannot prove reachable targets are the same gateway.
+  An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one
+  gateway with multiple transports, even when transport ports differ.
 - If that is intentional, isolate ports, config/state, and workspace roots per gateway.
 
 Checklist per instance:

@@ -173,11 +173,34 @@ function fingerprintPluginSourceRoots(
     env,
   });
   return {
-    global: fileFingerprint(cacheInputs.roots.global),
-    loadPaths: cacheInputs.loadPaths.map((entry) => fileFingerprint(entry)),
-    stock: cacheInputs.roots.stock ? fileFingerprint(cacheInputs.roots.stock) : null,
-    workspace: cacheInputs.roots.workspace ? fileFingerprint(cacheInputs.roots.workspace) : null,
+    global: sourceRootFingerprint(cacheInputs.roots.global),
+    loadPaths: cacheInputs.loadPaths.map((entry) => sourceRootFingerprint(entry)),
+    stock: cacheInputs.roots.stock ? sourceRootFingerprint(cacheInputs.roots.stock) : null,
+    workspace: cacheInputs.roots.workspace
+      ? sourceRootFingerprint(cacheInputs.roots.workspace)
+      : null,
   };
+}
+
+function sourceRootFingerprint(rootPath: string): unknown {
+  return {
+    root: fileFingerprint(rootPath),
+    // Directory mtimes can be too coarse on some Linux filesystems. Include only
+    // immediate child names/kinds so same-tick plugin installs invalidate the
+    // process memo without rereading manifests on hot registry lookups.
+    children: directoryChildFingerprint(rootPath),
+  };
+}
+
+function directoryChildFingerprint(directoryPath: string): unknown {
+  try {
+    return fs
+      .readdirSync(directoryPath, { withFileTypes: true })
+      .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
+      .toSorted(([left], [right]) => left.localeCompare(right));
+  } catch {
+    return "unreadable";
+  }
 }
 
 function fileFingerprint(filePath: string): unknown {

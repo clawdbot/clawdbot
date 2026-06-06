@@ -1,4 +1,6 @@
 // Imessage tests cover status plugin behavior.
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
@@ -19,6 +21,26 @@ const getIMessageSetupStatus = createPluginSetupWizardStatus({
 } as never);
 
 const spawnMock = vi.hoisted(() => vi.fn());
+
+function createMockChildProcess() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill: (signal?: string) => boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = (signal?: string) => {
+    child.killed = true;
+    child.emit("close", 0, signal ?? null);
+    return true;
+  };
+  return child;
+}
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -66,6 +88,96 @@ describe("createIMessageRpcClient", () => {
     );
 
     expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+  });
+
+  it.each([
+    ["U+2028", "\u2028"],
+    ["U+2029", "\u2029"],
+  ])(
+    "frames stdout on LF only so raw %s inside JSON strings stays intact",
+    async (_, separator) => {
+      const { IMessageRpcClient } = await import("./client.js");
+      const client = new IMessageRpcClient();
+      const internals = client as unknown as {
+        handleStdoutChunk: (chunk: Buffer | string) => void;
+        pending: Map<
+          string,
+          {
+            resolve: (value: unknown) => void;
+            reject: (error: Error) => void;
+          }
+        >;
+      };
+      const result = new Promise((resolve, reject) => {
+        internals.pending.set("1", { resolve, reject });
+      });
+      const text = `line one${separator}line two`;
+      const payload = `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { messages: [{ text }] },
+      })}\n`;
+      const bytes = Buffer.from(payload, "utf8");
+      const separatorIndex = bytes.indexOf(Buffer.from(separator, "utf8"));
+
+      internals.handleStdoutChunk(bytes.subarray(0, separatorIndex + 1));
+      internals.handleStdoutChunk(bytes.subarray(separatorIndex + 1));
+
+      await expect(result).resolves.toEqual({
+        messages: [{ text }],
+      });
+    },
+  );
+
+  it("handles multiple LF-delimited stdout responses in one chunk", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleStdoutChunk: (chunk: Buffer | string) => void;
+      pending: Map<
+        string,
+        {
+          resolve: (value: unknown) => void;
+          reject: (error: Error) => void;
+        }
+      >;
+    };
+    const first = new Promise((resolve, reject) => {
+      internals.pending.set("1", { resolve, reject });
+    });
+    const second = new Promise((resolve, reject) => {
+      internals.pending.set("2", { resolve, reject });
+    });
+
+    internals.handleStdoutChunk(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: "first" } })}\n${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { ok: "second" },
+      })}\n`,
+    );
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(second).resolves.toEqual({ ok: "second" });
+  });
+
+  it("ignores stdout from a stale child after stop so late notifications cannot leak (#89830)", async () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "");
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const onNotification = vi.fn();
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ onNotification });
+
+    await client.start();
+    await client.stop();
+
+    // A not-yet-exited imsg child emits a complete notification after stop().
+    // The `this.child !== child` guard must drop it before handleStdoutChunk.
+    child.stdout.write('{"jsonrpc":"2.0","method":"messages.changed","params":{}}\n');
+
+    expect(onNotification).not.toHaveBeenCalled();
   });
 });
 

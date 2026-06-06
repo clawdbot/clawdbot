@@ -245,6 +245,8 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA222");
 
     const firstResult = provider.parseWebhookEvent(firstInbound);
+    // Simulate the stream actually connecting (the bug: without this, no activeStreamCalls entry exists)
+    provider.registerCallStream("CA111", "MZ111");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
     expectStreamingTwiml(requireResponseBody(firstResult.providerResponseBody));
@@ -257,6 +259,7 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA322");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA311", "MZ311");
     provider.unregisterCallStream("CA311");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
@@ -274,6 +277,7 @@ describe("TwilioProvider", () => {
     const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA422");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA411", "MZ411");
     provider.parseWebhookEvent(completed);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
@@ -291,6 +295,7 @@ describe("TwilioProvider", () => {
     const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA522");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA511", "MZ511");
     provider.parseWebhookEvent(canceled);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
@@ -305,11 +310,29 @@ describe("TwilioProvider", () => {
     const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA622");
 
     provider.parseWebhookEvent(firstInbound);
+    provider.registerCallStream("CA611", "MZ611");
     const result = provider.parseWebhookEvent(secondInbound);
 
     expect(requireResponseBody(result.providerResponseBody)).toContain(
       'waitUrl="/voice/hold-music"',
     );
+  });
+
+  it("does not block subsequent call when first call never opens a media stream", () => {
+    const provider = createProvider();
+    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA711");
+    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA722");
+
+    // First call gets streaming TwiML but never connects a media stream
+    // (no registerCallStream ever fires for CA711)
+    provider.parseWebhookEvent(firstInbound);
+
+    // Second inbound call should NOT be queued — no active stream is registered
+    const secondResult = provider.parseWebhookEvent(secondInbound);
+
+    const secondBody = requireResponseBody(secondResult.providerResponseBody);
+    expectStreamingTwiml(secondBody);
+    expect(secondBody).not.toContain("hold-queue");
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {

@@ -210,6 +210,11 @@ export class CodexAppServerEventProjector {
     return this.completedTurn?.status;
   }
 
+  hasCompletedTerminalAssistantText(): boolean {
+    const finalItem = this.resolveFinalAssistantTextItem();
+    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+  }
+
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
@@ -1601,6 +1606,10 @@ export class CodexAppServerEventProjector {
   }
 
   private resolveFinalAssistantText(): string | undefined {
+    return this.resolveFinalAssistantTextItem()?.text;
+  }
+
+  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -1611,7 +1620,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       if (text && !this.toolProgressTexts.has(text)) {
-        return text;
+        return { itemId, text };
       }
     }
     return undefined;

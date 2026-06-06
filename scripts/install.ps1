@@ -1060,6 +1060,84 @@ function Test-NpmConfigRawKey {
     return $false
 }
 
+function Add-NpmCacheCandidate {
+    param(
+        [System.Collections.Generic.List[string]]$Candidates,
+        [object]$Path
+    )
+    foreach ($rawPath in @($Path)) {
+        $trimmed = "$rawPath".Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed) -and -not $Candidates.Contains($trimmed)) {
+            $Candidates.Add($trimmed)
+        }
+    }
+}
+
+function Get-NpmDebugLogRootCandidates {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    Add-NpmCacheCandidate -Candidates $candidates -Path $env:NPM_CONFIG_CACHE
+
+    $detectedCache = (Invoke-NpmCommand -Arguments @("config", "get", "cache") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path $detectedCache
+    }
+
+    if ($env:LOCALAPPDATA) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:LOCALAPPDATA "npm-cache")
+    }
+    if ($env:APPDATA) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:APPDATA "npm-cache")
+    }
+    if ($env:USERPROFILE) {
+        Add-NpmCacheCandidate -Candidates $candidates -Path (Join-Path $env:USERPROFILE "AppData\Local\npm-cache")
+    }
+
+    return $candidates
+}
+
+function Get-LatestNpmDebugLogPath {
+    foreach ($cacheDir in (Get-NpmDebugLogRootCandidates)) {
+        $logDir = Join-Path $cacheDir "_logs"
+        if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
+            continue
+        }
+        $latestLog = Get-ChildItem -LiteralPath $logDir -Filter "*-debug-*.log" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if ($latestLog) {
+            return $latestLog.FullName
+        }
+    }
+    return $null
+}
+
+function Write-NpmInstallFailureDetails {
+    param([object[]]$Output)
+    $printedOutput = $false
+    foreach ($line in @($Output)) {
+        if ($null -eq $line) {
+            continue
+        }
+        $text = "$line"
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            continue
+        }
+        Write-Host $text
+        $printedOutput = $true
+    }
+
+    $latestLog = Get-LatestNpmDebugLogPath
+    if ($latestLog) {
+        Write-Host "Latest npm debug log ($latestLog):" -ForegroundColor Yellow
+        Get-Content -LiteralPath $latestLog -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        return
+    }
+
+    if (-not $printedOutput) {
+        Write-Host "npm produced no console output and no npm debug log was found." -ForegroundColor Yellow
+    }
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -1119,7 +1197,7 @@ function Install-OpenClaw {
                 Write-Host "Re-run with verbose output to see the full error:" -ForegroundColor Yellow
                 Write-Host '  powershell -c "irm https://openclaw.ai/install.ps1 | iex"' -ForegroundColor Cyan
             }
-            $npmOutput | ForEach-Object { Write-Host $_ }
+            Write-NpmInstallFailureDetails -Output $npmOutput
             return $false
         }
     } finally {

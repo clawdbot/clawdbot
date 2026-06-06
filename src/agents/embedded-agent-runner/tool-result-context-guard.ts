@@ -334,6 +334,8 @@ export function installContextEngineLoopHook(params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -398,6 +400,7 @@ export function installContextEngineLoopHook(params: {
             messages: transcriptMessages,
             prePromptMessageCount,
           }),
+          isHeartbeat: params.isHeartbeat,
         });
       } else {
         const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -407,6 +410,7 @@ export function installContextEngineLoopHook(params: {
               sessionId,
               sessionKey,
               messages: newMessages,
+              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
@@ -414,6 +418,7 @@ export function installContextEngineLoopHook(params: {
                 sessionId,
                 sessionKey,
                 message,
+                isHeartbeat: params.isHeartbeat,
               });
             }
           }

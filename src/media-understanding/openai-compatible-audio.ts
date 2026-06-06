@@ -1,3 +1,4 @@
+import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
 // OpenAI-compatible audio transcription adapter for providers exposing the
 // /audio/transcriptions API shape.
 import {
@@ -43,7 +44,7 @@ export async function transcribeOpenAiCompatibleAudio(
       request: params.request,
       defaultHeaders,
       provider: params.provider,
-      api: "openai-audio-transcriptions",
+      api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
       capability: "audio",
       transport: "media-understanding",
     });

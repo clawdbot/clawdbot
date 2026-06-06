@@ -4,12 +4,15 @@ import {
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
+import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
 
 const googleProviderDiscovery: ProviderPlugin = {
   id: "google",
   label: "Google AI Studio",
   docsPath: "/providers/models",
   auth: [],
+  resolveConfigApiKey: ({ provider, env }) =>
+    provider === "google-vertex" ? resolveGoogleVertexConfigApiKey(env) : undefined,
   staticCatalog: {
     order: "simple",
     run: async () => ({

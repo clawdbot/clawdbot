@@ -1,6 +1,6 @@
 // Imessage plugin module implements client behavior.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -68,7 +68,8 @@ export class IMessageRpcClient {
   private readonly closed: Promise<void>;
   private closedResolve: (() => void) | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
-  private reader: Interface | null = null;
+  private stdoutBuffer = "";
+  private readonly stdoutDecoder = new StringDecoder("utf8");
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -97,14 +98,12 @@ export class IMessageRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
-    this.reader = createInterface({ input: child.stdout });
 
-    this.reader.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
+    child.stdout.on("data", (chunk) => {
+      if (this.child !== child) {
         return;
       }
-      this.handleLine(trimmed);
+      this.handleStdoutChunk(chunk);
     });
 
     child.stderr?.on("data", (chunk) => {
@@ -131,6 +130,9 @@ export class IMessageRpcClient {
     });
 
     child.on("close", (code, signal) => {
+      if (this.child === child) {
+        this.flushStdoutBuffer();
+      }
       this.failAll(this.buildCloseError(code, signal));
       this.closedResolve?.();
     });
@@ -140,8 +142,8 @@ export class IMessageRpcClient {
     if (!this.child) {
       return;
     }
-    this.reader?.close();
-    this.reader = null;
+    this.stdoutBuffer = "";
+    this.stdoutDecoder.end();
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;
@@ -213,6 +215,40 @@ export class IMessageRpcClient {
       }
     });
     return await response;
+  }
+
+  private handleStdoutChunk(chunk: Buffer | string) {
+    const text = typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk);
+    this.stdoutBuffer += text;
+
+    let newlineIndex = this.stdoutBuffer.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const line = this.stdoutBuffer.slice(0, newlineIndex);
+      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+      this.handleStdoutLine(line);
+      newlineIndex = this.stdoutBuffer.indexOf("\n");
+    }
+  }
+
+  private flushStdoutBuffer() {
+    const tail = this.stdoutDecoder.end();
+    if (tail) {
+      this.stdoutBuffer += tail;
+    }
+    if (!this.stdoutBuffer) {
+      return;
+    }
+    const line = this.stdoutBuffer;
+    this.stdoutBuffer = "";
+    this.handleStdoutLine(line);
+  }
+
+  private handleStdoutLine(line: string) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.handleLine(trimmed);
   }
 
   private handleLine(line: string) {

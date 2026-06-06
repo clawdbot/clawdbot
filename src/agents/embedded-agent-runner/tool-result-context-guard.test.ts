@@ -509,6 +509,7 @@ describe("installContextEngineLoopHook", () => {
       prePromptMessageCount: number;
     }) => Record<string, unknown> | undefined,
     onAfterTurnCheckpoint?: (messageCount: number) => void,
+    isHeartbeat?: boolean,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -521,6 +522,7 @@ describe("installContextEngineLoopHook", () => {
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
       ...(getRuntimeContext ? { getRuntimeContext } : {}),
       ...(onAfterTurnCheckpoint ? { onAfterTurnCheckpoint } : {}),
+      ...(isHeartbeat !== undefined ? { isHeartbeat } : {}),
     });
   }
 
@@ -984,7 +986,7 @@ describe("installContextEngineLoopHook", () => {
   it("ingests new messages in batches when afterTurn is absent", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({ omitAfterTurn: true });
-    installHook(agent, engine);
+    installHook(agent, engine, undefined, undefined, undefined, true);
 
     const batch0 = [makeUser("first"), makeToolResult("call_1", "r1")];
     await callTransform(agent, batch0);
@@ -1001,7 +1003,9 @@ describe("installContextEngineLoopHook", () => {
       throw new Error("expected ingestBatch mock");
     }
     expect(recordMockArg(ingestBatch).messages).toEqual(batch1.slice(2));
+    expect(recordMockArg(ingestBatch).isHeartbeat).toBe(true);
     expect(recordMockArg(ingestBatch, 1).messages).toEqual(batch2.slice(4));
+    expect(recordMockArg(ingestBatch, 1).isHeartbeat).toBe(true);
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
@@ -1019,7 +1023,21 @@ describe("installContextEngineLoopHook", () => {
     expect(ingestParams?.sessionId).toBe(sessionId);
     expect(ingestParams?.sessionKey).toBe(sessionKey);
     expect(ingestParams?.message).toBe(toolResult);
+    expect(ingestParams?.isHeartbeat).toBeUndefined();
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes heartbeat state through per-message ingest fallbacks", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
+    installHook(agent, engine, 1, undefined, undefined, true);
+
+    const toolResult = makeToolResult("call_1", "r1");
+    const messages = [makeUser("first"), toolResult];
+    await callTransform(agent, messages);
+
+    expect(engine.ingest).toHaveBeenCalledTimes(1);
+    expect(recordMockArg(engine.ingest).isHeartbeat).toBe(true);
   });
 
   it("falls through to source messages when engine.afterTurn throws", async () => {

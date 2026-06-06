@@ -252,6 +252,95 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
+    function createSseEventResponse(lines: string): Response {
+      return new Response(lines, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseEventResponse(
+                "event: message_start\ndata: " +
+                  JSON.stringify({
+                    type: "message_start",
+                    message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+                  }) +
+                  "\n\nevent: message_stop\ndata: " +
+                  JSON.stringify({ type: "message_stop" }) +
+                  "\n\n",
+              ),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      { apiKey: "sk-ant-key", client: client as never },
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    // start must come after message_start processing, not before the loop
+    const startIndex = eventTypes.indexOf("start");
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    // No error before start — the start event should be first non-error event
+    const errorBeforeStart = eventTypes.slice(0, startIndex).some((t) => t === "error");
+    expect(errorBeforeStart).toBe(false);
+  });
+
+  it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
+    function createSseEventResponse(lines: string): Response {
+      return new Response(lines, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseEventResponse(
+                "event: error\ndata: " +
+                  JSON.stringify({
+                    type: "invalid_request_error",
+                    message: "messages.1.content.63: Invalid signature in thinking block",
+                  }) +
+                  "\n\n",
+              ),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      { apiKey: "sk-ant-key", client: client as never },
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    // error must be the first event — no start emitted before it
+    expect(eventTypes[0]).toBe("error");
+    expect(eventTypes).not.toContain("start");
+  });
+
   it("strips the internal cache boundary when Anthropic cache control is disabled", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(

@@ -42,6 +42,7 @@ import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -95,6 +96,7 @@ function resolveLiteralProviderApiKey(
 }
 
 async function hasProviderAuthAvailable(params: {
+  capability: MediaUnderstandingCapability;
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -107,7 +109,13 @@ async function hasProviderAuthAvailable(params: {
   }
   cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
     .hasAvailableAuthForProvider;
-  return await cachedHasAvailableAuthForProvider(params);
+  return await cachedHasAvailableAuthForProvider({
+    ...params,
+    modelApi: resolveOpenAiAudioAuthModelApi({
+      capability: params.capability,
+      providerId: params.provider,
+    }),
+  });
 }
 
 function resolveConfiguredKeyProviderOrder(params: {
@@ -606,6 +614,7 @@ async function resolveKeyEntry(params: {
     }
     if (
       !(await hasProviderAuthAvailable({
+        capability,
         provider: providerId,
         cfg,
         agentDir,
@@ -843,6 +852,7 @@ async function resolveActiveModelEntry(params: {
     return null;
   }
   const hasAuth = await hasProviderAuthAvailable({
+    capability: params.capability,
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,

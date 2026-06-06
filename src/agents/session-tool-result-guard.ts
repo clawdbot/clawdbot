@@ -58,9 +58,26 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 }
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
 
 function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
   return message.role === "user";
+}
+
+function isExpectedCompactionAppend(entryId: string, appendedText: string): boolean {
+  const lines = appendedText
+    .trimEnd()
+    .split("\n")
+    .filter((line) => line.length > 0);
+  if (lines.length !== 1) {
+    return false;
+  }
+  try {
+    const entry = JSON.parse(lines[0]) as { type?: unknown; id?: unknown };
+    return entry.type === "compaction" && entry.id === entryId;
+  } catch {
+    return false;
+  }
 }
 
 type TranscriptSeqByEntryId = Map<string, number>;
@@ -568,6 +585,10 @@ export function installSessionToolResultGuard(
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    withCompactionPersistence?: (
+      append: () => string,
+      validateAppend: CompactionAppendValidator,
+    ) => string;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -625,6 +646,15 @@ export function installSessionToolResultGuard(
       }),
     };
   };
+  const originalAppendCompaction = sessionManager.appendCompaction.bind(sessionManager);
+  const guardedAppendCompaction = ((
+    ...args: Parameters<SessionManager["appendCompaction"]>
+  ): string => {
+    const append = () => originalAppendCompaction(...args);
+    return opts?.withCompactionPersistence
+      ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
+      : append();
+  }) as SessionManager["appendCompaction"];
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -821,6 +851,7 @@ export function installSessionToolResultGuard(
 
   // Monkey-patch appendMessage with our guarded version.
   sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendCompaction = guardedAppendCompaction;
 
   return {
     flushPendingToolResults,

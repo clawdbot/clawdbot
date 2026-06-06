@@ -84,6 +84,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
     Search via a signed-in local Ollama host or the hosted Ollama API.
   </Card>
+  <Card title="Parallel" icon="layer-group" href="/tools/parallel-search">
+    LLM-optimized dense excerpts from a web index purpose-built for AI agents.
+  </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
   </Card>
@@ -108,6 +111,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Kimi](/tools/kimi-search)                | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
 | [MiniMax Search](/tools/minimax-search)   | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search) | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
+| [Parallel](/tools/parallel-search)        | Dense excerpts ranked for LLM context                          | --                                               | `PARALLEL_API_KEY`                                                                      |
 | [Perplexity](/tools/perplexity-search)    | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
 | [SearXNG](/tools/searxng-search)          | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
 | [Tavily](/tools/tavily)                   | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
@@ -184,12 +188,13 @@ API-backed providers first:
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
+10. **Parallel** -- `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the Parallel endpoint (order 75)
 
 Key-free fallbacks after that:
 
-10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+11. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
+12. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
+13. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
@@ -198,7 +203,7 @@ error prompting you to configure one).
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
   bundled API-backed web search providers, including Brave, Exa, Firecrawl,
-  Gemini, Grok, Kimi, MiniMax, Perplexity, and Tavily,
+  Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
   selected provider key -- non-selected SecretRefs stay inactive, so you can

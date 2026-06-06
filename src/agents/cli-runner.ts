@@ -270,6 +270,7 @@ async function finalizeCliContextEngineTurn(params: {
     sessionIdUsed: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     sessionFile: runParams.sessionFile,
+    isHeartbeat: runParams.bootstrapContextRunKind === "heartbeat",
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,

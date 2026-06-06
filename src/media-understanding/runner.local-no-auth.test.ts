@@ -234,6 +234,56 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
+  it("uses OpenAI API key auth for audio when the default OpenAI profile is OAuth", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "oauth",
+                provider: "openai",
+                access: "oauth-chat-token",
+                refresh: "oauth-refresh-token",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
+        );
+        await withAudioFixture(
+          "openclaw-openai-audio-oauth-env-key",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `auth:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({ provider: "openai", model: "whisper-1" });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(result.outputs[0]?.text).toBe("auth:env-openai-audio-key");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("env-openai-audio-key");
+          },
+        );
+      });
+    });
+  });
+
   it("prefers stored auth profile credentials over plugin-only media no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {

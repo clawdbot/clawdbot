@@ -6,6 +6,11 @@ import {
   listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
 } from "./lib/extension-test-plan.mjs";
+import {
+  normalizeRelativePath,
+  relativizeExtensionVitestArgs,
+  relativizeExtensionVitestPath,
+} from "./lib/extension-vitest-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
@@ -100,15 +105,16 @@ function orderPlanGroups(planGroups, parallelism) {
   });
 }
 
-function normalizeRelativePath(inputPath) {
-  return path
-    .relative(process.cwd(), path.resolve(process.cwd(), inputPath))
-    .split(path.sep)
-    .join("/");
-}
-
 function isExactExcludePath(inputPath) {
   return !/[*!?[\]{}]/u.test(inputPath);
+}
+
+function addExactExcludePath(excludePaths, value) {
+  const normalized = normalizeRelativePath(value);
+  excludePaths.add(normalized);
+  if (!normalized.startsWith("extensions/")) {
+    excludePaths.add(`extensions/${normalized}`);
+  }
 }
 
 /**
@@ -121,7 +127,7 @@ export function parseExactVitestExcludePaths(vitestArgs) {
     if (arg === "--exclude") {
       const value = vitestArgs[index + 1];
       if (value && isExactExcludePath(value)) {
-        excludePaths.add(normalizeRelativePath(value));
+        addExactExcludePath(excludePaths, value);
       }
       index += 1;
       continue;
@@ -130,7 +136,7 @@ export function parseExactVitestExcludePaths(vitestArgs) {
     if (arg.startsWith(prefix)) {
       const value = arg.slice(prefix.length);
       if (value && isExactExcludePath(value)) {
-        excludePaths.add(normalizeRelativePath(value));
+        addExactExcludePath(excludePaths, value);
       }
     }
   }
@@ -161,7 +167,7 @@ async function runPlanGroup(group, params) {
     `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${targets.length} targets)`,
   );
   return await params.runGroup({
-    args: params.vitestArgs,
+    args: relativizeExtensionVitestArgs(params.vitestArgs),
     config: group.config,
     env: createGroupEnv({
       baseEnv: params.env,
@@ -169,7 +175,7 @@ async function runPlanGroup(group, params) {
       groupIndex: params.groupIndex,
       useDedicatedCache: params.useDedicatedCache,
     }),
-    targets,
+    targets: targets.map((target) => relativizeExtensionVitestPath(target)),
   });
 }
 

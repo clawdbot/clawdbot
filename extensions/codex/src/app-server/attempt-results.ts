@@ -8,6 +8,7 @@ import type {
   EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
+import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
 
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
@@ -19,13 +20,6 @@ export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): 
   return result.assistantTexts.join("\n\n").trim();
 }
 
-/** Returns whether attempt metadata saw potential side effects. */
-export function hasCodexAppServerPotentialSideEffectEvidence(
-  result: EmbeddedRunAttemptResult,
-): boolean {
-  return result.replayMetadata.hadPotentialSideEffects;
-}
-
 /**
  * Builds the user-facing timeout outcome when Codex stops without a terminal
  * turn event.
@@ -33,24 +27,24 @@ export function hasCodexAppServerPotentialSideEffectEvidence(
 export function buildCodexAppServerPromptTimeoutOutcome(params: {
   result: EmbeddedRunAttemptResult;
   turnCompletionIdleTimedOut: boolean;
+  turnWatchTimeoutKind?: CodexAttemptTurnWatchTimeoutKind;
 }): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
-  const completionIdleTimeoutHadPotentialSideEffects = hasCodexAppServerPotentialSideEffectEvidence(
-    params.result,
-  );
-  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
-  if (
-    !params.turnCompletionIdleTimedOut ||
-    (params.result.itemLifecycle.completedCount === 0 &&
-      !completionIdleTimeoutHadPotentialSideEffects &&
-      replayBlockedReason === undefined)
-  ) {
+  if (!params.turnCompletionIdleTimedOut) {
     return undefined;
   }
+  if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
+    return undefined;
+  }
+  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
+  const completionIdleTimeoutHadPotentialSideEffects =
+    replayBlockedReason === "tool_activity" ||
+    replayBlockedReason === "potential_side_effect" ||
+    replayBlockedReason === "active_item";
   return {
     message: completionIdleTimeoutHadPotentialSideEffects
       ? CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE
       : CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE,
-    ...(completionIdleTimeoutHadPotentialSideEffects
+    ...(replayBlockedReason
       ? {
           replayInvalid: true,
           livenessState: "abandoned" as const,

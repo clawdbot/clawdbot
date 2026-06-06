@@ -3303,7 +3303,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
     message,
   );
 }

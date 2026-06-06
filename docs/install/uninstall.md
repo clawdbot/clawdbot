@@ -21,7 +21,13 @@ openclaw uninstall
 
 When using the CLI, state removal preserves configured workspace directories unless you also select `--workspace`.
 
-Non-interactive (automation / npx):
+Preview what will be removed (safe):
+
+```bash
+openclaw uninstall --dry-run --all
+```
+
+Non-interactive (automation / npx). Use with caution and only after confirming scopes:
 
 ```bash
 openclaw uninstall --all --yes --non-interactive

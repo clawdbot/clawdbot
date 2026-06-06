@@ -14,6 +14,9 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
+const CODEX_MISSING_TERMINAL_MESSAGE =
+  "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
+
 function codexClientClosedAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
@@ -45,6 +48,9 @@ function codexTurnCompletionIdleTimeoutAttempt(
     timedOut: true,
     promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
     promptErrorSource: "prompt",
+    promptTimeoutOutcome: {
+      message: CODEX_MISSING_TERMINAL_MESSAGE,
+    },
     codexAppServerFailure: {
       kind: "turn_completion_idle_timeout",
       turnWatchTimeoutKind: "completion",
@@ -151,6 +157,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
           turnId: "turn-1",
           replaySafe: true,
         },
+        promptTimeoutOutcome: undefined,
       }),
     );
 
@@ -191,6 +198,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
           turnId: "turn-1",
           replaySafe: true,
         },
+        promptTimeoutOutcome: undefined,
       }),
     );
 
@@ -223,7 +231,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(result.payloads?.[0]).toMatchObject({
       isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      text: CODEX_MISSING_TERMINAL_MESSAGE,
     });
     expect(result.meta.timeoutPhase).toBe("provider");
     expect(result.meta.providerStarted).toBe(true);
@@ -254,7 +262,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     expect(result.payloads?.[0]).toMatchObject({
       isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      text: CODEX_MISSING_TERMINAL_MESSAGE,
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();

@@ -112,6 +112,9 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );
+    expect(npmInstallBody).toContain("Write-NpmInstallFailureDetails -Output $npmOutput");
+    expect(source).toContain("function Get-LatestNpmDebugLogPath {");
+    expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {

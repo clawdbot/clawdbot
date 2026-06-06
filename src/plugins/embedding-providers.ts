@@ -36,27 +36,35 @@ function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
   return created;
 }
 
-/** Registers an embedding provider adapter for the current process. */
+function getCoreEmbeddingProvider(id: string): RegisteredEmbeddingProvider | undefined {
+  return CORE_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id);
+}
+
 /** Registers an embedding provider adapter for plugin and built-in memory callers. */
 export function registerEmbeddingProvider(
   adapter: EmbeddingProviderAdapter,
   options?: { ownerPluginId?: string },
 ): void {
+  const coreEntry = getCoreEmbeddingProvider(adapter.id);
+  if (coreEntry) {
+    if (adapter !== coreEntry.adapter) {
+      throw new Error(`embedding provider already registered: ${adapter.id} (owner: core)`);
+    }
+    getEmbeddingProviders().delete(adapter.id);
+    return;
+  }
+
   getEmbeddingProviders().set(adapter.id, {
     adapter,
     ownerPluginId: options?.ownerPluginId,
   });
 }
 
-/** Returns the registered embedding provider entry, including core defaults. */
 /** Looks up the registered embedding provider entry, including owner metadata. */
 export function getRegisteredEmbeddingProvider(
   id: string,
 ): RegisteredEmbeddingProvider | undefined {
-  return (
-    getEmbeddingProviders().get(id) ??
-    CORE_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id)
-  );
+  return getCoreEmbeddingProvider(id) ?? getEmbeddingProviders().get(id);
 }
 
 /** Returns only the embedding provider adapter for callers that do not need ownership metadata. */
@@ -70,7 +78,9 @@ export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[
     CORE_EMBEDDING_PROVIDERS.map((entry) => [entry.adapter.id, entry]),
   );
   for (const entry of getEmbeddingProviders().values()) {
-    merged.set(entry.adapter.id, entry);
+    if (!merged.has(entry.adapter.id)) {
+      merged.set(entry.adapter.id, entry);
+    }
   }
   return Array.from(merged.values());
 }

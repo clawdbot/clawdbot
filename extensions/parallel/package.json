@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/parallel-plugin",
+  "version": "2026.5.21",
+  "private": true,
+  "description": "OpenClaw Parallel web search plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

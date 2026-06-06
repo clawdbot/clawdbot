@@ -23,6 +23,35 @@ export type GatewayStatusWarning = {
 const noReachableGatewayDiagnostic =
   "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
+function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  if (!entry.self) {
+    return null;
+  }
+  const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
+  const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
+  const discriminator =
+    typeof entry.self.instanceId === "string" && entry.self.instanceId.trim()
+      ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
+      : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
+        ? `device:${entry.self.deviceId.trim().toLowerCase()}`
+        : "";
+  if ((!host && !ip) || !discriminator) {
+    return null;
+  }
+  return `${host}\0${ip}\0${discriminator}`;
+}
+
+function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
+  if (reachable.length <= 1) {
+    return false;
+  }
+  const identityKeys = reachable.map((entry) => gatewaySelfIdentityKey(entry));
+  if (identityKeys.some((key) => key === null)) {
+    return true;
+  }
+  return new Set(identityKeys).size > 1;
+}
+
 function readModelPricingDegradedDetail(health: unknown): string | null {
   if (!health || typeof health !== "object") {
     return null;
@@ -91,13 +120,13 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: params.probed.map((entry) => entry.target.id),
     });
   }
-  if (reachable.length > 1) {
+  if (hasMultipleReachableGatewayIdentities(reachable)) {
     // Multiple reachable gateways are valid for isolated profiles but surprising
     // enough to call out before users debug against the wrong process.
     warnings.push({
       code: "multiple_gateways",
       message:
-        "Unconventional setup: multiple reachable gateways detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
       targetIds: reachable.map((entry) => entry.target.id),
     });
   }

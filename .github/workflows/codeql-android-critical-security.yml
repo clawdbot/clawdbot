@@ -35,7 +35,7 @@ jobs:
           java-version: "21"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         with:
           languages: java-kotlin
           build-mode: manual
@@ -46,6 +46,6 @@ jobs:
         run: ./gradlew --no-daemon :app:assemblePlayDebug
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
         with:
           category: "/codeql-critical-security/android"

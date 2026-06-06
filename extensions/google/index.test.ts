@@ -1,4 +1,7 @@
 // Google tests cover index plugin behavior.
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
@@ -14,6 +17,7 @@ import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-v
 import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
+import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -161,6 +165,59 @@ describe("google provider plugin hooks", () => {
         modelId: "gemini-3.1-pro-preview",
       } as never),
     ).toBe("native");
+  });
+
+  it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "",
+          GCLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {

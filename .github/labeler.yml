@@ -574,6 +574,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: parallel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/parallel/**"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

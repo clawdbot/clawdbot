@@ -992,7 +992,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
-        stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
         const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
@@ -1130,6 +1129,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheRead +
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
+            // Defer start until after message_start so that pre-stream SSE errors
+            // (e.g. invalid thinking signatures) arrive before any non-error event
+            // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
+            // and allowing the thinking-block recovery retry to fire.
+            stream.push({ type: "start", partial: output as never });
             continue;
           }
           if (event.type === "content_block_start") {

@@ -162,6 +162,23 @@ describe("tool display details", () => {
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
   });
 
+  it("formats Parallel's native objective + search_queries shape", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: {
+            objective: "Find the OpenClaw repository on GitHub",
+            search_queries: ["openclaw github", "openclaw repository"],
+            count: 5,
+          },
+        }),
+      ),
+    ).toBe(
+      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+    );
+  });
+
   it("summarizes exec commands with context", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

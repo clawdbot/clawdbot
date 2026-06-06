@@ -588,11 +588,15 @@ releases the session lane. Replay-safe stdio app-server failures, including
 turn-completion idle timeouts without assistant, tool, active-item, or
 side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
-session lane. They also clear the stale native thread binding and surface a
-recoverable timeout message for user or maintainer judgment instead of being
-replayed automatically. Timeout diagnostics include the last app-server
-notification method and, for raw assistant response items, the item type, role,
-id, and a bounded assistant text preview.
+session lane. They also clear the stale native thread binding instead of being
+replayed automatically. Completion-watch timeouts surface Codex-specific timeout
+text: replay-safe cases say the response may be incomplete, while unsafe cases
+tell the user to verify current state before retrying. Public timeout diagnostics
+include structural fields such as the last app-server notification method,
+raw assistant response item id/type/role, active request/item counts, and armed
+watch state. When the last notification is a raw assistant response item, they
+also include a bounded assistant text preview. They do not include raw prompt or
+tool content.
 
 Environment overrides remain available for local testing:
 

@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildCleanupPlan,
+  removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
@@ -198,6 +199,40 @@ describe("cleanup path removals", () => {
 
       await expect(fs.stat(legacyAttestationPath)).rejects.toThrow();
     } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to remove the current working directory", async () => {
+    const runtime = createRuntimeMock();
+    const result = await removePath(process.cwd(), runtime, { dryRun: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.skipped).toBeUndefined();
+    expect(runtime.error.mock.calls.length).toBe(1);
+    expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+    expect(runtime.log.mock.calls.length).toBe(0);
+  });
+
+  it("refuses to remove a directory containing the current working directory", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-cwd-"));
+    const nestedCwd = path.join(tmpRoot, "nested");
+    const cwdSpy = vi.spyOn(process, "cwd");
+
+    try {
+      await fs.mkdir(nestedCwd);
+      cwdSpy.mockReturnValue(nestedCwd);
+
+      const result = await removePath(tmpRoot, runtime, { dryRun: true });
+
+      expect(result.ok).toBe(false);
+      expect(result.skipped).toBeUndefined();
+      expect(runtime.error.mock.calls.length).toBe(1);
+      expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+      expect(runtime.log.mock.calls.length).toBe(0);
+    } finally {
+      cwdSpy.mockRestore();
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });

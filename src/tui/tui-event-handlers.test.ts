@@ -971,6 +971,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("keeps pending user text after run binding until history catches up", () => {
+    const pendingUsers = new Map([["run-gateway", "queued hello"]]);
+    const chatLog = {
+      ...createMockChatLog(),
+      countPendingUsers: () => pendingUsers.size,
+      render: (_width: number) => Array.from(pendingUsers.values()),
+    };
+    const { state, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      chatLog: chatLog as unknown as HandlerChatLog,
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+    });
+    noteLocalRunId("run-gateway");
+
+    handleChatEvent({
+      runId: "run-gateway",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "working" },
+    });
+
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(chatLog.countPendingUsers()).toBe(1);
+    expect(chatLog.render(120).join("\n")).toContain("queued hello");
+  });
+
   it("does not bind unknown gateway run ids while an optimistic message is pending", () => {
     const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, pendingOptimisticUserMessage: true },

@@ -140,6 +140,22 @@ export type EmbeddedRunAttemptResult = {
       | "tool_activity"
       | "potential_side_effect"
       | "active_item";
+    diagnostics?: {
+      idleMs?: number;
+      timeoutMs?: number;
+      lastActivityReason?: string;
+      lastNotificationMethod?: string;
+      lastNotificationItemId?: string;
+      lastNotificationItemType?: string;
+      lastNotificationItemRole?: string;
+      lastAssistantTextPreview?: string;
+      activeAppServerTurnRequests?: number;
+      activeTurnItemCount?: number;
+      terminalTurnNotificationQueued?: boolean;
+      completionIdleWatchArmed?: boolean;
+      assistantCompletionIdleWatchArmed?: boolean;
+      terminalIdleWatchArmed?: boolean;
+    };
   };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;

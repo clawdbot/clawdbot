@@ -1,5 +1,5 @@
 {
-  "originHash" : "92edc1a12985a9d17dc33bfc8b590ab5f5a9566bb2bdd8debdb79e6a8d445908",
+  "originHash" : "a88730a64ccb5fd092108256c37d6c80bc7b92a5b6b563d83a9a26988550234d",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/Peekaboo.git",
       "state" : {
-        "revision" : "36108b4ea7d7848d616c3cad1e7a03e40d6be857",
-        "version" : "3.2.1"
+        "revision" : "faf843032772c2074d834b931911bf0002704136",
+        "version" : "3.3.0"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "066e75a8b3e99962685d6a90cdd5293ebffd9261",
-        "version" : "2.9.1"
+        "revision" : "6276ba2b404829d139c45ff98427cf90e2efc59b",
+        "version" : "2.9.2"
       }
     },
     {
@@ -78,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "5073617dac96330a486245e4c0179cb0a6fd2256",
-        "version" : "1.12.0"
+        "revision" : "2aed77ae5ec9a86d8fe42c12275e4c2653a286ee",
+        "version" : "1.13.1"
       }
     },
     {

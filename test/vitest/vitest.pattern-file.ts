@@ -2,6 +2,45 @@
 import fs from "node:fs";
 import path from "node:path";
 
+const VITEST_OPTION_VALUE_FLAGS = new Set([
+  "-c",
+  "-r",
+  "-t",
+  "--browser",
+  "--changed",
+  "--config",
+  "--coverage.all",
+  "--coverage.exclude",
+  "--coverage.extension",
+  "--coverage.include",
+  "--coverage.provider",
+  "--coverage.reporter",
+  "--coverage.reportsDirectory",
+  "--dir",
+  "--environment",
+  "--environmentOptions",
+  "--exclude",
+  "--hookTimeout",
+  "--inspect",
+  "--inspectBrk",
+  "--maxConcurrency",
+  "--maxWorkers",
+  "--minWorkers",
+  "--mode",
+  "--name",
+  "--outputFile",
+  "--pool",
+  "--project",
+  "--reporter",
+  "--retry",
+  "--root",
+  "--sequence",
+  "--shard",
+  "--testNamePattern",
+  "--testTimeout",
+  "--workspace",
+]);
+
 function normalizeCliPattern(value: string): string {
   let normalized = value
     .trim()
@@ -15,6 +54,39 @@ function normalizeCliPattern(value: string): string {
     normalized = `${normalized}/**/*.test.*`;
   }
   return normalized;
+}
+
+function normalizeScopedDir(value: string | undefined): string {
+  return value?.trim().replaceAll("\\", "/").replace(/\/+$/u, "") ?? "";
+}
+
+function hasRepoRootPrefix(value: string): boolean {
+  return /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u.test(value);
+}
+
+function looksLikeDirRelativePath(value: string): boolean {
+  return (
+    value.includes("/") ||
+    value.includes(".test.") ||
+    value.includes(".e2e.") ||
+    value.includes(".live.")
+  );
+}
+
+function applyScopedDir(value: string, scopedDir: string): string {
+  const normalizedValue = value
+    .trim()
+    .replace(/^\.\/+/u, "")
+    .replaceAll("\\", "/");
+  if (
+    !scopedDir ||
+    hasRepoRootPrefix(normalizedValue) ||
+    path.isAbsolute(value) ||
+    !looksLikeDirRelativePath(normalizedValue)
+  ) {
+    return normalizedValue;
+  }
+  return `${scopedDir}/${normalizedValue}`;
 }
 
 function looksLikeCliIncludePattern(value: string): boolean {
@@ -72,24 +144,13 @@ export function loadPatternListFromEnv(
 }
 
 export function loadPatternListFromArgv(argv: string[] = process.argv): string[] | null {
-  const optionValueFlags = new Set([
-    "-c",
-    "-r",
-    "-t",
-    "--config",
-    "--dir",
-    "--environment",
-    "--exclude",
-    "--maxWorkers",
-    "--mode",
-    "--outputFile",
-    "--pool",
-    "--project",
-    "--reporter",
-    "--root",
-    "--shard",
-    "--testNamePattern",
-  ]);
+  return loadPatternListFromArgvForScope(argv);
+}
+
+function loadPatternListFromArgvForScope(
+  argv: string[] = process.argv,
+  options: { scopedDir?: string } = {},
+): string[] | null {
   const values: string[] = [];
   let skipNext = false;
   for (const value of argv.slice(2)) {
@@ -100,7 +161,7 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
     if (value === "run" || value === "watch" || value === "bench") {
       continue;
     }
-    if (optionValueFlags.has(value)) {
+    if (VITEST_OPTION_VALUE_FLAGS.has(value)) {
       skipNext = true;
       continue;
     }
@@ -110,7 +171,11 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
     values.push(value);
   }
 
-  const patterns = values.filter(looksLikeCliIncludePattern).map(normalizeCliPattern);
+  const scopedDir = normalizeScopedDir(options.scopedDir);
+  const patterns = values
+    .map((value) => applyScopedDir(value, scopedDir))
+    .filter(looksLikeCliIncludePattern)
+    .map(normalizeCliPattern);
 
   return patterns.length > 0 ? [...new Set(patterns)] : null;
 }
@@ -118,8 +183,9 @@ export function loadPatternListFromArgv(argv: string[] = process.argv): string[]
 export function narrowIncludePatternsForCli(
   includePatterns: string[],
   argv: string[] = process.argv,
+  options: { scopedDir?: string } = {},
 ): string[] | null {
-  const cliPatterns = loadPatternListFromArgv(argv);
+  const cliPatterns = loadPatternListFromArgvForScope(argv, options);
   if (!cliPatterns) {
     return null;
   }

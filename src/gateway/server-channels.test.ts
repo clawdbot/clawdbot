@@ -113,6 +113,13 @@ async function flushMicrotasks(times = 8): Promise<void> {
   }
 }
 
+async function waitForImmediate(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const handle = setImmediate(resolve);
+    handle.unref?.();
+  });
+}
+
 async function waitForMicrotaskCondition(
   check: () => boolean,
   message: string,
@@ -123,6 +130,24 @@ async function waitForMicrotaskCondition(
       return;
     }
     await Promise.resolve();
+  }
+  throw new Error(message);
+}
+
+async function advanceTimersUntil(
+  check: () => boolean,
+  message: string,
+  options: { stepMs: number; maxMs: number },
+): Promise<void> {
+  for (let elapsed = 0; elapsed <= options.maxMs; elapsed += options.stepMs) {
+    if (check()) {
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(options.stepMs);
+    await flushMicrotasks();
+  }
+  if (check()) {
+    return;
   }
   throw new Error(message);
 }
@@ -193,7 +218,8 @@ describe("server-channels auto restart", () => {
 
   beforeEach(() => {
     previousRegistry = getActivePluginRegistry();
-    vi.useFakeTimers();
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     hoisted.computeBackoff.mockClear();
     hoisted.sleepWithAbort.mockClear();
   });
@@ -222,7 +248,11 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
 
     await manager.startChannels();
-    await vi.advanceTimersByTimeAsync(200);
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 11,
+      "expected crash-loop restarts to reach the maximum attempt cap",
+      { stepMs: 10, maxMs: 500 },
+    );
 
     expect(startAccount).toHaveBeenCalledTimes(11);
     const snapshot = manager.getRuntimeSnapshot();
@@ -241,7 +271,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
 
     await manager.startChannels();
-    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
 
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
@@ -916,7 +946,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelIds: ["slack"], fillChannelDependencies: false });
 
     await manager.startChannels();
-    await vi.advanceTimersByTimeAsync(0);
+    await flushMicrotasks();
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     const account = manager.getRuntimeSnapshot().channelAccounts.slack?.[DEFAULT_ACCOUNT_ID];
@@ -937,7 +967,7 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
     expect(startAccount).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(0);
+    await waitForImmediate();
     await flushMicrotasks();
 
     const names = measureMock.mock.calls.map(([name]) => name);
@@ -970,7 +1000,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ startupTrace });
 
     await manager.startChannels();
-    await vi.advanceTimersByTimeAsync(0);
+    await waitForImmediate();
     await flushMicrotasks();
 
     expect(startAccount).toHaveBeenCalledTimes(1);
@@ -1002,7 +1032,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ startupTrace });
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    await vi.advanceTimersByTimeAsync(0);
+    await waitForImmediate();
     await handoffEntered.promise;
     const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await flushMicrotasks();

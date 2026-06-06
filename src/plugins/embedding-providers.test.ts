@@ -62,16 +62,36 @@ describe("embedding provider registry", () => {
   });
 
   it("preserves owner metadata in registered snapshots", () => {
-    const adapter = createAdapter("openai-compatible");
+    const adapter = createAdapter("local-compatible");
     const entry = {
       adapter,
-      ownerPluginId: "openai-compatible",
+      ownerPluginId: "local-compatible",
     };
 
     restoreRegisteredEmbeddingProviders([entry]);
 
-    expect(getRegisteredEmbeddingProvider("openai-compatible")).toEqual(entry);
-    expect(listRegisteredEmbeddingProviders()).toEqual([entry]);
+    expect(getRegisteredEmbeddingProvider("local-compatible")).toEqual(entry);
+    expect(listRegisteredEmbeddingProviders()).toEqual([
+      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
+      entry,
+    ]);
+  });
+
+  it("keeps core providers from being shadowed by restored snapshots", () => {
+    const adapter = createAdapter("openai-compatible");
+
+    expect(() =>
+      restoreRegisteredEmbeddingProviders([
+        {
+          adapter,
+          ownerPluginId: "shadow",
+        },
+      ]),
+    ).toThrow("embedding provider already registered: openai-compatible (owner: core)");
+
+    expect(getRegisteredEmbeddingProvider("openai-compatible")).toEqual(
+      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
+    );
   });
 
   it("stores adapters in a process-global singleton map", () => {

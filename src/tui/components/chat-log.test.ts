@@ -174,15 +174,19 @@ describe("ChatLog", () => {
     expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
-  it("stops counting a pending user message once the run is committed", () => {
+  it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "hello");
-    expect(chatLog.countPendingUsers()).toBe(1);
+    chatLog.addPendingUser("local", "queued hello", 1_000);
+    chatLog.startAssistant("hi there", "r-accepted");
 
-    expect(chatLog.commitPendingUser("run-1")).toBe(true);
+    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.indexOf("queued hello")).toBeLessThan(rendered.indexOf("hi there"));
+    // The row is now addressable by the gateway-assigned runId.
+    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
     expect(chatLog.countPendingUsers()).toBe(0);
-    expect(chatLog.render(120).join("\n")).toContain("hello");
   });
 
   it("reconciles pending users against rebuilt history using timestamps", () => {

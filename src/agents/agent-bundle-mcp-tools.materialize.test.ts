@@ -156,6 +156,72 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
+    // resource_link/resource/audio blocks have no base64 image source; if they
+    // leaked into the provider image branch Anthropic would 400 on an image with
+    // undefined data/media_type and poison the whole session history (#90710).
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "text", text: "intro" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/a.docx",
+              name: "a.docx",
+              title: "Quarterly report",
+            },
+            {
+              type: "resource_link",
+              uri: "https://example.com/bare",
+              name: "",
+            },
+            {
+              type: "resource",
+              resource: { uri: "memo://one", text: "memo body" },
+            },
+            {
+              type: "resource",
+              resource: { uri: "blob://two", blob: "AAAA", mimeType: "application/pdf" },
+            },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+            { type: "image", data: "iVBOR", mimeType: "image/png" },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toEqual([
+      { type: "text", text: "intro" },
+      { type: "text", text: "[Quarterly report] https://example.com/a.docx" },
+      { type: "text", text: "https://example.com/bare" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "blob://two" },
+      { type: "text", text: "[audio audio/mpeg]" },
+      { type: "image", data: "iVBOR", mimeType: "image/png" },
+    ]);
+  });
+
+  it("coerces a malformed image block (missing base64 source) to text", async () => {
+    // A real-world poison case: image block with undefined data/media_type.
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "image" } as unknown as CallToolResult["content"][number]],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify({ type: "image" }) });
+  });
+
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime(),

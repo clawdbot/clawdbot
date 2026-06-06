@@ -89,6 +89,41 @@ struct MacNodeModeCoordinatorTests {
         #expect(params.allowTOFU == false)
     }
 
+    @Test func `tls session cache reuses session box for unchanged params`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        var cache = MacNodeGatewayTLSSessionCache()
+        let params = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            storedFingerprint: "stored"))
+
+        let first = cache.sessionBox(url: url, params: params)
+        let second = cache.sessionBox(url: url, params: params)
+
+        #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
+    }
+
+    @Test func `tls session cache rebuilds session box when params change`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        var cache = MacNodeGatewayTLSSessionCache()
+        let firstParams = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            storedFingerprint: "stored"))
+        let secondParams = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:rotated"]]],
+            storedFingerprint: "stored"))
+
+        let first = cache.sessionBox(url: url, params: firstParams)
+        let second = cache.sessionBox(url: url, params: secondParams)
+
+        #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
+    }
+
     @Test func `auto repairs trusted tailscale serve pin mismatch`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let failure = GatewayTLSValidationFailure(

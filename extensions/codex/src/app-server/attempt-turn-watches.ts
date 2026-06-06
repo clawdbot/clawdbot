@@ -312,12 +312,21 @@ export function createCodexAttemptTurnWatchController(params: {
       scheduleCompletionIdleWatch();
       return;
     }
+    const details = {
+      ...completionLastActivityDetails,
+      activeAppServerTurnRequests: params.getActiveAppServerTurnRequests(),
+      activeTurnItemCount: params.getActiveTurnItemCount(),
+      terminalTurnNotificationQueued: params.isTerminalTurnNotificationQueued(),
+      completionIdleWatchArmed,
+      assistantCompletionIdleWatchArmed,
+      terminalIdleWatchArmed,
+    };
     const timeout = {
       kind: "completion" as const,
       idleMs,
       timeoutMs,
       lastActivityReason: completionLastActivityReason,
-      details: completionLastActivityDetails,
+      details,
     };
     params.onTimeout(timeout);
     params.onMarkTimedOut();

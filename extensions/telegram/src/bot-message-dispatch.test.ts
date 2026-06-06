@@ -5,6 +5,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -2610,6 +2611,73 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.clear).toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Boom" });
+  });
+
+  it("suppresses failed tool payloads after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "Tool failed after final", isError: true },
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Final answer" });
+  });
+
+  it("preserves final error warnings after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "Write failed", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(0, { text: "Final answer" });
+    expectDeliveredReply(0, { text: "Write failed", isError: true }, 1);
+  });
+
+  it("suppresses non-terminal final error warnings after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          { text: "Post-processing failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Final answer" });
+  });
+
+  it("preserves non-terminal final error warnings before any final reply is delivered", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          { text: "Post-processing failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Post-processing failed", isError: true });
   });
 
   it("streams button-bearing text into the same message", async () => {
