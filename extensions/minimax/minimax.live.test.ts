@@ -1,5 +1,5 @@
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 // Minimax tests cover minimax plugin behavior.
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -36,14 +36,14 @@ const registerMinimaxPlugin = () =>
     name: "MiniMax Provider",
   });
 
-function hasTrustedFfmpegForLiveVoiceNote(): boolean {
+function hasTrustedFfmpegForLiveVoiceNote(label: string): boolean {
   try {
     resolveFfmpegBin();
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("ffmpeg not found in trusted system directories")) {
-      console.warn("[minimax:live] skip voice-note transcode: ffmpeg unavailable");
+      console.warn(`[${label}:live] skip voice-note transcode: ffmpeg unavailable`);
       return false;
     }
     throw error;
@@ -85,7 +85,7 @@ describeTtsLive("minimax tts live", () => {
   }, 120_000);
 
   it("synthesizes MiniMax TTS as an Opus voice note", async () => {
-    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+    if (!hasTrustedFfmpegForLiveVoiceNote("minimax")) {
       return;
     }
 

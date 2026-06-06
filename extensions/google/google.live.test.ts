@@ -1,5 +1,5 @@
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 // Google tests cover google plugin behavior.
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -50,14 +50,14 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   return message.includes("timeout") || message.includes("aborted");
 }
 
-function hasTrustedFfmpegForLiveVoiceNote(): boolean {
+function hasTrustedFfmpegForLiveVoiceNote(label: string): boolean {
   try {
     resolveFfmpegBin();
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("ffmpeg not found in trusted system directories")) {
-      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
+      console.warn(`[${label}:live] skip voice-note transcode: ffmpeg unavailable`);
       return false;
     }
     throw error;
@@ -90,7 +90,7 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
-    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+    if (!hasTrustedFfmpegForLiveVoiceNote("google")) {
       return;
     }
 
