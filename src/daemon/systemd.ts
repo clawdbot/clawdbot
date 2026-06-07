@@ -209,7 +209,17 @@ export async function findSystemdGatewayInstallation(
     findSystemSystemdGatewayScope(env),
   ]);
   if (user && system) {
-    return { kind: "dueling", user, system };
+    // Only the SAME canonical gateway installed in both scopes is a dueling
+    // conflict (issue #79375). A marker-owned system unit with a *different*
+    // name is an intentional separate gateway — e.g. a rescue bot on the same
+    // host (see docs: /gateway#multiple-gateways-same-host) — and must never
+    // be treated as a duplicate of the user unit, or doctor could remove a
+    // legitimate user gateway. The user unit is always canonical; the direct
+    // system path is canonical too, so the real #79375 case still matches.
+    if (user.unitName === system.unitName) {
+      return { kind: "dueling", user, system };
+    }
+    return { kind: "user", user };
   }
   if (user) {
     return { kind: "user", user };

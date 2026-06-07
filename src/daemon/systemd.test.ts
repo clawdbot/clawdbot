@@ -621,6 +621,24 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(installation.kind).toBe("system");
   });
 
+  it("does not treat a custom marker-owned system gateway as dueling with the user unit", async () => {
+    // An intentional separate gateway (e.g. a rescue bot) under a different
+    // unit name must NOT be classified as a duplicate of the canonical user
+    // unit, or doctor could remove a legitimate user gateway (issue #79375 P1).
+    mockUnitFileLayout({ user: true, system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw-rescue.service",
+        detail: "unit: /etc/systemd/system/openclaw-rescue.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const installation = await findSystemdGatewayInstallation({ HOME: TEST_MANAGED_HOME });
+    expect(installation.kind).toBe("user");
+  });
+
   it("findSystemdGatewayInstallation reports none when nothing is installed", async () => {
     mockUnitFileLayout({ system: false });
     findSystemGatewayServicesMock.mockResolvedValueOnce([]);
