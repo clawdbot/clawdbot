@@ -72,9 +72,10 @@ describe("bench-cli-startup", () => {
               passingSample,
               { ...passingSample, exitCode: 1 },
               { ...passingSample, exitCode: null, signal: "SIGTERM" },
+              { ...passingSample, timedOut: true },
             ],
             summary: {
-              sampleCount: 3,
+              sampleCount: 4,
               durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
               firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
               maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
@@ -86,7 +87,40 @@ describe("bench-cli-startup", () => {
     ).toEqual([
       "dist/entry.js gatewayStatusJson sample 2: exited with code 1",
       "dist/entry.js gatewayStatusJson sample 3: exited via signal SIGTERM",
+      "dist/entry.js gatewayStatusJson sample 4: timed out",
     ]);
+  });
+
+  it("fails reports with samples that did not report RSS", () => {
+    expect(
+      testing.collectFailedSamples({
+        entry: "openclaw.mjs",
+        cases: [
+          {
+            id: "version",
+            name: "--version",
+            args: ["--version"],
+            contract: null,
+            samples: [
+              {
+                ms: 10,
+                firstOutputMs: 5,
+                maxRssMb: null,
+                exitCode: 0,
+                signal: null,
+              },
+            ],
+            summary: {
+              sampleCount: 1,
+              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+              maxRssMb: null,
+              exitSummary: "code:0x1",
+            },
+          },
+        ],
+      }),
+    ).toEqual(["openclaw.mjs version sample 1: did not report max RSS"]);
   });
 
   it("allows declared nonzero exit codes for clean-state probes", () => {

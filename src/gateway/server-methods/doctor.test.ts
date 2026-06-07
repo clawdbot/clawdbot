@@ -25,6 +25,7 @@ const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
+const loadShortTermPromotionDreamingStats = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig,
@@ -45,6 +46,7 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 
 vi.mock("./doctor.memory-core-runtime.js", () => ({
   dedupeDreamDiaryEntries,
+  loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
   previewRemHarness,
   writeBackfillDiaryEntries,
@@ -198,6 +200,27 @@ function findRecordByField(items: unknown, key: string, value: unknown) {
   return (items as Array<Record<string, unknown>>).find((item) => item[key] === value);
 }
 
+function makeDreamingStats(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    shortTermCount: 0,
+    recallSignalCount: 0,
+    dailySignalCount: 0,
+    groundedSignalCount: 0,
+    totalSignalCount: 0,
+    phaseSignalCount: 0,
+    lightPhaseHitCount: 0,
+    remPhaseHitCount: 0,
+    promotedTotal: 0,
+    promotedToday: 0,
+    storePath: "plugin-state:memory-core/short-term-recall/test",
+    phaseSignalPath: "plugin-state:memory-core/short-term-phase-signals/test",
+    shortTermEntries: [],
+    signalEntries: [],
+    promotedEntries: [],
+    ...overrides,
+  };
+}
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   const payload = respondPayload(respond);
   expectRecordFields(payload, {
@@ -222,6 +245,9 @@ describe("doctor.memory.status", () => {
     removeBackfillDiaryEntries.mockReset();
     removeGroundedShortTermCandidates.mockReset();
     repairDreamingArtifacts.mockReset();
+    loadShortTermPromotionDreamingStats
+      .mockReset()
+      .mockImplementation(async () => makeDreamingStats());
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -414,8 +440,8 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
+            "memory:memory/2026-04-03-1503.md:1:2": {
+              path: "memory/2026-04-03-1503.md",
               startLine: 1,
               endLine: 2,
               snippet: "Emma prefers shorter, lower-pressure check-ins.",
@@ -425,8 +451,8 @@ describe("doctor.memory.status", () => {
               lastRecalledAt: recentIso,
               promotedAt: undefined,
             },
-            "memory:memory/2026-04-02.md:1:2": {
-              path: "memory/2026-04-02.md",
+            "memory:memory/daily/2026-04-02-1015.md:1:2": {
+              path: "memory/daily/2026-04-02-1015.md",
               startLine: 1,
               endLine: 2,
               snippet: "Use the Happy Together calendar for flights.",
@@ -459,8 +485,8 @@ describe("doctor.memory.status", () => {
               dailyCount: 4,
               promotedAt: olderIso,
             },
-            "memory:memory/2026-04-04.md:1:2": {
-              path: "memory/2026-04-04.md",
+            "memory:memory/notes/2026-04-04-0800.md:1:2": {
+              path: "memory/notes/2026-04-04-0800.md",
               startLine: 1,
               endLine: 2,
               snippet: "Always book the covered valet option at Park & Greet BCN.",
@@ -483,11 +509,11 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
+            "memory:memory/2026-04-03-1503.md:1:2": {
               lightHits: 2,
               remHits: 3,
             },
-            "memory:memory/2026-04-02.md:1:2": {
+            "memory:memory/daily/2026-04-02-1015.md:1:2": {
               lightHits: 9,
               remHits: 9,
             },
@@ -552,6 +578,111 @@ describe("doctor.memory.status", () => {
       }
       return mainWorkspaceDir;
     });
+    loadShortTermPromotionDreamingStats.mockImplementation(
+      async ({ workspaceDir }: { workspaceDir: string }) =>
+        workspaceDir === alphaWorkspaceDir
+          ? makeDreamingStats({
+              shortTermCount: 0,
+              promotedTotal: 2,
+              promotedToday: 1,
+              promotedEntries: [
+                {
+                  key: "memory:memory/2026-04-01.md:1:2",
+                  path: "memory/2026-04-01.md",
+                  startLine: 1,
+                  endLine: 2,
+                  snippet: "Bunji lives in London.",
+                  recallCount: 7,
+                  dailyCount: 4,
+                  groundedCount: 0,
+                  totalSignalCount: 11,
+                  lightHits: 0,
+                  remHits: 0,
+                  phaseHitCount: 0,
+                  promotedAt: olderIso,
+                },
+                {
+                  key: "memory:memory/notes/2026-04-04-0800.md:1:2",
+                  path: "memory/notes/2026-04-04-0800.md",
+                  startLine: 1,
+                  endLine: 2,
+                  snippet: "Always book the covered valet option at Park & Greet BCN.",
+                  recallCount: 8,
+                  dailyCount: 3,
+                  groundedCount: 0,
+                  totalSignalCount: 11,
+                  lightHits: 0,
+                  remHits: 0,
+                  phaseHitCount: 0,
+                  promotedAt: recentIso,
+                },
+              ],
+              lastPromotedAt: recentIso,
+            })
+          : makeDreamingStats({
+              shortTermCount: 1,
+              recallSignalCount: 2,
+              dailySignalCount: 1,
+              totalSignalCount: 3,
+              phaseSignalCount: 5,
+              lightPhaseHitCount: 2,
+              remPhaseHitCount: 3,
+              promotedTotal: 1,
+              promotedToday: 1,
+              shortTermEntries: [
+                {
+                  key: "memory:memory/2026-04-03-1503.md:1:2",
+                  path: "memory/2026-04-03-1503.md",
+                  startLine: 1,
+                  endLine: 2,
+                  snippet: "Emma prefers shorter, lower-pressure check-ins.",
+                  recallCount: 2,
+                  dailyCount: 1,
+                  groundedCount: 0,
+                  totalSignalCount: 3,
+                  lightHits: 2,
+                  remHits: 3,
+                  phaseHitCount: 5,
+                  lastRecalledAt: recentIso,
+                },
+              ],
+              signalEntries: [
+                {
+                  key: "memory:memory/2026-04-03-1503.md:1:2",
+                  path: "memory/2026-04-03-1503.md",
+                  startLine: 1,
+                  endLine: 2,
+                  snippet: "Emma prefers shorter, lower-pressure check-ins.",
+                  recallCount: 2,
+                  dailyCount: 1,
+                  groundedCount: 0,
+                  totalSignalCount: 3,
+                  lightHits: 2,
+                  remHits: 3,
+                  phaseHitCount: 5,
+                  lastRecalledAt: recentIso,
+                },
+              ],
+              promotedEntries: [
+                {
+                  key: "memory:memory/daily/2026-04-02-1015.md:1:2",
+                  path: "memory/daily/2026-04-02-1015.md",
+                  startLine: 1,
+                  endLine: 2,
+                  snippet: "Use the Happy Together calendar for flights.",
+                  recallCount: 9,
+                  dailyCount: 5,
+                  groundedCount: 0,
+                  totalSignalCount: 14,
+                  lightHits: 0,
+                  remHits: 0,
+                  phaseHitCount: 0,
+                  promotedAt: recentIso,
+                },
+              ],
+              lastPromotedAt: recentIso,
+            }),
+    );
 
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({
@@ -598,7 +729,7 @@ describe("doctor.memory.status", () => {
         promotedToday: 2,
       });
       expectRecordFields((dreaming.shortTermEntries as unknown[])[0], {
-        path: "memory/2026-04-03.md",
+        path: "memory/2026-04-03-1503.md",
         snippet: "Emma prefers shorter, lower-pressure check-ins.",
         totalSignalCount: 3,
         lightHits: 2,
@@ -606,17 +737,17 @@ describe("doctor.memory.status", () => {
         phaseHitCount: 5,
       });
       expectRecordFields((dreaming.signalEntries as unknown[])[0], {
-        path: "memory/2026-04-03.md",
+        path: "memory/2026-04-03-1503.md",
         totalSignalCount: 3,
       });
       expectRecordFields(
-        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-04.md"),
+        findRecordByField(dreaming.promotedEntries, "path", "memory/notes/2026-04-04-0800.md"),
         {
           promotedAt: recentIso,
         },
       );
       expectRecordFields(
-        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-02.md"),
+        findRecordByField(dreaming.promotedEntries, "path", "memory/daily/2026-04-02-1015.md"),
         {
           promotedAt: recentIso,
         },
@@ -667,6 +798,31 @@ describe("doctor.memory.status", () => {
     };
     await writeStore(mainWorkspaceDir, "main agent memory");
     await writeStore(alphaWorkspaceDir, "alpha agent memory");
+    loadShortTermPromotionDreamingStats.mockImplementation(
+      async ({ workspaceDir }: { workspaceDir: string }) =>
+        makeDreamingStats({
+          promotedTotal: 1,
+          promotedEntries: [
+            {
+              key: "memory:memory/2026-04-04.md:1:2",
+              path: "memory/2026-04-04.md",
+              startLine: 1,
+              endLine: 2,
+              snippet:
+                workspaceDir === alphaWorkspaceDir ? "alpha agent memory" : "main agent memory",
+              recallCount: 0,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalSignalCount: 0,
+              lightHits: 0,
+              remHits: 0,
+              phaseHitCount: 0,
+              promotedAt: "2026-04-04T00:00:00.000Z",
+            },
+          ],
+          lastPromotedAt: "2026-04-04T00:00:00.000Z",
+        }),
+    );
     getRuntimeConfig.mockReturnValue({
       agents: {
         list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
@@ -740,6 +896,29 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
     resolveMemorySearchConfig.mockReturnValue(null);
+    loadShortTermPromotionDreamingStats.mockResolvedValueOnce(
+      makeDreamingStats({
+        promotedTotal: 1,
+        promotedEntries: [
+          {
+            key: "memory:memory/2026-04-03.md:1:2",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: "memory/2026-04-03.md",
+            recallCount: 0,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalSignalCount: 0,
+            lightHits: 0,
+            remHits: 0,
+            phaseHitCount: 0,
+            promotedAt: "2026-04-04T00:00:00.000Z",
+          },
+        ],
+        lastPromotedAt: "2026-04-04T00:00:00.000Z",
+      }),
+    );
     getRuntimeConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -879,26 +1058,7 @@ describe("doctor.memory.status", () => {
       agentId === "alpha" ? alphaWorkspaceDir : mainWorkspaceDir,
     );
 
-    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
-      const targetPath =
-        typeof target === "string"
-          ? target
-          : Buffer.isBuffer(target)
-            ? target.toString("utf-8")
-            : target instanceof URL
-              ? target.pathname
-              : "";
-      if (
-        targetPath === path.join(mainWorkspaceDir, "memory", ".dreams", "short-term-recall.json") ||
-        targetPath === alphaStorePath
-      ) {
-        const error = Object.assign(new Error("denied"), { code: "EACCES" });
-        throw error;
-      }
-      return await vi
-        .importActual<typeof import("node:fs/promises")>("node:fs/promises")
-        .then((actual) => actual.readFile(target, options as never));
-    });
+    loadShortTermPromotionDreamingStats.mockRejectedValue(new Error("denied"));
 
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({
@@ -919,7 +1079,6 @@ describe("doctor.memory.status", () => {
         storeError: "2 dreaming stores had read errors.",
       });
     } finally {
-      readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
   });

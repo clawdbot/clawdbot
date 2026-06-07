@@ -722,7 +722,7 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
+              node scripts/check-gateway-watch-regression.mjs --skip-build
           fi
 
           for index in "${!pids[@]}"; do

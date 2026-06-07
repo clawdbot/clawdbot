@@ -21,22 +21,16 @@ import {
   type PluginModuleLoaderFactory,
   type PluginModuleLoaderCache,
 } from "../plugins/plugin-module-loader-cache.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  PluginCommandContext,
-} from "../plugins/types.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 
-export type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  PluginCommandContext,
-};
+export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
+export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
+export type OpenClawPluginCommandDefinition =
+  import("../plugins/types.js").OpenClawPluginCommandDefinition;
+export type PluginCommandContext = import("../plugins/types.js").PluginCommandContext;
+
+type BundledChannelRuntime = unknown;
 
 type ChannelEntryConfigSchema<TPlugin> =
   TPlugin extends ChannelPlugin<unknown>
@@ -126,7 +120,7 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   loadChannelAccountInspector?: (
     options?: BundledEntryModuleLoadOptions,
   ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  setChannelRuntime?: (runtime: BundledChannelRuntime) => void;
 };
 
 /** Runtime contract returned by a bundled channel's setup-only entrypoint definition. */
@@ -142,7 +136,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   loadLegacySessionSurface?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  setChannelRuntime?: (runtime: BundledChannelRuntime) => void;
   registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
@@ -537,8 +531,8 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         )
     : undefined;
   const setChannelRuntime = runtime
-    ? (pluginRuntime: PluginRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+    ? (pluginRuntime: BundledChannelRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
           importMetaUrl,
           runtime,
         );
@@ -604,8 +598,8 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   // When runtime wiring is needed, expose only the setter so the loader can hand
   // the setup surface the active runtime without importing the full channel entry.
   const setChannelRuntime = runtime
-    ? (pluginRuntime: PluginRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+    ? (pluginRuntime: BundledChannelRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
           importMetaUrl,
           runtime,
         );

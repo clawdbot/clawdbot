@@ -11,14 +11,20 @@ function usage() {
 
 function parseArgs(argv) {
   const options = { file: "", help: false, limit: 12 };
+  const readLimit = (raw) => {
+    if (!raw || raw.startsWith("--")) {
+      throw new Error("--limit requires a value");
+    }
+    return parsePositiveInt(raw, "--limit");
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else if (arg === "--limit") {
-      options.limit = parsePositiveInt(argv[(index += 1)], "--limit");
+      options.limit = readLimit(argv[(index += 1)]);
     } else if (arg?.startsWith("--limit=")) {
-      options.limit = parsePositiveInt(arg.slice("--limit=".length), "--limit");
+      options.limit = readLimit(arg.slice("--limit=".length));
     } else if (!options.file) {
       options.file = arg;
     } else {

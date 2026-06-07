@@ -4,18 +4,21 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 const EXACT_SEMVER_VERSION_RE =
   /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
 const OPENCLAW_STABLE_CORRECTION_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
-const OPENCLAW_STABLE_VERSION_RE = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
+const OPENCLAW_STABLE_VERSION_RE =
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)$/;
 const OPENCLAW_ALPHA_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-alpha\.(?<alpha>[1-9]\d*)$/;
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-alpha\.(?<alpha>[1-9]\d*)$/;
 const OPENCLAW_BETA_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Parsed date-based OpenClaw release version used for channel-aware ordering. */
+/** Parsed monthly patch OpenClaw release version used for channel-aware ordering. */
 type OpenClawReleaseVersion = {
   channel: "alpha" | "beta" | "stable";
-  dateTime: number;
+  year: number;
+  month: number;
+  patch: number;
   alphaNumber?: number;
   betaNumber?: number;
   correctionNumber?: number;
@@ -144,7 +147,7 @@ export function isExactSemverVersion(value: string): boolean {
   return EXACT_SEMVER_VERSION_RE.test(value.trim());
 }
 
-/** Parses OpenClaw's date-based stable/alpha/beta/correction version format. */
+/** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
 function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | null {
   const trimmed = value.trim();
   const candidates = [
@@ -160,15 +163,14 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
 
   const year = Number.parseInt(candidate.match.groups.year ?? "", 10);
   const month = Number.parseInt(candidate.match.groups.month ?? "", 10);
-  const day = Number.parseInt(candidate.match.groups.day ?? "", 10);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
-    return null;
-  }
-  const date = new Date(Date.UTC(year, month - 1, day));
+  const patch = Number.parseInt(candidate.match.groups.patch ?? "", 10);
   if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(patch) ||
+    month < 1 ||
+    month > 12 ||
+    patch < 1
   ) {
     return null;
   }
@@ -190,28 +192,36 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
 
   return {
     channel: candidate.channel,
-    dateTime: date.getTime(),
+    year,
+    month,
+    patch,
     correctionNumber,
     alphaNumber,
     betaNumber,
   };
 }
 
-/** Returns whether a version is an OpenClaw date-based stable correction release. */
+/** Returns whether a version is an OpenClaw monthly patch stable correction release. */
 export function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed?.channel === "stable" && parsed.correctionNumber !== undefined;
 }
 
-/** Compares OpenClaw date-based release versions across alpha, beta, stable, and corrections. */
+/** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
 export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
   const parsedLeft = parseOpenClawReleaseVersion(left);
   const parsedRight = parseOpenClawReleaseVersion(right);
   if (!parsedLeft || !parsedRight) {
     return null;
   }
-  if (parsedLeft.dateTime !== parsedRight.dateTime) {
-    return parsedLeft.dateTime < parsedRight.dateTime ? -1 : 1;
+  if (parsedLeft.year !== parsedRight.year) {
+    return parsedLeft.year < parsedRight.year ? -1 : 1;
+  }
+  if (parsedLeft.month !== parsedRight.month) {
+    return parsedLeft.month < parsedRight.month ? -1 : 1;
+  }
+  if (parsedLeft.patch !== parsedRight.patch) {
+    return parsedLeft.patch < parsedRight.patch ? -1 : 1;
   }
   if (parsedLeft.channel !== parsedRight.channel) {
     const rank = { alpha: 0, beta: 1, stable: 2 };

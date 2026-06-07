@@ -40,6 +40,7 @@ const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
+const CLEANUP_SMOKE_NAME = "cleanup-smoke";
 export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
 export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
@@ -456,8 +457,10 @@ async function writeFailureIndex(logDir, summary) {
   const failures = Array.isArray(summary.failures)
     ? summary.failures
     : (summary.lanes ?? []).filter((lane) => lane.status !== 0);
+  const workflowRerunFailures = failures.filter((failure) => failure.targetable !== false);
   const lanes = failures.map((failure) => ({
-    ghWorkflowCommand: githubWorkflowRerunCommand([failure.name], ref),
+    ghWorkflowCommand:
+      failure.targetable === false ? undefined : githubWorkflowRerunCommand([failure.name], ref),
     image: failure.image,
     imageKind: failure.imageKind,
     lane: failure.name,
@@ -466,13 +469,14 @@ async function writeFailureIndex(logDir, summary) {
     noOutputTimedOut: failure.noOutputTimedOut,
     rerunCommand: failure.rerunCommand,
     status: failure.status,
+    targetable: failure.targetable,
     timedOut: failure.timedOut,
   }));
   const failureIndex = {
     combinedGhWorkflowCommand:
-      lanes.length > 0
+      workflowRerunFailures.length > 0
         ? githubWorkflowRerunCommand(
-            lanes.map((lane) => lane.lane),
+            workflowRerunFailures.map((failure) => failure.name),
             ref,
           )
         : undefined,
@@ -710,6 +714,85 @@ async function runForeground(label, command, env) {
   if (result.status !== 0) {
     throw new Error(`${label} failed with status ${result.status}`);
   }
+}
+
+async function recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs) {
+  const status = 1;
+  const logFile = path.join(logDir, `${CLEANUP_SMOKE_NAME}.log`);
+  const message = error instanceof Error ? error.message : String(error);
+  await fs.promises.writeFile(
+    logFile,
+    [
+      `==> [${CLEANUP_SMOKE_NAME}] command: ${command}`,
+      `==> [${CLEANUP_SMOKE_NAME}] status: ${status}`,
+      `==> [${CLEANUP_SMOKE_NAME}] error: ${message}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+  return {
+    command,
+    attempts: [
+      {
+        attempt: 1,
+        elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+        finishedAt: new Date().toISOString(),
+        noOutputTimedOut: false,
+        startedAt: new Date(startedAtMs).toISOString(),
+        status,
+        timedOut: false,
+      },
+    ],
+    elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+    finishedAt: new Date().toISOString(),
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    logFile,
+    name: CLEANUP_SMOKE_NAME,
+    noOutputTimedOut: false,
+    rerunCommand: command,
+    startedAt: new Date(startedAtMs).toISOString(),
+    status,
+    targetable: false,
+    timedOut: false,
+  };
+}
+
+async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
+  const logFile = path.join(logDir, `${CLEANUP_SMOKE_NAME}.log`);
+  const result = await runShellCommand({
+    command,
+    env: baseEnv,
+    label: CLEANUP_SMOKE_NAME,
+    logFile,
+  });
+  if (result.status === 0) {
+    return undefined;
+  }
+  return {
+    command,
+    attempts: [
+      {
+        attempt: 1,
+        elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+        finishedAt: new Date().toISOString(),
+        noOutputTimedOut: result.noOutputTimedOut,
+        startedAt: new Date(startedAtMs).toISOString(),
+        status: result.status,
+        timedOut: result.timedOut,
+      },
+    ],
+    elapsedSeconds: phaseElapsedSeconds(startedAtMs),
+    finishedAt: new Date().toISOString(),
+    image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+    logFile,
+    name: CLEANUP_SMOKE_NAME,
+    noOutputTimedOut: result.noOutputTimedOut,
+    rerunCommand: command,
+    startedAt: new Date(startedAtMs).toISOString(),
+    status: result.status,
+    targetable: false,
+    timedOut: result.timedOut,
+  };
 }
 
 async function runForegroundGroup(entries, env) {
@@ -1268,6 +1351,19 @@ async function main() {
     upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
     upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
+  if (scheduledLanes.length === 0) {
+    throw new Error(
+      [
+        "resolved zero Docker lanes",
+        `profile=${profile}`,
+        `releaseChunk=${releaseChunk || "<none>"}`,
+        `releaseProfile=${releaseProfile}`,
+        `liveMode=${liveMode}`,
+        `includeOpenWebUI=${includeOpenWebUI ? "1" : "0"}`,
+        `selectedLanes=${selectedLaneNames.length > 0 ? selectedLaneNames.join(",") : "<none>"}`,
+      ].join("; "),
+    );
+  }
 
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
@@ -1456,17 +1552,58 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    await runPhase(phases, "cleanup-smoke", {}, async () => {
-      await runForeground(
-        "Run cleanup smoke after parallel lanes",
-        "pnpm test:docker:cleanup",
+    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
+    const cleanupStartedAtMs = Date.now();
+    let cleanupFailure;
+    try {
+      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+        cleanupFailure = await runCleanupSmoke(
+          baseEnv,
+          logDir,
+          cleanupSmokeCommand,
+          cleanupStartedAtMs,
+        );
+        if (cleanupFailure) {
+          throw new Error(
+            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
+          );
+        }
+      });
+    } catch (error) {
+      cleanupFailure ??= await recordCleanupSmokeFailure(
+        error,
         baseEnv,
+        logDir,
+        cleanupSmokeCommand,
+        cleanupStartedAtMs,
       );
-    });
+    }
+    if (cleanupFailure) {
+      failures.push(cleanupFailure);
+    }
   } else {
     console.log("==> Cleanup smoke after parallel lanes: skipped for selected/release lanes");
   }
   await writeTimingStore(timingStore, allResults);
+  if (failures.length > 0) {
+    await writeRunSummary(logDir, {
+      chunk: releaseChunk || undefined,
+      failures,
+      image: baseEnv.OPENCLAW_DOCKER_E2E_IMAGE,
+      images: {
+        bare: baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE,
+        functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
+      },
+      lanes: allResults,
+      phases,
+      profile,
+      selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
+      startedAt: runStartedAt,
+      status: "failed",
+    });
+    await printFailureSummary(failures, tailLines);
+    process.exit(1);
+  }
   await writeRunSummary(logDir, {
     chunk: releaseChunk || undefined,
     failures,

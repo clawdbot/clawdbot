@@ -332,11 +332,14 @@ struct ConfigPatchParams: Encodable {
 }
 
 enum SkillMutationError: LocalizedError {
+    case liveGatewayUnavailable
     case missingConfigHash
     case invalidPatchPayload
 
     var errorDescription: String? {
         switch self {
+        case .liveGatewayUnavailable:
+            "Connect a live gateway to edit agent skills."
         case .missingConfigHash:
             "Config hash missing; refresh and retry."
         case .invalidPatchPayload:

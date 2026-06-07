@@ -132,17 +132,21 @@ function inspectRaw(imageRef) {
   });
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const imageRefs = [];
   const requiredPlatforms = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--platform") {
-      const value = argv[i + 1];
-      if (!value) {
-        throw new Error("--platform requires a value");
-      }
-      requiredPlatforms.push(parsePlatform(value));
+      requiredPlatforms.push(parsePlatform(readOptionValue(argv, i, arg)));
       i += 1;
       continue;
     }

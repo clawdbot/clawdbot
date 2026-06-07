@@ -116,6 +116,17 @@ const toolCalls = choice?.message?.tool_calls;
 if (choice?.finish_reason !== "tool_calls") {
   throw new Error(`expected finish_reason tool_calls: ${JSON.stringify(body)}`);
 }
+const messageContent = choice?.message?.content;
+const hasVisibleContent =
+  (typeof messageContent === "string" && messageContent.trim().length > 0) ||
+  (Array.isArray(messageContent) && messageContent.length > 0) ||
+  (messageContent !== undefined &&
+    messageContent !== null &&
+    typeof messageContent !== "string" &&
+    !Array.isArray(messageContent));
+if (hasVisibleContent) {
+  throw new Error(`expected tool call only response: ${JSON.stringify(choice.message)}`);
+}
 if (!Array.isArray(toolCalls) || toolCalls.length !== 1) {
   throw new Error(`expected exactly one tool call: ${JSON.stringify(body)}`);
 }

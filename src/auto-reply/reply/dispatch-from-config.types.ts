@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions, SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { FormatAbortReplyText, TryFastAbortFromMessage } from "./abort.runtime-types.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { GetReplyFromConfig } from "./get-reply.types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -15,6 +16,7 @@ export type DispatchFromConfigResult = {
   observedReplyDelivery?: boolean;
   noVisibleReplyFallbackEligible?: boolean;
   beforeAgentRunBlocked?: boolean;
+  sessionMetadataChanges?: CommandSessionMetadataChange[];
 };
 
 export type DispatchFromConfigParams = {
@@ -23,6 +25,7 @@ export type DispatchFromConfigParams = {
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;
   /** Optional patch applied to the already loaded config before reply resolution. */

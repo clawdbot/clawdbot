@@ -11,6 +11,7 @@ import {
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
   REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+  renderLaunchDesktop,
   runCommand,
   startLocalSut,
   waitForLog,
@@ -154,6 +155,15 @@ describe("telegram user Crabbox proof log polling", () => {
 
     expect(message).toContain("recent failure");
     expect(message).not.toContain("old-secret");
+  });
+
+  it("bounds remote Telegram Desktop launch diagnostics", () => {
+    const script = renderLaunchDesktop();
+
+    expect(script).toContain("print_desktop_log_tail() {");
+    expect(script).toContain('tail -c 262144 "$log_file"');
+    expect(script).toContain("print_desktop_log_tail\n  exit 1");
+    expect(script).not.toContain('cat "$root/telegram-desktop.log"');
   });
 
   posixIt("kills timed-out command process groups when the leader exits first", async () => {

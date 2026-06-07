@@ -47,6 +47,17 @@ function runProbeStatus(
   }
 }
 
+function runProbeFileStatus(
+  command: string,
+  filePath: string,
+): { status: number | null; stderr: string } {
+  const result = spawnSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, command, filePath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return { status: result.status, stderr: result.stderr };
+}
+
 describe("plugin update unchanged Docker E2E", () => {
   it("seeds current plugin install ledger state before checking config stability", () => {
     const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
@@ -75,6 +86,56 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
+    expect(script).toContain("openclaw_e2e_print_log /tmp/plugin-update-output.log");
+    expect(script).toContain("openclaw_e2e_print_log /tmp/openclaw-e2e-registry.log");
+    expect(script).not.toContain("cat /tmp/plugin-update-output.log");
+    expect(script).not.toContain("cat /tmp/openclaw-e2e-registry.log");
+  });
+
+  it("bounds assert-output diagnostics to the saved command log tail", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
+    const logPath = path.join(root, "plugin-update-output.log");
+    try {
+      writeFileSync(
+        logPath,
+        `DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG\n${"filler line\n".repeat(12 * 1024)}missing marker tail`,
+        "utf8",
+      );
+
+      const result = runProbeFileStatus("assert-output", logPath);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Expected up-to-date output missing");
+      expect(result.stderr).toContain("Output tail:");
+      expect(result.stderr).toContain("missing marker tail");
+      expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG");
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects unexpected download output before a large log tail", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
+    const logPath = path.join(root, "plugin-update-output.log");
+    try {
+      writeFileSync(
+        logPath,
+        [
+          "Downloading @example/lossless-claw",
+          "filler line\n".repeat(12 * 1024),
+          "lossless-claw is up to date (0.9.0).",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = runProbeFileStatus("assert-output", logPath);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Unexpected npm download/reinstall path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("waits for the local registry process during cleanup", () => {

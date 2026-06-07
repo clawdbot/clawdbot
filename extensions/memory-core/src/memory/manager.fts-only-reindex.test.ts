@@ -21,6 +21,8 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 

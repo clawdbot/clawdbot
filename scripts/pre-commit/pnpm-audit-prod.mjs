@@ -913,22 +913,29 @@ export async function runPnpmAuditProd({
   return 1;
 }
 
-function parseArgs(argv) {
+function readSeverityValue(value, optionName) {
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   let minSeverity = MIN_SEVERITY;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--audit-level" || argument === "--min-severity") {
-      minSeverity = argv[index + 1] ?? "";
+      minSeverity = readSeverityValue(argv[index + 1], argument);
       index += 1;
       continue;
     }
     if (argument.startsWith("--audit-level=")) {
-      minSeverity = argument.slice("--audit-level=".length);
+      minSeverity = readSeverityValue(argument.slice("--audit-level=".length), "--audit-level");
       continue;
     }
     if (argument.startsWith("--min-severity=")) {
-      minSeverity = argument.slice("--min-severity=".length);
+      minSeverity = readSeverityValue(argument.slice("--min-severity=".length), "--min-severity");
       continue;
     }
     throw new Error(`Unknown argument "${argument}".`);

@@ -59,6 +59,9 @@ const allowFailing = new Set(
     .map((entry) => entry.trim())
     .filter(Boolean),
 );
+const allowDegradedReady =
+  args.includes("--allow-degraded-ready") ||
+  process.env.OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED === "1";
 const timeoutOption = optionValue(
   "--timeout-ms",
   "OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS",
@@ -86,8 +89,12 @@ function matchesExpectation(body) {
   if (expectKind === "live") {
     return body?.ok === true && body?.status === "live";
   }
-  if (body?.ready === true) {
-    return true;
+  return body?.ready === true;
+}
+
+function matchesDegradedReadyExpectation(body) {
+  if (expectKind !== "ready" || body?.ready !== false) {
+    return false;
   }
   const failing = Array.isArray(body?.failing) ? body.failing : [];
   return (
@@ -153,8 +160,10 @@ while (Date.now() - startedAt <= timeoutMs) {
       status: response.status,
       text,
     };
-    const expectationMet = matchesExpectation(body);
-    if ((response.ok || expectKind === "ready") && expectationMet) {
+    const healthyExpectationMet = response.ok && matchesExpectation(body);
+    const degradedExpectationMet =
+      allowDegradedReady && response.status === 503 && matchesDegradedReadyExpectation(body);
+    if (healthyExpectationMet || degradedExpectationMet) {
       writeJson(out, {
         body,
         elapsedMs: Date.now() - startedAt,

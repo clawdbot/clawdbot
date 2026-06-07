@@ -443,6 +443,112 @@ function collectGatewayCpuObservations(params) {
   return observations;
 }
 
+function readQaSuiteSummary(summaryPath) {
+  if (!fs.existsSync(summaryPath)) {
+    return {
+      diagnosticFailure: "qa-summary-missing",
+      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
+      summary: null,
+    };
+  }
+  try {
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+    const invalidReason = validateQaSuiteSummary(summary);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "qa-summary-invalid",
+        diagnosticDetail: invalidReason,
+        summary: null,
+      };
+    }
+    if (summary.counts.failed > 0) {
+      return {
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
+        summary,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      summary,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      summary: null,
+    };
+  }
+}
+
+function validateQaSuiteSummary(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return "QA suite summary must be a JSON object";
+  }
+  if (!Array.isArray(summary.scenarios)) {
+    return "QA suite summary missing scenarios array";
+  }
+  if (
+    !summary.counts ||
+    typeof summary.counts !== "object" ||
+    !isNonNegativeInteger(summary.counts.total) ||
+    !isNonNegativeInteger(summary.counts.passed) ||
+    !isNonNegativeInteger(summary.counts.failed)
+  ) {
+    return "QA suite summary missing numeric counts";
+  }
+  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
+    return "QA suite summary missing run metadata";
+  }
+  const statusCounts = { failed: 0, passed: 0, skipped: 0 };
+  for (const scenario of summary.scenarios) {
+    if (!scenario || typeof scenario !== "object" || Array.isArray(scenario)) {
+      return "QA suite summary scenario entries must be objects";
+    }
+    if (scenario.status === "pass") {
+      statusCounts.passed += 1;
+    } else if (scenario.status === "fail") {
+      statusCounts.failed += 1;
+    } else if (scenario.status === "skip") {
+      statusCounts.skipped += 1;
+    } else {
+      return `QA suite summary scenario has invalid status: ${String(scenario.status)}`;
+    }
+  }
+  if (summary.counts.total !== summary.scenarios.length) {
+    return `QA suite summary total count mismatch: counts.total=${summary.counts.total}, scenarios=${summary.scenarios.length}`;
+  }
+  if (summary.counts.passed !== statusCounts.passed) {
+    return `QA suite summary passed count mismatch: counts.passed=${summary.counts.passed}, passed scenarios=${statusCounts.passed}`;
+  }
+  if (summary.counts.failed !== statusCounts.failed) {
+    return `QA suite summary failed count mismatch: counts.failed=${summary.counts.failed}, failed scenarios=${statusCounts.failed}`;
+  }
+  if (
+    summary.counts.skipped !== undefined &&
+    (!isNonNegativeInteger(summary.counts.skipped) ||
+      summary.counts.skipped !== statusCounts.skipped)
+  ) {
+    return `QA suite summary skipped count mismatch: counts.skipped=${String(summary.counts.skipped)}, skipped scenarios=${statusCounts.skipped}`;
+  }
+  if (summary.counts.failed === 0) {
+    const emptyPassedScenario = summary.scenarios.find(
+      (scenario) =>
+        scenario.status === "pass" &&
+        (!Array.isArray(scenario.steps) || scenario.steps.length === 0),
+    );
+    if (emptyPassedScenario) {
+      return `QA suite summary passed scenario has no step evidence: ${String(emptyPassedScenario.name ?? "<unknown>")}`;
+    }
+  }
+  return null;
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
 export {
   collectQaBaselineRegressionObservations,
   collectGatewayCpuObservations,
@@ -450,6 +556,7 @@ export {
   buildGauntletPrebuildEnv,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
+  readQaSuiteSummary,
   schemaHasRequiredFields,
   selectPluginEntries,
 };

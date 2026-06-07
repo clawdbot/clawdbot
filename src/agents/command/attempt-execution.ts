@@ -13,6 +13,10 @@ import {
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  injectTimestamp,
+  timestampOptsFromConfig,
+} from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -553,6 +557,10 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const cliPrompt =
+      params.opts.inputProvenance?.kind === "inter_session"
+        ? effectivePrompt
+        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -601,7 +609,7 @@ export function runAgentAttempt(params: {
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,
         config: params.cfg,
-        prompt: effectivePrompt,
+        prompt: cliPrompt,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,

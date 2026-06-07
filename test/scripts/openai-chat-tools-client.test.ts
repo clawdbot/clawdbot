@@ -112,12 +112,13 @@ function runDockerRunnerAuthPreflight(root: string, env: Record<string, string> 
   });
 }
 
-function toolCallResponse() {
+function toolCallResponse(messageOverrides: Record<string, unknown> = {}) {
   return {
     choices: [
       {
         finish_reason: "tool_calls",
         message: {
+          ...messageOverrides,
           tool_calls: [
             {
               type: "function",
@@ -272,6 +273,22 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
         ok: true,
         toolName: "get_weather",
       });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("rejects chat completions responses that include content beside the tool call", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(toolCallResponse({ content: "I will call the tool now." })));
+    });
+    const port = await listen(server);
+    try {
+      const result = await runClient(port);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("expected tool call only response");
     } finally {
       server.close();
     }

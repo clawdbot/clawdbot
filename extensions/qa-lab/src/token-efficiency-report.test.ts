@@ -134,6 +134,38 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: makeLiveSummary([]),
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "No runtime parity captures were present in the suite summary.",
+    ]);
+    expect(report.rows).toEqual([]);
+    expect(report.skipReason).toBeUndefined();
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
+  });
+
+  it("keeps empty mock runtime summaries skipped as non-live estimates", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: {
+        scenarios: [],
+        run: {
+          providerMode: "mock-openai",
+          runtimePair: ["openclaw", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("skipped");
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+  });
+
   it("labels mock-estimated Codex increases as regressions without failing the live gate", () => {
     const report = buildTokenEfficiencyReport({
       summary: {

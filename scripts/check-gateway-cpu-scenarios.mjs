@@ -12,7 +12,10 @@ import {
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
-import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
+import {
+  collectGatewayCpuObservations,
+  readQaSuiteSummary,
+} from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_STARTUP_CASES = ["default", "oneInternalHook", "allInternalHooks"];
@@ -50,7 +53,7 @@ function parseArgs(argv) {
     const arg = args[index];
     const readValue = () => {
       const value = args[index + 1];
-      if (!value) {
+      if (!value || value.startsWith("--")) {
         throw new Error(`Missing value for ${arg}`);
       }
       index += 1;
@@ -127,6 +130,51 @@ function readJsonIfExists(filePath) {
     return null;
   }
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function validateStartupReport(report) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    return "startup report must be a JSON object";
+  }
+  if (!Array.isArray(report.results)) {
+    return "startup report missing results array";
+  }
+  if (report.results.length === 0) {
+    return "startup report has no measured results";
+  }
+  return null;
+}
+
+function readStartupReport(startupOutput) {
+  if (!fs.existsSync(startupOutput)) {
+    return {
+      diagnosticFailure: "startup-report-missing",
+      diagnosticDetail: `expected startup bench report at ${startupOutput}`,
+      report: null,
+    };
+  }
+  try {
+    const report = readJsonIfExists(startupOutput);
+    const invalidReason = validateStartupReport(report);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "startup-report-invalid",
+        diagnosticDetail: invalidReason,
+        report: null,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      report,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "startup-report-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      report: null,
+    };
+  }
 }
 
 function runStep(name, command, args, options = {}, params = {}) {
@@ -221,6 +269,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
   const qaOutputDir = path.join(options.outputDir, "qa-suite");
+  const qaSummaryPath = path.join(qaOutputDir, "qa-suite-summary.json");
   const qaState = options.skipQa ? null : createQaState(options.outputDir);
   if (qaState) {
     fs.mkdirSync(qaState.home, { recursive: true });
@@ -276,6 +325,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
     privateQaBuildFailed = privateQaBuild.status !== 0;
   }
 
+  let qaStep = null;
   if (!options.skipQa) {
     const qaCommand = pnpmCommand(
       [
@@ -292,15 +342,22 @@ async function runGatewayCpuScenarios(options, params = {}) {
       ],
       { cwd: repoRoot, env: qaBuildEnv },
     );
-    steps.push(
-      privateQaBuildFailed
-        ? { name: "qa suite", signal: null, status: 1 }
-        : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
-    );
+    qaStep = privateQaBuildFailed
+      ? { name: "qa suite", signal: null, status: 1 }
+      : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params);
+    steps.push(qaStep);
   }
 
-  const startup = readJsonIfExists(startupOutput);
-  const qa = readJsonIfExists(path.join(qaOutputDir, "qa-suite-summary.json"));
+  const startupReportResult = options.skipStartup ? null : readStartupReport(startupOutput);
+  const startupReportFailure =
+    steps.find((step) => step.name === "startup bench")?.status === 0
+      ? (startupReportResult?.diagnosticFailure ?? null)
+      : null;
+  const startup = startupReportResult?.report ?? null;
+  const qaSummaryResult = options.skipQa ? null : readQaSuiteSummary(qaSummaryPath);
+  const qaSummaryFailure =
+    qaStep?.status === 0 ? (qaSummaryResult?.diagnosticFailure ?? null) : null;
+  const qa = qaSummaryResult?.summary ?? null;
   const observations = collectGatewayCpuObservations({
     startup,
     qa,
@@ -311,9 +368,19 @@ async function runGatewayCpuScenarios(options, params = {}) {
     generatedAt: new Date().toISOString(),
     outputDir: options.outputDir,
     startupOutput: fs.existsSync(startupOutput) ? startupOutput : null,
-    qaSummary: fs.existsSync(path.join(qaOutputDir, "qa-suite-summary.json"))
-      ? path.join(qaOutputDir, "qa-suite-summary.json")
-      : null,
+    qaSummary: fs.existsSync(qaSummaryPath) ? qaSummaryPath : null,
+    ...(startupReportFailure
+      ? {
+          startupReportFailure,
+          startupReportFailureDetail: startupReportResult?.diagnosticDetail ?? null,
+        }
+      : {}),
+    ...(qaSummaryFailure
+      ? {
+          qaSummaryFailure,
+          qaSummaryFailureDetail: qaSummaryResult?.diagnosticDetail ?? null,
+        }
+      : {}),
     options: {
       startupCases: options.startupCases,
       qaScenarios: options.qaScenarios,
@@ -338,8 +405,20 @@ async function runGatewayCpuScenarios(options, params = {}) {
         .join(", ")}`,
     );
   }
+  if (qaSummaryFailure) {
+    console.error(`[gateway-cpu] fail QA summary: ${qaSummaryResult?.diagnosticDetail}`);
+  }
+  if (startupReportFailure) {
+    console.error(`[gateway-cpu] fail startup report: ${startupReportResult?.diagnosticDetail}`);
+  }
 
-  const exitCode = steps.some((step) => step.status !== 0) || observations.length > 0 ? 1 : 0;
+  const exitCode =
+    steps.some((step) => step.status !== 0) ||
+    observations.length > 0 ||
+    qaSummaryFailure ||
+    startupReportFailure
+      ? 1
+      : 0;
   return { exitCode, summary };
 }
 
@@ -357,7 +436,9 @@ async function main(params = {}) {
 export const testing = {
   hasPrivateQaDist,
   parseArgs,
+  readStartupReport,
   runGatewayCpuScenarios,
+  validateStartupReport,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

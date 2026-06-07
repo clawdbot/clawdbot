@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import {
   assertPathInside,
   configPath,
@@ -104,9 +105,8 @@ const authRaw = readAuthProfileStoreText(path.join(stateDir(), "agents", "main",
 if (!authRaw) {
   throw new Error("auth profile SQLite store row was not persisted");
 }
-if (!authRaw.includes("OPENAI_API_KEY")) {
-  throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
-}
-if (authRaw.includes("sk-openclaw-codex-on-demand-e2e")) {
-  throw new Error("auth profile persisted the raw OpenAI test key");
-}
+assertOpenAiEnvAuthProfileStore(authRaw, {
+  envRefMessage: "auth profile did not persist OPENAI_API_KEY env ref",
+  rawKeyMessage: "auth profile persisted the raw OpenAI test key",
+  rawKeyNeedle: "sk-openclaw-codex-on-demand-e2e",
+});

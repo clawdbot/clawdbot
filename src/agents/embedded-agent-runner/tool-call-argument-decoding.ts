@@ -51,15 +51,24 @@ export function decodeHtmlEntitiesInObject(value: unknown): unknown {
   return value;
 }
 
+const decodedToolCallArguments = new WeakSet<object>();
+
 function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
+    if (
+      typedBlock.type !== "toolCall" ||
+      typeof typedBlock.arguments !== "object" ||
+      !typedBlock.arguments
+    ) {
       return;
     }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
+    if (decodedToolCallArguments.has(typedBlock.arguments)) {
+      return;
     }
+    const decoded = decodeHtmlEntitiesInObject(typedBlock.arguments) as object;
+    decodedToolCallArguments.add(decoded);
+    typedBlock.arguments = decoded;
   });
 }
 

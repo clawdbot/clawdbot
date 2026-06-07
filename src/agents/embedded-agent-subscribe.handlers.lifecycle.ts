@@ -130,13 +130,21 @@ export function handleAgentEnd(
   }
 
   const emitLifecycleTerminal = () => {
+    const terminalStopReason =
+      ctx.state.terminalStopReason ??
+      (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
+    const terminalAborted =
+      typeof ctx.state.terminalAborted === "boolean"
+        ? ctx.state.terminalAborted
+        : ctx.params.isTerminalAborted?.();
     const terminalMeta = {
-      ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
+      ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
       ...(typeof ctx.state.providerStarted === "boolean"
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
+      ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
     };
     if (isError) {
       emitAgentEvent({

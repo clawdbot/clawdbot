@@ -53,6 +53,7 @@ class PermissionRequester internal constructor(
   private val mutex = Mutex()
   private val requestSlotsLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
+
   // ActivityResult launchers cannot be registered after start; pre-register a small pool for nested UI flows.
   private val launchers = List(4) { createPermissionRequestSlot(launcherFactory) }
 

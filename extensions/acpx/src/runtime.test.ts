@@ -115,6 +115,10 @@ function makeLeaseStore() {
         leases.set(String(lease.leaseId), lease);
       }),
       markState: vi.fn(async (leaseId: string, state: string) => {
+        if (state === "closed" || state === "lost") {
+          leases.delete(leaseId);
+          return;
+        }
         const lease = leases.get(leaseId);
         if (lease) {
           lease.state = state;
@@ -1465,6 +1469,104 @@ describe("AcpxRuntime fresh reset wrapper", () => {
               pid: 920,
               ppid: 1,
               command: 'node "/tmp/other-gateway/acpx/codex-acp-wrapper.mjs"',
+            },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed).toStrictEqual([]);
+  });
+
+  it("cleans up non-lease-aware wrapper commands through fallback close cleanup", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        pid: 920,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 920,
+              ppid: 1,
+              command: CODEX_ACP_WRAPPER_COMMAND,
+            },
+            { pid: 921, ppid: 920, command: "node child.js" },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 921, signal: "SIGTERM" },
+      { pid: 920, signal: "SIGTERM" },
+    ]);
+  });
+
+  it("uses session lease metadata for fallback close cleanup identity checks", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        openclawGatewayInstanceId: "gateway-test",
+        openclawLeaseId: "lease-record",
+        pid: 920,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 920,
+              ppid: 1,
+              command: `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} other-lease ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`,
             },
           ]),
           killProcess: vi.fn((pid, signal) => {

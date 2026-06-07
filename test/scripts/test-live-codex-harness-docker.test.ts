@@ -118,4 +118,11 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     );
     expect(script).not.toMatch(/Failed to extract accountId from token[\s\S]{0,180}exit 0/u);
   });
+
+  it("bounds Codex preflight failure diagnostics", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('tail -c 262144 "$codex_preflight_log"');
+    expect(script).not.toContain('cat "$codex_preflight_log"');
+  });
 });

@@ -2,10 +2,16 @@
  * Public SDK facade for browser profile defaults and activated profile resolution.
  */
 import path from "node:path";
-import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { BrowserConfig } from "../config/types.browser.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser-types.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+export type {
+  ResolvedBrowserConfig,
+  ResolvedBrowserProfile,
+  ResolvedBrowserTabCleanupConfig,
+} from "./browser-types.js";
 
 /** Default global browser plugin enabled state. */
 export const DEFAULT_OPENCLAW_BROWSER_ENABLED = true;
@@ -23,55 +29,6 @@ export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 /** Default upload staging directory used by browser-backed file uploads. */
 export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
-
-/** Resolved browser tab cleanup settings after defaults and config are applied. */
-export type ResolvedBrowserTabCleanupConfig = {
-  enabled: boolean;
-  idleMinutes: number;
-  maxTabsPerSession: number;
-  sweepMinutes: number;
-};
-
-/** Fully resolved browser plugin config used by browser runtime callers. */
-export type ResolvedBrowserConfig = {
-  enabled: boolean;
-  evaluateEnabled: boolean;
-  controlPort: number;
-  cdpPortRangeStart: number;
-  cdpPortRangeEnd: number;
-  cdpProtocol: "http" | "https";
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  remoteCdpTimeoutMs: number;
-  remoteCdpHandshakeTimeoutMs: number;
-  localLaunchTimeoutMs: number;
-  localCdpReadyTimeoutMs: number;
-  actionTimeoutMs: number;
-  color: string;
-  executablePath?: string;
-  headless: boolean;
-  noSandbox: boolean;
-  attachOnly: boolean;
-  defaultProfile: string;
-  profiles: Record<string, BrowserProfileConfig>;
-  tabCleanup: ResolvedBrowserTabCleanupConfig;
-  ssrfPolicy?: SsrFPolicy;
-  extraArgs: string[];
-};
-
-/** One resolved browser profile target including CDP endpoint and launch mode. */
-export type ResolvedBrowserProfile = {
-  name: string;
-  cdpPort: number;
-  cdpUrl: string;
-  cdpHost: string;
-  cdpIsLoopback: boolean;
-  userDataDir?: string;
-  color: string;
-  driver: "openclaw" | "existing-session";
-  headless?: boolean;
-  attachOnly: boolean;
-};
 
 type BrowserProfilesSurface = {
   resolveBrowserConfig: (

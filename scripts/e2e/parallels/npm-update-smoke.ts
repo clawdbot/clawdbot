@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
+  extractLastOpenClawVersionFromLog,
   makeTempDir,
   packOpenClaw,
   parsePlatformList,
@@ -1165,9 +1166,7 @@ export class NpmUpdateSmoke {
   }
 
   private async extractLastVersion(logPath: string): Promise<string> {
-    const log = await readFile(logPath, "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersionFromLog(logPath);
   }
 
   private dumpLogTail(logPath: string): void {

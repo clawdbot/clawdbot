@@ -1,6 +1,7 @@
 // Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
@@ -25,8 +26,17 @@ const agentTurnTimeoutSeconds = readPositiveIntEnv(
 );
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
+const SESSION_JSONL_LINE_MAX_BYTES = 1024 * 1024;
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
 const SESSION_FILE_LIST_LIMIT = 20;
+const SESSION_SCAN_MAX_ENTRIES = readPositiveIntEnv(
+  "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES",
+  50_000,
+);
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -52,84 +62,305 @@ function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
 }
 
-function scanFileForNeedles(file, pendingNeedles) {
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeToolCallId(value) {
+  const id = readNonEmptyString(value);
+  return id || undefined;
+}
+
+function stringifyToolResult(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stringifyToolResult(entry)).filter(Boolean).join("\n");
+  }
+  if (!isRecord(value)) {
+    return value == null ? "" : String(value);
+  }
+  const nested = value.text ?? value.content ?? value.result ?? value.output;
+  return nested === undefined ? JSON.stringify(value) : stringifyToolResult(nested);
+}
+
+function extractTranscriptText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => extractTranscriptText(entry)).filter(Boolean).join("\n");
+  }
+  if (!isRecord(value)) {
+    return value == null ? "" : String(value);
+  }
+  return extractTranscriptText(value.text ?? value.content ?? value.result ?? value.output ?? "");
+}
+
+function extractTranscriptToolCalls(message) {
+  const calls = [];
+  const content = message.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!isRecord(block)) {
+        continue;
+      }
+      const type = readNonEmptyString(block.type)?.toLowerCase();
+      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
+        continue;
+      }
+      const tool = readNonEmptyString(block.name);
+      if (!tool) {
+        continue;
+      }
+      calls.push({
+        id:
+          normalizeToolCallId(block.id) ??
+          normalizeToolCallId(block.toolCallId) ??
+          normalizeToolCallId(block.toolUseId),
+        tool,
+      });
+    }
+  }
+
+  const rawToolCalls =
+    message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
+  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
+  for (const call of toolCalls) {
+    if (!isRecord(call)) {
+      continue;
+    }
+    const functionRecord = isRecord(call.function) ? call.function : undefined;
+    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    if (!tool) {
+      continue;
+    }
+    calls.push({
+      id:
+        normalizeToolCallId(call.id) ??
+        normalizeToolCallId(call.toolCallId) ??
+        normalizeToolCallId(call.toolUseId),
+      tool,
+    });
+  }
+  return calls;
+}
+
+function isFailureLikeToolResult(params) {
+  return (
+    params.type === "tool_result_error" ||
+    params.isError === true ||
+    params.is_error === true ||
+    /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu.test(
+      params.text,
+    )
+  );
+}
+
+function extractTranscriptToolResults(message) {
+  const results = [];
+  const tool =
+    readNonEmptyString(message.toolName) ??
+    readNonEmptyString(message.tool_name) ??
+    readNonEmptyString(message.name) ??
+    readNonEmptyString(message.tool);
+  if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
+    const text = extractTranscriptText(message.content);
+    results.push({
+      id:
+        normalizeToolCallId(message.tool_call_id) ??
+        normalizeToolCallId(message.toolCallId) ??
+        normalizeToolCallId(message.toolUseId) ??
+        normalizeToolCallId(message.id),
+      ...(tool ? { tool } : {}),
+      text,
+      failure: isFailureLikeToolResult({ text, isError: message.isError, is_error: message.is_error }),
+    });
+  }
+
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return results;
+  }
+  for (const block of content) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    const type = readNonEmptyString(block.type)?.toLowerCase();
+    if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
+      continue;
+    }
+    const text = stringifyToolResult(
+      block.content ?? block.text ?? block.result ?? block.output ?? block.error ?? block.message,
+    );
+    const blockTool =
+      readNonEmptyString(block.toolName) ??
+      readNonEmptyString(block.tool_name) ??
+      readNonEmptyString(block.name) ??
+      readNonEmptyString(block.tool);
+    results.push({
+      id:
+        normalizeToolCallId(block.tool_use_id) ??
+        normalizeToolCallId(block.toolUseId) ??
+        normalizeToolCallId(block.tool_call_id) ??
+        normalizeToolCallId(block.toolCallId) ??
+        normalizeToolCallId(block.id),
+      ...(blockTool ? { tool: blockTool } : {}),
+      text,
+      failure: isFailureLikeToolResult({
+        type,
+        text,
+        isError: block.isError,
+        is_error: block.is_error,
+      }),
+    });
+  }
+  return results;
+}
+
+function resultLinksToolCall(call, result, targetCallCount) {
+  if (call.id || result.id) {
+    return Boolean(call.id && result.id && call.id === result.id);
+  }
+  if (result.tool) {
+    return result.tool === call.tool;
+  }
+  return targetCallCount === 1;
+}
+
+function createToolEvidenceTracker(toolName, expected) {
+  const calls = [];
+  return {
+    recordMessage(message) {
+      for (const call of extractTranscriptToolCalls(message)) {
+        if (call.tool === toolName) {
+          calls.push(call);
+        }
+      }
+      for (const result of extractTranscriptToolResults(message)) {
+        if (result.failure || !result.text.includes(expected)) {
+          continue;
+        }
+        if (calls.some((call) => resultLinksToolCall(call, result, calls.length))) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
+function transcriptMessageFromLine(line) {
+  try {
+    const parsed = JSON.parse(line);
+    if (!isRecord(parsed)) {
+      return undefined;
+    }
+    return isRecord(parsed.message) ? parsed.message : parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function scanFileForToolEvidence(file, toolName, expected) {
+  const tracker = createToolEvidenceTracker(toolName, expected);
   let stat;
   try {
     stat = fs.statSync(file);
   } catch {
-    return;
+    return false;
   }
-  if (!stat.isFile() || stat.size <= 0 || pendingNeedles.size === 0) {
-    return;
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
   }
 
-  const maxNeedleLength = Math.max(...Array.from(pendingNeedles, (needle) => needle.length));
-  const carryChars = Math.max(SCAN_CARRY_CHARS, maxNeedleLength - 1);
   const fd = fs.openSync(file, "r");
   try {
     const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
-    let carry = "";
+    let pendingLine = "";
     let offset = 0;
-    while (offset < stat.size && pendingNeedles.size > 0) {
+    while (offset < stat.size) {
       const bytesToRead = Math.min(buffer.length, stat.size - offset);
       const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
       if (bytesRead <= 0) {
         break;
       }
       offset += bytesRead;
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
-      for (const needle of Array.from(pendingNeedles)) {
-        if (text.includes(needle)) {
-          pendingNeedles.delete(needle);
+      const lines = (pendingLine + buffer.subarray(0, bytesRead).toString("utf8")).split(/\r?\n/u);
+      pendingLine = lines.pop() ?? "";
+      if (Buffer.byteLength(pendingLine) > SESSION_JSONL_LINE_MAX_BYTES) {
+        pendingLine = pendingLine.slice(-SCAN_CARRY_CHARS);
+      }
+      for (const line of lines) {
+        const message = transcriptMessageFromLine(line.trim());
+        if (message && tracker.recordMessage(message)) {
+          return true;
         }
       }
-      carry = text.slice(-carryChars);
+    }
+    const message = transcriptMessageFromLine(pendingLine.trim());
+    if (message && tracker.recordMessage(message)) {
+      return true;
     }
   } finally {
     fs.closeSync(fd);
   }
+  return false;
 }
 
-function scanSessionTranscripts(sessionsDir, needles) {
-  const pendingNeedles = new Set(needles);
+function scanSessionTranscripts(sessionsDir, toolName, expected) {
   const checkedFiles = [];
   let filesChecked = 0;
   let stat;
   try {
     stat = fs.statSync(sessionsDir);
   } catch {
-    return { checkedFiles, filesChecked, missingDir: true, pendingNeedles };
+    return { checkedFiles, filesChecked, found: false, missingDir: true };
   }
   if (!stat.isDirectory()) {
-    return { checkedFiles, filesChecked, missingDir: true, pendingNeedles };
+    return { checkedFiles, filesChecked, found: false, missingDir: true };
   }
 
   const pendingDirs = [sessionsDir];
-  while (pendingDirs.length > 0 && pendingNeedles.size > 0) {
+  let scannedEntries = 0;
+  while (pendingDirs.length > 0) {
     const dir = pendingDirs.pop();
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .toSorted((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        pendingDirs.push(entryPath);
-        continue;
+    const handle = fs.opendirSync(dir);
+    try {
+      let entry;
+      while ((entry = handle.readSync()) !== null) {
+        scannedEntries += 1;
+        if (scannedEntries > SESSION_SCAN_MAX_ENTRIES) {
+          throw new Error(
+            `session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} filesystem entries`,
+          );
+        }
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          pendingDirs.push(entryPath);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+          continue;
+        }
+        filesChecked += 1;
+        if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
+          checkedFiles.push(path.relative(sessionsDir, entryPath));
+        }
+        if (scanFileForToolEvidence(entryPath, toolName, expected)) {
+          return { checkedFiles, filesChecked, found: true, missingDir: false };
+        }
       }
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      filesChecked += 1;
-      if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
-        checkedFiles.push(path.relative(sessionsDir, entryPath));
-      }
-      scanFileForNeedles(entryPath, pendingNeedles);
-      if (pendingNeedles.size === 0) {
-        break;
-      }
+    } finally {
+      handle.closeSync();
     }
   }
-  return { checkedFiles, filesChecked, missingDir: false, pendingNeedles };
+  return { checkedFiles, filesChecked, found: false, missingDir: false };
 }
 
 function realPathMaybe(filePath) {
@@ -352,9 +583,17 @@ function assertAgentTurn() {
   const toolName = requireEnv("TOOL_NAME");
   const outputPath = agentOutputPath();
   const errorPath = agentErrorPath();
+  const outputStat = fs.statSync(outputPath);
+  if (outputStat.isFile() && outputStat.size > AGENT_OUTPUT_MAX_BYTES) {
+    const stdoutTail = readTextFileTail(outputPath, ERROR_DETAIL_TAIL_BYTES);
+    const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
+    throw new Error(
+      `live agent output exceeded ${AGENT_OUTPUT_MAX_BYTES} bytes:\nstdout tail=${stdoutTail}\nstderr tail=${stderrTail}`,
+    );
+  }
   const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(expected)) {
     const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
     throw new Error(
@@ -362,12 +601,12 @@ function assertAgentTurn() {
     );
   }
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const scan = scanSessionTranscripts(sessionsDir, [toolName, expected]);
-  if (scan.pendingNeedles.size > 0) {
+  const scan = scanSessionTranscripts(sessionsDir, toolName, expected);
+  if (!scan.found) {
     const checkedFiles = scan.checkedFiles.length > 0 ? scan.checkedFiles.join(", ") : "<none>";
     const missingDir = scan.missingDir ? " sessions directory was missing." : "";
     throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; missing ${Array.from(scan.pendingNeedles).join(", ")} after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
+      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
     );
   }
 }

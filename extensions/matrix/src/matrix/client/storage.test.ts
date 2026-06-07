@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
+import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
@@ -257,6 +259,23 @@ describe("matrix client storage paths", () => {
     return legacyRoot;
   }
 
+  function legacySyncCacheBody(nextBatch = "legacy-token"): string {
+    return JSON.stringify({
+      version: 1,
+      savedSync: {
+        nextBatch,
+        accountData: [],
+        roomsData: {
+          join: {},
+          invite: {},
+          leave: {},
+          knock: {},
+        },
+      },
+      cleanShutdown: true,
+    });
+  }
+
   function writeJson(rootDir: string, filename: string, value: Record<string, unknown>) {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
   }
@@ -385,7 +404,9 @@ describe("matrix client storage paths", () => {
   it("falls back to migrating the older flat matrix storage layout", async () => {
     const stateDir = setupStateDir();
     const storagePaths = resolveDefaultStoragePaths();
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, {
+      storageBody: legacySyncCacheBody("legacy-token"),
+    });
     const env = createMigrationEnv(stateDir);
 
     await maybeMigrateLegacyStorage({
@@ -395,8 +416,81 @@ describe("matrix client storage paths", () => {
 
     expectFallbackMigrationSnapshot(env);
     expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
-    expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json.migrated"))).toBe(true);
+    expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
+    const syncStore = new SqliteBackedMatrixSyncStore(storagePaths.rootDir);
+    expect(syncStore.hasSavedSync()).toBe(true);
+    await expect(syncStore.getSavedSyncToken()).resolves.toBe("legacy-token");
+  });
+
+  it("migrates the previous account-scoped sync cache into sqlite before startup", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    fs.writeFileSync(storagePaths.storagePath, legacySyncCacheBody("account-token"));
+    const env = createMigrationEnv(stateDir);
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env,
+    });
+
+    expectFallbackMigrationSnapshot(env);
+    expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
+    expect(fs.existsSync(`${storagePaths.storagePath}.migrated`)).toBe(true);
+    const syncStore = new SqliteBackedMatrixSyncStore(storagePaths.rootDir);
+    expect(syncStore.hasSavedSync()).toBe(true);
+    await expect(syncStore.getSavedSyncToken()).resolves.toBe("account-token");
+  });
+
+  it("does not overwrite existing SQLite IDB snapshot state with a stale legacy sidecar", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    const currentSnapshot = JSON.stringify([
+      {
+        name: "current",
+        version: 1,
+        stores: [],
+      },
+    ]);
+    writeMatrixIdbSnapshotJson({
+      storageRootDir: storagePaths.rootDir,
+      snapshotJson: currentSnapshot,
+      databaseCount: 1,
+    });
+    fs.writeFileSync(
+      storagePaths.idbSnapshotPath,
+      JSON.stringify([{ name: "stale", version: 1, stores: [] }]),
+    );
+    const env = createMigrationEnv(stateDir);
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env,
+    });
+
+    expectFallbackMigrationSnapshot(env);
+    expect(readMatrixIdbSnapshotJson(storagePaths.rootDir)).toBe(currentSnapshot);
+    expect(fs.existsSync(storagePaths.idbSnapshotPath)).toBe(false);
+    expect(fs.existsSync(`${storagePaths.idbSnapshotPath}.migrated`)).toBe(true);
+  });
+
+  it("ignores unrecognized account-scoped sync cache files without a migration snapshot", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    fs.writeFileSync(storagePaths.storagePath, '{"new":true}');
+    const env = createMigrationEnv(stateDir);
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env,
+    });
+
+    expect(maybeCreateMatrixMigrationSnapshotMock).not.toHaveBeenCalled();
+    expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
   });
 
   it("continues migrating whichever legacy artifact is still missing", async () => {
@@ -414,6 +508,7 @@ describe("matrix client storage paths", () => {
 
     expectFallbackMigrationSnapshot(env);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
     expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
   });
@@ -563,6 +658,41 @@ describe("matrix client storage paths", () => {
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
     expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
     expect(rotatedStoragePaths.storagePath).toBe(oldStoragePaths.storagePath);
+  });
+
+  it("prefers claimed current-token state over an empty new-token metadata root", () => {
+    const stateDir = setupStateDir();
+    const oldStoragePaths = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-old",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        currentTokenStateClaimed: true,
+        deviceId: "DEVICE123",
+      },
+    });
+    seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-new",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+
+    const rotatedStoragePaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
+    expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
   });
 
   it("does not reuse a populated older token-hash root while deviceId is unknown", () => {

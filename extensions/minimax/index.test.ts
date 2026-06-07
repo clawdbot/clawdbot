@@ -71,6 +71,30 @@ describe("minimax provider hooks", () => {
     ).toBe("native");
   });
 
+  it("defaults M3 thinking on while keeping M2.x thinking off by default", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(apiProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M3" } as never)).toMatchObject({
+      defaultLevel: "adaptive",
+    });
+    expect(
+      apiProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M2.7" } as never),
+    ).toMatchObject({
+      defaultLevel: "off",
+    });
+    expect(
+      portalProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M3" } as never),
+    ).toMatchObject({
+      defaultLevel: "adaptive",
+    });
+  });
+
   it("keeps MiniMax auth setup metadata aligned across regions", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,

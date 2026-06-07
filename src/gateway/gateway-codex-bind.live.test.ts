@@ -467,23 +467,30 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_STATE_DIR = stateDir;
-
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        timeoutMs: 90_000,
-        requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
-        clientDisplayName: "vitest-codex-bind-live",
-      });
-      const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
-      pinActivePluginChannelRegistry(channelRegistry);
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
+      let pinnedChannelRegistry:
+        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
+        | undefined;
 
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          timeoutMs: 90_000,
+          requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
+          clientDisplayName: "vitest-codex-bind-live",
+        });
+        const activeClient = client;
+        const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
+        pinActivePluginChannelRegistry(channelRegistry);
+        pinnedChannelRegistry = channelRegistry;
+
         await writePluginBindingApproval({
           homeDir: tempHome,
           pluginRoot: resolveCodexPluginRoot(),
@@ -492,7 +499,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bind-${randomUUID()}`,
           context: "bind command",
@@ -520,7 +527,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
 
         const sendCodexCommand = async (message: string, contains: string, timeoutMs = 60_000) => {
           await sendChatAndWait({
-            client,
+            client: activeClient,
             sessionKey,
             idempotencyKey: `idem-codex-command-${randomUUID()}`,
             context: message,
@@ -563,7 +570,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         const textNonce = randomBytes(4).toString("hex").toUpperCase();
         const textToken = `CODEX-BIND-${textNonce}`;
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
           context: "bound text turn",
@@ -573,7 +580,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingAccountId: accountId,
         });
         const textHistory = await waitForAssistantText({
-          client,
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: textToken,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
@@ -581,7 +588,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         expect(textHistory.matchedAssistantText).toContain(textToken);
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-image-${randomUUID()}`,
           context: "bound image turn",
@@ -599,7 +606,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           ],
         });
         const imageHistory = await waitForAssistantText({
-          client,
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: "cat",
           caseInsensitive: true,
@@ -611,21 +618,29 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");
       } finally {
-        releasePinnedPluginChannelRegistry(channelRegistry);
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
-        await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        restoreEnvVar("CODEX_HOME", previous.codexHome);
-        restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);
-        restoreEnvVar("HOME", previous.home);
-        restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreEnvVar("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreEnvVar("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreEnvVar("OPENCLAW_STATE_DIR", previous.stateDir);
+        try {
+          if (pinnedChannelRegistry) {
+            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+          }
+          clearConfigCache();
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
+          } finally {
+            await server?.close();
+          }
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreEnvVar("CODEX_HOME", previous.codexHome);
+          restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
+          restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);
+          restoreEnvVar("HOME", previous.home);
+          restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+          restoreEnvVar("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+          restoreEnvVar("OPENCLAW_SKIP_CRON", previous.skipCron);
+          restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+          restoreEnvVar("OPENCLAW_STATE_DIR", previous.stateDir);
+        }
       }
     },
     CODEX_BIND_TIMEOUT_MS,

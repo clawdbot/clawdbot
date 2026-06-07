@@ -13,6 +13,7 @@ import {
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
 
 const tempDirs: string[] = [];
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -117,6 +118,29 @@ describe("telegram user credential path handling", () => {
 });
 
 describe("telegram user credential IO", () => {
+  it("rejects oversized chunked lease payload markers before hydration", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=chunk-marker-${Date.now()}`
+    )) as {
+      parseChunkedPayloadMarker(payload: unknown): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 1,
+        chunkCount: 4097,
+      }),
+    ).toThrow("Chunked payload marker exceeds 4096 chunks.");
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 64 * 1024 * 1024 + 1,
+        chunkCount: 1,
+      }),
+    ).toThrow("Chunked payload marker exceeds 67108864 bytes.");
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {

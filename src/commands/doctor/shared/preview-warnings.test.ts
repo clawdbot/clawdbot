@@ -262,7 +262,7 @@ describe("doctor preview warnings", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       doctorFixCommand: "openclaw doctor --fix",
       env: { CODEX_HOME: codexHome, HOME: root },
     });
@@ -295,6 +295,36 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('channels.signal.allowFrom: set to ["*"]')),
     ).toBe(true);
+  });
+
+  it("warns when a normalized legacy Codex provider cannot be auto-merged", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://api.openai.com/v1",
+              params: { store: true },
+              models: [{ id: "text-embedding-3-small" }],
+            },
+            "openai-codex": {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      "models.providers.openai-codex cannot be merged automatically",
+    );
+    expect(warning).toContain("models.providers.openai.params");
+    expect(warning).toContain("Move the affected model/provider defaults manually");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {

@@ -390,11 +390,13 @@ export async function promptAndConfigureLmstudioInteractive(params: {
   promptText?: ProviderPromptText;
   note?: ProviderPromptNote;
 }): Promise<ProviderAuthResult> {
-  const promptText = params.prompter?.text ?? params.promptText;
+  const promptText = params.prompter
+    ? params.prompter.text.bind(params.prompter)
+    : params.promptText;
   if (!promptText) {
     throw new Error("LM Studio interactive setup requires a text prompter.");
   }
-  const note = params.prompter?.note ?? params.note;
+  const note = params.prompter ? params.prompter.note.bind(params.prompter) : params.note;
   const defaultBaseUrl = resolveLmstudioSetupDefaultBaseUrl();
   const baseUrlRaw = await promptText({
     message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,

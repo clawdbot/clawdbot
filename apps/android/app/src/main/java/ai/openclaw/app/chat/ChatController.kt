@@ -61,9 +61,11 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+
   // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
   private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+
   // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
 
@@ -225,6 +227,7 @@ class ChatController(
         role = "user",
         content = userContent,
         timestampMs = System.currentTimeMillis(),
+        idempotencyKey = "$runId:user",
       )
     optimisticMessagesByRunId[runId] = optimisticMessage
     _messages.value = _messages.value + optimisticMessage
@@ -350,6 +353,7 @@ class ChatController(
         )
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
       _historyLoading.value = false
@@ -422,10 +426,8 @@ class ChatController(
         }
         if (runId != null) {
           clearPendingRun(runId)
-          optimisticMessagesByRunId.remove(runId)
         } else {
-          clearPendingRuns()
-          optimisticMessagesByRunId.clear()
+          clearPendingRuns(clearOptimisticMessages = false)
         }
         pendingToolCallsById.clear()
         publishPendingToolCalls()
@@ -455,6 +457,7 @@ class ChatController(
                 sessionKey = currentSessionKey,
                 previousMessages = _messages.value,
               )
+            prunePersistedOptimisticMessages(history.messages)
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
             history.thinkingLevel
@@ -561,12 +564,14 @@ class ChatController(
     }
   }
 
-  private fun clearPendingRuns() {
+  private fun clearPendingRuns(clearOptimisticMessages: Boolean = true) {
     for ((_, job) in pendingRunTimeoutJobs) {
       job.cancel()
     }
     pendingRunTimeoutJobs.clear()
-    optimisticMessagesByRunId.clear()
+    if (clearOptimisticMessages) {
+      optimisticMessagesByRunId.clear()
+    }
     synchronized(pendingRuns) {
       pendingRuns.clear()
       _pendingRunCount.value = 0
@@ -576,6 +581,15 @@ class ChatController(
   private fun removeOptimisticMessage(runId: String) {
     val message = optimisticMessagesByRunId.remove(runId) ?: return
     _messages.value = _messages.value.filterNot { it.id == message.id }
+  }
+
+  private fun prunePersistedOptimisticMessages(incoming: List<ChatMessage>) {
+    val retained =
+      retainUnmatchedOptimisticMessages(
+        incoming = incoming,
+        optimistic = optimisticMessagesByRunId.values,
+      ).toSet()
+    optimisticMessagesByRunId.entries.removeAll { entry -> entry.value !in retained }
   }
 
   private fun parseHistory(
@@ -592,13 +606,14 @@ class ChatController(
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent) ?: emptyList()
+        val content = parseChatMessageContents(obj)
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = role,
           content = content,
           timestampMs = ts,
+          idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
         )
       }
 
@@ -674,6 +689,19 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   }
 }
 
+internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
+  obj["content"].asArrayOrNull()?.let { content ->
+    return content.mapNotNull(::parseChatMessageContent)
+  }
+  obj["content"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  obj["text"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  return emptyList()
+}
+
 internal data class MainSessionState(
   val currentSessionKey: String,
   val appliedMainSessionKey: String,
@@ -732,29 +760,41 @@ internal fun mergeOptimisticMessages(
 ): List<ChatMessage> {
   if (optimistic.isEmpty()) return incoming
 
-  val unmatchedIncoming = incoming.toMutableList()
-  val missingOptimistic =
-    optimistic.filter { message ->
-      val matchIndex =
-        unmatchedIncoming.indexOfFirst { incomingMessage ->
-          incomingMessageConsumesOptimistic(incomingMessage, message)
-        }
-      if (matchIndex >= 0) {
-        unmatchedIncoming.removeAt(matchIndex)
-        false
-      } else {
-        true
-      }
-    }
+  val missingOptimistic = retainUnmatchedOptimisticMessages(incoming = incoming, optimistic = optimistic)
   if (missingOptimistic.isEmpty()) return incoming
 
   return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
+}
+
+internal fun retainUnmatchedOptimisticMessages(
+  incoming: List<ChatMessage>,
+  optimistic: Collection<ChatMessage>,
+): List<ChatMessage> {
+  if (optimistic.isEmpty()) return emptyList()
+
+  val unmatchedIncoming = incoming.toMutableList()
+  return optimistic.filter { message ->
+    val matchIndex =
+      unmatchedIncoming.indexOfFirst { incomingMessage ->
+        incomingMessageConsumesOptimistic(incomingMessage, message)
+      }
+    if (matchIndex >= 0) {
+      unmatchedIncoming.removeAt(matchIndex)
+      false
+    } else {
+      true
+    }
+  }
 }
 
 /**
  * Message identity used only for refresh reconciliation; it avoids exposing gateway ids as UI keys.
  */
 internal fun messageIdentityKey(message: ChatMessage): String? {
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isNotEmpty()) {
+    return listOf(message.role.trim().lowercase(), idempotencyKey).joinToString(separator = "|")
+  }
   val contentKey = messageContentIdentityKey(message) ?: return null
   val timestamp = message.timestampMs?.toString().orEmpty()
   if (timestamp.isEmpty() && contentKey.isEmpty()) return null
@@ -767,6 +807,10 @@ private fun incomingMessageConsumesOptimistic(
   incoming: ChatMessage,
   optimistic: ChatMessage,
 ): Boolean {
+  val optimisticIdempotencyKey = optimistic.idempotencyKey?.trim().orEmpty()
+  if (optimisticIdempotencyKey.isNotEmpty()) {
+    return incoming.idempotencyKey?.trim() == optimisticIdempotencyKey
+  }
   if (optimisticMessageIdentityKey(incoming) != optimisticMessageIdentityKey(optimistic)) return false
   val incomingTimestamp = incoming.timestampMs ?: return false
   val optimisticTimestamp = optimistic.timestampMs ?: return true

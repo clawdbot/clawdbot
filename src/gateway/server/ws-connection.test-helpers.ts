@@ -16,6 +16,7 @@ export type GatewayWsTestSocket = EventEmitter & {
     localAddress: string;
     localPort: number;
   };
+  bufferedAmount: number;
   send: ReturnType<typeof vi.fn>;
   ping?: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -64,6 +65,7 @@ export function createGatewayWsTestSocket(
       localAddress: "127.0.0.1",
       localPort: 5678,
     },
+    bufferedAmount: 0,
     send: vi.fn((data: string, cb?: (err?: Error) => void) => {
       params.onSend?.(data);
       cb?.();

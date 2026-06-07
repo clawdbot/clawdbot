@@ -14,6 +14,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // context and caches the expensive schema projection for short bursts of tool
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
+const TOOL_CACHE_MAX_ENTRIES = 256;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
 type CachedScopedTools = {
@@ -72,6 +73,11 @@ export class McpLoopbackToolCache {
       params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
     const now = Date.now();
+    for (const [key, entry] of this.#entries) {
+      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
+        this.#entries.delete(key);
+      }
+    }
     const cached = this.#entries.get(cacheKey);
     // Config object identity is part of the cache contract so explicit gateway
     // reloads invalidate tool scope and schema without filesystem polling.
@@ -88,10 +94,12 @@ export class McpLoopbackToolCache {
       time: now,
     };
     this.#entries.set(cacheKey, nextEntry);
-    for (const [key, entry] of this.#entries) {
-      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
-        this.#entries.delete(key);
+    while (this.#entries.size > TOOL_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.#entries.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
       }
+      this.#entries.delete(oldestKey);
     }
     return nextEntry;
   }

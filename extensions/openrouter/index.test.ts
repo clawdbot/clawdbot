@@ -1,4 +1,5 @@
 // Openrouter tests cover index plugin behavior.
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
@@ -14,6 +15,64 @@ import {
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+
+function createOpenRouterDoneStream(params: { responseId: string; totalCost: number }) {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        content: [{ type: "text", text: "ok" }],
+        responseId: params.responseId,
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: params.totalCost },
+        },
+      } as never,
+    });
+  });
+  return stream;
+}
+
+function createOpenRouterAbortedStream() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({
+      type: "error",
+      reason: "aborted",
+      error: {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        content: [],
+        responseId: "gen-aborted",
+        stopReason: "aborted",
+        timestamp: Date.now(),
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
+        },
+      } as never,
+    });
+  });
+  return stream;
+}
 
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
@@ -300,6 +359,121 @@ describe("openrouter provider hooks", () => {
     expect(capturedPayload?.provider).toEqual({
       order: ["moonshot"],
     });
+  });
+
+  it("reconciles OpenRouter streamed usage with generation metadata cost", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-cost-1");
+      return new Response(JSON.stringify({ data: { total_cost: 0.0042 } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const baseStreamFn = vi.fn(() =>
+      createOpenRouterDoneStream({ responseId: "gen-cost-1", totalCost: 0.001 }),
+    );
+
+    try {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        streamFn: baseStreamFn,
+      } as never);
+      if (!wrapped) {
+        throw new Error("expected OpenRouter wrapper");
+      }
+      const stream = await wrapped(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/auto",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        { apiKey: "or-test-key" } as never,
+      );
+      const message = await stream.result();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(message.usage.cost.total).toBe(0.0042);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not fetch generation metadata for custom OpenRouter-compatible routes", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const baseStreamFn = vi.fn(() =>
+      createOpenRouterDoneStream({ responseId: "gen-custom-route", totalCost: 0.001 }),
+    );
+
+    try {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        streamFn: baseStreamFn,
+      } as never);
+      if (!wrapped) {
+        throw new Error("expected OpenRouter wrapper");
+      }
+      const stream = await wrapped(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/auto",
+          baseUrl: "https://proxy.example.test/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        { apiKey: "or-test-key" } as never,
+      );
+      const message = await stream.result();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(message.usage.cost.total).toBe(0.001);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not fetch generation metadata for aborted stream errors", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const baseStreamFn = vi.fn(() => createOpenRouterAbortedStream());
+
+    try {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        streamFn: baseStreamFn,
+      } as never);
+      if (!wrapped) {
+        throw new Error("expected OpenRouter wrapper");
+      }
+      const stream = await wrapped(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/auto",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        { apiKey: "or-test-key" } as never,
+      );
+      const message = await stream.result();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(message.stopReason).toBe("aborted");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("merges resolved OpenRouter model params into transport params", async () => {

@@ -33,6 +33,11 @@ for env_name in \
   OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS \
   OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS \
   OPENCLAW_KITCHEN_SINK_RPC_CALL_MS \
+  OPENCLAW_KITCHEN_SINK_RPC_PORT \
+  OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS \
+  OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES \
+  OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS \
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP \
   OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB \
   OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB; do
   env_value="${!env_name:-}"
@@ -61,12 +66,14 @@ wait "$docker_pid"
 run_status="$?"
 set -e
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 
 if [ "$run_status" -eq 0 ]; then
   node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
 elif [ -s "$STATS_LOG" ]; then
-  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc || true
+  if ! node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc; then
+    echo "RESOURCE_CEILING_FAILED lane=kitchen-sink-rpc primary_status=$run_status" >&2
+  fi
 fi
 
 exit "$run_status"

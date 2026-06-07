@@ -1,8 +1,7 @@
 // Memory Wiki plugin module implements import runs behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { listMemoryWikiImportRunRecords } from "./import-runs-state.js";
 
 type MemoryWikiImportRunSummary = {
   runId: string;
@@ -103,35 +102,13 @@ function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | n
   };
 }
 
-function resolveImportRunsDir(vaultRoot: string): string {
-  return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
-}
-
 export async function listMemoryWikiImportRuns(
   config: ResolvedMemoryWikiConfig,
   options?: { limit?: number },
 ): Promise<MemoryWikiImportRunsStatus> {
   const limit = Math.max(1, Math.floor(options?.limit ?? 10));
-  const importRunsDir = resolveImportRunsDir(config.vault.path);
-  const entries = await fs
-    .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: unknown) => {
-      const code = asRecord(error)?.code;
-      if (code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    });
-  const runs = (
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-        .map(async (entry) => {
-          const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
-          return normalizeImportRunSummary(JSON.parse(raw) as unknown);
-        }),
-    )
-  )
+  const runs = (await listMemoryWikiImportRunRecords(config.vault.path))
+    .map((record) => normalizeImportRunSummary(record))
     .filter((entry): entry is MemoryWikiImportRunSummary => entry !== null)
     .toSorted((left, right) => right.appliedAt.localeCompare(left.appliedAt));
 

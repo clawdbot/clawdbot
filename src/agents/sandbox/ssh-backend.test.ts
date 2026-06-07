@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 import type { SandboxConfig } from "./types.js";
 
 const sshMocks = vi.hoisted(() => ({
@@ -141,9 +142,10 @@ async function expectBackendCreationToReject(params: {
 }
 
 describe("ssh sandbox backend", () => {
-  const originalEnv = { ...process.env };
+  let envSnapshot: ReturnType<typeof captureFullEnv>;
 
   beforeEach(() => {
+    envSnapshot = captureFullEnv();
     vi.clearAllMocks();
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
     sshMocks.disposeSshSandboxSession.mockResolvedValue(undefined);
@@ -164,12 +166,7 @@ describe("ssh sandbox backend", () => {
   });
 
   afterEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
-    }
-    Object.assign(process.env, originalEnv);
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 

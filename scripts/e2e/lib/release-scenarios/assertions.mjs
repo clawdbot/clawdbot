@@ -6,6 +6,7 @@ import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
@@ -129,10 +130,14 @@ function configureMockOpenAi() {
 
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
-  const state = readStateText();
-  assert(state.includes("OPENAI_API_KEY"), "OpenAI env ref was not persisted");
-  assert(!state.includes(rawKey), "raw OpenAI key was persisted");
   assert(fs.existsSync(configPath()), "openclaw.json missing");
+  assertOpenAiEnvAuthProfileStore(readAuthProfileStoreSqliteText(), {
+    missingMessage: "OpenAI env ref was not persisted",
+    envRefMessage: "OpenAI env ref was not persisted",
+    rawKeyMessage: "raw OpenAI key was persisted",
+    rawKeyNeedle: rawKey,
+  });
+  assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
 function assertAgentTurn() {

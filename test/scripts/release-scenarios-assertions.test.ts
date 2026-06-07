@@ -197,6 +197,121 @@ describe("release scenario assertions", () => {
     }
   });
 
+  it("rejects SQLite auth profile stores without a usable OpenAI env ref", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const home = path.join(root, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    try {
+      writeJson(configPath, {
+        auth: {
+          profiles: {
+            "openai:api-key": { provider: "openai", mode: "api_key" },
+          },
+        },
+      });
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": { note: "OPENAI_API_KEY" },
+        },
+      });
+
+      const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("OpenAI env ref was not persisted");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects inline OpenAI keys in the SQLite auth profile store", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const home = path.join(root, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    try {
+      writeJson(configPath, {
+        auth: {
+          profiles: {
+            "openai:api-key": { provider: "openai", mode: "api_key" },
+          },
+        },
+      });
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-raw-key",
+          },
+        },
+      });
+
+      const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("raw OpenAI key was persisted");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects raw OpenAI keys leaked outside the SQLite auth profile store", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const home = path.join(root, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const configPath = path.join(stateDir, "openclaw.json");
+
+    try {
+      writeJson(configPath, {
+        auth: {
+          profiles: {
+            "openai:api-key": { provider: "openai", mode: "api_key" },
+          },
+        },
+        models: {
+          providers: {
+            openai: { apiKey: "sk-test-raw-key" },
+          },
+        },
+      });
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
+
+      const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("raw OpenAI key was persisted");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("passes when the installed package version matches the candidate version", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const packageRoot = path.join(root, "openclaw");

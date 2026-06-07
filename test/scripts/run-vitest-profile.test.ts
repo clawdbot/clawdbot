@@ -89,6 +89,13 @@ describe("scripts/run-vitest-profile", () => {
     });
   });
 
+  it("rejects missing profile output directories", () => {
+    expect(() => parseArgs(["runner", "--output-dir"])).toThrow("Expected --output-dir <dir>.");
+    expect(() => parseArgs(["runner", "--output-dir", "--", "--config", "custom.ts"])).toThrow(
+      "Expected --output-dir <dir>.",
+    );
+  });
+
   it("passes vitest args after a separator", () => {
     expect(parseArgs(["main", "--output-dir", "/tmp/out", "--", "--config", "custom.ts"])).toEqual({
       mode: "main",

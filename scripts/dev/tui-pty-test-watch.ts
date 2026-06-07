@@ -1,6 +1,6 @@
 // Tui Pty Test Watch script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,6 +24,8 @@ const DEFAULT_PTY_COLS = 100;
 const DEFAULT_PTY_ROWS = 30;
 const CHILD_SIGTERM_GRACE_MS = 500;
 const CHILD_SIGKILL_GRACE_MS = 5_000;
+const MIRROR_READ_CHUNK_BYTES = 1024 * 1024;
+const CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
 
 type KillableChild = {
   pid?: number;
@@ -155,16 +157,54 @@ async function createMirrorFile(mirrorPath: string): Promise<void> {
   await writeFile(mirrorPath, "", "utf8");
 }
 
-async function readNewMirrorData(mirrorPath: string, offset: number) {
-  const data = await readFile(mirrorPath);
-  const nextOffset = data.byteLength;
-  if (nextOffset < offset) {
-    return { chunk: data, offset: nextOffset };
+async function readNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  const file = await open(mirrorPath, "r");
+  try {
+    const stats = await file.stat();
+    const readOffset = stats.size < offset ? 0 : offset;
+    const availableBytes = stats.size - readOffset;
+    if (availableBytes <= 0) {
+      return { chunk: Buffer.alloc(0), offset: readOffset };
+    }
+    const bytesToRead = Math.min(availableBytes, maxChunkBytes);
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await file.read(buffer, 0, bytesToRead, readOffset);
+    return { chunk: buffer.subarray(0, bytesRead), offset: readOffset + bytesRead };
+  } finally {
+    await file.close();
   }
-  if (nextOffset === offset) {
-    return { chunk: Buffer.alloc(0), offset };
+}
+
+function appendBufferTail(current: Buffer, chunk: Buffer, maxBytes = CHILD_OUTPUT_TAIL_BYTES) {
+  if (chunk.byteLength >= maxBytes) {
+    return chunk.subarray(chunk.byteLength - maxBytes);
   }
-  return { chunk: data.subarray(offset), offset: nextOffset };
+  if (current.byteLength + chunk.byteLength <= maxBytes) {
+    return current.byteLength === 0 ? Buffer.from(chunk) : Buffer.concat([current, chunk]);
+  }
+  const keepBytes = maxBytes - chunk.byteLength;
+  return Buffer.concat([current.subarray(current.byteLength - keepBytes), chunk]);
+}
+
+async function drainNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  onChunk: (chunk: Buffer) => void,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  let nextOffset = offset;
+  for (;;) {
+    const result = await readNewMirrorData(mirrorPath, nextOffset, maxChunkBytes);
+    nextOffset = result.offset;
+    if (result.chunk.byteLength === 0) {
+      return nextOffset;
+    }
+    onChunk(result.chunk);
+  }
 }
 
 async function main(): Promise<void> {
@@ -200,8 +240,8 @@ async function main(): Promise<void> {
     },
   );
 
-  let childStdout = "";
-  let childStderr = "";
+  let childStdout = Buffer.alloc(0);
+  let childStderr = Buffer.alloc(0);
   let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";
@@ -309,10 +349,10 @@ async function main(): Promise<void> {
   }
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    childStdout += chunk.toString("utf8");
+    childStdout = appendBufferTail(childStdout, chunk);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    childStderr += chunk.toString("utf8");
+    childStderr = appendBufferTail(childStderr, chunk);
   });
 
   type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
@@ -345,10 +385,7 @@ async function main(): Promise<void> {
       await delay(sawMirrorOutput ? 25 : 250);
     }
 
-    const result = await readNewMirrorData(options.mirrorPath, mirrorOffset);
-    if (result.chunk.byteLength > 0) {
-      writeMirrorChunk(result.chunk);
-    }
+    mirrorOffset = await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
   } finally {
     if (!childExit) {
       stopChild();
@@ -368,10 +405,10 @@ async function main(): Promise<void> {
     childExit = await childFinished;
   }
 
-  if (childStdout) {
+  if (childStdout.byteLength > 0) {
     process.stdout.write(childStdout);
   }
-  if (childStderr) {
+  if (childStderr.byteLength > 0) {
     process.stderr.write(childStderr);
   }
 
@@ -393,6 +430,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
+  appendBufferTail,
   createChildStopper,
+  drainNewMirrorData,
+  readNewMirrorData,
   signalChildProcessTree,
 };

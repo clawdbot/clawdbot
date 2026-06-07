@@ -732,6 +732,14 @@
     "target": "OC Path 插件"
   },
   {
+    "source": "Parallel plugin",
+    "target": "Parallel 插件"
+  },
+  {
+    "source": "Parallel search",
+    "target": "Parallel 搜索"
+  },
+  {
     "source": "CLI reference",
     "target": "CLI 参考"
   },

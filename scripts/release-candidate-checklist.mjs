@@ -17,7 +17,7 @@ const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 
 function usage() {
-  return `Usage: pnpm release:candidate -- --tag vYYYY.M.D-beta.N [options]
+  return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
 
 Dispatches or consumes release validation runs, validates the prepared npm tarball,
 builds plugin publish plans, writes a green evidence bundle, then prints the exact

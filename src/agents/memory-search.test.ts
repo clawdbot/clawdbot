@@ -213,6 +213,24 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
   });
 
+  it("resolves explicit concrete providers", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("openai"), "main");
+
+    expect(resolved?.provider).toBe("openai");
+  });
+
+  it("resolves explicit local providers", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
+
+    expect(resolved?.provider).toBe("local");
+  });
+
+  it("resolves explicit provider-none", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("none"), "main");
+
+    expect(resolved?.provider).toBe("none");
+  });
+
   it("resolves custom provider ids through their configured api owner", () => {
     // Workspace provider aliases inherit embedding defaults from their API
     // owner while keeping the configured provider id for auth/routing.

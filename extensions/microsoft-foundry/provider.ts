@@ -4,6 +4,7 @@ import type {
   ModelProviderConfig,
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { apiKeyAuthMethod, entraIdAuthMethod } from "./auth.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
@@ -17,6 +18,40 @@ import {
   resolveFoundryModelCapabilities,
   resolveFoundryTargetProfileId,
 } from "./shared.js";
+
+type FoundryProviderHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+
+const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+
+const wrapMicrosoftFoundryStreamFn: NonNullable<FoundryProviderHooks["wrapStreamFn"]> = (ctx) => {
+  if (ctx.model?.api !== "openai-responses") {
+    return ctx.streamFn ?? null;
+  }
+
+  const baseStreamFn = ctx.streamFn;
+  if (!baseStreamFn) {
+    return wrapOpenAIResponsesStreamFn?.(ctx) ?? null;
+  }
+
+  const streamFnWithResponsesReplayIds: NonNullable<typeof ctx.streamFn> = (
+    model,
+    context,
+    options,
+  ) =>
+    baseStreamFn(model, context, {
+      ...options,
+      // Foundry validates encrypted reasoning replay against the original item id,
+      // even though its Responses endpoint does not support persisted `store`.
+      replayResponsesItemIds: true,
+    } as typeof options & { replayResponsesItemIds: true });
+
+  return (
+    wrapOpenAIResponsesStreamFn?.({
+      ...ctx,
+      streamFn: streamFnWithResponsesReplayIds,
+    }) ?? streamFnWithResponsesReplayIds
+  );
+};
 
 export function buildMicrosoftFoundryProvider(): ProviderPlugin {
   return {
@@ -174,6 +209,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         ...(compat ? { compat } : {}),
       };
     },
+    wrapStreamFn: wrapMicrosoftFoundryStreamFn,
     prepareRuntimeAuth: prepareFoundryRuntimeAuth,
   };
 }

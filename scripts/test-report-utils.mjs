@@ -39,6 +39,26 @@ export function tryReadJsonFile(filePath, fallback) {
   }
 }
 
+function validateVitestJsonReport(reportPath) {
+  if (!fs.existsSync(reportPath)) {
+    return `missing Vitest JSON report: ${reportPath}`;
+  }
+  try {
+    const report = readJsonFile(reportPath);
+    if (!report || typeof report !== "object" || Array.isArray(report)) {
+      return `invalid Vitest JSON report: ${reportPath} (report must be an object)`;
+    }
+    if (!Array.isArray(report.testResults)) {
+      return `invalid Vitest JSON report: ${reportPath} (missing testResults array)`;
+    }
+  } catch (error) {
+    return `invalid Vitest JSON report: ${reportPath} (${
+      error instanceof Error ? error.message : String(error)
+    })`;
+  }
+  return null;
+}
+
 /**
  * Runs Vitest with the JSON reporter unless an existing report was supplied.
  */
@@ -71,6 +91,12 @@ export function runVitestJsonReport({
     if (run.status !== 0) {
       process.exit(run.status ?? 1);
     }
+  }
+
+  const invalidReport = validateVitestJsonReport(resolvedReportPath);
+  if (invalidReport) {
+    console.error(`[test-report-utils] ${invalidReport}`);
+    process.exit(1);
   }
 
   return resolvedReportPath;

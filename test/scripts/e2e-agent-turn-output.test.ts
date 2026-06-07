@@ -80,6 +80,90 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
     }
   });
 
+  it("does not accept markers that only appear in error payload text", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
+    try {
+      const outputPath = join(dir, "agent.log");
+      writeFileSync(
+        outputPath,
+        JSON.stringify({
+          payloads: [
+            { isError: true, text: "OPENCLAW_E2E_OK_ERROR_PAYLOAD" },
+            { text: "regular reply without marker" },
+          ],
+        }),
+      );
+
+      expect(() =>
+        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_PAYLOAD", outputPath),
+      ).toThrow(/agent reply payload did not contain marker/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accept markers that only appear in failed result meta text", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
+    try {
+      const outputPath = join(dir, "agent.log");
+      writeFileSync(
+        outputPath,
+        JSON.stringify({
+          result: {
+            status: "error",
+            meta: { finalAssistantVisibleText: "OPENCLAW_E2E_OK_ERROR_META" },
+            payloads: [{ isError: true, text: "OPENCLAW_E2E_OK_ERROR_META" }],
+          },
+        }),
+      );
+
+      expect(() =>
+        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_ERROR_META", outputPath),
+      ).toThrow(/agent reply payload did not contain marker/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accept markers that only appear in blocked root final text", () => {
+    expect(
+      extractAgentReplyTexts(
+        JSON.stringify({
+          status: "blocked",
+          finalAssistantVisibleText: "OPENCLAW_E2E_OK_BLOCKED_META",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not accept markers mirrored into blocked run metadata", () => {
+    const marker = "OPENCLAW_E2E_OK_BLOCKED_META";
+
+    expect(
+      extractAgentReplyTexts(
+        JSON.stringify({
+          payloads: [{ isError: true, text: marker }],
+          meta: {
+            error: { message: marker },
+            finalAssistantVisibleText: marker,
+            livenessState: "blocked",
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not accept payload markers from failed result envelopes", () => {
+    expect(
+      extractAgentReplyTexts(
+        JSON.stringify({
+          payloads: [{ text: "OPENCLAW_E2E_OK_FAILED_PAYLOAD" }],
+          status: "error",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("ignores stale reply markers outside the recent output tail", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
     try {

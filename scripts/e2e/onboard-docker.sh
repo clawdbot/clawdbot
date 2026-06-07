@@ -43,12 +43,14 @@ wait "$docker_pid"
 run_status="$?"
 set -e
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 
 if [ "$run_status" -eq 0 ]; then
   node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard
   echo "E2E complete."
 elif [ -s "$STATS_LOG" ]; then
-  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard || true
+  if ! node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard; then
+    echo "RESOURCE_CEILING_FAILED lane=onboard primary_status=$run_status" >&2
+  fi
 fi
 exit "$run_status"

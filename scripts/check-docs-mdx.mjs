@@ -92,6 +92,14 @@ function parsePositiveIntegerArg(raw, label) {
   return value;
 }
 
+function readRequiredValue(argv, index, label) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${label} requires a value`);
+  }
+  return value;
+}
+
 /**
  * Parses docs MDX check arguments.
  */
@@ -103,7 +111,7 @@ export function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const part = argv[index];
     if (part === "--json-out") {
-      jsonOut = argv[index + 1] ?? "";
+      jsonOut = readRequiredValue(argv, index, "--json-out");
       index += 1;
       continue;
     }

@@ -13,8 +13,74 @@ fi
 if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1; then
   source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-container.sh"
 fi
+if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
+  docker_e2e_resource_limits_disabled() {
+    case "${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}" in
+      1 | true | TRUE | yes | YES | on | ON)
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  docker_e2e_resource_value_disabled() {
+    case "${1:-}" in
+      "" | 0 | none | NONE | off | OFF | false | FALSE)
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  docker_e2e_run_arg_present() {
+    local option="$1"
+    shift
+    local arg
+    for arg in "$@"; do
+      if [ "$arg" = "$option" ] || [[ "$arg" == "$option="* ]]; then
+        return 0
+      fi
+      case "$option:$arg" in
+        --memory:-m | --memory:-m=*)
+          return 0
+          ;;
+      esac
+    done
+    return 1
+  }
+
+  docker_e2e_docker_run_resource_args() {
+    DOCKER_E2E_RUN_RESOURCE_ARGS=()
+    if docker_e2e_resource_limits_disabled; then
+      return 0
+    fi
+
+    local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
+    local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
+    local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
+
+    if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
+      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
+    fi
+    if ! docker_e2e_resource_value_disabled "$cpus" && ! docker_e2e_run_arg_present --cpus "$@"; then
+      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
+    fi
+    if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
+    fi
+  }
+fi
 if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
+    if [ "${1:-}" = "run" ]; then
+      shift
+      docker_e2e_docker_run_resource_args "$@"
+      if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+        docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+        return
+      fi
+      set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    fi
     if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
       docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
       return
@@ -158,13 +224,115 @@ docker_e2e_run_with_harness() {
   local run_status=0
   local cid_dir
   local cidfile
+  local docker_run_pid=""
+  local harness_stdin_fd=""
+  local cleanup_done=0
+  local previous_int_trap
+  local previous_term_trap
+  local previous_hup_trap
   cid_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-container.XXXXXX")"
   cidfile="$cid_dir/container.cid"
-  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" ||
-    run_status="$?"
-  docker_e2e_cleanup_container_cidfile "$cidfile"
-  rmdir "$cid_dir" 2>/dev/null || true
-  docker_e2e_cleanup_package_mount_args
+  previous_int_trap="$(trap -p INT || true)"
+  previous_term_trap="$(trap -p TERM || true)"
+  previous_hup_trap="$(trap -p HUP || true)"
+  restore_harness_traps() {
+    if [ -n "$previous_int_trap" ]; then
+      eval "$previous_int_trap"
+    else
+      trap - INT
+    fi
+    if [ -n "$previous_term_trap" ]; then
+      eval "$previous_term_trap"
+    else
+      trap - TERM
+    fi
+    if [ -n "$previous_hup_trap" ]; then
+      eval "$previous_hup_trap"
+    else
+      trap - HUP
+    fi
+  }
+  docker_e2e_harness_descendant_pids() {
+    local parent_pid="$1"
+    local child_pid
+    for child_pid in $(pgrep -P "$parent_pid" 2>/dev/null || true); do
+      docker_e2e_harness_descendant_pids "$child_pid"
+      printf '%s\n' "$child_pid"
+    done
+  }
+  terminate_harness_docker_run() {
+    [ -n "$docker_run_pid" ] || return 0
+    kill -0 "$docker_run_pid" 2>/dev/null || return 0
+    local descendant_pids
+    descendant_pids="$(docker_e2e_harness_descendant_pids "$docker_run_pid")"
+    if [ -n "$descendant_pids" ]; then
+      kill -TERM $descendant_pids 2>/dev/null || true
+    fi
+    kill -TERM "$docker_run_pid" 2>/dev/null || true
+    local grace_seconds="${OPENCLAW_DOCKER_E2E_CONTAINER_TERM_GRACE_SECONDS:-10}"
+    if ! [[ "$grace_seconds" =~ ^[0-9]+$ ]] || [ "$grace_seconds" -lt 1 ]; then
+      grace_seconds="10"
+    else
+      grace_seconds="$((10#$grace_seconds))"
+    fi
+    local wait_attempt
+    for wait_attempt in $(seq 1 "$((grace_seconds * 10))"); do
+      if ! kill -0 "$docker_run_pid" 2>/dev/null; then
+        return 0
+      fi
+      /bin/sleep 0.1
+    done
+    descendant_pids="$(docker_e2e_harness_descendant_pids "$docker_run_pid")"
+    if [ -n "$descendant_pids" ]; then
+      kill -KILL $descendant_pids 2>/dev/null || true
+    fi
+    kill -KILL "$docker_run_pid" 2>/dev/null || true
+  }
+  cleanup_harness_run() {
+    local cleanup_status="${1:-$?}"
+    local exit_after_cleanup="${2:-0}"
+    if [ "$cleanup_done" = "1" ]; then
+      if [ "$exit_after_cleanup" = "1" ]; then
+        exit "$cleanup_status"
+      fi
+      return "$cleanup_status"
+    fi
+    cleanup_done=1
+    trap - INT TERM HUP
+    terminate_harness_docker_run
+    wait "$docker_run_pid" 2>/dev/null || true
+    docker_e2e_cleanup_container_cidfile "$cidfile"
+    rmdir "$cid_dir" 2>/dev/null || true
+    docker_e2e_cleanup_package_mount_args
+    if [ -n "$harness_stdin_fd" ]; then
+      exec {harness_stdin_fd}<&-
+      harness_stdin_fd=""
+    fi
+    restore_harness_traps
+    if [ "$exit_after_cleanup" = "1" ]; then
+      exit "$cleanup_status"
+    fi
+    return "$cleanup_status"
+  }
+  trap 'cleanup_harness_run 130 1' INT
+  trap 'cleanup_harness_run 143 1' TERM
+  trap 'cleanup_harness_run 129 1' HUP
+  exec {harness_stdin_fd}<&0
+  docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
+  docker_run_pid="$!"
+  local had_errexit=0
+  case "$-" in
+    *e*)
+      had_errexit=1
+      ;;
+  esac
+  set +e
+  wait "$docker_run_pid"
+  run_status="$?"
+  if [ "$had_errexit" = "1" ]; then
+    set -e
+  fi
+  cleanup_harness_run 0
   return "$run_status"
 }
 

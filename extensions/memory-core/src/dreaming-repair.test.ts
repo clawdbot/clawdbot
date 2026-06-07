@@ -2,10 +2,26 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
+  resetMemoryCoreDreamingStateForTests,
+  writeMemoryCoreWorkspaceEntries,
+} from "./dreaming-state.js";
 
 const tempDirs: string[] = [];
+
+beforeAll(async () => {
+  await configureMemoryCoreDreamingStateForTests();
+});
+
+afterAll(() => {
+  resetMemoryCoreDreamingStateForTests();
+});
 
 async function createWorkspace(): Promise<string> {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "dreaming-repair-test-"));
@@ -147,5 +163,55 @@ describe("dreaming artifact repair", () => {
     expect(
       archivedEntries.filter((entry) => entry.startsWith("session-ingestion.json.")),
     ).not.toEqual([]);
+  });
+
+  it("clears sqlite session ingestion state when archiving session corpus", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
+    await Promise.all([
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main/session.jsonl",
+            value: {
+              lastSize: 120,
+              lastMtimeMs: 1_000,
+              lastContentHash: "hash",
+              cursorLine: 42,
+            },
+          },
+        ],
+      }),
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main:0",
+            value: { scope: "main", index: 0, hashes: ["message-hash"] },
+          },
+        ],
+      }),
+    ]);
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+
+    expect(repair.archivedSessionCorpus).toBe(true);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([]);
   });
 });

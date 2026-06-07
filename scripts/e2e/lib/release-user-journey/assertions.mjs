@@ -16,13 +16,18 @@ const SCAN_CARRY_CHARS = 256;
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 
 function clickClackHttpTimeoutMs() {
-  return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
+    5000,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS",
+  );
 }
 
 function clickClackHttpBodyMaxBytes() {
   return readPositiveInt(
     process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
     1024 * 1024,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES",
   );
 }
 
@@ -30,13 +35,19 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readPositiveInt(raw, fallback) {
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 function fileContainsText(file, needle) {

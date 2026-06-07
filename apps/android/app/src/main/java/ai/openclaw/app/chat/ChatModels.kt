@@ -8,6 +8,7 @@ data class ChatMessage(
   val role: String,
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
+  val idempotencyKey: String? = null,
 )
 
 /**

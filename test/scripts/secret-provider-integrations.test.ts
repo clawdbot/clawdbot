@@ -114,6 +114,25 @@ function writeSignaledStartupOpenClaw(root: string): string {
   return scriptPath;
 }
 
+function writeNoisySecretsConfigureOpenClaw(root: string): string {
+  const scriptPath = path.join(root, "fake-noisy-secrets-configure-openclaw.mjs");
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'secrets' && args[1] === 'configure') {",
+      "  process.stdout.write('x'.repeat(4096));",
+      "  process.exit(7);",
+      "}",
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
 function runProofHarness(
   root: string,
   fakeOpenClaw: string,
@@ -233,6 +252,165 @@ describe("secret provider integration proof harness", () => {
         delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
       } else {
         process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+    }
+  });
+
+  it("records optional proof omissions as skips instead of passes", async () => {
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=skip-${Date.now()}`);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const entry = await proof.runWithProof("PX", "optional live proof", async () =>
+        proof.skipProof("missing live credential"),
+      );
+
+      expect(entry.status).toBe("skip");
+      expect(entry.evidence).toBe("missing live credential");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("[SKIP] PX optional live proof"));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("blocks skipped secret proofs unless local rehearsals explicitly allow skips", async () => {
+    const previousAllowSkips = process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=skip-block-${Date.now()}`
+    );
+    const entries = [{ name: "PX", status: "skip", elapsedMs: 1, evidence: "missing service" }];
+
+    try {
+      delete process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+      expect(proof.collectBlockingProofResults(entries)).toEqual(entries);
+
+      process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS = "1";
+      expect(proof.collectBlockingProofResults(entries)).toEqual([]);
+    } finally {
+      if (previousAllowSkips === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS = previousAllowSkips;
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("bounds captured PTY configure output", async () => {
+    const root = makeTempDir();
+    const fakeOpenClaw = writeNoisySecretsConfigureOpenClaw(root);
+    const previousLimit = process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+    const previousEntry = process.env.OPENCLAW_ENTRY;
+    process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = "128";
+    process.env.OPENCLAW_ENTRY = fakeOpenClaw;
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=pty-output-${Date.now()}`
+      );
+
+      const error = await proof
+        .runPtySecretsConfigurePreset({
+          env: {
+            ...process.env,
+            OPENCLAW_ENTRY: fakeOpenClaw,
+          },
+        })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("secrets configure preset failed (7)");
+      expect((error as Error).message).toContain(
+        "secrets configure stdout truncated after 128 bytes",
+      );
+      expect((error as Error).message.length).toBeLessThan(600);
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+      if (previousEntry === undefined) {
+        delete process.env.OPENCLAW_ENTRY;
+      } else {
+        process.env.OPENCLAW_ENTRY = previousEntry;
+      }
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails mandatory commands that exit by signal",
+    async () => {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=signal-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "process.kill(process.pid, 'SIGTERM');",
+        ]),
+      ).rejects.toThrow("command terminated by signal (SIGTERM)");
+    },
+  );
+
+  it.each([
+    ["OPENCLAW_SECRET_PROOF_COMMAND_MS", "150ms"],
+    ["OPENCLAW_SECRET_PROOF_READY_MS", "0"],
+    ["OPENCLAW_SECRET_PROOF_OUTPUT_BYTES", "4mb"],
+    ["OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES", "4mb"],
+  ])("rejects malformed proof env limit %s=%s", async (name, value) => {
+    const previous = process.env[name];
+    process.env[name] = value;
+    try {
+      await expect(
+        import(`${pathToFileURL(proofScriptPath).href}?case=env-${name}-${Date.now()}`),
+      ).rejects.toThrow(`${name} must be a positive integer`);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previous;
+      }
+    }
+  });
+
+  it("bounds generated resolver stdin before reading the secret store", async () => {
+    const root = makeTempDir();
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const storePath = path.join(stateDir, "proof-secret-store.json");
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({ mode: "ok", calls: 0, values: { "proof/id": "ok" } }, null, 2)}\n`,
+      "utf8",
+    );
+    const previousLimit = process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES;
+    process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES = "64";
+
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=resolver-stdin-${Date.now()}`
+      );
+      const plugin = proof.writeProofPlugin({ stateDir });
+      const result = spawnSync(process.execPath, [plugin.resolverPath], {
+        cwd: plugin.pluginRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PROOF_SECRET_STORE_PATH: storePath,
+        },
+        input: JSON.stringify({ ids: ["proof/id"], padding: "x".repeat(512) }),
+        timeout: 5_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(`${result.stderr}${result.stdout}`).toContain("resolver stdin exceeded 64 bytes");
+      expect(JSON.parse(fs.readFileSync(storePath, "utf8")).calls).toBe(0);
+    } finally {
+      if (previousLimit === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES = previousLimit;
       }
     }
   });

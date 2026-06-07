@@ -45,6 +45,10 @@ type RttResult = {
 };
 
 type TelegramQaSummary = {
+  status?: string;
+  totals?: {
+    failed?: number;
+  };
   scenarios?: Array<{
     id?: string;
     rttMs?: number;
@@ -310,6 +314,47 @@ export async function runHarness(params: { env: NodeJS.ProcessEnv; harnessRoot: 
   return exitCode ?? 1;
 }
 
+function hasWarmSampleEvidence(scenario: NonNullable<TelegramQaSummary["scenarios"]>[number]) {
+  if (
+    typeof scenario.stats?.total !== "number" ||
+    scenario.stats.total < 1 ||
+    typeof scenario.stats.passed !== "number" ||
+    scenario.stats.passed < 1
+  ) {
+    return false;
+  }
+  return (
+    scenario.samples?.some(
+      (sample) =>
+        sample.status === "pass" &&
+        typeof sample.rttMs === "number" &&
+        Number.isFinite(sample.rttMs),
+    ) ?? false
+  );
+}
+
+function rttSummaryFailed(summary: TelegramQaSummary, requestedScenarios: string[]) {
+  if (summary.status !== undefined && summary.status !== "pass") {
+    return true;
+  }
+  if ((summary.totals?.failed ?? 0) > 0) {
+    return true;
+  }
+
+  const scenarios = summary.scenarios ?? [];
+  const requiredScenarioIds = ["telegram-canary", ...requestedScenarios];
+  for (const scenarioId of requiredScenarioIds) {
+    const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
+    if (!scenario || scenario.status !== "pass") {
+      return true;
+    }
+    if (scenarioId === "telegram-mentioned-message-reply" && !hasWarmSampleEvidence(scenario)) {
+      return true;
+    }
+  }
+  return scenarios.some((scenario) => scenario.status !== "pass");
+}
+
 export function buildRttResult(params: {
   artifacts: RttResult["artifacts"];
   finishedAt: Date;
@@ -321,7 +366,7 @@ export function buildRttResult(params: {
   startedAt: Date;
   version: string;
 }): RttResult {
-  const failed = (params.rawSummary.scenarios ?? []).some((scenario) => scenario.status === "fail");
+  const failed = rttSummaryFailed(params.rawSummary, params.scenarios);
   return {
     package: {
       spec: params.spec,

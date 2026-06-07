@@ -22,14 +22,19 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
+import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
   getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
+  isSmallLiveModelRef,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
@@ -47,6 +52,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { ModelRegistry } from "../llm/model-registry.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
@@ -111,6 +117,9 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  // Hosted DeepSeek V4 Flash can surface its internal tool-call sentinel
+  // instead of the readback nonce after the tool-read probe succeeds.
+  "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3.1-pro-preview",
 ]);
@@ -163,6 +172,7 @@ function providerListFromExplicitModelFilter(params: {
 
 function providerScopedModelRegistryProviders(params: {
   providerList: string[] | undefined;
+  useSmall: boolean;
   useExplicit: boolean;
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
@@ -171,7 +181,14 @@ function providerScopedModelRegistryProviders(params: {
     return params.providerList;
   }
   if (!params.useExplicit) {
-    return getHighSignalLiveModelProviders().filter((provider) =>
+    const providers = params.useSmall
+      ? [
+          ...new Set(
+            listPrioritizedSmallLiveModelRefs().map((ref) => normalizeProviderId(ref.provider)),
+          ),
+        ].toSorted((left, right) => left.localeCompare(right))
+      : getHighSignalLiveModelProviders();
+    return providers.filter((provider) =>
       params.providerFilter ? params.providerFilter.has(provider) : true,
     );
   }
@@ -179,6 +196,29 @@ function providerScopedModelRegistryProviders(params: {
     modelFilter: params.modelFilter,
     providerFilter: params.providerFilter,
   });
+}
+
+function filterGatewayLiveModelRefsByProvider(
+  refs: readonly { provider: string; id: string }[],
+  providerFilter: ReadonlySet<string> | null,
+): Array<{ provider: string; id: string }> {
+  if (!providerFilter) {
+    return [...refs];
+  }
+  const providers = new Set(
+    [...providerFilter].map((provider) => normalizeProviderId(provider)).filter(Boolean),
+  );
+  return refs.filter((ref) => providers.has(normalizeProviderId(ref.provider)));
+}
+
+function isWantedSmallGatewayLiveModel(params: {
+  model: Pick<Model, "provider" | "id">;
+  targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
+}): boolean {
+  return (
+    params.targetMatcher.matchesProvider(params.model.provider) &&
+    isSmallLiveModelRef({ provider: params.model.provider, id: params.model.id })
+  );
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -224,11 +264,15 @@ function resolveGatewayLiveMaxModels(): number {
     return Math.max(0, toInt(gatewayRaw, 0));
   }
   const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
-  const useExplicitModels = Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all";
+  const useSmallModels = rawModels === "small";
+  const useExplicitModels =
+    Boolean(rawModels) && rawModels !== "modern" && rawModels !== "all" && !useSmallModels;
   return resolveHighSignalLiveModelLimit({
     rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
     useExplicitModels,
-    defaultLimit: DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+    defaultLimit: useSmallModels
+      ? DEFAULT_SMALL_LIVE_MODEL_LIMIT
+      : DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   });
 }
 
@@ -320,6 +364,27 @@ function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
   );
 }
 
+function assertGatewayLiveCompletedSomeModels(params: {
+  label: string;
+  passedCount: number;
+  skippedCount: number;
+  timeoutSkippedCount: number;
+  total: number;
+}): void {
+  if (params.total === 0 || params.passedCount > 0) {
+    return;
+  }
+  assertGatewayLiveDidNotSkipAllDueToTimeout({
+    label: params.label,
+    skippedCount: params.skippedCount,
+    timeoutSkippedCount: params.timeoutSkippedCount,
+    total: params.total,
+  });
+  throw new Error(
+    `[${params.label}] completed zero successful live model run(s) across ${params.total} selected model(s); skipped=${params.skippedCount}. Live proof must exercise at least one model.`,
+  );
+}
+
 function formatGatewayLiveFilterSet(filter: ReadonlySet<string> | null): string {
   if (!filter || filter.size === 0) {
     return "all";
@@ -333,6 +398,7 @@ function assertGatewayLiveSelectedSomeModels(params: {
   modelFilter: ReadonlySet<string> | null;
   providerFilter: ReadonlySet<string> | null;
   total: number;
+  useSmall: boolean;
   useExplicit: boolean;
   wantedCount: number;
 }): void {
@@ -348,9 +414,29 @@ function assertGatewayLiveSelectedSomeModels(params: {
   ) {
     return;
   }
-  const mode = params.useExplicit ? "explicit" : "high-signal";
+  const mode = params.useExplicit ? "explicit" : params.useSmall ? "small" : "high-signal";
   throw new Error(
     `[${params.label}] selected no ${mode} live models for providers=${formatGatewayLiveFilterSet(params.providerFilter)} models=${formatGatewayLiveFilterSet(params.modelFilter)} from ${params.total} registry model(s); update the live model selection or pass explicit live model refs.`,
+  );
+}
+
+function assertGatewayLiveHasRunnableCandidates(params: {
+  candidatesCount: number;
+  label: string;
+  skipped: Array<{ model: string; error: string }>;
+}): void {
+  if (params.candidatesCount > 0) {
+    return;
+  }
+  const preview = params.skipped.length > 0 ? `:\n${formatFailurePreview(params.skipped, 8)}` : ".";
+  throw new Error(
+    `[${params.label}] selected no runnable live model candidates with usable credentials; skipped ${params.skipped.length} candidate(s)${preview}`,
+  );
+}
+
+function failGatewayLiveStartupCoverage(params: { label: string; reason: string }): never {
+  throw new Error(
+    `[${params.label}] gateway startup failed before live model coverage: ${params.reason}`,
   );
 }
 
@@ -848,6 +934,32 @@ describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   });
 });
 
+describe("assertGatewayLiveCompletedSomeModels", () => {
+  it("allows live sweeps with at least one successful model run", () => {
+    expect(() =>
+      assertGatewayLiveCompletedSomeModels({
+        label: "all-models",
+        passedCount: 1,
+        skippedCount: 4,
+        timeoutSkippedCount: 0,
+        total: 5,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails live sweeps with no successful model runs", () => {
+    expect(() =>
+      assertGatewayLiveCompletedSomeModels({
+        label: "all-models",
+        passedCount: 0,
+        skippedCount: 2,
+        timeoutSkippedCount: 0,
+        total: 2,
+      }),
+    ).toThrow(/completed zero successful live model run/);
+  });
+});
+
 describe("assertGatewayLiveSelectedSomeModels", () => {
   it("allows unfiltered sweeps with no high-signal models", () => {
     expect(() =>
@@ -857,6 +969,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: null,
         total: 0,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
@@ -871,6 +984,7 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: new Set(["openai"]),
         total: 42,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
@@ -885,10 +999,44 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
         modelFilter: null,
         providerFilter: new Set(["minimax", "minimax-portal"]),
         total: 0,
+        useSmall: false,
         useExplicit: false,
         wantedCount: 0,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("assertGatewayLiveHasRunnableCandidates", () => {
+  it("fails selected sweeps when auth lookup leaves no runnable candidates", () => {
+    expect(() =>
+      assertGatewayLiveHasRunnableCandidates({
+        candidatesCount: 0,
+        label: "all-models",
+        skipped: [{ model: "openai/gpt-5.5", error: "missing auth profile" }],
+      }),
+    ).toThrow(/selected no runnable live model candidates/);
+  });
+
+  it("allows selected sweeps with runnable candidates", () => {
+    expect(() =>
+      assertGatewayLiveHasRunnableCandidates({
+        candidatesCount: 1,
+        label: "all-models",
+        skipped: [],
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("failGatewayLiveStartupCoverage", () => {
+  it("fails startup timeouts instead of treating them as skipped live coverage", () => {
+    expect(() =>
+      failGatewayLiveStartupCoverage({
+        label: "all-models",
+        reason: "probe timeout after 90000ms (all-models: gateway-start)",
+      }),
+    ).toThrow(/gateway startup failed before live model coverage/);
   });
 });
 
@@ -932,6 +1080,14 @@ describe("resolveGatewayLiveMaxModels", () => {
     expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
   });
 
+  it("defaults small gateway sweeps to the curated small-model cap", () => {
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "small";
+    delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
+    delete process.env.OPENCLAW_LIVE_MAX_MODELS;
+
+    expect(resolveGatewayLiveMaxModels()).toBe(DEFAULT_SMALL_LIVE_MODEL_LIMIT);
+  });
+
   it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
     process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.5,anthropic/claude-opus-4-6";
     delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
@@ -966,6 +1122,24 @@ function createExplicitLiveFallbackModel(provider: string, id: string): Model {
   };
 }
 
+function createGatewayLiveTestRegistry(overrides: Partial<ModelRegistry>): ModelRegistry {
+  return {
+    find() {
+      return undefined;
+    },
+    getAll() {
+      return [];
+    },
+    getAvailable() {
+      return [];
+    },
+    hasConfiguredAuth() {
+      return true;
+    },
+    ...overrides,
+  };
+}
+
 describe("resolveExplicitLiveModelCandidates", () => {
   it("uses targeted registry lookup for explicit provider/model filters", () => {
     const model = createGatewayLiveTestModel("xai", "grok-4.3");
@@ -975,7 +1149,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("xai");
           expect(modelId).toBe("grok-4.3");
@@ -984,7 +1158,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["xai/grok-4.3"]),
       providerFilter: new Set(["xai"]),
       targetMatcher: matcher,
@@ -1001,7 +1175,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("google");
           expect(modelId).toBe("gemini-3.1-pro-preview");
@@ -1010,7 +1184,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["google/gemini-3-pro-preview"]),
       providerFilter: new Set(["google"]),
       targetMatcher: matcher,
@@ -1026,7 +1200,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       env: {},
     });
     const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: {
+      modelRegistry: createGatewayLiveTestRegistry({
         find(provider, modelId) {
           expect(provider).toBe("openai");
           expect(modelId).toBe("gpt-5.5");
@@ -1035,7 +1209,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
         getAll() {
           throw new Error("explicit model lookup should not enumerate registry");
         },
-      },
+      }),
       modelFilter: new Set(["openai/gpt-5.5"]),
       providerFilter: new Set(["openai"]),
       targetMatcher: matcher,
@@ -1057,14 +1231,14 @@ describe("resolveExplicitLiveModelCandidates", () => {
 
     expect(
       resolveExplicitLiveModelCandidates({
-        modelRegistry: {
+        modelRegistry: createGatewayLiveTestRegistry({
           find() {
             throw new Error("ambiguous model-only lookup should not use direct find");
           },
           getAll() {
             return [];
           },
-        },
+        }),
         modelFilter: new Set(["grok-4.3"]),
         providerFilter: null,
         targetMatcher: matcher,
@@ -1078,6 +1252,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: false,
         modelFilter: null,
         providerFilter: null,
@@ -1089,6 +1264,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: false,
         modelFilter: null,
         providerFilter: new Set(["openai", "not-high-signal"]),
@@ -1096,10 +1272,65 @@ describe("providerScopedModelRegistryProviders", () => {
     ).toEqual(["openai"]);
   });
 
+  it("uses curated small-model providers for small sweeps", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useSmall: true,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: null,
+      }),
+    ).toEqual(["lmstudio", "ollama", "openrouter", "sglang", "vllm", "zai"]);
+  });
+
+  it("intersects small gateway sweeps with provider filters", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useSmall: true,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: new Set(["ollama", "openai"]),
+      }),
+    ).toEqual(["ollama"]);
+  });
+
+  it("filters prioritized small refs before dynamic lookup", () => {
+    expect(
+      filterGatewayLiveModelRefsByProvider(
+        listPrioritizedSmallLiveModelRefs(),
+        new Set(["ollama"]),
+      ),
+    ).toEqual([{ provider: "ollama", id: "gemma3:4b" }]);
+  });
+
+  it("does not count small models outside a provider-scoped gateway sweep", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["ollama"]),
+      modelFilter: null,
+      env: {},
+    });
+
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("openrouter", "qwen/qwen3.5-9b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(false);
+    expect(
+      isWantedSmallGatewayLiveModel({
+        model: createGatewayLiveTestModel("ollama", "gemma3:4b"),
+        targetMatcher: matcher,
+      }),
+    ).toBe(true);
+  });
+
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
         providerFilter: null,
@@ -1111,6 +1342,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["gpt-5.2"]),
         providerFilter: new Set(["openai"]),
@@ -1122,6 +1354,7 @@ describe("providerScopedModelRegistryProviders", () => {
     expect(
       providerScopedModelRegistryProviders({
         providerList: undefined,
+        useSmall: false,
         useExplicit: true,
         modelFilter: new Set(["gpt-5.2"]),
         providerFilter: null,
@@ -1408,6 +1641,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
+    { modelKey: "deepinfra/deepseek-ai/DeepSeek-V4-Flash", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
@@ -2095,10 +2329,7 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type LiveModelRegistry = {
-  find(provider: string, modelId: string): Model | null | undefined;
-  getAll(): Array<Model>;
-};
+type LiveModelRegistry = ModelRegistry;
 
 function toGatewayLiveModel(params: {
   provider: string;
@@ -2196,6 +2427,12 @@ function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry 
     },
     getAll() {
       return models;
+    },
+    getAvailable() {
+      return models;
+    },
+    hasConfiguredAuth() {
+      return true;
     },
   };
 }
@@ -2675,41 +2912,41 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
   try {
-    const port = await withGatewayLiveProbeTimeout(
-      getFreeGatewayPort(),
-      `${params.label}: gateway-port`,
-    );
-    server = await withGatewayLiveProbeTimeout(
-      startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      }),
-      `${params.label}: gateway-start`,
-    );
+    try {
+      const port = await withGatewayLiveProbeTimeout(
+        getFreeGatewayPort(),
+        `${params.label}: gateway-port`,
+      );
+      server = await withGatewayLiveProbeTimeout(
+        startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        }),
+        `${params.label}: gateway-start`,
+      );
 
-    client = await withGatewayLiveProbeTimeout(
-      connectClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-      }),
-      `${params.label}: gateway-connect`,
-    );
-  } catch (error) {
-    const message = String(error);
-    if (isGatewayLiveProbeTimeout(message)) {
-      logProgress(`[${params.label}] skip (gateway startup timeout)`);
-      return;
+      client = await withGatewayLiveProbeTimeout(
+        connectClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+        }),
+        `${params.label}: gateway-connect`,
+      );
+    } catch (error) {
+      const message = String(error);
+      if (isGatewayLiveProbeTimeout(message)) {
+        failGatewayLiveStartupCoverage({ label: params.label, reason: message });
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  if (!server || !client) {
-    logProgress(`[${params.label}] skip (gateway startup incomplete)`);
-    return;
-  }
-
-  try {
+    if (!server || !client) {
+      failGatewayLiveStartupCoverage({
+        label: params.label,
+        reason: "gateway server/client did not initialize",
+      });
+    }
     logProgress(
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
@@ -2722,6 +2959,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
     }
     const failures: Array<{ model: string; error: string }> = [];
+    let passedCount = 0;
     let skippedCount = 0;
     let timeoutSkippedCount = 0;
     const total = params.candidates.length;
@@ -3139,6 +3377,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             skippedCount += 1;
             break;
           }
+          passedCount += 1;
           logProgress(`${progressLabel}: done`);
           break;
         } catch (err) {
@@ -3337,20 +3576,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `gateway live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
       );
     }
-    if (skippedCount === total) {
-      assertGatewayLiveDidNotSkipAllDueToTimeout({
-        label: params.label,
-        skippedCount,
-        timeoutSkippedCount,
-        total,
-      });
-      logProgress(`[${params.label}] skipped all models (no runnable profiles or provider drift)`);
-    }
+    assertGatewayLiveCompletedSomeModels({
+      label: params.label,
+      passedCount,
+      skippedCount,
+      timeoutSkippedCount,
+      total,
+    });
   } finally {
     clearRuntimeConfigSnapshot();
     restoreProductionEnvForLiveRun(runtimeEnv);
-    client.stop();
-    await server.close({ reason: "live test complete" });
+    client?.stop();
+    if (server) {
+      await server.close({ reason: "live test complete" });
+    }
     await fs.rm(toolProbePath, { force: true });
     // Give the filesystem a short retry window while agent/runtime teardown
     // releases handles inside these temporary live-test directories.
@@ -3362,16 +3601,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 
-    process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-    process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-    process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-    process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
-    process.env.OPENCLAW_DISABLE_BONJOUR = previous.disableBonjour;
-    process.env.OPENCLAW_LOG_LEVEL = previous.logLevel;
-    process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
-    process.env.OPENCLAW_STATE_DIR = previous.stateDir;
+    restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
+    restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
+    restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+    restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+    restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
+    restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+    restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
+    restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
+    restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
+    restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
   }
 }
 
@@ -3402,10 +3641,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
-        const useExplicit = Boolean(rawModels) && !useModern;
+        const useSmall = rawModels === "small";
+        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
         const filter = useExplicit ? parseFilter(rawModels) : null;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
+          useSmall,
           useExplicit,
           modelFilter: filter,
           providerFilter: PROVIDERS,
@@ -3439,6 +3680,30 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
         }
+        if (useSmall) {
+          const augmented = await withGatewayLiveSetupTimeout(
+            appendPrioritizedDynamicLiveModels({
+              models: all,
+              config: cfg,
+              agentDir,
+              workspaceDir,
+              env: process.env,
+              modelRegistry,
+              refs: filterGatewayLiveModelRefsByProvider(
+                listPrioritizedSmallLiveModelRefs(),
+                PROVIDERS,
+              ),
+            }),
+            "[all-models] load dynamic small model refs",
+          );
+          if (augmented.added.length > 0) {
+            logProgress(
+              `[all-models] loaded ${augmented.added.length} prioritized dynamic small model refs`,
+            );
+            all = augmented.models;
+            modelRegistry = createStaticLiveModelRegistry(all);
+          }
+        }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
           providerFilter: PROVIDERS,
@@ -3457,24 +3722,27 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         if (!wanted) {
           wanted = filter
             ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
-            : all.filter(
-                (m) =>
-                  !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-                    provider: m.provider,
-                    useExplicitModels: useExplicit,
-                    providerFilter: PROVIDERS,
-                    config: cfg,
-                    env: process.env,
-                  }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
-              );
+            : useSmall
+              ? all.filter((m) => isWantedSmallGatewayLiveModel({ model: m, targetMatcher }))
+              : all.filter(
+                  (m) =>
+                    !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                      provider: m.provider,
+                      useExplicitModels: useExplicit,
+                      providerFilter: PROVIDERS,
+                      config: cfg,
+                      env: process.env,
+                    }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+                );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
         assertGatewayLiveSelectedSomeModels({
-          allowProviderDriftSkip: useModern,
+          allowProviderDriftSkip: useModern || useSmall,
           label: "all-models",
           modelFilter: filter,
           providerFilter: PROVIDERS,
           total: all.length,
+          useSmall,
           useExplicit,
           wantedCount: wanted.length,
         });
@@ -3522,16 +3790,22 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               `[all-models] auth lookup skipped candidates:\n${formatFailurePreview(skipped, 8)}`,
             );
           }
-          logProgress("[all-models] no API keys found; skipping");
-          return;
         }
-        const selectedCandidates = selectHighSignalLiveItems(
+        assertGatewayLiveHasRunnableCandidates({
+          candidatesCount: candidates.length,
+          label: "all-models",
+          skipped,
+        });
+        const selectCandidates = useSmall ? selectSmallLiveItems : selectHighSignalLiveItems;
+        const selectedCandidates = selectCandidates(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
           (model) => ({ provider: model.provider, id: model.id }),
           (model) => model.provider,
         );
-        logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
+        logProgress(
+          `[all-models] selection=${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"}`,
+        );
         if (selectedCandidates.length < candidates.length) {
           logProgress(
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
@@ -3546,7 +3820,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           label: "all-models",
           cfg,
           candidates: selectedCandidates,
-          allowNotFoundSkip: useModern,
+          allowNotFoundSkip: useModern || useSmall,
           extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
           extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
           thinkingLevel: THINKING_LEVEL,
@@ -3606,79 +3880,81 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    const cfg = getRuntimeConfig();
-    await ensureOpenClawModelsJson(cfg);
-
-    const agentDir = resolveDefaultAgentDir(cfg);
-    const authStorage = discoverAuthStorage(agentDir);
-    const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
-    const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
-
-    if (!anthropic || !zai) {
-      return;
-    }
-    try {
-      await getApiKeyForModel({
-        model: anthropic,
-        cfg,
-        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-      });
-      await getApiKeyForModel({
-        model: zai,
-        cfg,
-        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-      });
-    } catch {
-      return;
-    }
-
-    const agentId = "dev";
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const nonceA = randomUUID();
-    const nonceB = randomUUID();
-    const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
-    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
-
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let client: GatewayClient | undefined;
+    let toolProbePath: string | undefined;
     try {
-      const port = await withGatewayLiveProbeTimeout(
-        getFreeGatewayPort(),
-        "zai-fallback: gateway-port",
-      );
-      server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token },
-          controlUiEnabled: false,
-        }),
-        "zai-fallback: gateway-start",
-      );
+      const cfg = getRuntimeConfig();
+      await ensureOpenClawModelsJson(cfg);
 
-      client = await withGatewayLiveProbeTimeout(
-        connectClient({
-          url: `ws://127.0.0.1:${port}`,
-          token,
-        }),
-        "zai-fallback: gateway-connect",
-      );
-    } catch (error) {
-      const message = String(error);
-      if (isGatewayLiveProbeTimeout(message)) {
-        logProgress("[zai-fallback] skip (gateway startup timeout)");
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
+      const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
+
+      if (!anthropic || !zai) {
         return;
       }
-      throw error;
-    }
+      try {
+        await getApiKeyForModel({
+          model: anthropic,
+          cfg,
+          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+        });
+        await getApiKeyForModel({
+          model: zai,
+          cfg,
+          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+        });
+      } catch {
+        return;
+      }
 
-    if (!server || !client) {
-      logProgress("[zai-fallback] skip (gateway startup incomplete)");
-      return;
-    }
+      const agentId = "dev";
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const nonceA = randomUUID();
+      const nonceB = randomUUID();
+      toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
+      await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    try {
+      try {
+        const port = await withGatewayLiveProbeTimeout(
+          getFreeGatewayPort(),
+          "zai-fallback: gateway-port",
+        );
+        server = await withGatewayLiveProbeTimeout(
+          startGatewayServer(port, {
+            bind: "loopback",
+            auth: { mode: "token", token },
+            controlUiEnabled: false,
+          }),
+          "zai-fallback: gateway-start",
+        );
+
+        client = await withGatewayLiveProbeTimeout(
+          connectClient({
+            url: `ws://127.0.0.1:${port}`,
+            token,
+          }),
+          "zai-fallback: gateway-connect",
+        );
+      } catch (error) {
+        const message = String(error);
+        if (isGatewayLiveProbeTimeout(message)) {
+          failGatewayLiveStartupCoverage({ label: "zai-fallback", reason: message });
+        }
+        throw error;
+      }
+
+      if (!server || !client) {
+        failGatewayLiveStartupCoverage({
+          label: "zai-fallback",
+          reason: "gateway server/client did not initialize",
+        });
+      }
+
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
       await withGatewayLiveSessionControlTimeout(
@@ -3747,16 +4023,20 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     } finally {
       clearRuntimeConfigSnapshot();
       restoreProductionEnvForLiveRun(runtimeEnv);
-      client.stop();
-      await server.close({ reason: "live test complete" });
-      await fs.rm(toolProbePath, { force: true });
+      client?.stop();
+      if (server) {
+        await server.close({ reason: "live test complete" });
+      }
+      if (toolProbePath) {
+        await fs.rm(toolProbePath, { force: true });
+      }
 
-      process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-      process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-      process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
+      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
+      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
+      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
     }
   }, 180_000);
 });

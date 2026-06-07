@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   getDefaultRedactPatterns,
   redactSecrets,
@@ -14,19 +14,17 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
-const originalEnv = captureEnv(["OPENCLAW_CONFIG_PATH"]);
 let tempDirs: string[] = [];
 
-function writeConfig(source: string): void {
+function writeConfig(source: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
   tempDirs.push(dir);
   const configPath = path.join(dir, "openclaw.json");
   fs.writeFileSync(configPath, source);
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  return configPath;
 }
 
 afterEach(() => {
-  originalEnv.restore();
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -524,14 +522,16 @@ describe("redactSensitiveText", () => {
   });
 
   it("honors logging redaction settings from the active config path", () => {
-    writeConfig(`{
+    const configPath = writeConfig(`{
       logging: {
         redactSensitive: "off",
       },
     }`);
 
-    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-1234567890abcdef",
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+      expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+        "OPENAI_API_KEY=sk-1234567890abcdef",
+      ),
     );
   });
 
@@ -573,13 +573,17 @@ describe("redactSensitiveText", () => {
   });
 
   it("keeps configured redaction patterns active for text outside default markers", () => {
-    writeConfig(`{
+    const configPath = writeConfig(`{
       logging: {
         redactPatterns: ["/internal-\\\\d+/g"],
       },
     }`);
 
-    expect(redactSensitiveText("ticket internal-12345 should hide")).toBe("ticket *** should hide");
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+      expect(redactSensitiveText("ticket internal-12345 should hide")).toBe(
+        "ticket *** should hide",
+      ),
+    );
   });
 
   it("redacts built-in query parameters after the default prefilter", () => {

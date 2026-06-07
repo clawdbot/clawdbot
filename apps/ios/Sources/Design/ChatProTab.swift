@@ -6,6 +6,7 @@ struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: OpenClawChatViewModel?
+    @State private var viewModelUsesAppleReviewDemoTransport = false
 
     var body: some View {
         NavigationStack {
@@ -24,8 +25,10 @@ struct ChatProTab: View {
                             assistantAvatarTint: OpenClawBrand.accent,
                             showsAssistantAvatars: false,
                             composerChrome: .clean,
-                            messagePlaceholder: "Message \(self.agentDisplayName)...",
+                            isComposerEnabled: self.gatewayConnected,
+                            messagePlaceholder: self.messagePlaceholder,
                             talkControl: self.talkControl)
+                            .id(ObjectIdentifier(viewModel))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         ProCard {
@@ -41,7 +44,9 @@ struct ChatProTab: View {
                         Spacer()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .navigationBarHidden(true)
         }
         .task {
@@ -49,6 +54,10 @@ struct ChatProTab: View {
         }
         .onChange(of: self.appModel.chatSessionKey) { _, _ in
             self.syncChatViewModel()
+        }
+        .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
+            self.syncChatViewModel()
+            self.viewModel?.refresh()
         }
         .onChange(of: self.appModel.isOperatorGatewayConnected) { _, connected in
             guard connected else { return }
@@ -99,10 +108,29 @@ struct ChatProTab: View {
 
     private func syncChatViewModel() {
         let sessionKey = self.appModel.chatSessionKey
+        let usesDemoTransport = self.appModel.isAppleReviewDemoModeEnabled
         guard let viewModel else {
+            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                transport: usesDemoTransport
+                    ? AppleReviewDemoChatTransport()
+                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
+                onSessionChanged: { sessionKey in
+                    self.appModel.focusChatSession(sessionKey)
+                },
+                diagnosticsLog: { message in
+                    GatewayDiagnostics.log(message)
+                })
+            return
+        }
+        if self.viewModelUsesAppleReviewDemoTransport != usesDemoTransport {
+            self.viewModelUsesAppleReviewDemoTransport = usesDemoTransport
+            self.viewModel = OpenClawChatViewModel(
+                sessionKey: sessionKey,
+                transport: usesDemoTransport
+                    ? AppleReviewDemoChatTransport()
+                    : IOSGatewayChatTransport(gateway: self.appModel.operatorSession),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -112,7 +140,7 @@ struct ChatProTab: View {
             return
         }
         guard viewModel.sessionKey != sessionKey else { return }
-        viewModel.switchSession(to: sessionKey)
+        viewModel.syncSession(to: sessionKey)
     }
 
     private var talkControl: OpenClawChatTalkControl {
@@ -130,8 +158,7 @@ struct ChatProTab: View {
     }
 
     private var activeAgentID: String {
-        self.normalized(self.appModel.selectedAgentId)
-            ?? self.normalized(self.appModel.gatewayDefaultAgentId)
+        self.normalized(self.appModel.chatAgentId)
             ?? "main"
     }
 
@@ -156,8 +183,14 @@ struct ChatProTab: View {
     }
 
     private var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected &&
-            self.appModel.isOperatorGatewayConnected
+        guard GatewayStatusBuilder.build(appModel: self.appModel) == .connected else {
+            return false
+        }
+        return self.appModel.isAppleReviewDemoModeEnabled || self.appModel.isOperatorGatewayConnected
+    }
+
+    private var messagePlaceholder: String {
+        self.gatewayConnected ? "Message \(self.agentDisplayName)..." : "Connect to a gateway"
     }
 
     private var chatUserAccent: Color {
@@ -169,7 +202,7 @@ struct ChatProTab: View {
     }
 
     private var agentDisplayName: String {
-        self.normalized(self.activeAgent?.name) ?? self.appModel.activeAgentName
+        self.normalized(self.activeAgent?.name) ?? self.appModel.chatAgentName
     }
 
     private var agentBadge: String {

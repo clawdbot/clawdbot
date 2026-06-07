@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   isRunWithEnvHelpRequest,
   parseRunWithEnvArgs,
+  resolveForceKillDelayMs,
   resolveSpawnCommand,
 } from "../../scripts/run-with-env.mjs";
 
@@ -122,6 +123,39 @@ describe("run-with-env", () => {
       command: "node.exe",
       args: ["scripts/run-vitest.mjs"],
     });
+  });
+
+  it("rejects malformed force-kill grace configuration before spawning", () => {
+    expect(resolveForceKillDelayMs({})).toBe(5_000);
+    expect(resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "250" })).toBe(250);
+    for (const value of ["0", "-1", "1e3", "100ms"]) {
+      expect(() => resolveForceKillDelayMs({ OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: value })).toThrow(
+        "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
+      );
+    }
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/run-with-env.mjs",
+        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
+        "--",
+        "node",
+        "-e",
+        "process.stdout.write('spawned')",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "100ms" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
+    );
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(

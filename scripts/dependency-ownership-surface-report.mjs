@@ -397,7 +397,15 @@ function printTextReport(report) {
   process.stdout.write(renderTextReport(report));
 }
 
-function parseArgs(argv) {
+function readArtifactPath(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     asJson: false,
     check: false,
@@ -421,7 +429,8 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
+      options.markdownPath = readArtifactPath(argv, index, arg);
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);

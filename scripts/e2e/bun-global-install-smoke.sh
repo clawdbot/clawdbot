@@ -31,16 +31,62 @@ run_with_timeout() {
 
 restore_dist_from_image() {
   local image="$1"
-  local container_id
+  local backup_dir=""
+  local container_id=""
+  local swapped=0
+  local temp_dir=""
+
+  cleanup_restore_dist() {
+    if [ -n "$container_id" ]; then
+      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
+    fi
+    if [ "$swapped" != "1" ] && [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
+      rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true
+      if [ ! -e "$ROOT_DIR/dist" ] && mv "$backup_dir" "$ROOT_DIR/dist" >/dev/null 2>&1; then
+        backup_dir=""
+      fi
+    fi
+    if [ -n "$temp_dir" ]; then
+      rm -rf "$temp_dir"
+    fi
+    if [ "$swapped" = "1" ] && [ -n "$backup_dir" ]; then
+      rm -rf "$backup_dir"
+    fi
+  }
 
   echo "==> Reuse dist/ from Docker image: $image"
-  container_id="$(docker_e2e_docker_cmd create "$image")"
-  rm -rf "$ROOT_DIR/dist"
-  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
+  if ! container_id="$(docker_e2e_docker_cmd create "$image")"; then
+    cleanup_restore_dist
     return 1
   fi
-  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
+  if ! temp_dir="$(mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX")"; then
+    cleanup_restore_dist
+    return 1
+  fi
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"; then
+    cleanup_restore_dist
+    return 1
+  fi
+  if [ -e "$ROOT_DIR/dist" ]; then
+    if ! backup_dir="$(mktemp -d "$ROOT_DIR/.dist-backup.XXXXXX")"; then
+      cleanup_restore_dist
+      return 1
+    fi
+    if ! rmdir "$backup_dir"; then
+      cleanup_restore_dist
+      return 1
+    fi
+    if ! mv "$ROOT_DIR/dist" "$backup_dir"; then
+      cleanup_restore_dist
+      return 1
+    fi
+  fi
+  if ! mv "$temp_dir/dist" "$ROOT_DIR/dist"; then
+    cleanup_restore_dist
+    return 1
+  fi
+  swapped=1
+  cleanup_restore_dist
 }
 
 resolve_package_tgz() {

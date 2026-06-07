@@ -1,6 +1,5 @@
 // Qqbot plugin module implements channel behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { getAccessToken } from "../../engine/messaging/sender.js";
 import { ChannelApiSchema, executeChannelApi } from "../../engine/tools/channel-api.js";
 import type { ChannelApiParams } from "../../engine/tools/channel-api.js";
 import { listQQBotAccountIds, resolveQQBotAccount } from "../config.js";
@@ -50,6 +49,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
         "See the qqbot-channel skill for full endpoint details.",
       parameters: ChannelApiSchema,
       async execute(_toolCallId, params) {
+        const { getAccessToken } = await import("../../engine/messaging/sender.js");
         const accessToken = await getAccessToken(account.appId, account.clientSecret);
         return executeChannelApi(params as ChannelApiParams, { accessToken });
       },

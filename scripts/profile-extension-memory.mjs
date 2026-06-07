@@ -449,6 +449,36 @@ async function main() {
         2,
       ),
     );
+
+    const failures = [];
+    if (report.baseline.status !== "ok") {
+      failures.push(`baseline import ${report.baseline.status}`);
+    }
+    if (report.baseline.maxRssMb === null) {
+      failures.push("baseline import did not report RSS");
+    }
+    if (report.combined !== null) {
+      if (report.combined.status !== "ok") {
+        failures.push(`combined import ${report.combined.status}`);
+      }
+      if (report.combined.maxRssMb === null) {
+        failures.push("combined import did not report RSS");
+      }
+    }
+    for (const result of report.results) {
+      if (result.status !== "ok") {
+        failures.push(`${result.dir} import ${result.status}`);
+      }
+      if (result.maxRssMb === null) {
+        failures.push(`${result.dir} import did not report RSS`);
+      }
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) {
+        console.error(`[extension-memory] ${failure}`);
+      }
+      process.exitCode = 1;
+    }
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }

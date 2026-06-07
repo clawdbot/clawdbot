@@ -11,7 +11,12 @@ import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
-import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
+import {
+  APNS_HTTP2_CANCEL_CODE,
+  appendApnsResponseBodyCapture,
+  connectApnsHttp2Session,
+  createApnsResponseBodyCapture,
+} from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
@@ -753,7 +758,7 @@ async function sendApnsRequest(params: {
 
     let statusCode = 0;
     let apnsId: string | undefined;
-    let responseBody = "";
+    const responseBody = createApnsResponseBodyCapture();
 
     req.setEncoding("utf8");
     req.setTimeout(params.timeoutMs, () => {
@@ -770,11 +775,11 @@ async function sendApnsRequest(params: {
     });
     req.on("data", (chunk) => {
       if (typeof chunk === "string") {
-        responseBody += chunk;
+        appendApnsResponseBodyCapture(responseBody, chunk);
       }
     });
     req.on("end", () => {
-      finish({ status: statusCode, apnsId, body: responseBody });
+      finish({ status: statusCode, apnsId, body: responseBody.text });
     });
     req.on("error", (err) => fail(err));
 

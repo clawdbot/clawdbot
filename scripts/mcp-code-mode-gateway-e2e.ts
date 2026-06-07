@@ -12,16 +12,14 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import {
+  type McpCodeModeMentions,
+  validateMcpCodeModeResult,
+} from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 const require = createRequire(import.meta.url);
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -74,27 +72,6 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
   }
 }
 
-function outputText(response: unknown): string {
-  const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
-  if (!Array.isArray(output)) {
-    return "";
-  }
-  return output
-    .flatMap((item) => {
-      if (item.type !== "message" || !Array.isArray(item.content)) {
-        return [];
-      }
-      return item.content.flatMap((piece) => {
-        if (!piece || typeof piece !== "object") {
-          return [];
-        }
-        const record = piece as { text?: unknown };
-        return typeof record.text === "string" ? [record.text] : [];
-      });
-    })
-    .join("\n");
-}
-
 async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
   const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
   return await countSessionLogMentions({
@@ -108,6 +85,14 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       toolSearchPollution: 'tools.search("lookup note"',
     },
   });
+}
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
 }
 
 async function writeProbeMcpServer(serverPath: string) {
@@ -230,6 +215,11 @@ async function writeConfig(params: {
 export async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
+  const previousEnv = {
+    configPath: process.env.OPENCLAW_CONFIG_PATH,
+    stateDir: process.env.OPENCLAW_STATE_DIR,
+    testFast: process.env.OPENCLAW_TEST_FAST,
+  };
   let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   try {
@@ -295,25 +285,14 @@ export async function main() {
     }>;
     const laneRequests = requests.slice(beforeRequests.length);
     const firstRequest = laneRequests[0] ?? {};
-    const finalText = outputText(response);
     const mentions = await readSessionLogMentions(stateDir);
     const plannedTools = laneRequests
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string");
-
-    assert(
-      finalText.includes("MCP_CODE_MODE_FILE_OK"),
-      "agent did not complete MCP code-mode API file turn",
-    );
-    assert(finalText.includes("fixture-note-alpha"), "agent did not return MCP fixture note");
-    assert(plannedTools.includes("exec"), "agent did not call code-mode exec");
-    assert(
-      mentions.apiFileRead > 0 && mentions.mcpNamespace > 0,
-      "session log lacks MCP API file usage",
-    );
-    assert(mentions.apiCall === 0, "agent should not need MCP.$api when API files are available");
-    assert(mentions.mcpTool > 0, "session log lacks materialized MCP tool call");
-    assert(mentions.toolSearchPollution === 0, "MCP lookup leaked through tools.search");
+    const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
+      plannedTools,
+      requireExec: true,
+    });
 
     const summary = {
       ok: true,
@@ -334,9 +313,9 @@ export async function main() {
     await server?.close({ reason: "mcp code-mode gateway e2e complete" });
     await provider?.stop();
     resetConfigRuntimeState();
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_TEST_FAST;
+    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.stateDir);
+    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.configPath);
+    restoreEnvValue("OPENCLAW_TEST_FAST", previousEnv.testFast);
     if (!keep) {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

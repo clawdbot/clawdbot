@@ -28,6 +28,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { stripGoogleProviderPrefix } from "./model-id.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
   isGoogleGemini25ThinkingBudgetModel,
@@ -323,7 +324,7 @@ function resolveGoogleModelPath(modelId: string): string {
   if (modelId.startsWith("models/") || modelId.startsWith("tunedModels/")) {
     return modelId;
   }
-  return `models/${modelId}`;
+  return `models/${stripGoogleProviderPrefix(modelId)}`;
 }
 
 function buildGoogleGenerativeAiRequestUrl(model: GoogleTransportModel): string {
@@ -356,7 +357,10 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
+export function resolveGoogleVertexBaseOrigin(
+  model: GoogleTransportModel,
+  location: string,
+): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -371,6 +375,12 @@ function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: st
   }
   if (location === "global") {
     return "https://aiplatform.googleapis.com";
+  }
+  // Multi-region locations (eu, us) use the dedicated .rep.googleapis.com host
+  // with the location embedded in the host, matching @google/genai SDK behavior.
+  // A regional prefix (eu-aiplatform.googleapis.com) returns an HTML 404.
+  if (location === "eu" || location === "us") {
+    return `https://aiplatform.${location}.rep.googleapis.com`;
   }
   return `https://${location}-aiplatform.googleapis.com`;
 }

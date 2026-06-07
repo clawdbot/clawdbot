@@ -48,6 +48,7 @@ type IMessageSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  audioAsVoice?: boolean;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -729,6 +730,8 @@ async function trySendAttachmentForTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
   filePath: string;
+  audioAsVoice?: boolean;
+  replyToId?: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
@@ -758,6 +761,8 @@ async function trySendAttachmentForTarget(params: {
       attachmentChatTarget,
       "--file",
       params.filePath,
+      ...(params.audioAsVoice ? ["--audio"] : []),
+      ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
       "auto",
     ]);
@@ -822,7 +827,8 @@ async function trySendAttachmentForTarget(params: {
     receipt: createIMessageSendReceipt({
       messageId,
       target: params.target,
-      kind: "media",
+      kind: params.audioAsVoice ? "voice" : "media",
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     }),
   };
 }
@@ -905,7 +911,7 @@ export async function sendMessageIMessage(
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
-  if (filePath && !resolvedReplyToId) {
+  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
     const attachmentEchoText = message.trim()
       ? resolveOutboundEchoText("", mediaContentType)
       : echoText;
@@ -915,6 +921,8 @@ export async function sendMessageIMessage(
       target,
       service,
       filePath,
+      audioAsVoice: opts.audioAsVoice,
+      ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,

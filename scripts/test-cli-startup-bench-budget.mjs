@@ -154,8 +154,16 @@ const current = readJsonFile(resolveCurrentReportPath());
 const baselineCases = indexCases(baseline);
 const currentCases = indexCases(current);
 const shouldRequireEveryBaselineCase = opts.preset === "all";
+const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
 
 let failed = false;
+
+if (currentCases.size === 0) {
+  console.error(
+    `[test-cli-startup-bench-budget] current report has no cases for preset ${opts.preset}`,
+  );
+  failed = true;
+}
 
 for (const [id] of baselineCases) {
   if (shouldRequireEveryBaselineCase && !currentCases.has(id)) {
@@ -163,10 +171,30 @@ for (const [id] of baselineCases) {
     failed = true;
   }
 }
+if (
+  !opts.skipBaseline &&
+  !shouldRequireEveryBaselineCase &&
+  baselineCases.size > 0 &&
+  matchedBaselineCaseIds.length === 0
+) {
+  console.error(
+    `[test-cli-startup-bench-budget] no current cases matched the baseline for preset ${opts.preset}`,
+  );
+  failed = true;
+}
 
 for (const currentCase of currentCases.values()) {
-  if ((currentCase.samples ?? []).length === 0) {
+  const samples = currentCase.samples ?? [];
+  if (samples.length === 0) {
     console.error(`[test-cli-startup-bench-budget] ${currentCase.name} has no measured samples.`);
+    failed = true;
+  }
+  if (samples.some((sample) => sample.timedOut === true)) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} timed out.`);
+    failed = true;
+  }
+  if (samples.some((sample) => !Number.isFinite(sample.maxRssMb))) {
+    console.error(`[test-cli-startup-bench-budget] ${currentCase.name} did not report max RSS.`);
     failed = true;
   }
 }
@@ -255,12 +283,12 @@ for (const currentCase of currentCases.values()) {
   }
 
   const badSample = (currentCase.samples ?? []).find(
-    (sample) => sample.exitCode !== 0 || sample.signal != null,
+    (sample) => sample.timedOut === true || sample.exitCode !== 0 || sample.signal != null,
   );
   if (badSample) {
     console.error(
       `[test-cli-startup-bench-budget] ${currentCase.name} exited ${String(
-        badSample.signal ?? badSample.exitCode,
+        badSample.timedOut === true ? "timeout" : (badSample.signal ?? badSample.exitCode),
       )}; response contract requires a clean exit.`,
     );
     failed = true;

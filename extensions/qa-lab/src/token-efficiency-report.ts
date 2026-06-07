@@ -194,17 +194,18 @@ export function buildTokenEfficiencyReport(
     .filter((result): result is RuntimeParityResult => Boolean(result));
 
   if (parityResults.length === 0) {
+    const noCapturesReason = "No runtime parity captures were present in the suite summary.";
     return {
-      status: "skipped",
+      status: liveUsage ? "evaluated" : "skipped",
       runtimePair,
       generatedAt: params.generatedAt ?? new Date().toISOString(),
       ...(providerMode ? { providerMode } : {}),
       thresholdPercent,
       rows: [],
       aggregate: ZERO_AGGREGATE,
-      pass: true,
-      failures: [],
-      skipReason: "No runtime parity captures were present in the suite summary.",
+      pass: !liveUsage,
+      failures: liveUsage ? [noCapturesReason] : [],
+      ...(liveUsage ? {} : { skipReason: noCapturesReason }),
       notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
     };
   }

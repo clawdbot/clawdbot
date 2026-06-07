@@ -33,7 +33,10 @@ import {
   isMatrixQaExactMarkerReply,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
-import { waitForMatrixSyncStoreWithCursor } from "./scenario-runtime-state-files.js";
+import {
+  deleteMatrixSyncStoreCursor,
+  waitForMatrixSyncStoreWithCursor,
+} from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
@@ -1417,7 +1420,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     });
     await context.restartGatewayAfterStateMutation(
       async () => {
-        await rm(syncStore.pathname, { force: true });
+        await deleteMatrixSyncStoreCursor(syncStore);
       },
       {
         timeoutMs: context.timeoutMs,

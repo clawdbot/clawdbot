@@ -173,6 +173,12 @@ describe("resolveBuildAllStep", () => {
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
+
+  it("keeps export-html build output aligned with runtime template lookup", () => {
+    const step = getBuildAllStep("copy-export-html-templates");
+
+    expect(step.cache?.outputs).toEqual(["dist/export-html"]);
+  });
 });
 
 describe("resolveBuildAllSteps", () => {

@@ -1,13 +1,14 @@
 // Qa Lab plugin module implements suite runtime agent session behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { scanDirectReplyTranscriptSentinels } from "./gateway-log-sentinel.js";
+import { createDirectReplyTranscriptSentinelScanner } from "./gateway-log-sentinel.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -21,6 +22,8 @@ type QaGatewayCallEnv = Pick<
 >;
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+const SESSION_TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
+const SESSION_TRANSCRIPT_LINE_MAX_BYTES = 1024 * 1024;
 let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
 
 function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
@@ -79,28 +82,122 @@ function extractSessionTranscriptText(message: Record<string, unknown>) {
   return parts.join("\n").trim();
 }
 
-function extractFinalAssistantTextFromTranscript(transcriptBytes: string) {
-  let finalText = "";
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
-      }
-      const text = extractSessionTranscriptText(message);
-      if (text) {
-        finalText = text;
-      }
-    } catch {
-      // Ignore malformed transcript rows and keep QA summary checks deterministic.
-    }
+function readSessionTranscriptLineMessage(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
   }
-  return finalText;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
+  } catch {
+    // Ignore malformed transcript rows and keep QA summary checks deterministic.
+    return undefined;
+  }
+}
+
+function appendSessionTranscriptLineChunk(params: {
+  pendingLine: string;
+  pendingLineBytes: number;
+  chunk: string;
+  sessionKey: string;
+}) {
+  const pendingLine = params.pendingLine + params.chunk;
+  const pendingLineBytes = params.pendingLineBytes + Buffer.byteLength(params.chunk, "utf8");
+  if (pendingLineBytes > SESSION_TRANSCRIPT_LINE_MAX_BYTES) {
+    throw new Error(
+      `session transcript line exceeded ${SESSION_TRANSCRIPT_LINE_MAX_BYTES} bytes for ${params.sessionKey}`,
+    );
+  }
+  return { pendingLine, pendingLineBytes };
+}
+
+async function readSessionTranscriptFileSummary(
+  transcriptPath: string,
+  sessionKey: string,
+): Promise<QaSessionTranscriptSummary> {
+  const scanner = createDirectReplyTranscriptSentinelScanner();
+  const decoder = new StringDecoder("utf8");
+  const buffer = Buffer.allocUnsafe(SESSION_TRANSCRIPT_READ_CHUNK_BYTES);
+  let finalText = "";
+  let pendingLine = "";
+  let pendingLineBytes = 0;
+  let hasTranscriptContent = false;
+
+  const processLine = (line: string) => {
+    if (line.trim()) {
+      hasTranscriptContent = true;
+    }
+    const message = readSessionTranscriptLineMessage(line);
+    if (!message || message.role !== "assistant") {
+      return;
+    }
+    const text = extractSessionTranscriptText(message);
+    if (text) {
+      finalText = text;
+    }
+    scanner.recordMessage(message);
+  };
+
+  const file = await fs.open(transcriptPath, "r");
+  try {
+    for (;;) {
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      let chunk = decoder.write(buffer.subarray(0, bytesRead));
+      for (;;) {
+        const lineEnd = chunk.indexOf("\n");
+        if (lineEnd === -1) {
+          const appended = appendSessionTranscriptLineChunk({
+            pendingLine,
+            pendingLineBytes,
+            chunk,
+            sessionKey,
+          });
+          pendingLine = appended.pendingLine;
+          pendingLineBytes = appended.pendingLineBytes;
+          break;
+        }
+        const appended = appendSessionTranscriptLineChunk({
+          pendingLine,
+          pendingLineBytes,
+          chunk: chunk.slice(0, lineEnd),
+          sessionKey,
+        });
+        processLine(appended.pendingLine);
+        pendingLine = "";
+        pendingLineBytes = 0;
+        chunk = chunk.slice(lineEnd + 1);
+      }
+    }
+    const finalChunk = decoder.end();
+    if (finalChunk) {
+      const appended = appendSessionTranscriptLineChunk({
+        pendingLine,
+        pendingLineBytes,
+        chunk: finalChunk,
+        sessionKey,
+      });
+      pendingLine = appended.pendingLine;
+      pendingLineBytes = appended.pendingLineBytes;
+    }
+    if (pendingLine) {
+      processLine(pendingLine);
+    }
+  } finally {
+    await file.close();
+  }
+
+  if (!hasTranscriptContent) {
+    throw new Error(`session transcript is empty for ${sessionKey}`);
+  }
+
+  return {
+    finalText,
+    hasDirectReplySelfMessage: scanner.findings().length > 0,
+  };
 }
 
 async function callGatewayWithSessionStoreLockRetry<T>(
@@ -234,14 +331,7 @@ async function readSessionTranscriptSummary(
     sessionId,
     sessionFile: entry?.sessionFile,
   });
-  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
-  if (!transcriptBytes.trim()) {
-    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
-  }
-  return {
-    finalText: extractFinalAssistantTextFromTranscript(transcriptBytes),
-    hasDirectReplySelfMessage: scanDirectReplyTranscriptSentinels(transcriptBytes).length > 0,
-  };
+  return readSessionTranscriptFileSummary(transcriptPath, normalizedSessionKey);
 }
 
 export {

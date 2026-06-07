@@ -60,7 +60,22 @@ function resolveTimeoutMs(envName, defaultValue) {
   return Math.trunc(parsed);
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+function readEqualsOptionValue(value, optionName) {
+  if (value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     outputDir: "",
     outputName: "",
@@ -70,19 +85,25 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      options.outputDir = argv[(index += 1)] ?? "";
+      options.outputDir = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
-      options.outputDir = arg.slice("--output-dir=".length);
+      options.outputDir = readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir");
     } else if (arg === "--output-name") {
-      options.outputName = argv[(index += 1)] ?? "";
+      options.outputName = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--output-name=")) {
-      options.outputName = arg.slice("--output-name=".length);
+      options.outputName = readEqualsOptionValue(
+        arg.slice("--output-name=".length),
+        "--output-name",
+      );
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
     } else if (arg === "--source-dir") {
-      options.sourceDir = argv[(index += 1)] ?? "";
+      options.sourceDir = readOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
-      options.sourceDir = arg.slice("--source-dir=".length);
+      options.sourceDir = readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir");
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -155,16 +176,13 @@ function run(command, args, cwd, options = {}) {
     };
     const terminateChild = () => {
       killChild("SIGTERM");
-      forceKillTimeout = setTimeout(
-        () => {
-          forceKillTimeout = undefined;
-          if (settled && !processGroupAlive()) {
-            return;
-          }
-          killChild("SIGKILL");
-        },
-        options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
-      );
+      forceKillTimeout = setTimeout(() => {
+        forceKillTimeout = undefined;
+        if (settled && !processGroupAlive()) {
+          return;
+        }
+        killChild("SIGKILL");
+      }, options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS);
       forceKillTimeout.unref?.();
     };
     ACTIVE_CHILD_KILLERS.add(killChild);

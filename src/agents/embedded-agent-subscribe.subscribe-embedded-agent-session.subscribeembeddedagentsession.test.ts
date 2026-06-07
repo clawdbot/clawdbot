@@ -1285,6 +1285,43 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(error).toContain("API rate limit reached");
   });
 
+  it("reads terminal abort state before emitting lifecycle:end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    let terminalAborted = false;
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-aborted",
+      sessionKey: "test-session",
+      onAgentEvent,
+      isTerminalAborted: () => terminalAborted,
+    });
+    const assistantMessage = {
+      api: "test",
+      provider: "test",
+      model: "test",
+      role: "assistant",
+      stopReason: "aborted",
+      content: [],
+      usage: makeZeroUsageSnapshot(),
+      timestamp: 0,
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    terminalAborted = true;
+    emit({ type: "agent_end", messages: [assistantMessage] });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+        aborted: true,
+      }),
+    );
+  });
+
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();

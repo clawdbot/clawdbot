@@ -13,6 +13,14 @@ import type { CaptureEventRecord } from "./types.js";
 const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
   "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
+const CAPTURE_BODY_PREVIEW_BYTES = 8192;
+
+type BodyPreviewCapture = {
+  chunks: Buffer[];
+  previewBytes: number;
+  totalBytes: number;
+  truncated: boolean;
+};
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
@@ -104,12 +112,40 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
   return new URL(`http://${host}${req.url ?? "/"}`);
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function createBodyPreviewCapture(): BodyPreviewCapture {
+  return { chunks: [], previewBytes: 0, totalBytes: 0, truncated: false };
+}
+
+function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | string): void {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  capture.totalBytes += buffer.byteLength;
+  const remaining = CAPTURE_BODY_PREVIEW_BYTES - capture.previewBytes;
+  if (remaining <= 0) {
+    capture.truncated = capture.truncated || buffer.byteLength > 0;
+    return;
   }
-  return Buffer.concat(chunks);
+  const slice = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+  capture.chunks.push(slice);
+  capture.previewBytes += slice.byteLength;
+  if (slice.byteLength < buffer.byteLength) {
+    capture.truncated = true;
+  }
+}
+
+function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
+  dataText: string;
+  metaJson?: string;
+} {
+  return {
+    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    metaJson: capture.truncated
+      ? JSON.stringify({
+          bodyBytes: capture.totalBytes,
+          capturePreviewBytes: CAPTURE_BODY_PREVIEW_BYTES,
+          captureTruncated: true,
+        })
+      : undefined,
+  };
 }
 
 export async function startDebugProxyServer(params: {
@@ -180,13 +216,7 @@ export async function startDebugProxyServer(params: {
         res.end(responseBody);
         return;
       }
-      const body = await readBody(req);
-      recordTargetEvent({
-        direction: "outbound",
-        kind: "request",
-        headersJson: JSON.stringify(req.headers),
-        dataText: body.subarray(0, 8192).toString("utf8"),
-      });
+      const requestCapture = createBodyPreviewCapture();
       const upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(
         target,
         {
@@ -194,26 +224,44 @@ export async function startDebugProxyServer(params: {
           headers: req.headers,
         },
         (upstreamRes) => {
-          const chunks: Buffer[] = [];
+          const responseCapture = createBodyPreviewCapture();
           upstreamRes.on("data", (chunk) => {
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            chunks.push(buffer);
+            appendBodyPreviewCapture(responseCapture, buffer);
             res.write(buffer);
           });
           upstreamRes.on("end", () => {
-            const responseBody = Buffer.concat(chunks);
             recordTargetEvent({
               direction: "inbound",
               kind: "response",
               status: upstreamRes.statusCode ?? undefined,
               headersJson: JSON.stringify(upstreamRes.headers),
-              dataText: responseBody.subarray(0, 8192).toString("utf8"),
+              ...finishBodyPreviewCapture(responseCapture),
             });
             res.end();
           });
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         },
       );
+      req.on("data", (chunk) => {
+        appendBodyPreviewCapture(requestCapture, chunk);
+      });
+      req.on("end", () => {
+        recordTargetEvent({
+          direction: "outbound",
+          kind: "request",
+          headersJson: JSON.stringify(req.headers),
+          ...finishBodyPreviewCapture(requestCapture),
+        });
+      });
+      req.on("error", (error) => {
+        recordTargetEvent({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
+        });
+        upstream.destroy(error);
+      });
       upstream.on("error", (error) => {
         recordTargetEvent({
           direction: "local",
@@ -223,10 +271,7 @@ export async function startDebugProxyServer(params: {
         res.statusCode = 502;
         res.end(error.message);
       });
-      if (body.byteLength > 0) {
-        upstream.write(body);
-      }
-      upstream.end();
+      req.pipe(upstream);
     })();
   });
 

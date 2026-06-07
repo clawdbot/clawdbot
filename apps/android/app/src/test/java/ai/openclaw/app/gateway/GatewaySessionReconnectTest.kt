@@ -20,6 +20,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -233,7 +234,75 @@ class GatewaySessionReconnectTest {
     )
   }
 
-  private fun createReconnectHarness(): ReconnectHarness {
+  @Test
+  fun pairingRequiredFailureNotifiesPauseReconnectProblem() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(
+              """
+              {"type":"res","id":"$id","ok":false,"error":{"code":"NOT_PAIRED","message":"pairing required: device approval is required","details":{"code":"PAIRING_REQUIRED","reason":"not-paired","requestId":"request-1"}}}
+              """.trimIndent(),
+            )
+          }
+        }
+      val harness =
+        createReconnectHarness { error, pauseReconnect ->
+          connectFailure.complete(error to pauseReconnect)
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (error, pauseReconnect) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
+
+        assertEquals("PAIRING_REQUIRED", error.details?.code)
+        assertEquals("not-paired", error.details?.reason)
+        assertEquals("request-1", error.details?.requestId)
+        assertTrue(pauseReconnect)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun pairingRequiredFailureDropsUnsafeRequestId() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(
+              """
+              {"type":"res","id":"$id","ok":false,"error":{"code":"NOT_PAIRED","message":"pairing required: device approval is required","details":{"code":"PAIRING_REQUIRED","reason":"not-paired","requestId":"request-1;echo unsafe"}}}
+              """.trimIndent(),
+            )
+          }
+        }
+      val harness =
+        createReconnectHarness { error, pauseReconnect ->
+          connectFailure.complete(error to pauseReconnect)
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (error, pauseReconnect) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
+
+        assertEquals("PAIRING_REQUIRED", error.details?.code)
+        assertEquals("not-paired", error.details?.reason)
+        assertNull(error.details?.requestId)
+        assertTrue(pauseReconnect)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  private fun createReconnectHarness(
+    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
+  ): ReconnectHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
     val session =
@@ -243,6 +312,7 @@ class GatewaySessionReconnectTest {
         deviceAuthStore = ReconnectDeviceAuthStore(),
         onConnected = {},
         onDisconnected = { _ -> },
+        onConnectFailure = onConnectFailure,
         onEvent = { _, _ -> },
         onInvoke = { GatewaySession.InvokeResult.ok("""{"handled":true}""") },
       )

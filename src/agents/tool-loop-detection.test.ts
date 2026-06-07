@@ -1,8 +1,18 @@
 // Tool loop detection tests cover repeated-call hashing, ping-pong detection,
 // unknown-tool thresholds, and circuit-breaker escalation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+
+// Recognize a provider-docked send tool by name (only "telegram" here) so the
+// volatility strip applies to it without pulling in the channel-plugin registry; the
+// real detector is covered by embedded-agent-messaging's own tests.
+const isMessagingToolSendActionMock = vi.hoisted(() =>
+  vi.fn((toolName: string): boolean => toolName === "telegram"),
+);
+vi.mock("./embedded-agent-messaging.js", () => ({
+  isMessagingToolSendAction: isMessagingToolSendActionMock,
+}));
 import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -912,6 +922,335 @@ describe("tool-loop-detection", () => {
 
       const result = detectToolCallLoop(state, "tool", { arg: 1 }, enabledLoopDetectionConfig);
       expect(result.stuck).toBe(false);
+    });
+  });
+
+  describe("message send loop detection (#89090)", () => {
+    // Mirror jsonResult(payload): text is the stringified payload (so it carries the
+    // volatile id too) and details is the payload — the shape a real send returns.
+    function sendResult(payload: Record<string, unknown>) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        details: payload,
+      };
+    }
+
+    function recordSend(
+      state: SessionState,
+      toolName: string,
+      params: unknown,
+      payload: Record<string, unknown>,
+      index: number,
+    ): void {
+      const toolCallId = `${toolName}-${index}`;
+      recordToolCall(state, toolName, params, toolCallId, enabledLoopDetectionConfig);
+      recordToolCallOutcome(state, {
+        toolName,
+        toolParams: params,
+        toolCallId,
+        result: sendResult(payload),
+        config: enabledLoopDetectionConfig,
+      });
+    }
+
+    function sendPayload(index: number): Record<string, unknown> {
+      return {
+        ok: true,
+        channel: "feishu",
+        chatId: "oc_chat",
+        runId: `run_${index}`,
+        messageId: `om_${index}`,
+        receipt: { platformMessageId: `p_${index}` },
+      };
+    }
+
+    it("gives duplicate sends a stable result hash despite per-call ids in details and text", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      recordSend(state, "message", params, sendPayload(0), 0);
+      recordSend(state, "message", params, sendPayload(1), 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+    });
+
+    it("strips nested ids so broadcast results with per-call ids share a result hash", () => {
+      const state = createState();
+      const params = { action: "broadcast", text: "ping" };
+      const broadcast = (index: number) => ({
+        results: [
+          { channel: "feishu", ok: true, result: { messageId: `om_${index}`, receipt: index } },
+        ],
+      });
+      recordSend(state, "message", params, broadcast(0), 0);
+      recordSend(state, "message", params, broadcast(1), 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+    });
+
+    it("escalates identical-arg send loops to critical even though every id differs", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("also blocks sessions_send loops whose result carries a fresh runId", () => {
+      const state = createState();
+      const params = { sessionKey: "agent:main:peer", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "sessions_send", params, { ok: true, runId: `run_${i}` }, i);
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "sessions_send",
+        params,
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates provider-docked send-tool loops (e.g. telegram) whose result carries fresh ids", () => {
+      const state = createState();
+      const params = { to: "telegram:123", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "telegram", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "telegram", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates sibling delivery actions (reply) the same as send", () => {
+      const state = createState();
+      const params = { action: "reply", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("blocks upload-file loops whose result carries a fresh file id", () => {
+      const state = createState();
+      const params = { action: "upload-file", target: "feishu:oc_chat", media: "img.png" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          { ok: true, channel: "feishu", fileId: `f_${i}`, messageId: `om_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("blocks poll loops whose result carries a fresh poll id", () => {
+      const state = createState();
+      const params = { action: "poll", target: "tg:chat-1", question: "?" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          { ok: true, channel: "telegram", messageId: `om_${i}`, chatId: "c1", pollId: `pl_${i}` },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("does not flag distinct messages (different args) as a no-progress loop", () => {
+      const state = createState();
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          { action: "send", target: "feishu:oc_chat", text: `line ${i}` },
+          sendPayload(i),
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(
+        state,
+        "message",
+        { action: "send", target: "feishu:oc_chat", text: "line final" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("keeps full result hashing for non-send message actions so id/timestamp progress is not masked", () => {
+      const state = createState();
+      const params = { action: "read", target: "feishu:oc_chat" };
+      // Results differ only in id/timestamp: a non-send action must still treat that as
+      // progress (distinct hashes), unlike a send where those are stripped as volatile.
+      recordSend(state, "message", params, { ok: true, messageId: "m_0", ts: 1000 }, 0);
+      recordSend(state, "message", params, { ok: true, messageId: "m_1", ts: 2000 }, 1);
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("preserves stable nested route ids so distinct routes stay distinguishable", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      // messageId is volatile (stripped); a nested route id is a stable fact that must survive,
+      // so two sends resolving to different routes keep distinct hashes.
+      recordSend(
+        state,
+        "message",
+        params,
+        { ok: true, messageId: "om_0", route: { id: "conv-A" } },
+        0,
+      );
+      recordSend(
+        state,
+        "message",
+        params,
+        { ok: true, messageId: "om_1", route: { id: "conv-B" } },
+        1,
+      );
+      const hashes = state.toolCallHistory
+        ?.filter((call) => call.toolName === "message")
+        .map((call) => call.resultHash);
+      expect(hashes?.[0]).not.toBe(hashes?.[1]);
+    });
+
+    it("keeps a critical send block sticky after the veto result is recorded", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      expect(detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig).stuck).toBe(
+        true,
+      );
+      // The loop veto records a blocked result (buildBlockedToolResult, deniedReason "tool-loop");
+      // it must not reset the no-progress streak, so the next identical send is still blocked.
+      recordToolCall(state, "message", params, "message-veto", enabledLoopDetectionConfig);
+      recordToolCallOutcome(state, {
+        toolName: "message",
+        toolParams: params,
+        toolCallId: "message-veto",
+        result: {
+          content: [{ type: "text", text: "blocked" }],
+          details: { status: "blocked", deniedReason: "tool-loop" },
+        },
+        config: enabledLoopDetectionConfig,
+      });
+      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(after.stuck).toBe(true);
+      if (after.stuck) {
+        expect(after.level).toBe("critical");
+      }
+    });
+
+    it("still escalates repeated plugin/approval vetoes to a critical loop", () => {
+      const state = createState();
+      const params = { action: "read", target: "feishu:oc_chat" };
+      // A non-loop veto (plugin/approval) keeps a stable result hash, so repeated identical
+      // denials still accumulate a no-progress streak and reach a critical block.
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordToolCall(state, "message", params, `veto-${i}`, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "plugin-before-tool-call" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("blocks plugin-shaped send results whose message object carries a bare per-send id", () => {
+      const state = createState();
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        // The volatile id is the message object's own `id`; conversation.id is stable.
+        recordSend(
+          state,
+          "message",
+          params,
+          {
+            message: {
+              id: `qa_${i}`,
+              accountId: "default",
+              direction: "outbound",
+              conversation: { id: "loop-room", chatType: "channel" },
+              senderId: "openclaw",
+              text: "hello",
+              timestamp: 1_800_000_000_000 + i,
+            },
+          },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("does not escalate when a stable conversation id changes between sends", () => {
+      const state = createState();
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(
+          state,
+          "message",
+          params,
+          {
+            message: {
+              id: `qa_${i}`,
+              direction: "outbound",
+              conversation: { id: `loop-room-${i}`, chatType: "channel" },
+              text: "hello",
+            },
+          },
+          i,
+        );
+      }
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
 

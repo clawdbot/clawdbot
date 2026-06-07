@@ -119,11 +119,15 @@ describe("qa cli runtime", () => {
   let suiteArtifactsDir: string;
   let suiteReportPath: string;
   let suiteSummaryPath: string;
+  let telegramArtifactsDir: string;
+  let telegramSummaryPath: string;
 
   beforeEach(async () => {
     suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
+    telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
+    telegramSummaryPath = path.join(telegramArtifactsDir, "telegram-qa-summary.json");
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
     await fs.writeFile(
       suiteSummaryPath,
@@ -131,6 +135,18 @@ describe("qa cli runtime", () => {
         counts: {
           total: 1,
           passed: 1,
+          failed: 0,
+        },
+        scenarios: [],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      telegramSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 0,
+          passed: 0,
           failed: 0,
         },
         scenarios: [],
@@ -180,10 +196,10 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
     runTelegramQaLive.mockResolvedValue({
-      outputDir: "/tmp/telegram",
-      reportPath: "/tmp/telegram/report.md",
-      summaryPath: "/tmp/telegram/summary.json",
-      observedMessagesPath: "/tmp/telegram/observed.json",
+      outputDir: telegramArtifactsDir,
+      reportPath: path.join(telegramArtifactsDir, "report.md"),
+      summaryPath: telegramSummaryPath,
+      observedMessagesPath: path.join(telegramArtifactsDir, "observed.json"),
       scenarios: [],
     });
     listTelegramQaScenarioCatalog.mockReturnValue([
@@ -221,6 +237,7 @@ describe("qa cli runtime", () => {
     stderrWrite.mockRestore();
     vi.clearAllMocks();
     await fs.rm(suiteArtifactsDir, { recursive: true, force: true });
+    await fs.rm(telegramArtifactsDir, { recursive: true, force: true });
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {
@@ -401,22 +418,23 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("sets a failing exit code when telegram scenarios fail", async () => {
+  it("sets a failing exit code when the telegram summary reports failures", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
+    await fs.writeFile(
+      telegramSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 1, failed: 0 },
+        scenarios: [{ status: "fail" }],
+      }),
+      "utf8",
+    );
     runTelegramQaLive.mockResolvedValueOnce({
-      outputDir: "/tmp/telegram",
-      reportPath: "/tmp/telegram/report.md",
-      summaryPath: "/tmp/telegram/summary.json",
-      observedMessagesPath: "/tmp/telegram/observed.json",
-      scenarios: [
-        {
-          id: "telegram-help-command",
-          title: "Telegram help command reply",
-          status: "fail",
-          details: "missing expected text",
-        },
-      ],
+      outputDir: telegramArtifactsDir,
+      reportPath: path.join(telegramArtifactsDir, "report.md"),
+      summaryPath: telegramSummaryPath,
+      observedMessagesPath: path.join(telegramArtifactsDir, "observed.json"),
+      scenarios: [],
     });
 
     try {
@@ -433,10 +451,10 @@ describe("qa cli runtime", () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
     runTelegramQaLive.mockResolvedValueOnce({
-      outputDir: "/tmp/telegram",
-      reportPath: "/tmp/telegram/report.md",
-      summaryPath: "/tmp/telegram/summary.json",
-      observedMessagesPath: "/tmp/telegram/observed.json",
+      outputDir: telegramArtifactsDir,
+      reportPath: path.join(telegramArtifactsDir, "report.md"),
+      summaryPath: telegramSummaryPath,
+      observedMessagesPath: path.join(telegramArtifactsDir, "observed.json"),
       scenarios: [
         {
           id: "telegram-help-command",
@@ -503,13 +521,7 @@ describe("qa cli runtime", () => {
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
-      scenarios: [
-        {
-          name: "channel chat baseline",
-          status: "fail",
-          steps: [],
-        },
-      ],
+      scenarios: [],
     });
 
     try {

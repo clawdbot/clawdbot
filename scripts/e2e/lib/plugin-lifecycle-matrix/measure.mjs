@@ -21,6 +21,18 @@ function readPositiveIntEnv(name, fallback) {
   return value;
 }
 
+function readPositiveNumberEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+(?:\.\d+)?$/u.test(text)) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  return value;
+}
+
 const pageSize = readPositiveIntEnv("OPENCLAW_PROC_PAGE_SIZE", 4096);
 const clockTicks = readPositiveIntEnv("OPENCLAW_PROC_CLK_TCK", 100);
 const pollMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100);
@@ -29,6 +41,12 @@ const timeoutKillGraceMs = readPositiveIntEnv(
   "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
   2000,
 );
+const maxRssKbThreshold = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB",
+  4 * 1024 * 1024,
+);
+const maxWallMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS", timeoutMs);
+const maxCpuCoreRatio = readPositiveNumberEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO", 16);
 
 if (!fs.existsSync("/proc")) {
   console.error("plugin lifecycle resource sampler requires Linux /proc");
@@ -264,6 +282,25 @@ function finish(code, signal) {
   console.log(
     `plugin lifecycle resource: phase=${phase} max_rss_kb=${maxRssKb} cpu_s=${cpuSeconds.toFixed(3)} wall_ms=${wallMs.toFixed(0)} cpu_core_ratio=${cpuCoreRatio.toFixed(3)} signal=${summarySignal}`,
   );
+  const violations = [];
+  if (maxRssKb > maxRssKbThreshold) {
+    violations.push(`max_rss_kb=${maxRssKb} > ${maxRssKbThreshold}`);
+  }
+  if (wallMs > maxWallMs) {
+    violations.push(`wall_ms=${wallMs.toFixed(0)} > ${maxWallMs}`);
+  }
+  if (cpuCoreRatio > maxCpuCoreRatio) {
+    violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
+  }
+  if (violations.length > 0) {
+    console.error(
+      `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
+    );
+    if (!timedOut && !signal && (code ?? 0) === 0) {
+      process.exit(1);
+      return;
+    }
+  }
   if (timedOut) {
     process.exit(124);
     return;

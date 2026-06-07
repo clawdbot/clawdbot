@@ -12,7 +12,10 @@ import {
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
   isImageProcessorUnavailableError,
+  MAX_IMAGE_INPUT_PIXELS,
+  readImageMetadataFromHeader,
   resizeToJpeg,
+  type ImageMetadata,
 } from "../media/media-services.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
@@ -62,6 +65,26 @@ function inferMimeTypeFromBase64(base64: string): string | undefined {
     return "image/gif";
   }
   return undefined;
+}
+
+function imageWithinLimits(
+  buffer: Buffer,
+  metadata: ImageMetadata | null,
+  maxDimensionPx: number,
+  maxBytes: number,
+): metadata is ImageMetadata {
+  const width = metadata?.width;
+  const height = metadata?.height;
+  return (
+    typeof width === "number" &&
+    typeof height === "number" &&
+    width > 0 &&
+    height > 0 &&
+    buffer.byteLength <= maxBytes &&
+    width <= maxDimensionPx &&
+    height <= maxDimensionPx &&
+    width * height <= MAX_IMAGE_INPUT_PIXELS
+  );
 }
 
 function formatBytesShort(bytes: number): string {
@@ -147,19 +170,24 @@ async function resizeImageBase64IfNeeded(params: {
   height?: number;
 }> {
   const buf = Buffer.from(params.base64, "base64");
-  const meta = await getImageMetadata(buf);
+  const headerMeta = readImageMetadataFromHeader(buf);
+  if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
+    return {
+      base64: params.base64,
+      mimeType: params.mimeType,
+      resized: false,
+      width: headerMeta.width,
+      height: headerMeta.height,
+    };
+  }
+  const meta = headerMeta ?? (await getImageMetadata(buf));
   const width = meta?.width;
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
-  if (
-    hasDimensions &&
-    !overBytes &&
-    width <= params.maxDimensionPx &&
-    height <= params.maxDimensionPx
-  ) {
+  if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
     return {
       base64: params.base64,
       mimeType: params.mimeType,

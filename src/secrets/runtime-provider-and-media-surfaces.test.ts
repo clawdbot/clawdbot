@@ -63,6 +63,36 @@ async function prepareMediaModelAuthSnapshot(params: {
 }
 
 describe("secrets runtime provider and media surfaces", () => {
+  it("resolves talk realtime provider api key refs", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_REALTIME_API_KEY",
+                },
+                model: "gpt-realtime-2",
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        OPENAI_REALTIME_API_KEY: "sk-realtime-test",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.talk?.realtime?.providers?.openai?.apiKey).toBe("sk-realtime-test");
+    expect(snapshot.config.talk?.realtime?.providers?.openai?.model).toBe("gpt-realtime-2");
+  });
+
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
       return;

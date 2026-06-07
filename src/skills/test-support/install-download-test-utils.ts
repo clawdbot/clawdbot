@@ -1,9 +1,13 @@
-// Install download test utilities provide fake download responses and paths.
-import path from "node:path";
+// Install download test utilities provide isolated state and workspace paths.
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 
-/** Points OpenClaw state at a workspace-local temp dir for install tests. */
-export function setTempStateDir(workspaceDir: string): string {
-  const stateDir = path.join(workspaceDir, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  return stateDir;
+/** Creates isolated OpenClaw state for install download tests. */
+export async function createInstallDownloadTestState(): Promise<OpenClawTestState> {
+  return await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skills-install-",
+  });
 }

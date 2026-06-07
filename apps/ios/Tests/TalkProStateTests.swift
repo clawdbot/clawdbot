@@ -5,6 +5,7 @@ import Testing
     @Test func disabledTalkWithoutLoadedConfigCanStartAndRetryLoad() {
         let state = TalkProState(
             gatewayConnected: true,
+            isDemoMode: false,
             isEnabled: false,
             statusText: "Offline",
             isConfigLoaded: false,
@@ -23,6 +24,7 @@ import Testing
     @Test func enabledTalkWithoutLoadedConfigCanBeStopped() {
         let state = TalkProState(
             gatewayConnected: true,
+            isDemoMode: false,
             isEnabled: true,
             statusText: "Offline",
             isConfigLoaded: false,
@@ -41,6 +43,7 @@ import Testing
     @Test func enabledTalkWithLoadedConfigCanBeStopped() {
         let state = TalkProState(
             gatewayConnected: true,
+            isDemoMode: false,
             isEnabled: true,
             statusText: "Ready",
             isConfigLoaded: true,
@@ -57,6 +60,7 @@ import Testing
     @Test func missingScopeTakesPriorityOverUnloadedConfig() {
         let state = TalkProState(
             gatewayConnected: true,
+            isDemoMode: false,
             isEnabled: false,
             statusText: "Offline",
             isConfigLoaded: false,
@@ -69,5 +73,26 @@ import Testing
         #expect(state.chipText == "Needs approval")
         #expect(state.primaryAction == .enablePermission)
         #expect(state.primaryButtonTitle == "Enable Talk")
+    }
+
+    @Test func demoModeKeepsTalkDisabled() {
+        let state = TalkProState(
+            gatewayConnected: true,
+            isDemoMode: true,
+            isEnabled: true,
+            statusText: "Ready",
+            isConfigLoaded: true,
+            isListening: true,
+            isSpeaking: true,
+            isUserSpeechDetected: true,
+            permissionState: .ready)
+
+        #expect(state.title == "Demo mode only")
+        #expect(state.chipText == "Demo")
+        #expect(state.icon == "waveform.slash")
+        #expect(state.primaryAction == .waiting)
+        #expect(state.primaryButtonTitle == "Demo Mode Only")
+        #expect(state.primaryButtonIcon == "lock.fill")
+        #expect(state.waveformMode(micLevel: 0.8) == .still)
     }
 }

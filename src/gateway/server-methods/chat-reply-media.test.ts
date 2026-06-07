@@ -2,11 +2,14 @@
  * Tests chat reply media handling for gateway message delivery.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 
@@ -29,17 +32,17 @@ type MediaTestContext = {
 };
 
 describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
-  let rootDir = "";
+  let testState: OpenClawTestState;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-reply-media-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(rootDir, "state"));
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-webchat-reply-media-",
+    });
   });
 
   afterEach(async () => {
-    vi.unstubAllEnvs();
-    await fs.rm(rootDir, { recursive: true, force: true });
-    rootDir = "";
+    await testState.cleanup();
   });
 
   function createConfig(params: {
@@ -62,7 +65,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   }
 
   function createMediaTestContext(params: { allowRead: boolean }): MediaTestContext {
-    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const stateDir = testState.stateDir;
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const workspaceDir = path.join(stateDir, "workspace");
     return {
@@ -216,7 +219,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
   it("does not preserve untrusted local audio paths before display normalization", async () => {
     const { stateDir, cfg } = createMediaTestContext({ allowRead: false });
-    const audioPath = path.join(rootDir, "outside", "voice.mp3");
+    const audioPath = path.join(testState.root, "outside", "voice.mp3");
     await createAudioFile(audioPath);
 
     const payload = await normalizeReplyMedia({

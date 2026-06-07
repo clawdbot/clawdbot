@@ -99,6 +99,11 @@ Prefer returning an action-keyed map such as
 `{ "set-profile": ["avatarUrl", "avatarPath"] }` so unrelated actions do not
 inherit another action's media args. A flat array still works for params that
 are intentionally shared across every exposed action.
+Channels that must expose a temporary public URL for a platform-side media fetch
+can use `createHostedOutboundMediaStore(...)` from
+`openclaw/plugin-sdk/outbound-media` with plugin state stores. Keep platform
+route parsing and token enforcement in the channel plugin; the shared helper
+only owns media loading, expiry metadata, chunk rows, and cleanup.
 
 If your channel needs provider-specific shaping for `message(action="send")`,
 prefer `actions.prepareSendPayload(...)`. Put native cards, blocks, embeds, or

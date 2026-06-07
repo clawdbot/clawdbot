@@ -4,12 +4,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 let stateDir = "";
 
 const mocks = vi.hoisted(() => ({
@@ -66,18 +69,20 @@ function callHandler(method: string, params: Record<string, unknown>) {
 
 describe("skills proposal gateway handlers", () => {
   beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skills-proposals-gateway-state-",
+    });
     mocks.chatSend.mockReset();
     mocks.chatSend.mockImplementation(async ({ respond }) => {
       respond(true, { runId: "run-skill-workshop-revision", status: "started" }, undefined);
     });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-");
-    stateDir = await tempDirs.make("openclaw-skills-proposals-gateway-state-");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    stateDir = testState.stateDir;
   });
 
   afterEach(async () => {
-    envSnapshot.restore();
+    await testState.cleanup();
     await tempDirs.cleanup();
   });
 

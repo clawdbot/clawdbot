@@ -5,7 +5,6 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryDreamingPluginConfig,
@@ -18,6 +17,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { formatError } from "../server-utils.js";
 import {
   dedupeDreamDiaryEntries,
+  loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
   previewRemHarness,
   removeBackfillDiaryEntries,
@@ -28,8 +28,6 @@ import {
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
@@ -334,35 +332,6 @@ function resolveDreamingConfig(
   };
 }
 
-function normalizeMemoryPath(rawPath: string): string {
-  return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
-}
-
-function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
-  const normalized = normalizeMemoryPath(rawPath);
-  const workspaceNormalized = normalizeMemoryPath(workspaceDir);
-  if (path.isAbsolute(rawPath) && normalized.startsWith(`${workspaceNormalized}/`)) {
-    return normalized.slice(workspaceNormalized.length + 1);
-  }
-  return normalized;
-}
-
-function isShortTermMemoryPath(filePath: string): boolean {
-  const normalized = normalizeMemoryPath(filePath);
-  // Status only counts short-term source shapes; promoted diary/report files stay out.
-  if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
-    return true;
-  }
-  if (
-    /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/.test(
-      normalized,
-    )
-  ) {
-    return true;
-  }
-  return /^(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized);
-}
-
 type DreamingStoreStats = Pick<
   DoctorMemoryDreamingPayload,
   | "shortTermCount"
@@ -386,34 +355,6 @@ type DreamingStoreStats = Pick<
 >;
 
 const DREAMING_ENTRY_LIST_LIMIT = 8;
-
-function toNonNegativeInt(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(num));
-}
-
-function parseEntryRangeFromKey(
-  key: string,
-  fallbackStartLine: unknown,
-  fallbackEndLine: unknown,
-): { startLine: number; endLine: number } {
-  const startLine = toNonNegativeInt(fallbackStartLine);
-  const endLine = toNonNegativeInt(fallbackEndLine);
-  if (startLine > 0 && endLine > 0) {
-    return { startLine, endLine };
-  }
-  const match = key.match(/:(\d+):(\d+)$/);
-  if (match) {
-    return {
-      startLine: Math.max(1, toNonNegativeInt(match[1])),
-      endLine: Math.max(1, toNonNegativeInt(match[2])),
-    };
-  }
-  return { startLine: 1, endLine: 1 };
-}
 
 function compareDreamingEntryByRecency(
   a: DoctorMemoryDreamingEntryPayload,
@@ -490,164 +431,9 @@ async function loadDreamingStoreStats(
   nowMs: number,
   timezone?: string,
 ): Promise<DreamingStoreStats> {
-  const storePath = path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
-  const phaseSignalPath = path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
   try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    const store = asRecord(parsed);
-    const entries = asRecord(store?.entries) ?? {};
-    let shortTermCount = 0;
-    let recallSignalCount = 0;
-    let dailySignalCount = 0;
-    let groundedSignalCount = 0;
-    let totalSignalCount = 0;
-    let phaseSignalCount = 0;
-    let lightPhaseHitCount = 0;
-    let remPhaseHitCount = 0;
-    let promotedTotal = 0;
-    let promotedToday = 0;
-    let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
-    let latestPromotedAt: string | undefined;
-    const activeKeys = new Set<string>();
-    const activeEntries = new Map<string, DoctorMemoryDreamingEntryPayload>();
-    const shortTermEntries: DoctorMemoryDreamingEntryPayload[] = [];
-    const promotedEntries: DoctorMemoryDreamingEntryPayload[] = [];
-
-    for (const [entryKey, value] of Object.entries(entries)) {
-      const entry = asRecord(value);
-      if (!entry) {
-        continue;
-      }
-      const source = normalizeTrimmedString(entry.source);
-      const entryPath = normalizeTrimmedString(entry.path);
-      if (source !== "memory" || !entryPath || !isShortTermMemoryPath(entryPath)) {
-        continue;
-      }
-      const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
-      const recallCount = toNonNegativeInt(entry.recallCount);
-      const dailyCount = toNonNegativeInt(entry.dailyCount);
-      const groundedCount = toNonNegativeInt(entry.groundedCount);
-      const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
-      const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entryPath);
-      const snippet =
-        normalizeTrimmedString(entry.snippet) ??
-        normalizeTrimmedString(entry.summary) ??
-        normalizedEntryPath;
-      const lastRecalledAt = normalizeTrimmedString(entry.lastRecalledAt);
-      const detail: DoctorMemoryDreamingEntryPayload = {
-        key: entryKey,
-        path: normalizedEntryPath,
-        startLine: range.startLine,
-        endLine: Math.max(range.startLine, range.endLine),
-        snippet,
-        recallCount,
-        dailyCount,
-        groundedCount,
-        totalSignalCount: totalEntrySignalCount,
-        lightHits: 0,
-        remHits: 0,
-        phaseHitCount: 0,
-        ...(lastRecalledAt ? { lastRecalledAt } : {}),
-      };
-      const promotedAt = normalizeTrimmedString(entry.promotedAt);
-      if (!promotedAt) {
-        shortTermCount += 1;
-        activeKeys.add(entryKey);
-        recallSignalCount += recallCount;
-        dailySignalCount += dailyCount;
-        groundedSignalCount += groundedCount;
-        totalSignalCount += totalEntrySignalCount;
-        shortTermEntries.push(detail);
-        activeEntries.set(entryKey, detail);
-        continue;
-      }
-      promotedTotal += 1;
-      promotedEntries.push({
-        ...detail,
-        promotedAt,
-      });
-      const promotedAtMs = Date.parse(promotedAt);
-      if (Number.isFinite(promotedAtMs) && isSameMemoryDreamingDay(promotedAtMs, nowMs, timezone)) {
-        promotedToday += 1;
-      }
-      if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
-        latestPromotedAtMs = promotedAtMs;
-        latestPromotedAt = promotedAt;
-      }
-    }
-
-    let phaseSignalError: string | undefined;
-    try {
-      const phaseRaw = await fs.readFile(phaseSignalPath, "utf-8");
-      const parsedPhase = JSON.parse(phaseRaw) as unknown;
-      const phaseStore = asRecord(parsedPhase);
-      const phaseEntries = asRecord(phaseStore?.entries) ?? {};
-      for (const [key, value] of Object.entries(phaseEntries)) {
-        // Phase signals are joined only to active short-term entries, not archived promotions.
-        if (!activeKeys.has(key)) {
-          continue;
-        }
-        const phaseEntry = asRecord(value);
-        const lightHits = toNonNegativeInt(phaseEntry?.lightHits);
-        const remHits = toNonNegativeInt(phaseEntry?.remHits);
-        lightPhaseHitCount += lightHits;
-        remPhaseHitCount += remHits;
-        phaseSignalCount += lightHits + remHits;
-        const detail = activeEntries.get(key);
-        if (detail) {
-          detail.lightHits = lightHits;
-          detail.remHits = remHits;
-          detail.phaseHitCount = lightHits + remHits;
-        }
-      }
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code !== "ENOENT") {
-        phaseSignalError = formatError(err);
-      }
-    }
-
-    return {
-      shortTermCount,
-      recallSignalCount,
-      dailySignalCount,
-      groundedSignalCount,
-      totalSignalCount,
-      phaseSignalCount,
-      lightPhaseHitCount,
-      remPhaseHitCount,
-      promotedTotal,
-      promotedToday,
-      storePath,
-      phaseSignalPath,
-      shortTermEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryByRecency),
-      signalEntries: trimDreamingEntries(shortTermEntries, compareDreamingEntryBySignals),
-      promotedEntries: trimDreamingEntries(promotedEntries, compareDreamingEntryByPromotion),
-      ...(latestPromotedAt ? { lastPromotedAt: latestPromotedAt } : {}),
-      ...(phaseSignalError ? { phaseSignalError } : {}),
-    };
+    return await loadShortTermPromotionDreamingStats({ workspaceDir, nowMs, timezone });
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
-      return {
-        shortTermCount: 0,
-        recallSignalCount: 0,
-        dailySignalCount: 0,
-        groundedSignalCount: 0,
-        totalSignalCount: 0,
-        phaseSignalCount: 0,
-        lightPhaseHitCount: 0,
-        remPhaseHitCount: 0,
-        promotedTotal: 0,
-        promotedToday: 0,
-        storePath,
-        phaseSignalPath,
-        shortTermEntries: [],
-        signalEntries: [],
-        promotedEntries: [],
-      };
-    }
     return {
       shortTermCount: 0,
       recallSignalCount: 0,
@@ -659,8 +445,6 @@ async function loadDreamingStoreStats(
       remPhaseHitCount: 0,
       promotedTotal: 0,
       promotedToday: 0,
-      storePath,
-      phaseSignalPath,
       shortTermEntries: [],
       signalEntries: [],
       promotedEntries: [],

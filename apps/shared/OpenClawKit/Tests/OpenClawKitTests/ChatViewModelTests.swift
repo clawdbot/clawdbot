@@ -97,6 +97,8 @@ private func makeViewModel(
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+    setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
     resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -105,6 +107,7 @@ private func makeViewModel(
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
+    onSessionChanged: (@MainActor (String) -> Void)? = nil,
     onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil) async
     -> (TestChatTransport, OpenClawChatViewModel)
 {
@@ -112,6 +115,8 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        requestHistoryHook: requestHistoryHook,
+        setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
         resetSessionHook: resetSessionHook,
         compactSessionHook: compactSessionHook,
@@ -124,6 +129,7 @@ private func makeViewModel(
             sessionKey: sessionKey,
             transport: transport,
             initialThinkingLevel: initialThinkingLevel,
+            onSessionChanged: onSessionChanged,
             onThinkingLevelChanged: onThinkingLevelChanged)
     }
     return (transport, vm)
@@ -155,6 +161,13 @@ private func waitForLastSentRunId(_ transport: TestChatTransport) async throws -
     return try #require(await transport.lastSentRunId())
 }
 
+private func waitForSentRunId(after sentRunCount: Int, _ transport: TestChatTransport) async throws -> String {
+    try await waitUntil("transport send called") {
+        await transport.sentRunIds().count > sentRunCount
+    }
+    return try #require(await transport.sentRunIds().last)
+}
+
 @discardableResult
 private func sendMessageAndEmitFinal(
     transport: TestChatTransport,
@@ -162,10 +175,15 @@ private func sendMessageAndEmitFinal(
     text: String,
     sessionKey: String = "main") async throws -> String
 {
+    let sentRunCount = await transport.sentRunIds().count
     await sendUserMessage(vm, text: text)
-    try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+    let runId = try await waitForSentRunId(after: sentRunCount, transport)
+    try await waitUntil("send is pending or refreshed") {
+        await MainActor.run {
+            vm.pendingRunCount == 1 || (!vm.isSending && vm.pendingRunCount == 0)
+        }
+    }
 
-    let runId = try await waitForLastSentRunId(transport)
     transport.emit(
         .chat(
             OpenClawChatEventPayload(
@@ -274,6 +292,28 @@ private actor AsyncCounter {
         self.value += 1
         return self.value
     }
+
+    func current() -> Int {
+        self.value
+    }
+}
+
+private actor SessionSubscribeGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            self.waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        let waiters = self.waiters
+        self.waiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
 }
 
 private actor TestChatTransportState {
@@ -281,6 +321,7 @@ private actor TestChatTransportState {
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
     var healthCallCount: Int = 0
+    var activeSessionKeys: [String] = []
     var createdSessionKeys: [String] = []
     var createdParentSessionKeys: [String?] = []
     var resetSessionKeys: [String] = []
@@ -299,6 +340,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
+    private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
     private let createSessionHook: (@Sendable (String, String?) async throws -> Void)?
     private let resetSessionHook: (@Sendable (String) async throws -> Void)?
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
@@ -314,6 +357,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+        setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -325,6 +370,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.requestHistoryHook = requestHistoryHook
+        self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
         self.resetSessionHook = resetSessionHook
         self.compactSessionHook = compactSessionHook
@@ -343,7 +390,12 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.stream
     }
 
-    func setActiveSessionKey(_: String) async throws {}
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        await self.state.activeSessionKeysAppend(sessionKey)
+        if let setActiveSessionHook {
+            try await setActiveSessionHook(sessionKey)
+        }
+    }
 
     func createSession(
         key: String,
@@ -359,8 +411,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        let idx = await self.state.historyCallCount
-        await self.state.setHistoryCallCount(idx + 1)
+        let idx = await self.state.nextHistoryCallIndex()
+        if let requestHistoryHook {
+            try await requestHistoryHook(sessionKey)
+        }
         if idx < self.historyResponses.count {
             return self.historyResponses[idx]
         }
@@ -389,8 +443,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     }
 
     func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
-        let idx = await self.state.sessionsCallCount
-        await self.state.setSessionsCallCount(idx + 1)
+        let idx = await self.state.nextSessionsCallIndex()
         if idx < self.sessionsResponses.count {
             return self.sessionsResponses[idx]
         }
@@ -403,8 +456,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
-        let idx = await self.state.modelsCallCount
-        await self.state.setModelsCallCount(idx + 1)
+        let idx = await self.state.nextModelsCallIndex()
         if idx < self.modelResponses.count {
             return self.modelResponses[idx]
         }
@@ -440,8 +492,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
-        let idx = await self.state.healthCallCount
-        await self.state.setHealthCallCount(idx + 1)
+        let idx = await self.state.nextHealthCallIndex()
         if idx < self.healthResponses.count {
             return self.healthResponses[idx]
         }
@@ -483,6 +534,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.patchedModels
     }
 
+    func activeSessionKeys() async -> [String] {
+        await self.state.activeSessionKeys
+    }
+
     func patchedThinkingLevels() async -> [String] {
         await self.state.patchedThinkingLevels
     }
@@ -509,20 +564,28 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 }
 
 extension TestChatTransportState {
-    fileprivate func setHistoryCallCount(_ v: Int) {
-        self.historyCallCount = v
+    fileprivate func nextHistoryCallIndex() -> Int {
+        defer { self.historyCallCount += 1 }
+        return self.historyCallCount
     }
 
-    fileprivate func setSessionsCallCount(_ v: Int) {
-        self.sessionsCallCount = v
+    fileprivate func nextSessionsCallIndex() -> Int {
+        defer { self.sessionsCallCount += 1 }
+        return self.sessionsCallCount
     }
 
-    fileprivate func setModelsCallCount(_ v: Int) {
-        self.modelsCallCount = v
+    fileprivate func nextModelsCallIndex() -> Int {
+        defer { self.modelsCallCount += 1 }
+        return self.modelsCallCount
     }
 
-    fileprivate func setHealthCallCount(_ v: Int) {
-        self.healthCallCount = v
+    fileprivate func nextHealthCallIndex() -> Int {
+        defer { self.healthCallCount += 1 }
+        return self.healthCallCount
+    }
+
+    fileprivate func activeSessionKeysAppend(_ v: String) {
+        self.activeSessionKeys.append(v)
     }
 
     fileprivate func sentRunIdsAppend(_ v: String) {
@@ -570,8 +633,8 @@ extension TestChatTransportState {
     }
 }
 
-@Suite struct ChatViewModelTests {
-    @Test func displaysErrorMessageFallbackOnlyForAssistantErrorTurns() throws {
+struct ChatViewModelTests {
+    @Test func `displays error message fallback only for assistant error turns`() throws {
         func decodeMessage(role: String, stopReason: String, contentText: String? = nil) throws -> OpenClawChatMessage {
             let contentJSON = contentText.map { #"[{"type":"text","text":"\#($0)"}]"# } ?? "[]"
             let data = """
@@ -641,7 +704,7 @@ extension TestChatTransportState {
                 errorMessage: toolUseAssistant.errorMessage) == nil)
     }
 
-    @Test func streamsAssistantAndClearsOnFinal() async throws {
+    @Test func `streams assistant and clears on final`() async throws {
         let sessionId = "sess-main"
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(
@@ -686,7 +749,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
-    @Test func rendersFinalChatEventMessageWhenHistoryIsStale() async throws {
+    @Test func `renders final chat event message when history is stale`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
@@ -719,9 +782,9 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func completionWaitRefreshesHistoryAndClearsPendingRun() async throws {
+    @Test func `completion wait refreshes history and clears pending run`() async throws {
         let sessionId = "sess-main"
-        let now = Date().timeIntervalSince1970 * 1000
+        let now = (Date().timeIntervalSince1970 * 1000) + 10000
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(sessionId: sessionId, messages: [])
         let history3 = historyPayload(
@@ -755,9 +818,9 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func agentLifecycleEndRefreshesHistoryAndClearsPendingRun() async throws {
+    @Test func `agent lifecycle end refreshes history and clears pending run`() async throws {
         let sessionId = "sess-main"
-        let now = Date().timeIntervalSince1970 * 1000
+        let now = (Date().timeIntervalSince1970 * 1000) + 10000
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(sessionId: sessionId, messages: [])
         let history3 = historyPayload(
@@ -792,7 +855,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func pendingRunBlocksSecondMainSend() async throws {
+    @Test func `pending run blocks second main send`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
@@ -817,7 +880,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.input } == "second")
     }
 
-    @Test func keepsOptimisticUserMessageWhenFinalRefreshReturnsOnlyAssistantHistory() async throws {
+    @Test func `keeps optimistic user message when final refresh returns only assistant history`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(sessionId: sessionId)
@@ -848,7 +911,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func keepsOptimisticUserMessageWhenFinalRefreshHistoryIsTemporarilyEmpty() async throws {
+    @Test func `keeps optimistic user message when final refresh history is temporarily empty`() async throws {
         let sessionId = "sess-main"
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(sessionId: sessionId, messages: [])
@@ -870,7 +933,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func doesNotDuplicateUserMessageWhenRefreshReturnsCanonicalTimestamp() async throws {
+    @Test func `does not duplicate user message when refresh returns canonical timestamp`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(sessionId: sessionId)
@@ -909,7 +972,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func preservesRepeatedOptimisticUserMessagesWithIdenticalContentDuringRefresh() async throws {
+    @Test func `preserves repeated optimistic user messages with identical content during refresh`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(sessionId: sessionId)
@@ -932,6 +995,15 @@ extension TestChatTransportState {
             transport: transport,
             vm: vm,
             text: "retry")
+        try await waitUntil("first retry completes") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.contains { message in
+                        message.role == "assistant" &&
+                            message.content.compactMap(\.text).joined(separator: "\n") == "first answer"
+                    }
+            }
+        }
         try await sendMessageAndEmitFinal(
             transport: transport,
             vm: vm,
@@ -952,7 +1024,100 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func acceptsCanonicalSessionKeyEventsForOwnPendingRun() async throws {
+    @Test func `run refresh does not resurrect old user turns omitted by bounded history`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let oldMessages = [
+            chatTextMessage(role: "user", text: "old question", timestamp: now - 2000),
+            chatTextMessage(role: "assistant", text: "old answer", timestamp: now - 1000),
+        ]
+        let boundedRefreshMessages = [
+            chatTextMessage(role: "user", text: "current question", timestamp: now + 5000),
+            chatTextMessage(role: "assistant", text: "current answer", timestamp: now + 6000),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionId: sessionId, messages: oldMessages),
+                historyPayload(sessionId: sessionId, messages: boundedRefreshMessages),
+            ])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "current question")
+
+        try await waitUntil("bounded refresh replaces old history") {
+            await MainActor.run {
+                let texts = vm.messages.map { message in
+                    message.content.compactMap(\.text).joined(separator: "\n")
+                }
+                return texts.contains("current answer") &&
+                    !texts.contains("old question") &&
+                    !texts.contains("old answer")
+            }
+        }
+    }
+
+    @Test @MainActor func `bounded repeated same text reply invalidates older stale refresh`() async throws {
+        let sessionId = "sess-main"
+        let staleRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let staleRefreshReleasedCount = AsyncCounter()
+        let now = (Date().timeIntervalSince1970 * 1000) + 10000
+        let firstTurn = [
+            chatTextMessage(role: "user", text: "retry", timestamp: now),
+            chatTextMessage(role: "assistant", text: "first answer", timestamp: now + 1),
+        ]
+        let latestBoundedTurn = [
+            chatTextMessage(role: "user", text: "retry", timestamp: now + 2),
+            chatTextMessage(role: "assistant", text: "second answer", timestamp: now + 3),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionId: sessionId, messages: firstTurn),
+                historyPayload(sessionId: sessionId, messages: firstTurn),
+                historyPayload(sessionId: sessionId, messages: latestBoundedTurn),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await staleRefreshGate.wait()
+                    _ = await staleRefreshReleasedCount.increment()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        transport.emit(OpenClawChatTransportEvent.seqGap)
+        try await waitUntil("stale refresh is in flight") {
+            await historyCount.current() == 2
+        }
+
+        vm.input = "retry"
+        vm.send()
+        _ = try await waitForLastSentRunId(transport)
+        try await waitUntil("bounded second answer applies") {
+            await MainActor.run {
+                vm.sessionId == sessionId &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "second answer" }
+                    }
+            }
+        }
+
+        await staleRefreshGate.release()
+        try await waitUntil("stale refresh resumes") {
+            await staleRefreshReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run {
+            vm.messages.contains { message in
+                message.content.contains { $0.text == "second answer" }
+            }
+        })
+    }
+
+    @Test func `accepts canonical session key events for own pending run`() async throws {
         let history1 = historyPayload()
         let history2 = historyPayload(
             messages: [
@@ -983,7 +1148,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func surfacesAssistantErrorMessageAfterOwnRunRefresh() async throws {
+    @Test func `surfaces assistant error message after own run refresh`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload()
         let history2 = historyPayload(
@@ -1028,7 +1193,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func acceptsCanonicalSessionKeyEventsForExternalRuns() async throws {
+    @Test func `accepts canonical session key events for external runs`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "first", timestamp: now)])
         let history2 = historyPayload(
@@ -1056,7 +1221,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func appendsExternalSessionUserMessageForActiveSession() async throws {
+    @Test func `appends external session user message for active session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             sessionKey: "agent:aiden:main",
@@ -1092,7 +1257,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func appendsGlobalSessionUserMessageForSelectedAgent() async throws {
+    @Test func `appends global session user message for selected agent`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             sessionKey: "agent:work:global",
@@ -1129,7 +1294,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func ignoresGlobalSessionUserMessageForDifferentAgent() async throws {
+    @Test func `ignores global session user message for different agent`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             sessionKey: "agent:work:global",
@@ -1161,7 +1326,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.messages.isEmpty })
     }
 
-    @Test func ignoresAgentMainSessionMessageForDifferentCurrentMainAlias() async throws {
+    @Test func `ignores agent main session message for different current main alias`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
@@ -1190,7 +1355,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.messages.isEmpty })
     }
 
-    @Test func appendsExternalSessionAssistantMessageWhileRunPending() async throws {
+    @Test func `appends external session assistant message while run pending`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
@@ -1228,7 +1393,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func dedupesGatewayEchoOfLocalUserMessage() async throws {
+    @Test func `dedupes gateway echo of local user message`() async throws {
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
         await MainActor.run { vm.load() }
@@ -1257,19 +1422,19 @@ extension TestChatTransportState {
                                 fileName: nil,
                                 content: nil),
                         ],
-                        timestamp: Date().timeIntervalSince1970 * 1000 + 5_000),
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 5000),
                     messageId: "srv-echo-1",
                     messageSeq: 1)))
 
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(await MainActor.run {
-            vm.messages.filter { msg in
+            vm.messages.count(where: { msg in
                 msg.role == "user" && msg.content.first?.text == "echo me"
-            }.count == 1
+            }) == 1
         })
     }
 
-    @Test func appendsSameContentUserTranscriptWhenItIsNotLocalEcho() async throws {
+    @Test func `appends same content user transcript when it is not local echo`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             historyResponses: [
@@ -1297,20 +1462,20 @@ extension TestChatTransportState {
                                 fileName: nil,
                                 content: nil),
                         ],
-                        timestamp: now + 1_000),
+                        timestamp: now + 1000),
                     messageId: "msg-repeat-2",
                     messageSeq: 2)))
 
         try await waitUntil("repeated user transcript appended") {
             await MainActor.run {
-                vm.messages.filter { msg in
+                vm.messages.count(where: { msg in
                     msg.role == "user" && msg.content.first?.text == "repeat"
-                }.count == 2
+                }) == 2
             }
         }
     }
 
-    @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {
+    @Test func `ignores external session user message for other session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
@@ -1339,7 +1504,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.messages.isEmpty })
     }
 
-    @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {
+    @Test func `preserves message I ds across history refreshes`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)])
         let history2 = historyPayload(
@@ -1361,7 +1526,7 @@ extension TestChatTransportState {
         #expect(firstIdAfter == firstIdBefore)
     }
 
-    @Test func clearsStreamingOnExternalFinalEvent() async throws {
+    @Test func `clears streaming on external final event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
@@ -1381,7 +1546,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
-    @Test func seqGapClearsPendingRunsAndAutoRefreshesHistory() async throws {
+    @Test func `seq gap clears pending runs and auto refreshes history`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload()
         let history2 = historyPayload(messages: [chatTextMessage(
@@ -1407,7 +1572,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText == nil })
     }
 
-    @Test func sessionChoicesPreferMainAndRecent() async throws {
+    @Test func `session choices prefer main and recent`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
@@ -1433,7 +1598,7 @@ extension TestChatTransportState {
         #expect(keys == ["main", "recent-1", "recent-2"])
     }
 
-    @Test func sessionChoicesIncludeCurrentWhenMissing() async throws {
+    @Test func `session choices include current when missing`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
@@ -1457,7 +1622,7 @@ extension TestChatTransportState {
         #expect(keys == ["main", "custom"])
     }
 
-    @Test func sessionChoicesUseResolvedMainSessionKeyInsteadOfLiteralMain() async throws {
+    @Test func `session choices use resolved main session key instead of literal main`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let recentOlder = now - (90 * 60 * 1000)
@@ -1505,7 +1670,7 @@ extension TestChatTransportState {
         #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
     }
 
-    @Test func sessionChoicesHideInternalOnboardingSession() async throws {
+    @Test func `session choices hide internal onboarding session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 1000)
@@ -1572,7 +1737,7 @@ extension TestChatTransportState {
         #expect(keys == ["agent:main:main"])
     }
 
-    @Test func newTriggerStartsFreshAgentSessionWithoutAdminReset() async throws {
+    @Test func `new trigger starts fresh agent session without admin reset`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before new", timestamp: 1),
@@ -1620,7 +1785,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func newTriggerFallsBackToResetWhenCreateSessionIsUnsupported() async throws {
+    @Test func `new trigger falls back to reset when create session is unsupported`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before new", timestamp: 1),
@@ -1659,7 +1824,7 @@ extension TestChatTransportState {
         #expect(await transport.lastSentRunId() == nil)
     }
 
-    @Test func sendAttemptsRequestWhenCachedHealthIsStaleFalse() async throws {
+    @Test func `send attempts request when cached health is stale false`() async throws {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             healthResponses: [false])
@@ -1676,7 +1841,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
-    @Test func resetTriggerResetsSessionAndReloadsHistory() async throws {
+    @Test func `reset trigger resets session and reloads history`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before reset", timestamp: 1),
@@ -1706,7 +1871,7 @@ extension TestChatTransportState {
         #expect(await transport.lastSentRunId() == nil)
     }
 
-    @Test func compactTriggerCompactsSessionAndReloadsHistory() async throws {
+    @Test func `compact trigger compacts session and reloads history`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before compact", timestamp: 1),
@@ -1736,7 +1901,7 @@ extension TestChatTransportState {
         #expect(await transport.lastSentRunId() == nil)
     }
 
-    @Test func compactTriggerShowsGenericErrorMessageOnFailure() async throws {
+    @Test func `compact trigger shows generic error message on failure`() async throws {
         let history = historyPayload()
         let (transport, vm) = await makeViewModel(
             historyResponses: [history],
@@ -1759,7 +1924,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText } == "Unable to compact the session. Please try again.")
     }
 
-    @Test func compactTriggerIgnoresConcurrentAndImmediateRepeatRequests() async throws {
+    @Test func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
         let before = historyPayload(
             messages: [
                 chatTextMessage(role: "assistant", text: "before compact", timestamp: 1),
@@ -1803,7 +1968,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText } == "Please wait before compacting this session again.")
     }
 
-    @Test func compactTriggerAllowsImmediateRetryAfterFailure() async throws {
+    @Test func `compact trigger allows immediate retry after failure`() async throws {
         let history = historyPayload()
         let attemptCount = AsyncCounter()
         let (transport, vm) = await makeViewModel(
@@ -1840,7 +2005,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
-    @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
+    @Test func `bootstraps model selection from session and defaults`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -1868,7 +2033,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.defaultModelLabel } == "Default: openai/gpt-4.1-mini")
     }
 
-    @Test func selectingDefaultModelPatchesNilAndUpdatesSelection() async throws {
+    @Test func `selecting default model patches nil and updates selection`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -1901,7 +2066,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
     }
 
-    @Test func selectingProviderQualifiedModelDisambiguatesDuplicateModelIDs() async throws {
+    @Test func `selecting provider qualified model disambiguates duplicate model I ds`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -1934,7 +2099,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func slashModelIDsStayProviderQualifiedInSelectionAndPatch() async throws {
+    @Test func `slash model I ds stay provider qualified in selection and patch`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -1967,7 +2132,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func staleModelPatchCompletionsDoNotOverwriteNewerSelection() async throws {
+    @Test func `stale model patch completions do not overwrite newer selection`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -2010,7 +2175,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
     }
 
-    @Test func sendWaitsForInFlightModelPatchToFinish() async throws {
+    @Test func `send waits for in flight model patch to finish`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -2063,7 +2228,7 @@ extension TestChatTransportState {
         #expect(await transport.sentThinkingLevels() == ["off"])
     }
 
-    @Test func failedLatestModelSelectionDoesNotReplayAfterOlderCompletionFinishes() async throws {
+    @Test func `failed latest model selection does not replay after older completion finishes`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -2113,7 +2278,7 @@ extension TestChatTransportState {
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
-    @Test func failedLatestModelSelectionRestoresEarlierSuccessWithoutReplay() async throws {
+    @Test func `failed latest model selection restores earlier success without replay`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -2162,7 +2327,1043 @@ extension TestChatTransportState {
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
-    @Test func switchingSessionsIgnoresLateModelPatchCompletionFromPreviousSession() async throws {
+    @Test @MainActor func `switch session notifies session changed callback`() async throws {
+        var changedSessionKeys: [String] = []
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            onSessionChanged: { changedSessionKeys.append($0) })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.switchSession(to: "other")
+
+        try await waitUntil("user switch bootstrapped target session") {
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+        }
+        #expect(changedSessionKeys == ["other"])
+    }
+
+    @Test @MainActor func `sync session does not notify session changed callback`() async throws {
+        var changedSessionKeys: [String] = []
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            onSessionChanged: { changedSessionKeys.append($0) })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+
+        try await waitUntil("external sync bootstrapped target session") {
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+        }
+        #expect(changedSessionKeys.isEmpty)
+    }
+
+    @Test @MainActor func `refresh ignores late history from canceled bootstrap for same session`() async throws {
+        let staleHistoryGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let staleHistoryReleasedCount = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-stale-load",
+                    messages: [chatTextMessage(role: "assistant", text: "stale load", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-current-refresh",
+                    messages: [chatTextMessage(role: "assistant", text: "current refresh", timestamp: 2)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 1 {
+                    await staleHistoryGate.wait()
+                    _ = await staleHistoryReleasedCount.increment()
+                }
+            })
+
+        vm.load()
+        try await waitUntil("first bootstrap history request is in flight") {
+            await mainHistoryCount.current() == 1
+        }
+
+        vm.refresh()
+        try await waitUntil("refresh bootstrap wins") {
+            await MainActor.run {
+                vm.sessionId == "sess-current-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "current refresh" }
+                    }
+            }
+        }
+
+        await staleHistoryGate.release()
+        try await waitUntil("stale load history resumes") {
+            await staleHistoryReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-current-refresh")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale load" }
+            }
+        })
+    }
+
+    @Test @MainActor func `manual refresh invalidates older same session event refresh`() async throws {
+        let staleRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let staleRefreshReleasedCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-event-stale",
+                    messages: [chatTextMessage(role: "assistant", text: "stale same-session event", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-manual-refresh",
+                    messages: [chatTextMessage(role: "assistant", text: "current manual refresh", timestamp: 2)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await staleRefreshGate.wait()
+                    _ = await staleRefreshReleasedCount.increment()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        transport.emit(.seqGap)
+        try await waitUntil("same-session event refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        vm.refresh()
+        try await waitUntil("manual refresh wins") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-manual-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "current manual refresh" }
+                    }
+            }
+        }
+
+        await staleRefreshGate.release()
+        try await waitUntil("stale same-session event refresh resumes") {
+            await staleRefreshReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-main-manual-refresh")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale same-session event" }
+            }
+        })
+    }
+
+    @Test @MainActor func `failed newer same session refresh does not drop older successful send refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from older success", timestamp: now + 1),
+                    ]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+                if count == 3 {
+                    throw NSError(
+                        domain: "ChatViewModelTests",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "newer event refresh failed"])
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+        try await waitUntil("newer event refresh starts") {
+            await mainHistoryCount.current() == 3
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older successful send refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from older success" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `newer empty terminal refresh does not drop older assistant run refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from older success", timestamp: now + 1),
+                    ]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-terminal-empty-refresh",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+        try await waitUntil("newer empty terminal refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-terminal-empty-refresh" &&
+                    vm.pendingRunCount == 0
+            }
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older successful send refresh applies assistant reply") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.pendingRunCount == 0 &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from older success" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `newer user only terminal refresh after final event message does not drop older assistant run refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from durable history", timestamp: now + 1),
+                    ]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-terminal-user-only-refresh",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "reply from final event",
+                        timestamp: now + 0.5),
+                    errorMessage: nil)))
+        try await waitUntil("newer user-only terminal refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-terminal-user-only-refresh" &&
+                    !vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from final event" }
+                    }
+            }
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older successful send refresh applies durable assistant reply") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.pendingRunCount == 0 &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from durable history" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `manual refresh user only history does not drop older assistant run refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from older success", timestamp: now + 1),
+                    ]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-manual-user-only-refresh",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        vm.refresh()
+        try await waitUntil("manual user-only refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-manual-user-only-refresh" &&
+                    vm.pendingRunCount == 0
+            }
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older successful send refresh applies after manual refresh") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from older success" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `manual refresh older complete history does not drop pending user assistant run refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let olderCompleteMessages = [
+            chatTextMessage(role: "user", text: "older question", timestamp: now - 2),
+            chatTextMessage(role: "assistant", text: "older answer", timestamp: now - 1),
+        ]
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main",
+                    messages: olderCompleteMessages),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: olderCompleteMessages + [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from pending turn", timestamp: now + 1),
+                    ]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-manual-older-complete-refresh",
+                    messages: olderCompleteMessages),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        vm.refresh()
+        try await waitUntil("manual older complete refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-manual-older-complete-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "older answer" }
+                    } &&
+                    !vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from pending turn" }
+                    }
+            }
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older successful send refresh applies pending turn answer") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from pending turn" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `manual stale complete refresh after final event does not drop durable reply refresh`() async throws {
+        let sendRefreshGate = SessionSubscribeGate()
+        let eventRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let olderCompleteMessages = [
+            chatTextMessage(role: "user", text: "older question", timestamp: now - 2),
+            chatTextMessage(role: "assistant", text: "older answer", timestamp: now - 1),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main",
+                    messages: olderCompleteMessages),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: olderCompleteMessages + [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "durable reply", timestamp: now + 1),
+                    ]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-event-stale-complete-refresh",
+                    messages: olderCompleteMessages),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-manual-stale-complete-refresh",
+                    messages: olderCompleteMessages),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await sendRefreshGate.wait()
+                }
+                if count == 3 {
+                    await eventRefreshGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("post-send refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(role: "assistant", text: "local final reply", timestamp: now + 0.5),
+                    errorMessage: nil)))
+        try await waitUntil("local final event reply is visible") {
+            await MainActor.run {
+                vm.messages.contains { message in
+                    message.content.contains { $0.text == "local final reply" }
+                }
+            }
+        }
+
+        vm.refresh()
+        try await waitUntil("manual stale complete refresh applies without durable reply") {
+            let historyCount = await mainHistoryCount.current()
+            let stateMatches = await MainActor.run {
+                vm.sessionId == "sess-main-manual-stale-complete-refresh" &&
+                    !vm.messages.contains { message in
+                        message.content.contains { $0.text == "durable reply" }
+                    }
+            }
+            return historyCount == 4 && stateMatches
+        }
+
+        await eventRefreshGate.release()
+        try await waitUntil("event stale complete refresh resumes") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-event-stale-complete-refresh"
+            }
+        }
+
+        await sendRefreshGate.release()
+
+        try await waitUntil("older durable send refresh applies after manual stale refresh") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-send-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "durable reply" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `bootstrap history does not overwrite newer same session refresh`() async throws {
+        let bootstrapHistoryGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let bootstrapHistoryReleasedCount = AsyncCounter()
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: Date().timeIntervalSince1970 * 1000,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [sessionEntry(key: "main", updatedAt: Date().timeIntervalSince1970 * 1000)])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-bootstrap-stale",
+                    messages: [chatTextMessage(role: "assistant", text: "stale bootstrap", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-event-newer",
+                    messages: [chatTextMessage(role: "assistant", text: "newer event refresh", timestamp: 2)]),
+            ],
+            sessionsResponses: [sessions],
+            modelResponses: [[modelChoice(id: "glm-5.1", name: "GLM 5.1")]],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 1 {
+                    await bootstrapHistoryGate.wait()
+                    _ = await bootstrapHistoryReleasedCount.increment()
+                }
+            })
+
+        vm.load()
+        try await waitUntil("bootstrap history is in flight") {
+            await mainHistoryCount.current() == 1
+        }
+
+        transport.emit(.seqGap)
+        try await waitUntil("newer same-session refresh applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-main-event-newer" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "newer event refresh" }
+                    }
+            }
+        }
+
+        await bootstrapHistoryGate.release()
+        try await waitUntil("bootstrap history resumes") {
+            await bootstrapHistoryReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-main-event-newer")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale bootstrap" }
+            }
+        })
+        try await waitUntil("bootstrap metadata still loads") {
+            await MainActor.run {
+                vm.healthOK &&
+                    vm.sessions.contains { $0.key == "main" } &&
+                    vm.modelChoices.contains { $0.modelID == "glm-5.1" }
+            }
+        }
+    }
+
+    @Test @MainActor func `stale fallback refresh keeps retrying while run remains pending`() async throws {
+        let staleFallbackGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let staleFallbackReleasedCount = AsyncCounter()
+        let now = (Date().timeIntervalSince1970 * 1000) + 10000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-send-refresh",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-stale-fallback",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-newer-empty-refresh",
+                    messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-next-fallback",
+                    messages: [
+                        chatTextMessage(role: "user", text: "hello", timestamp: now),
+                        chatTextMessage(role: "assistant", text: "reply from later fallback", timestamp: now + 1),
+                    ]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 3 {
+                    await staleFallbackGate.wait()
+                    _ = await staleFallbackReleasedCount.increment()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.input = "hello"
+        vm.send()
+        _ = try await waitForLastSentRunId(transport)
+        try await waitUntil("first fallback refresh is in flight") {
+            await mainHistoryCount.current() == 3
+        }
+
+        emitExternalFinal(transport: transport, runId: "external-run", sessionKey: "main")
+        try await waitUntil("newer empty refresh applies") {
+            await MainActor.run { vm.sessionId == "sess-main-newer-empty-refresh" }
+        }
+
+        await staleFallbackGate.release()
+        try await waitUntil("stale fallback resumes") {
+            await staleFallbackReleasedCount.current() == 1
+        }
+
+        try await waitUntil("later fallback still runs", timeoutSeconds: 7.0) {
+            await mainHistoryCount.current() >= 5
+        }
+        try await waitUntil("later fallback applies assistant reply") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "reply from later fallback" }
+                    }
+            }
+        }
+    }
+
+    @Test @MainActor func `stale bootstrap history does not overwrite latest session`() async throws {
+        let staleHistoryGate = SessionSubscribeGate()
+        let staleHistoryReleasedCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "other",
+                    sessionId: "sess-other-stale",
+                    messages: [chatTextMessage(role: "assistant", text: "stale other", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-current",
+                    messages: [chatTextMessage(role: "assistant", text: "current main", timestamp: 2)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                if sessionKey == "other" {
+                    await staleHistoryGate.wait()
+                    _ = await staleHistoryReleasedCount.increment()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+        try await waitUntil("other session subscribe starts") {
+            await transport.activeSessionKeys().last == "other"
+        }
+
+        vm.syncSession(to: "main")
+        try await waitUntil("main session wins") {
+            await MainActor.run {
+                vm.sessionKey == "main" &&
+                    vm.sessionId == "sess-main-current" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "current main" }
+                    }
+            }
+        }
+
+        await staleHistoryGate.release()
+        try await waitUntil("stale other history resumes") {
+            await staleHistoryReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-main-current")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale other" }
+            }
+        })
+    }
+
+    @Test @MainActor func `session switch clears old latest user before new session refreshes`() async throws {
+        let staleBootstrapGate = SessionSubscribeGate()
+        let otherHistoryCount = AsyncCounter()
+        let staleBootstrapReleasedCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main",
+                    messages: [chatTextMessage(role: "user", text: "main pending question", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "other",
+                    sessionId: "sess-other-bootstrap-stale",
+                    messages: [chatTextMessage(role: "assistant", text: "stale other bootstrap", timestamp: 2)]),
+                historyPayload(
+                    sessionKey: "other",
+                    sessionId: "sess-other-newer-refresh",
+                    messages: [chatTextMessage(role: "assistant", text: "newer other refresh", timestamp: 3)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "other" else { return }
+                let count = await otherHistoryCount.increment()
+                if count == 1 {
+                    await staleBootstrapGate.wait()
+                    _ = await staleBootstrapReleasedCount.increment()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+        try await waitUntil("other bootstrap history is in flight") {
+            await otherHistoryCount.current() == 1
+        }
+        #expect(await MainActor.run { vm.messages.isEmpty })
+
+        transport.emit(.seqGap)
+        try await waitUntil("newer other refresh applies") {
+            await MainActor.run {
+                vm.sessionKey == "other" &&
+                    vm.sessionId == "sess-other-newer-refresh" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "newer other refresh" }
+                    }
+            }
+        }
+
+        await staleBootstrapGate.release()
+        try await waitUntil("stale other bootstrap resumes") {
+            await staleBootstrapReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-other-newer-refresh")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale other bootstrap" }
+            }
+        })
+    }
+
+    @Test @MainActor func `stale seq gap refresh does not overwrite latest session`() async throws {
+        let staleRefreshGate = SessionSubscribeGate()
+        let mainHistoryCount = AsyncCounter()
+        let staleRefreshReleasedCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(
+                    sessionKey: "main",
+                    sessionId: "sess-main-gap-stale",
+                    messages: [chatTextMessage(role: "assistant", text: "stale gap", timestamp: 1)]),
+                historyPayload(
+                    sessionKey: "other",
+                    sessionId: "sess-other-current",
+                    messages: [chatTextMessage(role: "assistant", text: "current other", timestamp: 2)]),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await mainHistoryCount.increment()
+                if count == 2 {
+                    await staleRefreshGate.wait()
+                    _ = await staleRefreshReleasedCount.increment()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        transport.emit(.seqGap)
+        try await waitUntil("seq gap refresh is in flight") {
+            await mainHistoryCount.current() == 2
+        }
+
+        vm.syncSession(to: "other")
+        try await waitUntil("other session bootstrap wins") {
+            await MainActor.run {
+                vm.sessionKey == "other" &&
+                    vm.sessionId == "sess-other-current" &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "current other" }
+                    }
+            }
+        }
+
+        await staleRefreshGate.release()
+        try await waitUntil("stale seq gap refresh resumes") {
+            await staleRefreshReleasedCount.current() == 1
+        }
+
+        #expect(await MainActor.run { vm.sessionId } == "sess-other-current")
+        #expect(await MainActor.run {
+            !vm.messages.contains { message in
+                message.content.contains { $0.text == "stale gap" }
+            }
+        })
+    }
+
+    @Test @MainActor func `send waiting for model patch does not send after session switch`() async throws {
+        let modelPatchGate = SessionSubscribeGate()
+        let modelPatchReleasedCount = AsyncCounter()
+        let models = [modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            modelResponses: [models, models],
+            setSessionModelHook: { _ in
+                await modelPatchGate.wait()
+                _ = await modelPatchReleasedCount.increment()
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.selectModel("openai/gpt-5.4")
+        try await waitUntil("model patch is in flight") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
+        }
+
+        vm.input = "hello before switch"
+        vm.send()
+        try await waitUntil("send is waiting for model patch") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        vm.syncSession(to: "other")
+        try await waitUntil("session switch clears pending send") {
+            await MainActor.run {
+                vm.sessionKey == "other" &&
+                    vm.sessionId == "sess-other" &&
+                    vm.pendingRunCount == 0
+            }
+        }
+
+        await modelPatchGate.release()
+        try await waitUntil("model patch resumes") {
+            await modelPatchReleasedCount.current() == 1
+        }
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(await transport.sentRunIds().isEmpty)
+    }
+
+    @Test @MainActor func `stale sync bootstrap restores current active session subscription`() async throws {
+        let staleSubscribeGate = SessionSubscribeGate()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            setActiveSessionHook: { sessionKey in
+                if sessionKey == "other" {
+                    await staleSubscribeGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+        try await waitUntil("stale subscribe is in flight") {
+            await transport.activeSessionKeys().last == "other"
+        }
+
+        vm.syncSession(to: "main")
+        try await waitUntil("current session subscribed") {
+            let sessionKey = await MainActor.run { vm.sessionKey }
+            let activeSessionKeys = await transport.activeSessionKeys()
+            return sessionKey == "main" &&
+                Array(activeSessionKeys.suffix(2)) == ["other", "main"]
+        }
+
+        await staleSubscribeGate.release()
+
+        try await waitUntil("current session resubscribed after stale subscribe") {
+            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
+        }
+    }
+
+    @Test @MainActor func `stale subscribe failure reasserts current active session subscription`() async throws {
+        let staleSubscribeGate = SessionSubscribeGate()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+            ],
+            setActiveSessionHook: { sessionKey in
+                if sessionKey == "other" {
+                    await staleSubscribeGate.wait()
+                    throw NSError(
+                        domain: "TestChatTransport",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "stale subscribe failed after side effect"])
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+        try await waitUntil("stale subscribe is in flight") {
+            await transport.activeSessionKeys().last == "other"
+        }
+
+        vm.syncSession(to: "main")
+        try await waitUntil("current session subscribed") {
+            await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"]
+        }
+
+        await staleSubscribeGate.release()
+
+        try await waitUntil("current session resubscribed after stale subscribe failure") {
+            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
+        }
+    }
+
+    @Test @MainActor func `stale sync repair reasserts latest active session subscription`() async throws {
+        let staleSubscribeGate = SessionSubscribeGate()
+        let staleRepairGate = SessionSubscribeGate()
+        let mainSubscribeCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "final", sessionId: "sess-final"),
+            ],
+            setActiveSessionHook: { sessionKey in
+                if sessionKey == "other" {
+                    await staleSubscribeGate.wait()
+                }
+                if sessionKey == "main" {
+                    let count = await mainSubscribeCount.increment()
+                    if count == 3 {
+                        await staleRepairGate.wait()
+                    }
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        vm.syncSession(to: "other")
+        try await waitUntil("stale subscribe is in flight") {
+            await transport.activeSessionKeys().last == "other"
+        }
+
+        vm.syncSession(to: "main")
+        try await waitUntil("main session subscribed") {
+            await Array(transport.activeSessionKeys().suffix(2)) == ["other", "main"]
+        }
+
+        await staleSubscribeGate.release()
+        try await waitUntil("stale repair is in flight") {
+            await Array(transport.activeSessionKeys().suffix(3)) == ["other", "main", "main"]
+        }
+
+        vm.syncSession(to: "final")
+        try await waitUntil("newest session subscribed") {
+            let sessionKey = await MainActor.run { vm.sessionKey }
+            let activeSessionKeys = await transport.activeSessionKeys()
+            return sessionKey == "final" && activeSessionKeys.last == "final"
+        }
+
+        await staleRepairGate.release()
+
+        try await waitUntil("newest session resubscribed after stale repair") {
+            await Array(transport.activeSessionKeys().suffix(3)) == ["main", "final", "final"]
+        }
+    }
+
+    @Test func `switching sessions ignores late model patch completion from previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
@@ -2207,7 +3408,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == nil)
     }
 
-    @Test func lateModelCompletionDoesNotReplayCurrentSessionSelectionIntoPreviousSession() async throws {
+    @Test func `late model completion does not replay current session selection into previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let initialSessions = OpenClawChatSessionsListResponse(
             ts: now,
@@ -2279,7 +3480,7 @@ extension TestChatTransportState {
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
-    @Test func explicitThinkingLevelWinsOverHistoryAndPersistsChanges() async throws {
+    @Test func `explicit thinking level wins over history and persists changes`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2308,7 +3509,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { callbackState.values } == ["medium"])
     }
 
-    @Test func serverProvidedThinkingLevelsOutsideMenuArePreservedForSend() async throws {
+    @Test func `server provided thinking levels outside menu are preserved for send`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2326,7 +3527,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func decodesGatewayThinkingMetadataFromSessionList() throws {
+    @Test func `decodes gateway thinking metadata from session list`() throws {
         let json = """
         {
           "defaults": {
@@ -2370,7 +3571,7 @@ extension TestChatTransportState {
         #expect(decoded.sessions.first?.thinkingDefault == "max")
     }
 
-    @Test func sessionThinkingLevelsDrivePickerOptions() async throws {
+    @Test func `session thinking levels drive picker options`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2433,7 +3634,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "adaptive", "maximum"])
     }
 
-    @Test func thinkingOptionsFallbackAndCurrentUnsupportedLevelStayVisible() async throws {
+    @Test func `thinking options fallback and current unsupported level stay visible`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2481,7 +3682,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.label) } == ["off", "max", "xhigh"])
     }
 
-    @Test func matchingDefaultThinkingLevelsBeatLegacyRowThinkingOptions() async throws {
+    @Test func `matching default thinking levels beat legacy row thinking options`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2537,7 +3738,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == ["off", "adaptive", "max"])
     }
 
-    @Test func defaultThinkingLevelsDoNotLeakToDifferentSessionModel() async throws {
+    @Test func `default thinking levels do not leak to different session model`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2592,7 +3793,7 @@ extension TestChatTransportState {
             ["off", "minimal", "low", "medium", "high", "max"])
     }
 
-    @Test func staleThinkingPatchCompletionReappliesLatestSelection() async throws {
+    @Test func `stale thinking patch completion reapplies latest selection`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2622,7 +3823,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
     }
 
-    @Test func clearsStreamingOnExternalErrorEvent() async throws {
+    @Test func `clears streaming on external error event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
@@ -2646,7 +3847,7 @@ extension TestChatTransportState {
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
     }
 
-    @Test func stripsInboundMetadataFromHistoryMessages() async throws {
+    @Test func `strips inbound metadata from history messages`() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -2675,7 +3876,7 @@ extension TestChatTransportState {
         #expect(sanitized == "Hello?")
     }
 
-    @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
+    @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])

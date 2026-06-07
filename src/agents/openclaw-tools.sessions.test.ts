@@ -712,6 +712,18 @@ describe("sessions tools", () => {
         return {
           messages: [
             { role: "toolResult", content: [] },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              content: [{ type: "text", text: "mirrored" }],
+            },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-injected",
+              content: [{ type: "text", text: "injected" }],
+            },
             { role: "assistant", content: [{ type: "text", text: "ok" }] },
           ],
         };
@@ -725,16 +737,27 @@ describe("sessions tools", () => {
     }
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: Array<{ role?: string }> };
-    expect(details.messages).toHaveLength(1);
-    expect(details.messages?.[0]?.role).toBe("assistant");
+    const details = result.details as { messages?: unknown[] };
+    expect(details.messages).toHaveLength(3);
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
+    expect(details.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
 
     const withTools = await tool.execute("call4", {
       sessionKey: "main",
       includeTools: true,
     });
     const withToolsDetails = withTools.details as { messages?: unknown[] };
-    expect(withToolsDetails.messages).toHaveLength(2);
+    expect(withToolsDetails.messages).toHaveLength(4);
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(withToolsDetails.messages).toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
+    );
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {

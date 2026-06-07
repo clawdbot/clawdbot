@@ -1,9 +1,12 @@
 // Matrix tests cover legacy crypto restore plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { readMatrixLegacyCryptoMigrationState } from "../crypto-state-store.js";
 import type { MatrixRoomKeyBackupRestoreResult } from "../sdk.js";
 import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";
 
@@ -34,12 +37,7 @@ const BASE_AUTH = {
 type MatrixAuth = typeof BASE_AUTH;
 
 function readLegacyMigrationState(rootDir: string) {
-  const statePath = path.join(rootDir, "legacy-crypto-migration.json");
-  if (!fs.existsSync(statePath)) {
-    return null;
-  }
-
-  return JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+  return readMatrixLegacyCryptoMigrationState(rootDir) as Record<string, unknown> | null;
 }
 
 async function runLegacyRestoreScenario(params: {
@@ -82,16 +80,23 @@ async function runLegacyRestoreScenario(params: {
       result,
       restoreRoomKeyBackup,
       rootState: readLegacyMigrationState(rootDir),
-      rootStateExists: fs.existsSync(path.join(rootDir, "legacy-crypto-migration.json")),
+      rootStateExists: readLegacyMigrationState(rootDir) !== null,
       sourceRootState: readLegacyMigrationState(sourceRootDir),
-      sourceRootStateExists: fs.existsSync(
-        path.join(sourceRootDir, "legacy-crypto-migration.json"),
-      ),
+      sourceRootStateExists: readLegacyMigrationState(sourceRootDir) !== null,
     };
   });
 }
 
 describe("maybeRestoreLegacyMatrixBackup", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
+  });
+
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("marks pending legacy backup restore as completed after success", async () => {
     const { result, sourceRootState } = await runLegacyRestoreScenario({
       migration: {

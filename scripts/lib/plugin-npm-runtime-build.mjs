@@ -294,11 +294,16 @@ export async function buildPluginNpmRuntime(params) {
   };
 }
 
-function parseArgs(argv) {
+function readPackageDirArg(argv) {
   const packageDir = argv[0];
-  if (!packageDir) {
+  if (!packageDir || packageDir.startsWith("--")) {
     throw new Error("usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>");
   }
+  return packageDir;
+}
+
+export function parseArgs(argv) {
+  const packageDir = readPackageDirArg(argv);
   return { packageDir };
 }
 

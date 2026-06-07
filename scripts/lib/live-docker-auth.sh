@@ -229,9 +229,50 @@ openclaw_live_timeout_supports_kill_after() {
   "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1
 }
 
+openclaw_live_resource_limits_disabled() {
+  case "${OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS:-${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+openclaw_live_resource_value_disabled() {
+  case "${1:-}" in
+    "" | 0 | none | NONE | off | OFF | false | FALSE)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+openclaw_live_docker_run_resource_args() {
+  local target_array="${1:?target array required}"
+  eval "${target_array}=()"
+  if openclaw_live_resource_limits_disabled; then
+    return 0
+  fi
+
+  local memory="${OPENCLAW_LIVE_DOCKER_MEMORY:-${OPENCLAW_DOCKER_E2E_MEMORY:-8g}}"
+  local cpus="${OPENCLAW_LIVE_DOCKER_CPUS:-${OPENCLAW_DOCKER_E2E_CPUS:-16}}"
+  local pids_limit="${OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:-${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}}"
+
+  if ! openclaw_live_resource_value_disabled "$memory"; then
+    eval "${target_array}+=(--memory \"\$memory\")"
+  fi
+  if ! openclaw_live_resource_value_disabled "$cpus"; then
+    eval "${target_array}+=(--cpus \"\$cpus\")"
+  fi
+  if ! openclaw_live_resource_value_disabled "$pids_limit"; then
+    eval "${target_array}+=(--pids-limit \"\$pids_limit\")"
+  fi
+}
+
 openclaw_live_init_docker_run_args() {
   local target_array="${1:?target array required}"
   local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local resource_args=()
   local timeout_bin
   local quoted_timeout
 
@@ -245,6 +286,8 @@ openclaw_live_init_docker_run_args() {
   else
     eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
   fi
+  openclaw_live_docker_run_resource_args resource_args
+  openclaw_live_append_array "$target_array" resource_args
 }
 
 openclaw_live_container_node_options() {
@@ -347,7 +390,11 @@ openclaw_live_chown_bind_dirs_for_container_user() {
   done
   ((index > 0)) || return 0
 
+  local resource_args=()
+  openclaw_live_docker_run_resource_args resource_args
+
   docker run --rm \
+    "${resource_args[@]}" \
     -u 0:0 \
     --entrypoint sh \
     -e OPENCLAW_BIND_DIR_USER="$container_user" \

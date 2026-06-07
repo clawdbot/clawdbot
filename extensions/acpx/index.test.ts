@@ -45,9 +45,11 @@ describe("acpx plugin", () => {
   it("registers the runtime service and reply_dispatch hook", () => {
     const service = { id: "acpx-service", start: vi.fn() };
     createAcpxRuntimeServiceMock.mockReturnValue(service);
+    const openKeyedStore = vi.fn();
 
     const api = {
       pluginConfig: { stateDir: "/tmp/acpx" },
+      runtime: { state: { openKeyedStore } },
       registerService: vi.fn(),
       on: vi.fn(),
     };
@@ -56,9 +58,30 @@ describe("acpx plugin", () => {
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
+      openKeyedStore: expect.any(Function),
     });
+    const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {
+      openKeyedStore: typeof openKeyedStore;
+    };
+    params.openKeyedStore({ namespace: "test", maxEntries: 1 });
+    expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
     expect(api.registerService).toHaveBeenCalledWith(service);
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock);
+  });
+
+  it("does not touch runtime state while registering metadata-only plugin APIs", () => {
+    const service = { id: "acpx-service", start: vi.fn() };
+    createAcpxRuntimeServiceMock.mockReturnValue(service);
+
+    const api = {
+      pluginConfig: {},
+      runtime: {},
+      registerService: vi.fn(),
+      on: vi.fn(),
+    };
+
+    expect(() => plugin.register(api as never)).not.toThrow();
+    expect(api.registerService).toHaveBeenCalledWith(service);
   });
 
   it("preserves the ACP reply_dispatch runtime path through the registered hook", async () => {
@@ -71,8 +94,10 @@ describe("acpx plugin", () => {
     });
 
     const on = vi.fn();
+    const openKeyedStore = vi.fn();
     const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
+      runtime: { state: { openKeyedStore } } as never,
       registerService: vi.fn(),
       on,
     });

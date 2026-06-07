@@ -4,7 +4,15 @@ import { registerWikiCli } from "./src/cli.js";
 import { memoryWikiConfigSchema, resolveMemoryWikiConfig } from "./src/config.js";
 import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
+import {
+  configureMemoryWikiImportRunStateStore,
+  createMemoryWikiImportRunStateStore,
+} from "./src/import-runs-state.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import {
+  configureMemoryWikiSourceSyncStateStore,
+  createMemoryWikiSourceSyncStateStore,
+} from "./src/source-sync-state.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -20,6 +28,12 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
+    configureMemoryWikiSourceSyncStateStore(
+      createMemoryWikiSourceSyncStateStore(api.runtime.state.openKeyedStore),
+    );
+    configureMemoryWikiImportRunStateStore(
+      createMemoryWikiImportRunStateStore(api.runtime.state.openKeyedStore),
+    );
 
     api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
     api.registerMemoryCorpusSupplement(

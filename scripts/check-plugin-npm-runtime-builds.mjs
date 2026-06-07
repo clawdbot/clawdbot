@@ -11,16 +11,20 @@ import {
   resolvePluginNpmRuntimeBuildPlan,
 } from "./lib/plugin-npm-runtime-build.mjs";
 
-function parseArgs(argv) {
+function readPackageArgValue(argv, index) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error("missing value for --package");
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const packageDirs = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--package") {
-      const packageDir = argv[index + 1];
-      if (!packageDir) {
-        throw new Error("missing value for --package");
-      }
-      packageDirs.push(packageDir);
+      packageDirs.push(readPackageArgValue(argv, index));
       index += 1;
       continue;
     }

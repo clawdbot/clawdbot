@@ -2,8 +2,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { createConnection as createNetConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
@@ -161,6 +163,48 @@ describe("qa-otel-smoke receiver bounds", () => {
     }
   });
 
+  it("closes active local OTLP receiver sockets during cleanup", async () => {
+    const receiver = testing.startLocalOtlpReceiver();
+    const port = await receiver.listen();
+    const socket = createNetConnection(port, "127.0.0.1");
+    const socketClosed = new Promise<void>((resolve) => {
+      socket.once("close", resolve);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      socket.write(
+        [
+          "POST /v1/traces HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/x-protobuf",
+          "Content-Length: 1048576",
+          "",
+          "x",
+        ].join("\r\n"),
+      );
+
+      await Promise.race([
+        receiver.close(),
+        delay(1_000).then(() => {
+          throw new Error("receiver close timed out");
+        }),
+      ]);
+      await Promise.race([
+        socketClosed,
+        delay(1_000).then(() => {
+          throw new Error("socket close timed out");
+        }),
+      ]);
+    } finally {
+      socket.destroy();
+      await receiver.close().catch(() => {});
+    }
+  });
+
   it("fails smoke assertions for captured non-2xx OTLP requests", () => {
     const assertion = testing.assertSmoke({
       bodyText: {},
@@ -203,6 +247,19 @@ describe("qa-otel-smoke receiver bounds", () => {
 
     expect(captured.traces?.join("\n")).toContain("OTEL-QA-SECRET");
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
+  });
+
+  it("keeps collector output tails bounded without retaining earlier chunks", () => {
+    const output = testing.createBoundedTextAccumulator(64);
+
+    output.append("DO_NOT_RETAIN_COLLECTOR_PREFIX\n");
+    output.append(Buffer.alloc(2048, "x"));
+    output.append("\nCOLLECTOR_TAIL_MARKER\n");
+
+    expect(output.byteLength()).toBeLessThanOrEqual(64);
+    expect(output.text()).toContain("COLLECTOR_TAIL_MARKER");
+    expect(output.text()).toContain("...");
+    expect(output.text()).not.toContain("DO_NOT_RETAIN_COLLECTOR_PREFIX");
   });
 
   it("times out and kills a wedged QA suite child with a detached gateway", async () => {
@@ -301,6 +358,51 @@ describe("qa-otel-smoke receiver bounds", () => {
         "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
       );
       expect(existsSync(collectorDir)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports bounded Docker collector output when readiness exits", async () => {
+    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-output-"));
+    const collectorDir = path.join(tempRoot, "collector");
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+
+    try {
+      let thrown: unknown;
+      await testing
+        .startDockerOtelCollector(4317, {
+          mkdtemp: async () => {
+            mkdirSync(collectorDir);
+            return collectorDir;
+          },
+          randomUUID: () => "00000000-0000-4000-8000-000000000000",
+          reserveLocalPort: async () => 4318,
+          spawn: vi.fn(() => child) as never,
+          stopDockerContainer: vi.fn(async () => {}),
+          waitForLocalPort: async (_port, _timeout, readFailure) => {
+            child.stdout.emit("data", "DO_NOT_DUMP_COLLECTOR_PREFIX\n");
+            child.stderr.emit("data", Buffer.alloc(64 * 1024, "x"));
+            child.stderr.emit("data", "\nCOLLECTOR_TAIL_MARKER\n");
+            child.emit("close", 1);
+            await delay(0);
+            throw new Error(readFailure());
+          },
+        })
+        .catch((error: unknown) => {
+          thrown = error;
+        });
+
+      expect(thrown).toBeInstanceOf(Error);
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toContain("COLLECTOR_TAIL_MARKER");
+      expect(message).not.toContain("DO_NOT_DUMP_COLLECTOR_PREFIX");
+      expect(message.length).toBeLessThan(24 * 1024);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

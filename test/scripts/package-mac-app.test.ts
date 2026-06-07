@@ -48,6 +48,102 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSparkleBuildHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("sparkle_canonical_build_from_version()");
+  const end = script.indexOf("build_path_for_arch()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getStopPackagedAppBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("running_packaged_app_pids()");
+  const end = script.indexOf("\nstop_packaged_app_if_running\n");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getSwiftCompatibilityBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
+  const end = script.indexOf('echo "🖼  Copying app icon"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
+  tempDirs.push(root, toolsDir);
+
+  const appRoot = path.join(root, "dist", "OpenClaw.app");
+  const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
+  const lsofPath = path.join(toolsDir, "lsof");
+  const pgrepPath = path.join(toolsDir, "pgrep");
+  const sleepPath = path.join(toolsDir, "sleep");
+
+  writeFileSync(
+    lsofPath,
+    ["#!/usr/bin/env bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
+    "utf8",
+  );
+  writeFileSync(pgrepPath, "#!/usr/bin/env bash\nprintf '123\\n'\n", "utf8");
+  writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+  chmodSync(lsofPath, 0o755);
+  chmodSync(pgrepPath, 0o755);
+  chmodSync(sleepPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRODUCT=OpenClaw
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    kill() {
+      if [[ "\${1:-}" == "-0" ]]; then
+        return ${killZeroStatus}
+      fi
+      return 0
+    }
+    ${getStopPackagedAppBlock()}
+    stop_packaged_app_if_running
+  `);
+}
+
+function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+  const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const xcodeSelectPath = path.join(toolsDir, "xcode-select");
+  tempDirs.push(root, toolsDir);
+
+  writeFileSync(
+    xcodeSelectPath,
+    ["#!/usr/bin/env bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
+    "utf8",
+  );
+  chmodSync(xcodeSelectPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    BUILD_CONFIG=${JSON.stringify(buildConfig)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    mkdir -p "$APP_ROOT/Contents/Frameworks"
+    ${getSwiftCompatibilityBlock()}
+  `);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -127,6 +223,45 @@ describe("package-mac-app plist stamping", () => {
     expect(result.stderr).toContain("pnpm is not on PATH and corepack pnpm is unavailable");
   });
 
+  it("runs Sparkle build metadata derivation from the repository root", () => {
+    const helperBlock = getSparkleBuildHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-root-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-tools-"));
+    tempDirs.push(tempRoot, toolsDir);
+
+    const nodePath = path.join(toolsDir, "node");
+    writeFileSync(
+      nodePath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
+        '  echo "node ran outside repo root: $PWD" >&2',
+        "  exit 1",
+        "fi",
+        "echo 2026060290",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(nodePath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_ROOT=${JSON.stringify(tempRoot)}
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export OPENCLAW_ROOT PATH
+      cd /tmp
+      ${helperBlock}
+      sparkle_canonical_build_from_version 2026.6.2
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026060290\n");
+    expect(result.stderr).toBe("");
+  });
+
   it("does not kill unrelated OpenClaw processes during packaging", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stopBlock = script.slice(
@@ -141,6 +276,34 @@ describe("package-mac-app plist stamping", () => {
     expect(stopBlock).toContain(
       '[[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]',
     );
+  });
+
+  it("fails when the packaged app survives forced shutdown", () => {
+    const result = runStopPackagedAppHarness(0);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Packaged OpenClaw bundle did not exit: 123");
+  });
+
+  it("fails release packaging when the Swift compatibility library is missing", () => {
+    const result = runSwiftCompatibilityHarness("release");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift compatibility library not found");
+  });
+
+  it("allows debug packaging to continue without the Swift compatibility library", () => {
+    const result = runSwiftCompatibilityHarness("debug");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("WARN: Swift compatibility library not found");
+  });
+
+  it("passes when the packaged app exits after shutdown", () => {
+    const result = runStopPackagedAppHarness(1);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   it("keeps mac packaging script checks in the macOS CI lane", () => {

@@ -12,6 +12,7 @@ import {
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -170,6 +171,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const snapshot = await getSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          fallbackEntry: params.sessionEntry,
+          persist: false,
         });
         syncGoalSessionEntry(params);
         return goalReply(formatSessionGoalStatus(snapshot.goal));
@@ -188,6 +191,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
@@ -199,6 +203,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
@@ -209,6 +214,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         const message = formatGoalResumeContinuationPrompt(parsed.text);
         applyGoalContinuationPrompt(params, message);
         return goalContinuation();
@@ -222,6 +228,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
       }
       case "block":
@@ -233,6 +240,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
       case "clear": {
@@ -241,6 +249,9 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
         });
         syncGoalSessionEntry(params);
+        if (removed) {
+          markCommandSessionMetadataChanged(params);
+        }
         return goalReply(removed ? "Goal cleared." : "No goal to clear.");
       }
       default:

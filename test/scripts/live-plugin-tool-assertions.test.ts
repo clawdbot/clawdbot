@@ -87,13 +87,29 @@ describe("live plugin tool assertions", () => {
       });
       mkdirSync(sessionsDir, { recursive: true });
       writeFileSync(
-        path.join(sessionsDir, "tool.jsonl"),
-        `${"x".repeat(64 * 1024 - "e2e_slug_".length)}e2e_slug_probe\n`,
-        "utf8",
-      );
-      writeFileSync(
-        path.join(sessionsDir, "reply.jsonl"),
-        `${"x".repeat(64 * 1024 - "live-plugin-".length)}live-plugin-slug\n`,
+        path.join(sessionsDir, "session.jsonl"),
+        [
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "call-live-plugin-tool",
+                  name: "e2e_slug_probe",
+                  input: { seed: "live plugin slug" },
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "tool",
+              tool_call_id: "call-live-plugin-tool",
+              content: `${"x".repeat(64 * 1024)}\nlive-plugin-slug`,
+            },
+          }),
+        ].join("\n"),
         "utf8",
       );
 
@@ -101,6 +117,131 @@ describe("live plugin tool assertions", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects markers that only appear as raw transcript text", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [{ text: "live-plugin-slug" }],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        path.join(sessionsDir, "session.jsonl"),
+        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
+        "utf8",
+      );
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("missing causal tool-result evidence");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects split transcript evidence across unrelated files", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [{ text: "live-plugin-slug" }],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(path.join(sessionsDir, "tool.jsonl"), "e2e_slug_probe\n", "utf8");
+      writeFileSync(path.join(sessionsDir, "reply.jsonl"), "live-plugin-slug\n", "utf8");
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("session transcript did not show");
+      expect(result.stderr).toContain("after checking 2 jsonl file(s)");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds session transcript traversal before scanning unbounded trees", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [{ text: "live-plugin-slug" }],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      for (let index = 0; index < 4; index += 1) {
+        writeFileSync(path.join(sessionsDir, `noise-${index}.jsonl`), "noise\n", "utf8");
+      }
+
+      const result = runAssertion(root, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES: "2",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("session transcript scan exceeded 2 filesystem entries");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects markers that only appear in error payload text", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeJson(path.join(root, "agent.json"), {
+        payloads: [
+          { isError: true, text: "live-plugin-slug" },
+          { text: "regular reply without the expected marker" },
+        ],
+      });
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        path.join(sessionsDir, "session.jsonl"),
+        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
+        "utf8",
+      );
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live agent reply did not contain tool slug");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects non-JSON stdout even when a later object contains the slug", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    const sessionsDir = path.join(root, "state", "agents", "main", "sessions");
+
+    try {
+      writeFileSync(
+        path.join(root, "agent.json"),
+        ["warning before json", JSON.stringify({ payloads: [{ text: "live-plugin-slug" }] })].join(
+          "\n",
+        ),
+        "utf8",
+      );
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        path.join(sessionsDir, "session.jsonl"),
+        ["e2e_slug_probe", "live-plugin-slug"].join("\n"),
+        "utf8",
+      );
+
+      const result = runAssertion(root);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Unexpected token");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -132,6 +273,31 @@ describe("live plugin tool assertions", () => {
       expect(result.stderr).toContain("recent stderr tail");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_STDOUT");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_STDERR");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects oversized agent output before parsing it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+
+    try {
+      writeFileSync(
+        path.join(root, "agent.json"),
+        `DO_NOT_DUMP_OLD_AGENT_OUTPUT${"x".repeat(70 * 1024)}\nrecent oversized stdout tail`,
+        "utf8",
+      );
+      writeFileSync(path.join(root, "agent.err"), "recent stderr tail\n", "utf8");
+
+      const result = runAssertion(root, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES: "1024",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live agent output exceeded 1024 bytes");
+      expect(result.stderr).toContain("recent oversized stdout tail");
+      expect(result.stderr).toContain("recent stderr tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_AGENT_OUTPUT");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

@@ -1,3 +1,4 @@
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
@@ -13,10 +14,12 @@ export async function runQaWhatsAppCommand(opts: LiveTransportQaCommandOptions) 
     "observed messages": result.observedMessagesPath,
     ...(result.gatewayDebugDirPath ? { "gateway debug logs": result.gatewayDebugDirPath } : {}),
   });
-  if (
-    !runOptions.allowFailures &&
-    result.scenarios.some((scenario) => scenario.status === "fail")
-  ) {
-    process.exitCode = 1;
+  if (!runOptions.allowFailures) {
+    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+      result.summaryPath,
+    );
+    if (blockingScenarioCount > 0) {
+      process.exitCode = 1;
+    }
   }
 }

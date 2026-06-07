@@ -302,7 +302,9 @@ describe("release user journey assertions", () => {
             "0.2",
           ]),
         ),
-      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS must be a positive integer. Got: "100ms"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });
@@ -364,7 +366,9 @@ describe("release user journey assertions", () => {
               "hello",
             ]),
         ),
-      ).rejects.toThrow("fixture inbound failed: 500");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES must be a positive integer. Got: "16bytes"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });

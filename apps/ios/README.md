@@ -1,6 +1,6 @@
 # OpenClaw iOS (Super Alpha)
 
-This iOS app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node` on iPhone and iPad.
+This iOS app is super-alpha and internal-use only. The first public App Store release targets iPhone and connects to an OpenClaw Gateway as a `role: node`.
 
 ## Distribution Status
 
@@ -34,7 +34,7 @@ open OpenClaw.xcodeproj
 
 3. In Xcode:
    - Scheme: `OpenClaw`
-   - Destination: connected iPhone or iPad (recommended for real behavior)
+   - Destination: connected iPhone (recommended for real behavior)
    - Build configuration: `Debug`
    - Run (`Product` -> `Run`)
 4. If signing fails on a personal team:
@@ -251,7 +251,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 ## Computer Use Relationship
 
-The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone or iPad canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
+The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
 
 ## Location Automation Use Case (Testing)
 

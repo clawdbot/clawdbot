@@ -132,7 +132,7 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/auto-reply/reply/export-html"],
+      outputs: ["dist/export-html"],
     },
   },
   {

@@ -9,6 +9,11 @@ import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } 
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+  resolveMediaReferenceLocalPath,
+} from "../../../media/media-reference.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
@@ -49,6 +54,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Override these to delegate file reading to remote systems (for example SSH).
  */
 export interface ReadOperations {
+  /** Resolve a user-supplied path for this read backend. */
+  resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
@@ -58,6 +65,7 @@ export interface ReadOperations {
 }
 
 const defaultReadOperations: ReadOperations = {
+  resolvePath: resolveLocalReadPath,
   readFile: (path) => fsReadFile(path),
   access: (path) => fsAccess(path, constants.R_OK),
   detectImageMimeType: detectSupportedImageMimeTypeFromFile,
@@ -161,6 +169,22 @@ function getCompactReadClassification(
   return undefined;
 }
 
+async function resolveLocalReadPath(filePath: string, cwd: string): Promise<string> {
+  const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
+  if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
+    return await resolveMediaReferenceLocalPath(normalizedMediaSource);
+  }
+  return resolveReadPath(filePath, cwd);
+}
+
+async function resolveReadToolPath(
+  ops: ReadOperations,
+  filePath: string,
+  cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
+}
+
 function formatCompactReadCall(
   classification: CompactReadClassification,
   args: ReadRenderArgs | undefined,
@@ -246,7 +270,6 @@ export function createReadToolDefinition(
     ) {
       void toolCallId;
       void onUpdate;
-      const absolutePath = resolveReadPath(path, cwd);
       return new Promise<{
         content: (TextContent | ImageContent)[];
         details: ReadToolDetails | undefined;
@@ -264,6 +287,7 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
+            const absolutePath = await resolveReadToolPath(ops, path, cwd);
             // Check if file exists and is readable.
             await ops.access(absolutePath);
             if (aborted) {

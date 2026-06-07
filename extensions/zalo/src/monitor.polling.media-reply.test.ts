@@ -1,15 +1,18 @@
 // Zalo tests cover monitor.polling.media reply plugin behavior.
-import { chmod, mkdir, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
-import { join } from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import { setZaloRuntime } from "./runtime.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -24,7 +27,6 @@ import {
 } from "./test-support/monitor-mocks-test-support.js";
 
 const prepareHostedZaloMediaUrlMock = vi.fn();
-const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
 
 vi.mock("./outbound-media.js", async () => {
   const actual = await vi.importActual<typeof import("./outbound-media.js")>("./outbound-media.js");
@@ -36,15 +38,14 @@ vi.mock("./outbound-media.js", async () => {
 
 import { clearHostedZaloMediaForTest } from "./outbound-media.js";
 
-function resolveHostedZaloMediaDirName(): string {
-  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
-  return workerId ? `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${workerId}` : ZALO_OUTBOUND_MEDIA_DIR_NAME;
+function installZaloRuntimeForTest(): void {
+  setZaloRuntime({
+    state: {
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests<T>("zalo", options),
+    },
+  } as unknown as PluginRuntime);
 }
-
-const ZALO_OUTBOUND_MEDIA_DIR = join(
-  resolvePreferredOpenClawTmpDir(),
-  resolveHostedZaloMediaDirName(),
-);
 
 async function writeHostedZaloMediaFixture(params: {
   id: string;
@@ -53,21 +54,28 @@ async function writeHostedZaloMediaFixture(params: {
   buffer: Buffer;
   contentType?: string;
 }): Promise<void> {
-  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, mode: 0o700 });
-  await chmod(ZALO_OUTBOUND_MEDIA_DIR, 0o700).catch(() => undefined);
-  await Promise.all([
-    writeFile(
-      join(ZALO_OUTBOUND_MEDIA_DIR, `${params.id}.json`),
-      JSON.stringify({
-        routePath: params.routePath,
-        token: params.token,
-        contentType: params.contentType,
-        expiresAt: Date.now() + 60_000,
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    ),
-    writeFile(join(ZALO_OUTBOUND_MEDIA_DIR, `${params.id}.bin`), params.buffer, { mode: 0o600 }),
-  ]);
+  const metaStore = createPluginStateKeyedStoreForTests("zalo", {
+    namespace: "hosted-outbound-media",
+    maxEntries: 80,
+  });
+  const chunkStore = createPluginStateKeyedStoreForTests("zalo", {
+    namespace: "hosted-outbound-media-chunks",
+    maxEntries: 16_384,
+  });
+  await chunkStore.register(`media:${params.id}:chunk:0000`, {
+    id: params.id,
+    index: 0,
+    dataBase64: params.buffer.toString("base64"),
+  });
+  await metaStore.register(`media:${params.id}:meta`, {
+    id: params.id,
+    routePath: params.routePath,
+    token: params.token,
+    ...(params.contentType ? { contentType: params.contentType } : {}),
+    expiresAt: Date.now() + 60_000,
+    chunkCount: 1,
+    byteLength: params.buffer.byteLength,
+  });
 }
 
 function createHostedMediaResponse() {
@@ -111,7 +119,9 @@ describe("Zalo polling media replies", () => {
 
   beforeEach(async () => {
     await resetLifecycleTestState();
-    clearHostedZaloMediaForTest();
+    await clearHostedZaloMediaForTest();
+    resetPluginStateStoreForTests();
+    installZaloRuntimeForTest();
     prepareHostedZaloMediaUrlMock.mockReset();
     prepareHostedZaloMediaUrlMock.mockResolvedValue(
       "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret",
@@ -148,7 +158,7 @@ describe("Zalo polling media replies", () => {
   });
 
   afterAll(async () => {
-    clearHostedZaloMediaForTest();
+    await clearHostedZaloMediaForTest();
     await resetLifecycleTestState();
   });
 

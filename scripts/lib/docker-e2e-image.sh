@@ -131,6 +131,7 @@ docker_e2e_sample_stats_until_exit() {
   if ! [[ "$heartbeat_seconds" =~ ^[0-9]+$ ]] || [ "$heartbeat_seconds" -lt 1 ]; then
     heartbeat_seconds="30"
   fi
+  heartbeat_seconds="$((10#$heartbeat_seconds))"
 
   while kill -0 "$docker_pid" 2>/dev/null; do
     if docker_e2e_docker_cmd inspect "$container_name" >/dev/null 2>&1; then

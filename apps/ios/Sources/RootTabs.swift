@@ -298,7 +298,6 @@ struct RootTabs: View {
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
-                    self.showOnboarding = false
                     self.onboardingComplete = true
                     self.hasConnectedOnce = true
                     OnboardingStateStore.markCompleted(mode: nil)

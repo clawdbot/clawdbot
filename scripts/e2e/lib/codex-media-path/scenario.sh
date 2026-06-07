@@ -47,7 +47,7 @@ openclaw plugins inspect codex --runtime --json >"$PLUGIN_INSPECT_LOG"
 node scripts/e2e/lib/codex-media-path/write-config.mjs
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
-openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 480
+openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 480 "$PORT"
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
   tsx scripts/e2e/lib/codex-media-path/client.mjs >"$CLIENT_LOG" 2>&1

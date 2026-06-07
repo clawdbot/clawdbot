@@ -10,6 +10,14 @@ import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 /**
  * Parses Vitest profiler mode, output directory, and forwarded Vitest args.
  */
+function readOutputDirValue(argv, index) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error("Expected --output-dir <dir>.");
+  }
+  return value;
+}
+
 export function parseArgs(argv) {
   const args = {
     mode: "",
@@ -28,7 +36,7 @@ export function parseArgs(argv) {
       break;
     }
     if (arg === "--output-dir") {
-      args.outputDir = argv[i + 1] ?? "";
+      args.outputDir = readOutputDirValue(argv, i);
       i += 1;
       continue;
     }

@@ -56,6 +56,14 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+function requireFinalMessageId(final: { messageId?: string }, flow: SupportedFlow): string {
+  const messageId = final.messageId?.trim();
+  if (!messageId) {
+    throw new Error(`${flow} final send did not return a durable Telegram message id`);
+  }
+  return messageId;
+}
+
 type TelegramThinkingFinalDeps = {
   createDraftStream?: (params: {
     accountId?: string;
@@ -352,8 +360,9 @@ export async function runTelegramThinkingFinalFlow(
     threadId: options.threadId,
   });
 
+  const finalMessageId = requireFinalMessageId(final, "thinking-final");
   return {
-    finalMessageId: final.messageId,
+    finalMessageId,
     previewUpdates: thinkingUpdates.length,
   };
 }
@@ -416,8 +425,9 @@ export async function runTelegramWorkingFinalFlow(
     threadId: options.threadId,
   });
 
+  const finalMessageId = requireFinalMessageId(final, "working-final");
   return {
-    finalMessageId: final.messageId,
+    finalMessageId,
     previewUpdates,
   };
 }

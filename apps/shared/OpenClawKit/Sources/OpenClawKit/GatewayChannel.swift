@@ -197,6 +197,7 @@ private struct SelectedConnectAuth {
     let storedToken: String?
     let storedScopes: [String]?
     let authSource: GatewayAuthSource
+    let suppressedDeviceTokenRetry: Bool
 }
 
 private enum GatewayConnectErrorCodes {
@@ -442,7 +443,8 @@ public actor GatewayChannelActor {
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,
-            deviceId: identity?.deviceId)
+            deviceId: identity?.deviceId,
+            requestedScopes: requestedScopes)
         let scopes = self.resolveConnectScopes(
             role: role,
             requestedScopes: requestedScopes,
@@ -479,7 +481,9 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        if selectedAuth.authDeviceToken != nil, self.pendingDeviceTokenRetry {
+        if self.pendingDeviceTokenRetry,
+           selectedAuth.authDeviceToken != nil || selectedAuth.suppressedDeviceTokenRetry
+        {
             self.pendingDeviceTokenRetry = false
         }
         self.lastAuthSource = selectedAuth.authSource
@@ -555,7 +559,8 @@ public actor GatewayChannelActor {
     private func selectConnectAuth(
         role: String,
         includeDeviceIdentity: Bool,
-        deviceId: String?) -> SelectedConnectAuth
+        deviceId: String?,
+        requestedScopes: [String]) -> SelectedConnectAuth
     {
         let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitBootstrapToken =
@@ -566,9 +571,21 @@ public actor GatewayChannelActor {
             ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)
             : nil
         let storedToken = storedEntry?.token
+        let storedScopes = storedEntry?.scopes ?? []
+        let requestedScopesExceedStoredToken = Self.requestedScopesExceedStoredToken(
+            role: role,
+            requestedScopes: requestedScopes,
+            storedToken: storedToken,
+            storedScopes: storedScopes)
+        let suppressedDeviceTokenRetry =
+            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil
+        // Scope upgrades must be judged from the requested scopes. A stale
+        // device-token retry carries the old grant and is rejected before pairing repair.
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
-            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
+            !requestedScopesExceedStoredToken && storedToken != nil && explicitToken != nil &&
+            self.isTrustedDeviceRetryEndpoint()
         let authToken =
             explicitToken ??
             // A freshly scanned setup code should force the bootstrap pairing path instead of
@@ -598,7 +615,90 @@ public actor GatewayChannelActor {
             signatureToken: authToken ?? authBootstrapToken,
             storedToken: storedToken,
             storedScopes: storedEntry?.scopes,
-            authSource: authSource)
+            authSource: authSource,
+            suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
+    }
+
+    nonisolated static func _test_requestedScopesExceedStoredToken(
+        role: String,
+        requestedScopes: [String],
+        storedToken: String?,
+        storedScopes: [String]) -> Bool
+    {
+        self.requestedScopesExceedStoredToken(
+            role: role,
+            requestedScopes: requestedScopes,
+            storedToken: storedToken,
+            storedScopes: storedScopes)
+    }
+
+    private nonisolated static func requestedScopesExceedStoredToken(
+        role: String,
+        requestedScopes: [String],
+        storedToken: String?,
+        storedScopes: [String]) -> Bool
+    {
+        storedToken != nil && !storedScopes.isEmpty &&
+            !self.storedDeviceTokenScopesAllow(
+                role: role,
+                requestedScopes: requestedScopes,
+                storedScopes: storedScopes)
+    }
+
+    private nonisolated static func storedDeviceTokenScopesAllow(
+        role: String,
+        requestedScopes: [String],
+        storedScopes: [String]) -> Bool
+    {
+        let requested = self.normalizedScopeList(requestedScopes)
+        if requested.isEmpty {
+            return true
+        }
+        let allowed = self.normalizedScopeList(storedScopes)
+        if allowed.isEmpty {
+            return false
+        }
+        let allowedSet = Set(allowed)
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedRole != "operator" {
+            let prefix = "\(normalizedRole)."
+            return requested.allSatisfy { scope in
+                scope.hasPrefix(prefix) && allowedSet.contains(scope)
+            }
+        }
+        return requested.allSatisfy { scope in
+            self.operatorScopeSatisfied(scope, granted: allowedSet)
+        }
+    }
+
+    private nonisolated static func normalizedScopeList(_ scopes: [String]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for scope in scopes {
+            let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || seen.contains(trimmed) {
+                continue
+            }
+            seen.insert(trimmed)
+            out.append(trimmed)
+        }
+        return out
+    }
+
+    private nonisolated static func operatorScopeSatisfied(_ scope: String, granted: Set<String>) -> Bool {
+        if !scope.hasPrefix("operator.") {
+            return false
+        }
+        if granted.contains("operator.admin") {
+            return true
+        }
+        if scope == "operator.read" {
+            return granted.contains("operator.read") || granted.contains("operator.write")
+        }
+        if scope == "operator.write" {
+            return granted.contains("operator.write")
+        }
+        return granted.contains(scope)
     }
 
     private func shouldPersistBootstrapHandoffTokens() -> Bool {

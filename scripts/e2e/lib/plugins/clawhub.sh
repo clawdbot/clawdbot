@@ -24,13 +24,13 @@ run_plugins_clawhub_scenario() {
           return 0
         fi
         if ! kill -0 "$server_pid" 2>/dev/null; then
-          cat "$server_log"
+          openclaw_plugins_print_fixture_log "$server_log"
           return 1
         fi
         sleep 0.1
       done
 
-      cat "$server_log"
+      openclaw_plugins_print_fixture_log "$server_log"
       echo "Timed out waiting for ClawHub fixture server." >&2
       return 1
     }
@@ -45,7 +45,7 @@ run_plugins_clawhub_scenario() {
       fi
       unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-clawhub-fixture.XXXXXX")"
-      start_clawhub_fixture_server "$clawhub_fixture_dir"
+      start_clawhub_fixture_server "$clawhub_fixture_dir" || return 1
     fi
 
     node scripts/e2e/lib/plugins/assertions.mjs clawhub-preflight

@@ -2,6 +2,7 @@
 // Validates release metadata-only changed scopes for CI routing.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mjs";
 
 const VERSION_ONLY_TEXT_PATHS = new Set([
@@ -18,7 +19,15 @@ function normalizePath(input) {
     .replace(/^\.\/+/u, "");
 }
 
-function parseArgs(argv) {
+function readRefOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`Expected ${optionName} <ref>.`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = { staged: false, base: "origin/main", head: "HEAD", paths: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -27,9 +36,11 @@ function parseArgs(argv) {
     } else if (arg === "--staged") {
       args.staged = true;
     } else if (arg === "--base") {
-      args.base = argv[++index] ?? "";
+      args.base = readRefOptionValue(argv, index, arg);
+      index += 1;
     } else if (arg === "--head") {
-      args.head = argv[++index] ?? "";
+      args.head = readRefOptionValue(argv, index, arg);
+      index += 1;
     } else {
       args.paths.push(normalizePath(arg));
     }
@@ -118,8 +129,8 @@ function fail(message) {
   process.exitCode = 1;
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+export function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
   const paths = listChangedPaths(args);
 
   for (const filePath of paths) {
@@ -151,4 +162,6 @@ function main() {
   console.error(`[release-metadata] ok (${paths.length} files)`);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  main();
+}

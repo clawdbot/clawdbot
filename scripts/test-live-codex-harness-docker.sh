@@ -300,7 +300,7 @@ if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
     echo "ERROR: Codex auth cannot extract accountId from the available token; refresh OPENCLAW_CODEX_AUTH_JSON or use OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key." >&2
     exit 1
   fi
-  cat "$codex_preflight_log" >&2
+  tail -c 262144 "$codex_preflight_log" >&2 || true
   exit 1
 fi
 node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}

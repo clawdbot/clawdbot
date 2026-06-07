@@ -195,6 +195,54 @@ describe("google web search provider", () => {
     );
   });
 
+  it("accepts Gemini success JSON with empty grounding metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: { parts: [{ text: "Today's date is Sunday, June 7, 2026." }] },
+                    groundingMetadata: {},
+                  },
+                ],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    const result = await tool?.execute({ query: "current date today" });
+
+    expect(result).toMatchObject({
+      citations: [],
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+    });
+    expect(String(result?.content)).toContain("Today's date is Sunday, June 7, 2026.");
+  });
+
   it("reports malformed Gemini API JSON with a stable provider error", async () => {
     vi.stubGlobal(
       "fetch",

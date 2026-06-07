@@ -10,6 +10,9 @@ import {
 } from "../plugin-index-sqlite.mjs";
 
 const home = os.homedir();
+const OUTPUT_TAIL_BYTES = 64 * 1024;
+const OUTPUT_TAIL_LINES = 120;
+const OUTPUT_SCAN_WINDOW_BYTES = 8 * 1024;
 
 const readJson = (file) => {
   try {
@@ -106,15 +109,51 @@ function assertSnapshot(beforePath) {
   }
 }
 
-function assertOutput(logPath) {
-  const output = fs.readFileSync(logPath, "utf8");
-  const failure = output.includes("Downloading @example/lossless-claw")
+function appendBufferTail(tail, chunk, maxBytes) {
+  if (chunk.length >= maxBytes) {
+    return chunk.subarray(chunk.length - maxBytes);
+  }
+  if (tail.length + chunk.length <= maxBytes) {
+    return Buffer.concat([tail, chunk]);
+  }
+  return Buffer.concat([tail, chunk]).subarray(tail.length + chunk.length - maxBytes);
+}
+
+async function readOutputEvidence(logPath) {
+  let outputTail = Buffer.alloc(0);
+  let scanWindow = "";
+  let sawDownload = false;
+  let sawUpToDate = false;
+  for await (const chunk of fs.createReadStream(logPath)) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const text = buffer.toString("utf8");
+    const searchable = `${scanWindow}${text}`;
+    outputTail = appendBufferTail(outputTail, buffer, OUTPUT_TAIL_BYTES);
+    sawDownload ||= searchable.includes("Downloading @example/lossless-claw");
+    sawUpToDate ||= searchable.includes("lossless-claw is up to date (0.9.0).");
+    scanWindow = searchable.slice(-OUTPUT_SCAN_WINDOW_BYTES);
+  }
+  return {
+    outputTail: outputTail
+      .toString("utf8")
+      .split(/\r?\n/u)
+      .slice(-OUTPUT_TAIL_LINES)
+      .join("\n")
+      .trimEnd(),
+    sawDownload,
+    sawUpToDate,
+  };
+}
+
+async function assertOutput(logPath) {
+  const evidence = await readOutputEvidence(logPath);
+  const failure = evidence.sawDownload
     ? "Unexpected npm download/reinstall path"
-    : !output.includes("lossless-claw is up to date (0.9.0).")
+    : !evidence.sawUpToDate
       ? "Expected up-to-date output missing"
       : "";
   if (failure) {
-    throw new Error(`${failure}\n${output}`);
+    throw new Error(`${failure}\nOutput tail:\n${evidence.outputTail}`);
   }
 }
 

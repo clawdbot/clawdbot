@@ -196,4 +196,34 @@ describe("startQaGatewayRpcClient", () => {
     await expect(secondRequest).resolves.toEqual({ ok: true });
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects queued requests that have not started before stop", async () => {
+    let releaseFirst: (() => void) | null = null;
+    gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(
+      async () =>
+        await new Promise<{ ok: boolean }>((resolve) => {
+          releaseFirst = () => resolve({ ok: true });
+        }),
+    );
+
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    const firstRequest = client.request("health");
+    await Promise.resolve();
+    const secondRequest = client.request("status");
+    await Promise.resolve();
+
+    await client.stop();
+    expectReleaseCallback(releaseFirst)();
+
+    await expect(firstRequest).resolves.toEqual({ ok: true });
+    await expect(secondRequest).rejects.toThrow(
+      "gateway rpc client already stopped\nGateway logs:\nqa logs",
+    );
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+  });
 });

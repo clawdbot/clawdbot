@@ -379,7 +379,15 @@ export async function generateDependencyReleaseEvidence({
   return { manifest, counts, outputDir };
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName, { allowEmpty = false } = {}) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--") || (!allowEmpty && value === "")) {
+    throw new Error(`Expected ${optionName} <value>.`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     rootDir: process.cwd(),
     outputDir: null,
@@ -395,31 +403,38 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--root") {
-      options.rootDir = argv[++index];
+      options.rootDir = readOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--output-dir") {
-      options.outputDir = argv[++index];
+      options.outputDir = readOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--release-ref") {
-      options.releaseRef = argv[++index];
+      options.releaseRef = readOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--npm-dist-tag") {
-      options.npmDistTag = argv[++index];
+      options.npmDistTag = readOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      options.baseRef = argv[++index];
+      options.baseRef = readOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--github-output") {
-      options.githubOutput = argv[++index];
+      options.githubOutput = readOptionValue(argv, index, arg, { allowEmpty: true });
+      index += 1;
       continue;
     }
     if (arg === "--github-step-summary") {
-      options.githubStepSummary = argv[++index];
+      options.githubStepSummary = readOptionValue(argv, index, arg, { allowEmpty: true });
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);

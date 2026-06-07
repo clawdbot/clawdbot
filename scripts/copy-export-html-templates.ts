@@ -16,13 +16,7 @@ const exportHtmlSrcDir = path.join(
   "reply",
   "export-html",
 );
-const exportHtmlDistDir = path.join(
-  context.projectRoot,
-  "dist",
-  "auto-reply",
-  "reply",
-  "export-html",
-);
+const exportHtmlDistDir = path.join(context.projectRoot, "dist", "export-html");
 
 function copyExportHtmlTemplates() {
   if (!fs.existsSync(exportHtmlSrcDir)) {

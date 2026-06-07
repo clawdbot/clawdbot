@@ -31,7 +31,27 @@ function usage() {
   ].join("\n");
 }
 
-function parseArgs(argv) {
+function readFlagValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value.`);
+  }
+  return value;
+}
+
+function parsePositiveInt(value, flag) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+export function parseArgs(argv) {
   const args = {
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
@@ -39,31 +59,32 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      args.outputDir = argv[(index += 1)];
+      args.outputDir = readFlagValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      args.repoRoot = argv[(index += 1)];
+      args.repoRoot = readFlagValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--iterations") {
-      args.iterations = Number(argv[(index += 1)]);
+      args.iterations = parsePositiveInt(readFlagValue(argv, index, arg), arg);
+      index += 1;
       continue;
     }
     if (arg === "--methods") {
-      args.methods = argv[(index += 1)]
+      args.methods = readFlagValue(argv, index, arg)
         .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
+      index += 1;
       continue;
     }
     throw new Error(`Unknown argument: ${arg}\n${usage()}`);
   }
   if (!args.outputDir) {
     throw new Error(usage());
-  }
-  if (!Number.isInteger(args.iterations) || args.iterations < 1) {
-    throw new Error("--iterations must be a positive integer.");
   }
   if (args.methods.length === 0) {
     throw new Error("--methods must include at least one gateway method.");
@@ -104,6 +125,21 @@ function formatErrorMessage(error) {
   return String(error);
 }
 
+async function readyzReportsReady(response) {
+  if (!response.ok) {
+    return false;
+  }
+  if (typeof response.json !== "function") {
+    return false;
+  }
+  try {
+    const body = await response.json();
+    return body && typeof body === "object" && body.ready === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Polls readiness endpoints while also failing fast if the child exits.
  */
@@ -134,17 +170,22 @@ export async function waitForGatewayReady({
         `gateway exited before readiness code=${observedExit.code ?? "null"} signal=${observedExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
       );
     }
-    for (const endpoint of ["/readyz", "/healthz"]) {
-      try {
-        const response = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, {
-          signal: AbortSignal.timeout(probeTimeoutMs),
-        });
-        if (response.ok) {
-          return;
-        }
-      } catch {
-        // The gateway may not have bound the port yet.
+    try {
+      const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
+        signal: AbortSignal.timeout(probeTimeoutMs),
+      });
+      if (await readyzReportsReady(response)) {
+        return;
       }
+    } catch {
+      // The gateway may not have bound the port yet.
+    }
+    try {
+      await fetchImpl(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(probeTimeoutMs),
+      });
+    } catch {
+      // Liveness is diagnostic only; /readyz is the usable RPC readiness contract.
     }
     await sleep(sleepMs);
   }
@@ -412,15 +453,111 @@ function quantile(sorted, q) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * q) - 1))];
 }
 
-function stats(samples) {
+function roundMeasuredMs(value, label) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative finite duration.`);
+  }
+  return Math.max(1, Math.round(value));
+}
+
+export function summarizeRttSamples(samples) {
+  if (samples.length === 0) {
+    throw new Error("RPC RTT measurement produced no samples.");
+  }
   const sorted = samples.toSorted((left, right) => left - right);
   return {
-    avgMs: Math.round(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
-    maxMs: Math.round(sorted.at(-1)),
-    minMs: Math.round(sorted[0]),
-    p50Ms: Math.round(quantile(sorted, 0.5)),
-    p95Ms: Math.round(quantile(sorted, 0.95)),
+    avgMs: roundMeasuredMs(sorted.reduce((sum, value) => sum + value, 0) / sorted.length, "avgMs"),
+    maxMs: roundMeasuredMs(sorted.at(-1), "maxMs"),
+    minMs: roundMeasuredMs(sorted[0], "minMs"),
+    p50Ms: roundMeasuredMs(quantile(sorted, 0.5), "p50Ms"),
+    p95Ms: roundMeasuredMs(quantile(sorted, 0.95), "p95Ms"),
   };
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertPayloadObject(method, payload) {
+  if (!isRecord(payload)) {
+    throw new Error(`${method} returned invalid payload: expected object.`);
+  }
+  return payload;
+}
+
+function assertHealthSmokePayload(payload) {
+  const summary = assertPayloadObject("health", payload);
+  if (summary.ok !== true) {
+    throw new Error("health returned invalid payload: expected ok=true.");
+  }
+  if (!Number.isFinite(summary.ts)) {
+    throw new Error("health returned invalid payload: expected numeric ts.");
+  }
+  if (!Number.isFinite(summary.durationMs)) {
+    throw new Error("health returned invalid payload: expected numeric durationMs.");
+  }
+  if (typeof summary.defaultAgentId !== "string" || summary.defaultAgentId.trim() === "") {
+    throw new Error("health returned invalid payload: expected defaultAgentId.");
+  }
+  if (!Array.isArray(summary.agents)) {
+    throw new Error("health returned invalid payload: expected agents array.");
+  }
+  if (!isRecord(summary.channels)) {
+    throw new Error("health returned invalid payload: expected channels object.");
+  }
+  if (!Array.isArray(summary.channelOrder)) {
+    throw new Error("health returned invalid payload: expected channelOrder array.");
+  }
+  if (!isRecord(summary.sessions)) {
+    throw new Error("health returned invalid payload: expected sessions object.");
+  }
+}
+
+function assertConfigGetSmokePayload(payload) {
+  const snapshot = assertPayloadObject("config.get", payload);
+  if (typeof snapshot.path !== "string" || snapshot.path.trim() === "") {
+    throw new Error("config.get returned invalid payload: expected config path.");
+  }
+  if (typeof snapshot.exists !== "boolean") {
+    throw new Error("config.get returned invalid payload: expected exists boolean.");
+  }
+  if (typeof snapshot.valid !== "boolean") {
+    throw new Error("config.get returned invalid payload: expected valid boolean.");
+  }
+  if (!isRecord(snapshot.sourceConfig)) {
+    throw new Error("config.get returned invalid payload: expected sourceConfig object.");
+  }
+  if (!isRecord(snapshot.resolved)) {
+    throw new Error("config.get returned invalid payload: expected resolved object.");
+  }
+  if (!isRecord(snapshot.runtimeConfig)) {
+    throw new Error("config.get returned invalid payload: expected runtimeConfig object.");
+  }
+  if (!isRecord(snapshot.config)) {
+    throw new Error("config.get returned invalid payload: expected config object.");
+  }
+  if (!Array.isArray(snapshot.issues)) {
+    throw new Error("config.get returned invalid payload: expected issues array.");
+  }
+  if (!Array.isArray(snapshot.warnings)) {
+    throw new Error("config.get returned invalid payload: expected warnings array.");
+  }
+  if (!Array.isArray(snapshot.legacyIssues)) {
+    throw new Error("config.get returned invalid payload: expected legacyIssues array.");
+  }
+}
+
+export function assertRpcSmokeResponse(method, response) {
+  if (!response?.ok) {
+    throw new Error(`${method} failed: ${JSON.stringify(response?.error)}`);
+  }
+  if (method === "health") {
+    assertHealthSmokePayload(response.payload);
+    return;
+  }
+  if (method === "config.get") {
+    assertConfigGetSmokePayload(response.payload);
+  }
 }
 
 function toText(data) {
@@ -436,7 +573,7 @@ function toText(data) {
   return Buffer.from(data).toString("utf8");
 }
 
-function createGatewayClient({ WebSocket, url }) {
+export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
   const ws = new WebSocket(url, { handshakeTimeout: 8_000 });
   const pending = new Map();
   const rejectPending = (error) => {
@@ -471,15 +608,28 @@ function createGatewayClient({ WebSocket, url }) {
   });
   const waitOpen = async () =>
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("gateway websocket open timeout")), 8_000);
-      ws.once("open", () => {
+      let settled = false;
+      const settle = (callback) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
-        resolve();
-      });
-      ws.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        ws.off?.("open", onOpen);
+        ws.off?.("error", onError);
+        callback();
+      };
+      const onOpen = () => settle(resolve);
+      const onError = (error) =>
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const timer = setTimeout(() => {
+        settle(() => {
+          ws.close();
+          reject(new Error("gateway websocket open timeout"));
+        });
+      }, openTimeoutMs);
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {
@@ -571,6 +721,7 @@ async function main() {
   const stdoutPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrPath = path.join(tempRoot, "gateway.stderr.log");
   let gatewayChild;
+  let client;
   let removeGatewayParentCleanup = () => {};
   let status = "fail";
   let details = "";
@@ -612,7 +763,7 @@ async function main() {
     const protocol = await import(
       pathToFileURL(path.join(repoRoot, "packages/gateway-protocol/src/version.ts")).href
     );
-    const client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
+    client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
     await client.waitOpen();
     const connectStarted = performance.now();
     const connect = await client.request(
@@ -645,7 +796,7 @@ async function main() {
       payload: {
         method: "connect",
         ok: true,
-        durationMs: Math.round(performance.now() - connectStarted),
+        durationMs: roundMeasuredMs(performance.now() - connectStarted, "connect durationMs"),
       },
     });
     const samples = [];
@@ -653,23 +804,27 @@ async function main() {
       for (let iteration = 1; iteration <= args.iterations; iteration += 1) {
         const requestStartedAtMs = performance.now();
         const response = await client.request(method, {}, 10_000);
-        const durationMs = Math.round(performance.now() - requestStartedAtMs);
-        if (!response.ok) {
-          throw new Error(`${method} failed: ${JSON.stringify(response.error)}`);
-        }
+        const durationMs = performance.now() - requestStartedAtMs;
+        const roundedDurationMs = roundMeasuredMs(durationMs, `${method} durationMs`);
+        assertRpcSmokeResponse(method, response);
         samples.push({ method, durationMs });
         events.push({
           event: "gateway-rpc",
-          payload: { kind: "gateway-rpc", method, ok: true, durationMs, iteration },
+          payload: {
+            kind: "gateway-rpc",
+            method,
+            ok: true,
+            durationMs: roundedDurationMs,
+            iteration,
+          },
         });
       }
     }
-    client.close();
-    const sampleStats = stats(samples.map((sample) => sample.durationMs));
+    const sampleStats = summarizeRttSamples(samples.map((sample) => sample.durationMs));
     const byMethod = Object.fromEntries(
       args.methods.map((method) => [
         method,
-        stats(
+        summarizeRttSamples(
           samples.filter((sample) => sample.method === method).map((sample) => sample.durationMs),
         ),
       ]),
@@ -691,6 +846,7 @@ async function main() {
     details = error instanceof Error ? (error.stack ?? error.message) : String(error);
   } finally {
     try {
+      client?.close();
       if (gatewayChild) {
         await stopGateway(gatewayChild).catch(() => {});
       }

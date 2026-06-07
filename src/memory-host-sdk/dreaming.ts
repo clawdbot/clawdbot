@@ -152,6 +152,7 @@ export type MemoryDreamingWorkspace = {
 export type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
+  env?: NodeJS.ProcessEnv;
 };
 
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
@@ -655,7 +656,7 @@ export function resolveMemoryDreamingWorkspaces(
   };
 
   for (const agentId of agentIds) {
-    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
+    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
   addWorkspace(
     options.primaryWorkspaceDir ?? undefined,

@@ -254,9 +254,43 @@ function normalizeTranscriptText(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
+function createDirectReplyFinding(): GatewayLogSentinelFinding {
+  return {
+    kind: "direct-reply-self-message",
+    verdict: "product-bug",
+    owner: "openclaw-routing",
+    productImpact: "P1",
+    qaImpact: "P0",
+    line: 1,
+    text: "assistant called message(action=send) and then produced final text Sent.",
+  };
+}
+
+export function createDirectReplyTranscriptSentinelScanner() {
   let lastAssistantText = "";
   const toolCalls: GatewayLogSentinelToolCall[] = [];
+  return {
+    recordMessage(message: Record<string, unknown>) {
+      if (message.role !== "assistant") {
+        return;
+      }
+      const text = extractMessageText(message);
+      if (text) {
+        lastAssistantText = text;
+      }
+      toolCalls.push(...extractAssistantToolCalls(message));
+    },
+    findings(): GatewayLogSentinelFinding[] {
+      const hasDirectReply =
+        toolCalls.some(isCurrentChatMessageSend) &&
+        normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent.";
+      return hasDirectReply ? [createDirectReplyFinding()] : [];
+    },
+  };
+}
+
+function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
+  const scanner = createDirectReplyTranscriptSentinelScanner();
   for (const line of transcriptBytes.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -268,19 +302,12 @@ function transcriptHasDirectReplySelfMessage(transcriptBytes: string) {
       if (!message || message.role !== "assistant") {
         continue;
       }
-      const text = extractMessageText(message);
-      if (text) {
-        lastAssistantText = text;
-      }
-      toolCalls.push(...extractAssistantToolCalls(message));
+      scanner.recordMessage(message);
     } catch {
       // Ignore malformed QA transcript rows and keep sentinel scans deterministic.
     }
   }
-  return (
-    toolCalls.some(isCurrentChatMessageSend) &&
-    normalizeTranscriptText(lastAssistantText).toLowerCase() === "sent."
-  );
+  return scanner.findings().length > 0;
 }
 
 export function scanGatewayLogSentinels(
@@ -322,17 +349,7 @@ export function scanDirectReplyTranscriptSentinels(
   if (!transcriptHasDirectReplySelfMessage(transcriptBytes)) {
     return [];
   }
-  return [
-    {
-      kind: "direct-reply-self-message",
-      verdict: "product-bug",
-      owner: "openclaw-routing",
-      productImpact: "P1",
-      qaImpact: "P0",
-      line: 1,
-      text: "assistant called message(action=send) and then produced final text Sent.",
-    },
-  ];
+  return [createDirectReplyFinding()];
 }
 
 export function formatGatewayLogSentinelSummary(findings: readonly GatewayLogSentinelFinding[]) {

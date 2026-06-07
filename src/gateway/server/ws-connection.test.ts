@@ -1,6 +1,7 @@
 // Gateway WebSocket connection tests cover handshake auth, shared sessions, and message-handler attachment.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { MAX_BUFFERED_BYTES } from "../server-constants.js";
 import {
   attachGatewayWsForTest,
   createGatewayWsTestRequestContext,
@@ -179,6 +180,21 @@ describe("attachGatewayWsConnectionHandler", () => {
     socket.emit("close", 1000, Buffer.from("done"));
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes slow consumers before writing direct response frames", async () => {
+    const socket = createGatewayWsTestSocket();
+    const { passed } = await connectTestWs({ socket });
+    const handlerParams = passed as {
+      send: (frame: unknown) => void;
+    };
+    socket.send.mockClear();
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+
+    handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } });
+
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
   });
 
   it("skips node presence disconnects for stale reconnected sockets", async () => {

@@ -11,6 +11,18 @@ type AppcastItem = {
   sparkleVersion: number | null;
 };
 
+describe("canonicalSparkleBuildFromVersion", () => {
+  it("keeps pre-transition appcast builds on the legacy date key", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.2")).toBe(2026060290);
+  });
+
+  it("uses monthly patch build keys from the June 2026 floor onward", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.2")).toBe(2606000502);
+    expect(canonicalSparkleBuildFromVersion("2026.6.32-beta.1")).toBe(2606003201);
+    expect(canonicalSparkleBuildFromVersion("2026.6.32")).toBe(2606003290);
+  });
+});
+
 function parseItems(appcast: string): AppcastItem[] {
   return [...appcast.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => {
     const raw = match[1] ?? "";

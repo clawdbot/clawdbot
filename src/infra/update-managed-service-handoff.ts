@@ -4,17 +4,17 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveRestartSentinelPath } from "../../infra/restart-sentinel.js";
+import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 import {
   SUPERVISOR_HINT_ENV_VARS,
   type RespawnSupervisor,
-} from "../../infra/supervisor-markers.js";
+} from "./supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
-} from "../../infra/update-control-plane-sentinel.js";
-import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "../../infra/update-managed-service-handoff-cleanup.js";
-import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
+} from "./update-control-plane-sentinel.js";
+import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
+import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
@@ -269,10 +269,14 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
+  channel?: "stable" | "beta" | "dev";
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
+  if (params.channel) {
+    updateArgs.push("--channel", params.channel);
+  }
   if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     updateArgs.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
@@ -288,10 +292,16 @@ function resolveUpdateCliArgv(params: {
   return ["openclaw", ...updateArgs];
 }
 
-export function formatManagedServiceUpdateCommand(timeoutMs?: number): string {
+export function formatManagedServiceUpdateCommand(params?: {
+  timeoutMs?: number;
+  channel?: "stable" | "beta" | "dev";
+}): string {
   const args = ["openclaw", "update", "--yes"];
-  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-    args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
+  if (params?.channel) {
+    args.push("--channel", params.channel);
+  }
+  if (typeof params?.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
+    args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
   }
   return args.join(" ");
 }
@@ -410,6 +420,7 @@ async function resolveHandoffSpawn(params: {
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
+  channel?: "stable" | "beta" | "dev";
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
@@ -426,10 +437,14 @@ export async function startManagedServiceUpdateHandoff(params: {
   const logPath = path.join(dir, "handoff.log");
   const commandArgv = resolveUpdateCliArgv({
     timeoutMs: params.timeoutMs,
+    channel: params.channel,
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
-  const commandLabel = formatManagedServiceUpdateCommand(params.timeoutMs);
+  const commandLabel = formatManagedServiceUpdateCommand({
+    timeoutMs: params.timeoutMs,
+    channel: params.channel,
+  });
   const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,

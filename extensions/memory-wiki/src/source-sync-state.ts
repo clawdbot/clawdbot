@@ -1,11 +1,16 @@
 // Memory Wiki plugin module implements source sync state behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
-type MemoryWikiImportedSourceStateEntry = {
+export type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;
   pagePath: string;
   sourcePath: string;
@@ -14,40 +19,213 @@ type MemoryWikiImportedSourceStateEntry = {
   renderFingerprint: string;
 };
 
-type MemoryWikiImportedSourceState = {
+export type MemoryWikiImportedSourceState = {
   version: 1;
   entries: Record<string, MemoryWikiImportedSourceStateEntry>;
 };
+
+type MemoryWikiSourceSyncStateStore = {
+  read: (vaultRoot: string) => Promise<MemoryWikiImportedSourceState>;
+  write: (vaultRoot: string, state: MemoryWikiImportedSourceState) => Promise<void>;
+};
+
+type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
+  vaultRootKey: string;
+  syncKey: string;
+};
+
+export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
+export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
 
 const EMPTY_STATE: MemoryWikiImportedSourceState = {
   version: 1,
   entries: {},
 };
 
-function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
+let configuredSourceSyncStore: MemoryWikiSourceSyncStateStore | undefined;
+const memorySourceSyncStateByVault = new Map<string, MemoryWikiImportedSourceState>();
+
+export function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
+}
+
+function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiImportedSourceState {
+  return {
+    version: 1,
+    entries: Object.fromEntries(
+      Object.entries(state.entries).map(([key, value]) => [key, { ...value }]),
+    ),
+  };
+}
+
+function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return EMPTY_STATE;
+  }
+  const parsed = value as Partial<MemoryWikiImportedSourceState>;
+  if (parsed.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
+    return EMPTY_STATE;
+  }
+  const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
+  for (const [syncKey, entry] of Object.entries(parsed.entries)) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      (entry.group !== "bridge" && entry.group !== "unsafe-local") ||
+      typeof entry.pagePath !== "string" ||
+      typeof entry.sourcePath !== "string" ||
+      typeof entry.sourceUpdatedAtMs !== "number" ||
+      typeof entry.sourceSize !== "number" ||
+      typeof entry.renderFingerprint !== "string"
+    ) {
+      continue;
+    }
+    entries[syncKey] = {
+      group: entry.group,
+      pagePath: entry.pagePath,
+      sourcePath: entry.sourcePath,
+      sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
+      sourceSize: entry.sourceSize,
+      renderFingerprint: entry.renderFingerprint,
+    };
+  }
+  return { version: 1, entries };
+}
+
+function resolveVaultRootKey(vaultRoot: string): string {
+  return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
+}
+
+function resolveStateEntryKey(vaultRootKey: string, syncKey: string): string {
+  return createHash("sha256").update(`${vaultRootKey}\0${syncKey}`, "utf8").digest("hex");
+}
+
+function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
+  return {
+    async read(vaultRoot) {
+      const vaultRootKey = resolveVaultRootKey(vaultRoot);
+      return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
+    },
+    async write(vaultRoot, state) {
+      assertSourceSyncStateWithinLimit(state);
+      const vaultRootKey = resolveVaultRootKey(vaultRoot);
+      memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
+    },
+  };
+}
+
+function assertSourceSyncStateWithinLimit(state: MemoryWikiImportedSourceState): void {
+  const count = Object.keys(state.entries).length;
+  if (count > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
+    throw new Error(
+      `Memory Wiki source sync state exceeds SQLite entry limit (${count}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
+    );
+  }
+}
+
+export function assertMemoryWikiSourceSyncStateCapacity(params: {
+  state: MemoryWikiImportedSourceState;
+  group: MemoryWikiImportedSourceGroup;
+  incomingCount: number;
+}): void {
+  const retainedOtherGroupCount = Object.values(params.state.entries).filter(
+    (entry) => entry.group !== params.group,
+  ).length;
+  const projectedCount = retainedOtherGroupCount + params.incomingCount;
+  if (projectedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
+    throw new Error(
+      `Memory Wiki source sync state exceeds SQLite entry limit (${projectedCount}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
+    );
+  }
+}
+
+export function createMemoryWikiSourceSyncStateStore(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): MemoryWikiSourceSyncStateStore {
+  const openStore = () =>
+    openKeyedStore<MemoryWikiSourceSyncStateRecord>({
+      namespace: MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
+      maxEntries: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+    });
+
+  return {
+    async read(vaultRoot) {
+      const vaultRootKey = resolveVaultRootKey(vaultRoot);
+      const entries: MemoryWikiImportedSourceState["entries"] = {};
+      for (const row of await openStore().entries()) {
+        const value = row.value;
+        if (value.vaultRootKey !== vaultRootKey || typeof value.syncKey !== "string") {
+          continue;
+        }
+        const normalized = normalizeSourceSyncState({
+          version: 1,
+          entries: { [value.syncKey]: value },
+        });
+        const entry = normalized.entries[value.syncKey];
+        if (entry) {
+          entries[value.syncKey] = entry;
+        }
+      }
+      return { version: 1, entries };
+    },
+    async write(vaultRoot, state) {
+      assertSourceSyncStateWithinLimit(state);
+      const vaultRootKey = resolveVaultRootKey(vaultRoot);
+      const store = openStore();
+      const normalized = normalizeSourceSyncState(state);
+      const nextKeys = new Set<string>();
+      for (const [syncKey, entry] of Object.entries(normalized.entries)) {
+        const key = resolveStateEntryKey(vaultRootKey, syncKey);
+        nextKeys.add(key);
+        await store.register(key, {
+          ...entry,
+          vaultRootKey,
+          syncKey,
+        });
+      }
+      for (const row of await store.entries()) {
+        if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
+          await store.delete(row.key);
+        }
+      }
+    },
+  };
+}
+
+export function configureMemoryWikiSourceSyncStateStore(
+  store: MemoryWikiSourceSyncStateStore | undefined,
+): void {
+  configuredSourceSyncStore = store;
+}
+
+function resolveSourceSyncStore(
+  store?: MemoryWikiSourceSyncStateStore,
+): MemoryWikiSourceSyncStateStore {
+  return store ?? configuredSourceSyncStore ?? createMemoryFallbackStateStore();
 }
 
 export async function readMemoryWikiSourceSyncState(
   vaultRoot: string,
+  store?: MemoryWikiSourceSyncStateStore,
+): Promise<MemoryWikiImportedSourceState> {
+  return await resolveSourceSyncStore(store).read(vaultRoot);
+}
+
+export async function readLegacyMemoryWikiSourceSyncState(
+  vaultRoot: string,
 ): Promise<MemoryWikiImportedSourceState> {
   const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  const { value: parsed } = await readJsonFileWithFallback<Partial<MemoryWikiImportedSourceState>>(
-    statePath,
-    EMPTY_STATE,
-  );
-  return {
-    version: 1,
-    entries: { ...parsed.entries },
-  };
+  const { value: parsed } = await readJsonFileWithFallback<unknown>(statePath, EMPTY_STATE);
+  return normalizeSourceSyncState(parsed);
 }
 
 export async function writeMemoryWikiSourceSyncState(
   vaultRoot: string,
   state: MemoryWikiImportedSourceState,
+  store?: MemoryWikiSourceSyncStateStore,
 ): Promise<void> {
-  const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  await writeJsonFileAtomically(statePath, state);
+  await resolveSourceSyncStore(store).write(vaultRoot, state);
 }
 
 export async function shouldSkipImportedSourceWrite(params: {

@@ -3785,14 +3785,33 @@ async function runCommandInvocation(invocation, options) {
       }
     };
 
+    const finishLogStream = (callback) => {
+      let completed = false;
+      const finish = (error) => {
+        if (completed) {
+          return;
+        }
+        completed = true;
+        callback(error);
+      };
+      logStream.once("finish", finish);
+      logStream.once("error", finish);
+      logStream.end();
+    };
+
     const finalize = (callback) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimers();
-      logStream.end();
-      callback();
+      finishLogStream((logError) => {
+        if (logError) {
+          rejectPromise(new Error(`Command log write failed: ${formatError(logError)}`));
+          return;
+        }
+        callback();
+      });
     };
 
     const requestKill = () => {
@@ -3894,11 +3913,16 @@ async function runCommandInvocation(invocation, options) {
 export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
+  let logStreamError = null;
+  logStream.on("error", (error) => {
+    logStreamError ??= error;
+  });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
+    response.setHeader("connection", "close");
     if (request.url !== `/${fileName}`) {
       response.statusCode = 404;
       response.end("not found");
@@ -3907,7 +3931,6 @@ export async function startStaticFileServer(params) {
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
     response.setHeader("content-length", String(fileStat.size));
-    response.setHeader("connection", "close");
     const fileStream = createReadStream(params.filePath);
     fileStream.once("error", (error) => {
       logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
@@ -3936,23 +3959,75 @@ export async function startStaticFileServer(params) {
     throw new Error("Failed to bind static file server.");
   }
   const port = address.port;
+  let closePromise;
   return {
     url: `http://127.0.0.1:${port}/${fileName}`,
-    close: () =>
-      new Promise((resolvePromise, rejectPromise) => {
+    close: () => {
+      closePromise ??= new Promise((resolvePromise, rejectPromise) => {
+        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
-          logStream.end();
-          if (error) {
-            rejectPromise(error);
-            return;
-          }
-          resolvePromise();
+          void (async () => {
+            const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
+              (logError: unknown): Error =>
+                logError instanceof Error ? logError : new Error(String(logError)),
+            );
+            if (error) {
+              rejectPromise(error);
+              return;
+            }
+            if (closeLogError) {
+              rejectPromise(
+                closeLogError instanceof Error
+                  ? closeLogError
+                  : new Error(formatError(closeLogError)),
+              );
+              return;
+            }
+            resolvePromise();
+          })();
         });
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-      }),
+        closeStaticFileServerConnections(server, sockets);
+      });
+      return closePromise;
+    },
   };
+}
+
+function closeStaticFileServerConnections(server, sockets) {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  if (typeof server.closeAllConnections === "function") {
+    server.closeAllConnections();
+  }
+}
+
+function finishStaticFileServerLog(logStream, pendingError) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (pendingError) {
+      logStream.destroy();
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(pendingError)}`));
+      return;
+    }
+    let completed = false;
+    const finish = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      resolvePromise();
+    };
+    const fail = (error) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(error)}`));
+    };
+    logStream.once("finish", finish);
+    logStream.once("error", fail);
+    logStream.end();
+  });
 }
 
 export function resolveStaticFileContentType(filePath) {

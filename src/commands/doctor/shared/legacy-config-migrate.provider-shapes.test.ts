@@ -102,6 +102,38 @@ describe("legacy migrate provider-shaped config", () => {
     });
   });
 
+  it("does not treat an existing realtime voice alias as Talk provider repair", () => {
+    const input: OpenClawConfig = {
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-1",
+          },
+        },
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+            },
+          },
+          model: "gpt-realtime",
+          voice: "cedar",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    const migrated = normalizeLegacyTalkConfig(input, changes);
+
+    expect(changes).toStrictEqual([]);
+    expect(migrated).toEqual(input);
+  });
+
   it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
     const res = migrateLegacyConfig({
       messages: {

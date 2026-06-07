@@ -174,6 +174,7 @@ describe("CLI attempt execution", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (ORIGINAL_HOME === undefined) {
       delete process.env.HOME;
     } else {
@@ -1190,6 +1191,53 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       toolsAllow: ["read", "web_search"],
+    });
+  });
+
+  it("stamps CLI prompts with current timestamp context", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
+    const sessionKey = "agent:main:direct:claude-timestamp";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-timestamp",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "what time is it?",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-timestamp",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
     });
   });
 

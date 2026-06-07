@@ -187,7 +187,7 @@ export const pluginRegistrationContractCases = {
   },
   parallel: {
     pluginId: "parallel",
-    webSearchProviderIds: ["parallel"],
+    webSearchProviderIds: ["parallel", "parallel-free"],
   },
   perplexity: {
     pluginId: "perplexity",

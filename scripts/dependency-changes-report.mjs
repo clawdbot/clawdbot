@@ -232,7 +232,15 @@ function gitDiffDependencyFiles(baseRef, cwd) {
     });
 }
 
-function parseArgs(argv) {
+function readRequiredValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     rootDir: process.cwd(),
     baseRef: null,
@@ -247,27 +255,33 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--root") {
-      options.rootDir = argv[++index];
+      options.rootDir = readRequiredValue(argv, index, "--root");
+      index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      options.baseRef = argv[++index];
+      options.baseRef = readRequiredValue(argv, index, "--base-ref");
+      index += 1;
       continue;
     }
     if (arg === "--base-lockfile") {
-      options.baseLockfile = argv[++index];
+      options.baseLockfile = readRequiredValue(argv, index, "--base-lockfile");
+      index += 1;
       continue;
     }
     if (arg === "--head-lockfile") {
-      options.headLockfile = argv[++index];
+      options.headLockfile = readRequiredValue(argv, index, "--head-lockfile");
+      index += 1;
       continue;
     }
     if (arg === "--json") {
-      options.jsonPath = argv[++index];
+      options.jsonPath = readRequiredValue(argv, index, "--json");
+      index += 1;
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
+      options.markdownPath = readRequiredValue(argv, index, "--markdown");
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);

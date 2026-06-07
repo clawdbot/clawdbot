@@ -18,6 +18,8 @@ const DEFAULT_BOT_CREDENTIALS_FILE =
 const DEFAULT_CONVEX_ENV_FILE = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
+const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
 const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
   process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS?.trim(),
   120_000,
@@ -25,6 +27,14 @@ const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
 const BROKER_TIMEOUT_MS = optionalPositiveInteger(
   process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_BROKER_TIMEOUT_MS?.trim(),
   30_000,
+);
+const CHUNKED_PAYLOAD_MAX_BYTES = optionalPositiveInteger(
+  process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES?.trim(),
+  DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES,
+);
+const CHUNKED_PAYLOAD_MAX_CHUNKS = optionalPositiveInteger(
+  process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS?.trim(),
+  DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
 );
 
 function usage(): never {
@@ -268,12 +278,18 @@ function parseChunkedPayloadMarker(payload: unknown) {
   ) {
     throw new Error("Chunked payload marker has invalid chunkCount.");
   }
+  if (record.chunkCount > CHUNKED_PAYLOAD_MAX_CHUNKS) {
+    throw new Error(`Chunked payload marker exceeds ${CHUNKED_PAYLOAD_MAX_CHUNKS} chunks.`);
+  }
   if (
     typeof record.byteLength !== "number" ||
     !Number.isInteger(record.byteLength) ||
     record.byteLength < 0
   ) {
     throw new Error("Chunked payload marker has invalid byteLength.");
+  }
+  if (record.byteLength > CHUNKED_PAYLOAD_MAX_BYTES) {
+    throw new Error(`Chunked payload marker exceeds ${CHUNKED_PAYLOAD_MAX_BYTES} bytes.`);
   }
   return {
     chunkCount: record.chunkCount,
@@ -294,6 +310,7 @@ async function hydratePayloadFromLease(params: {
   const credentialId = requireString(params.acquired, "credentialId");
   const leaseToken = requireString(params.acquired, "leaseToken");
   const chunks: string[] = [];
+  let serializedLength = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const chunk = await postBroker({
       action: "payload-chunk",
@@ -308,10 +325,15 @@ async function hydratePayloadFromLease(params: {
         index,
       },
     });
-    chunks.push(requireString(chunk, "data"));
+    const data = requireString(chunk, "data");
+    serializedLength += data.length;
+    if (serializedLength > marker.byteLength) {
+      throw new Error("Chunked payload exceeded declared byteLength.");
+    }
+    chunks.push(data);
   }
   const serialized = chunks.join("");
-  if (serialized.length !== marker.byteLength) {
+  if (serializedLength !== marker.byteLength) {
     throw new Error("Chunked payload length mismatch.");
   }
   return parseTelegramUserQaCredentialPayload(JSON.parse(serialized));
@@ -603,3 +625,5 @@ async function main(argv = process.argv) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
+
+export { parseChunkedPayloadMarker };

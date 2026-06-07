@@ -14,7 +14,7 @@ import {
   resolveShortTermPromotionDreamingConfig,
   runShortTermDreamingPromotionIfTriggered,
 } from "./dreaming.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
+import { recordShortTermRecalls, testing as shortTermTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = testing.constants;
@@ -2562,38 +2562,28 @@ describe("short-term dreaming trigger", () => {
       "Move backups to S3 Glacier and sync router failover notes.",
       "Keep router recovery docs current.",
     ]);
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-01T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              key: "memory:memory/2026-04-03.md:1:2",
-              path: "memory/2026-04-03.md",
-              startLine: 1,
-              endLine: 2,
-              source: "memory",
-              snippet: "Move backups to S3 Glacier and sync router failover notes.",
-              recallCount: 3,
-              totalScore: 2.7,
-              maxScore: 0.95,
-              firstRecalledAt: "2026-04-01T00:00:00.000Z",
-              lastRecalledAt: "2026-04-03T00:00:00.000Z",
-              queryHashes: ["abc", "abc", "def"],
-              recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
-              conceptTags: [],
-            },
-          },
+    await shortTermTesting.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: "2026-04-01T00:00:00.000Z",
+      entries: {
+        "memory:memory/2026-04-03.md:1:2": {
+          key: "memory:memory/2026-04-03.md:1:2",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "Move backups to S3 Glacier and sync router failover notes.",
+          recallCount: 3,
+          totalScore: 2.7,
+          maxScore: 0.95,
+          firstRecalledAt: "2026-04-01T00:00:00.000Z",
+          lastRecalledAt: "2026-04-03T00:00:00.000Z",
+          queryHashes: ["abc", "abc", "def"],
+          recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
+          conceptTags: [],
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+      },
+    });
 
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
@@ -2614,12 +2604,7 @@ describe("short-term dreaming trigger", () => {
 
     expect(result?.handled).toBe(true);
     expectLogContains(logger.info, "normalized recall artifacts before dreaming");
-    const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      entries: Record<
-        string,
-        { queryHashes?: string[]; recallDays?: string[]; conceptTags?: string[] }
-      >;
-    };
+    const repaired = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
     expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.queryHashes).toEqual([
       "abc",
       "def",

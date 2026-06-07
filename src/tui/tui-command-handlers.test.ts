@@ -1148,4 +1148,34 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
+
+  it("renders model listing feedback before the backend list resolves", async () => {
+    let resolveModels: (
+      value: Array<{ provider: string; id: string; name?: string }>,
+    ) => void = () => {
+      throw new Error("model list promise resolver was not initialized");
+    };
+    const listModelsPromise = new Promise<Array<{ provider: string; id: string; name?: string }>>(
+      (resolve) => {
+        resolveModels = (value) => resolve(value);
+      },
+    );
+    const listModels = vi.fn(() => listModelsPromise);
+    const { handleCommand, addSystem, openOverlay, requestRender } = createHarness({ listModels });
+
+    const pending = handleCommand("/models");
+    await Promise.resolve();
+
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("loading models...");
+    expect(openOverlay).not.toHaveBeenCalled();
+    const feedbackOrder = addSystem.mock.invocationCallOrder[0] ?? 0;
+    const renderOrders = requestRender.mock.invocationCallOrder;
+    expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
+
+    resolveModels([{ provider: "openrouter", id: "openrouter/auto" }]);
+    await pending;
+
+    expect(openOverlay).toHaveBeenCalledTimes(1);
+  });
 });

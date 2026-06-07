@@ -2,16 +2,192 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertRpcSmokeResponse,
   cleanupTempRoot,
+  createGatewayClient,
   installGatewayParentCleanup,
   isGatewayProcessAlive,
+  parseArgs,
   signalGatewayProcess,
   startGateway,
   stopGateway,
+  summarizeRttSamples,
   waitForGatewayReady,
 } from "../../scripts/measure-rpc-rtt.mjs";
 
+class FakeWebSocket extends EventEmitter {
+  static OPEN = 1;
+  static instances: FakeWebSocket[] = [];
+
+  closed = false;
+  readyState = 0;
+  sent: string[] = [];
+
+  constructor(
+    readonly url: string,
+    readonly options: unknown,
+  ) {
+    super();
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(payload: string, callback?: (error?: Error) => void): void {
+    this.sent.push(payload);
+    callback?.();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.readyState = 3;
+    this.emit("close", 1000, "closed");
+  }
+}
+
 describe("scripts/measure-rpc-rtt.mjs", () => {
+  it("closes websocket clients that time out before opening", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      openTimeoutMs: 1,
+      url: "ws://127.0.0.1:12345",
+    });
+
+    await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
+    expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+  });
+
+  it("rejects pending websocket requests when cleanup closes the client", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      url: "ws://127.0.0.1:12345",
+    });
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("fake websocket was not created");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+
+    const request = client.request("health", {}, 10_000);
+    client.close();
+
+    await expect(request).rejects.toThrow("gateway websocket client closed");
+    expect(socket.closed).toBe(true);
+  });
+
+  it("parses bounded RPC RTT options strictly", () => {
+    expect(
+      parseArgs([
+        "--output-dir",
+        "/tmp/rpc-rtt",
+        "--repo-root",
+        "/repo",
+        "--iterations",
+        "3",
+        "--methods",
+        "health, config.get ",
+      ]),
+    ).toMatchObject({
+      iterations: 3,
+      methods: ["health", "config.get"],
+      outputDir: "/tmp/rpc-rtt",
+      repoRoot: "/repo",
+    });
+
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--iterations", "1e3"])).toThrow(
+      "--iterations must be a positive integer.",
+    );
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--iterations", "0"])).toThrow(
+      "--iterations must be a positive integer.",
+    );
+    expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
+      "--methods requires a value.",
+    );
+    for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
+      expect(() => parseArgs([flag, "--methods", "health"])).toThrow(`${flag} requires a value.`);
+    }
+  });
+
+  it("does not publish zero-millisecond RPC RTT summaries", () => {
+    expect(summarizeRttSamples([0, 0.1, 0.49])).toEqual({
+      avgMs: 1,
+      maxMs: 1,
+      minMs: 1,
+      p50Ms: 1,
+      p95Ms: 1,
+    });
+    expect(summarizeRttSamples([1.4, 2.6])).toEqual({
+      avgMs: 2,
+      maxMs: 3,
+      minMs: 1,
+      p50Ms: 1,
+      p95Ms: 3,
+    });
+  });
+
+  it("rejects invalid RPC RTT summary samples", () => {
+    expect(() => summarizeRttSamples([])).toThrow("RPC RTT measurement produced no samples.");
+    expect(() => summarizeRttSamples([Number.NaN])).toThrow(
+      "avgMs must be a non-negative finite duration.",
+    );
+    expect(() => summarizeRttSamples([-1])).toThrow(
+      "avgMs must be a non-negative finite duration.",
+    );
+  });
+
+  it("validates default RPC RTT smoke payloads", () => {
+    expect(() =>
+      assertRpcSmokeResponse("health", {
+        ok: true,
+        payload: {
+          agents: [],
+          channelOrder: [],
+          channels: {},
+          defaultAgentId: "codex",
+          durationMs: 3,
+          ok: true,
+          sessions: { count: 0, path: "/state/sessions", recent: [] },
+          ts: Date.now(),
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertRpcSmokeResponse("config.get", {
+        ok: true,
+        payload: {
+          config: {},
+          exists: true,
+          issues: [],
+          legacyIssues: [],
+          path: "/tmp/openclaw.json",
+          resolved: {},
+          runtimeConfig: {},
+          sourceConfig: {},
+          valid: true,
+          warnings: [],
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() => assertRpcSmokeResponse("health", { ok: true, payload: {} })).toThrow(
+      "health returned invalid payload: expected ok=true.",
+    );
+    expect(() => assertRpcSmokeResponse("config.get", { ok: true, payload: {} })).toThrow(
+      "config.get returned invalid payload: expected config path.",
+    );
+  });
+
+  it("keeps custom RPC RTT methods on the generic ok/error contract", () => {
+    expect(() => assertRpcSmokeResponse("custom.method", { ok: true })).not.toThrow();
+    expect(() =>
+      assertRpcSmokeResponse("custom.method", {
+        error: { code: "bad_request" },
+        ok: false,
+      }),
+    ).toThrow('custom.method failed: {"code":"bad_request"}');
+  });
+
   it("closes parent gateway log handles after spawning", async () => {
     const child = Object.assign(new EventEmitter(), {
       exitCode: null,
@@ -265,7 +441,11 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     const fetchImpl = vi
       .fn()
       .mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"))
-      .mockResolvedValueOnce({ ok: true });
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ ready: true }),
+        ok: true,
+      });
 
     await waitForGatewayReady({
       child,
@@ -277,7 +457,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
       stderrPath: "/no/such/stderr.log",
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
       "http://127.0.0.1:12345/readyz",
@@ -288,6 +468,67 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:12345/healthz",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:12345/readyz",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("waits for /readyz even when /healthz is live", async () => {
+    const child = new EventEmitter();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ failing: ["gateway"], ready: false }),
+        ok: false,
+        status: 503,
+      })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ ok: true, status: "live" }),
+        ok: true,
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValue({ failing: [], ready: true }),
+        ok: true,
+        status: 200,
+      });
+
+    await waitForGatewayReady({
+      child,
+      fetchImpl,
+      port: 12345,
+      probeTimeoutMs: 7,
+      readyTimeoutMs: 50,
+      sleepMs: 1,
+      stderrPath: "/no/such/stderr.log",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:12345/readyz",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:12345/healthz",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:12345/readyz",
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       }),

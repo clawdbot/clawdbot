@@ -91,7 +91,7 @@ trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 start_gateway() {
   local log_path="$1"
   gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$log_path")"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_path"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_path" 300 "$PORT"
 }
 
 stop_gateway() {

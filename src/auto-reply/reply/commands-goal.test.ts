@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
   formatGoalContinuationPrompt,
   handleGoalCommand,
@@ -110,6 +111,9 @@ describe("goal commands", () => {
     expect(params.command.commandBodyNormalized).toBe("build a 3d game");
     expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("build a 3d game");
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe("build a 3d game");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("wraps command-prefixed goal objectives before continuing", async () => {
@@ -215,5 +219,40 @@ describe("goal commands", () => {
     expect(directives.cleaned).toBe(prompt);
     expect(directives.hasFastDirective).toBe(false);
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
+  });
+
+  it("renders status without persisting derived budget state", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 25,
+        totalTokensFresh: true,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "finish the migration",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokenBudget: 20,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    const params = buildGoalParams("/goal status", storePath);
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Status: budget_limited");
+    expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("active");
+    expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 });

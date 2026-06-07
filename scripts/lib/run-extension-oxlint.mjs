@@ -9,6 +9,23 @@ import {
 } from "./local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
+function hasOxlintFormatArg(args) {
+  return args.some(
+    (arg) =>
+      arg === "--format" ||
+      arg.startsWith("--format=") ||
+      arg === "-f" ||
+      arg.startsWith("-f=") ||
+      (arg.startsWith("-f") && arg.length > 2),
+  );
+}
+
+function addOxlintFormatArg(args, value) {
+  const separatorIndex = args.indexOf("--");
+  const insertIndex = separatorIndex === -1 ? args.length : separatorIndex;
+  args.splice(insertIndex, 0, "--format", value);
+}
+
 /**
  * Runs focused extension oxlint with a temp config and local heavy-check lock.
  */
@@ -44,6 +61,9 @@ export function runExtensionOxlint(params) {
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
+    if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
+      addOxlintFormatArg(finalArgs, "stylish");
+    }
     const oxlint = createManagedCommandInvocation({
       args: finalArgs,
       bin: oxlintPath,

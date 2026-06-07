@@ -277,13 +277,13 @@ NODE
       return 0
     fi
     if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
-      cat "$log_file" >&2 || true
+      openclaw_e2e_print_log "$log_file" >&2
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$log_file" >&2 || true
+  openclaw_e2e_print_log "$log_file" >&2
   echo "Timed out waiting for configured plugin install npm fixture registry." >&2
   return 1
 }
@@ -319,8 +319,8 @@ update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed" >&2
-  cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
-  cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
   exit "$update_status"
 fi
 
@@ -331,12 +331,12 @@ else
   configure_configured_plugin_install_fixture_registry
   if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
     echo "openclaw doctor failed" >&2
-    cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
+    openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log >&2
     exit 1
   fi
   if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw config validate >>/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
     echo "post-doctor config validation failed" >&2
-    cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
+    openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-doctor.log >&2
     exit 1
   fi
 fi
@@ -352,12 +352,12 @@ else
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$START_BUDGET" ]; then
     echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${START_BUDGET}s" >&2
-    cat "$GATEWAY_LOG" >&2 || true
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     exit 1
   fi
 fi
@@ -372,23 +372,22 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --base-url "http://127.0.0.1:$PORT" \
   --path /readyz \
   --expect ready \
-  --allow-failing discord,telegram,whatsapp,feishu,matrix \
   --out /tmp/openclaw-upgrade-survivor-readyz.json
 
 echo "Checking gateway RPC status..."
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
 if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
   echo "gateway status failed" >&2
-  cat /tmp/openclaw-upgrade-survivor-status.err >&2 || true
-  cat "$GATEWAY_LOG" >&2 || true
-  cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.err >&2
+  openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+  openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
   exit 1
 fi
 status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
 if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
   echo "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s" >&2
-  cat /tmp/openclaw-upgrade-survivor-status.json >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-status.json >&2
   exit 1
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json

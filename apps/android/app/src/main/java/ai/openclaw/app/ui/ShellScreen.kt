@@ -103,7 +103,10 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
-internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
+internal fun shellBottomNavVisible(
+  keyboardVisible: Boolean,
+  commandOpen: Boolean,
+): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
@@ -116,8 +119,10 @@ fun ShellScreen(
     var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
     var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
+    var voiceScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
@@ -138,8 +143,12 @@ fun ShellScreen(
       viewModel.clearRequestedHomeDestination()
     }
 
-    LaunchedEffect(activeTab) {
-      viewModel.setVoiceScreenActive(activeTab == Tab.Voice)
+    LaunchedEffect(activeTab, runtimeInitialized) {
+      val voiceScreenActive = activeTab == Tab.Voice
+      if (voiceScreenActive || voiceScreenWasActive || runtimeInitialized) {
+        viewModel.setVoiceScreenActive(voiceScreenActive)
+      }
+      voiceScreenWasActive = voiceScreenActive
     }
 
     BackHandler(enabled = activeTab != Tab.Overview) {
@@ -213,11 +222,6 @@ fun ShellScreen(
             ProvidersModelsScreen(
               viewModel = viewModel,
               onBack = { activeTab = Tab.Overview },
-              onAddProvider = {
-                settingsRoute = SettingsRoute.Gateway
-                returnToOverviewFromSettings = false
-                activeTab = Tab.Settings
-              },
             )
           Tab.Sessions ->
             SessionsScreen(
@@ -342,8 +346,7 @@ private fun OverviewScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val readyProviderCount = readyModelProviderCount(providers, models)
-  val expiringProviderCount = expiringModelProviderCount(providers)
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -351,7 +354,6 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
-      expiringProviderCount = expiringProviderCount,
     )
 
   LaunchedEffect(isConnected) {
@@ -457,14 +459,12 @@ private fun OverviewScreen(
                 ModuleRow("Sessions", "Conversation history", if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, Tab.Sessions),
                 ModuleRow(
                   title = "Providers & Models",
-                  subtitle = "Model setup",
+                  subtitle = "Provider readiness",
                   metadata =
                     when {
                       !isConnected -> "Offline"
                       readyProviderCount > 0 -> "$readyProviderCount ready"
-                      expiringProviderCount > 0 -> "$expiringProviderCount expiring"
-                      models.isNotEmpty() -> "${models.size} models"
-                      else -> "Setup"
+                      else -> "No ready"
                     },
                   icon = Icons.Outlined.Inventory2,
                   tab = Tab.ProvidersModels,
@@ -567,13 +567,8 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && expiringProviderCount > 0) {
-      HomeAttentionRow("Providers", "Provider auth expires soon", Icons.Outlined.Inventory2, Tab.ProvidersModels)
-    } else {
-      null
-    },
-    if (isConnected && readyProviderCount == 0 && expiringProviderCount == 0) {
-      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
+    if (isConnected && readyProviderCount == 0) {
+      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.Gateway)
     } else {
       null
     },

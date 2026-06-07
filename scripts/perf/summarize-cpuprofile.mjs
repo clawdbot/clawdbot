@@ -59,8 +59,28 @@ function add(map, key, micros) {
   map.set(key, (map.get(key) ?? 0) + micros);
 }
 
-function summarizeProfile(file, limit) {
+function validateProfile(profile, file) {
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    throw new Error(`${file}: CPU profile must be a JSON object`);
+  }
+  if (!Array.isArray(profile.nodes) || profile.nodes.length === 0) {
+    throw new Error(`${file}: CPU profile has no nodes`);
+  }
+  if (!Array.isArray(profile.samples) || profile.samples.length === 0) {
+    throw new Error(`${file}: CPU profile has no samples`);
+  }
+  if (
+    !Number.isFinite(profile.startTime) ||
+    !Number.isFinite(profile.endTime) ||
+    profile.endTime <= profile.startTime
+  ) {
+    throw new Error(`${file}: CPU profile duration must be positive`);
+  }
+}
+
+export function summarizeProfile(file, limit) {
   const profile = JSON.parse(fs.readFileSync(file, "utf8"));
+  validateProfile(profile, file);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
   const samples = Array.isArray(profile.samples) ? profile.samples : [];
   const deltas = Array.isArray(profile.timeDeltas) ? profile.timeDeltas : [];
@@ -83,8 +103,11 @@ function summarizeProfile(file, limit) {
     add(byFrame, `${functionName}\t${url}${line}`, micros);
     add(byModule, groupUrl(frame.url ?? ""), micros);
   }
+  if (byFrame.size === 0) {
+    throw new Error(`${file}: CPU profile samples did not match profile nodes`);
+  }
 
-  const durationMs = ((profile.endTime ?? 0) - (profile.startTime ?? 0)) / 1000;
+  const durationMs = (profile.endTime - profile.startTime) / 1000;
   console.log(`\n${file}`);
   console.log(`duration_ms: ${durationMs.toFixed(1)} samples: ${samples.length}`);
   console.log("top_frames:");
@@ -113,8 +136,13 @@ function main() {
     console.error("usage: scripts/perf/summarize-cpuprofile.mjs [--limit N] <profile...>");
     process.exit(2);
   }
-  for (const file of options.files) {
-    summarizeProfile(file, options.limit);
+  try {
+    for (const file of options.files) {
+      summarizeProfile(file, options.limit);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 }
 

@@ -46,6 +46,7 @@ type EffectivePolicyReport = {
   note?: string;
 };
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
+const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -55,12 +56,21 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   agent?: string;
 };
 
-async function readStdin(): Promise<string> {
+async function readStdin(
+  stream: NodeJS.ReadableStream = process.stdin,
+  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
+): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);
+    }
+    chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -294,7 +304,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     typeof defaults.autoAllowSkills === "boolean"
       ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
       : null,
-  ].filter(Boolean) as string[];
+  ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
   const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
     [];
@@ -622,3 +632,7 @@ export function registerExecApprovalsCli(program: Command) {
 
   applyParentDefaultHelpAction(approvals);
 }
+
+export const testing = {
+  readStdin,
+};

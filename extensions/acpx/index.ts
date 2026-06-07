@@ -14,6 +14,7 @@ const plugin = {
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,
+        openKeyedStore: (options) => api.runtime.state.openKeyedStore(options),
       }),
     );
     api.on("reply_dispatch", tryDispatchAcpReplyHook);

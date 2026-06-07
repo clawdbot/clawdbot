@@ -21,7 +21,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
-import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
+import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
 import {
   formatMatrixErrorMessage,
@@ -329,7 +329,7 @@ export class MatrixClient {
   private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
-  private readonly syncStore?: FileBackedMatrixSyncStore;
+  private readonly syncStore?: SqliteBackedMatrixSyncStore;
   private readonly idbSnapshotPath?: string;
   private readonly cryptoDatabasePrefix?: string;
   private bridgeRegistered = false;
@@ -370,7 +370,7 @@ export class MatrixClient {
       encryption?: boolean;
       initialSyncLimit?: number;
       syncFilter?: IFilterDefinition;
-      storagePath?: string;
+      storageRootDir?: string;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
@@ -390,7 +390,9 @@ export class MatrixClient {
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
-    this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
+    this.syncStore = opts.storageRootDir
+      ? new SqliteBackedMatrixSyncStore(opts.storageRootDir)
+      : undefined;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.selfUserId = opts.userId?.trim() || null;

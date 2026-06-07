@@ -3,7 +3,9 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   computeMinimumRetryWindowMs,
   MATRIX_IDB_PERSIST_INTERVAL_MS,
@@ -41,6 +43,8 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-idb-lock-order-"));
     withFileLockMock.mockReset();
     withFileLockMock.mockImplementation(
@@ -51,10 +55,11 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
 
   afterEach(async () => {
     await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
+    resetPluginStateStoreForTests();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("captures the snapshot after the file lock is acquired", async () => {
+  it("captures the current snapshot into SQLite state", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     await seedDatabase({
       name: cryptoDatabaseName,
@@ -62,45 +67,26 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
       records: [{ key: "room-1", value: { session: "old-session" } }],
     });
 
-    withFileLockMock.mockImplementationOnce(async (_filePath, _options, fn) => {
-      await seedDatabase({
-        name: cryptoDatabaseName,
-        storeName: "sessions",
-        records: [{ key: "room-1", value: { session: "new-session" } }],
-      });
-      return await fn();
-    });
-
     await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
+    await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
 
-    const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as Array<{
-      stores: Array<{
-        name: string;
-        records: Array<{ key: IDBValidKey; value: { session: string } }>;
-      }>;
-    }>;
-    const sessionsStore = data[0]?.stores.find((store) => store.name === "sessions");
-    expect(sessionsStore?.records).toEqual([{ key: "room-1", value: { session: "new-session" } }]);
+    await expect(restoreIdbFromDisk(snapshotPath)).resolves.toBe(true);
+    const dbs = await indexedDB.databases();
+    expect(dbs.map((entry) => entry.name)).toContain(cryptoDatabaseName);
   });
 
-  it("waits at least one persist interval before timing out on snapshot lock contention", async () => {
+  it("uses the long snapshot lock options when importing a legacy file", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     const capturedOptions: CapturedLockOptions[] = [];
 
     withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
       capturedOptions.push(options as CapturedLockOptions);
-      return 0;
-    });
-    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
-
-    fs.writeFileSync(snapshotPath, "[]", "utf8");
-    withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
-      capturedOptions.push(options as CapturedLockOptions);
       return false;
     });
+    fs.writeFileSync(snapshotPath, "[]", "utf8");
     await restoreIdbFromDisk(snapshotPath);
 
-    expect(capturedOptions).toHaveLength(2);
+    expect(capturedOptions).toHaveLength(1);
     for (const options of capturedOptions) {
       expect(computeMinimumRetryWindowMs(options.retries)).toBeGreaterThanOrEqual(
         MATRIX_IDB_PERSIST_INTERVAL_MS,

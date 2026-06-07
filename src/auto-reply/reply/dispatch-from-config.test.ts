@@ -35,6 +35,7 @@ import { createInternalHookEventPayload } from "../../test-utils/internal-hook-e
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import {
   createReplyDispatcher,
@@ -1040,6 +1041,56 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
+  });
+
+  it("returns session metadata changes marked during reply resolution", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        SessionKey: sessionKey,
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (ctx) => {
+        markCommandSessionMetadataChanged({ ctx, sessionKey });
+        return { text: "goal updated" };
+      },
+    });
+
+    expect(result.sessionMetadataChanges).toEqual([{ sessionKey, reason: "command-metadata" }]);
+  });
+
+  it("notifies session metadata changes before later dispatch errors", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const dispatcher = createDispatcher();
+    dispatcher.sendFinalReply = vi.fn(() => {
+      throw new Error("delivery failed");
+    });
+    const onSessionMetadataChanges = vi.fn();
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          SessionKey: sessionKey,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        onSessionMetadataChanges,
+        replyResolver: async (ctx) => {
+          markCommandSessionMetadataChanged({ ctx, sessionKey });
+          return { text: "goal updated" };
+        },
+      }),
+    ).rejects.toThrow("delivery failed");
+
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("skips pre-dispatch admission when the caller already aborted", async () => {

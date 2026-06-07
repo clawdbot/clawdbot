@@ -61,7 +61,7 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$
 (
   cd "$git_root"
   if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
-    cat /tmp/openclaw-git-install.log >&2 || true
+    openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
 )
@@ -81,7 +81,7 @@ pkg_tgz_path="$package_tgz"
 
 package_install_log="/tmp/openclaw-update-channel-switch-package-install.log"
 if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path" >"$package_install_log" 2>&1; then
-  cat "$package_install_log" >&2 || true
+  openclaw_e2e_print_log "$package_install_log" >&2
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"

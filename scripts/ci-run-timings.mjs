@@ -127,6 +127,9 @@ function collectRunTimingContext(run) {
  */
 export function summarizeRunTimings(run, limit = 15) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -312,6 +315,9 @@ function loadRun(runId) {
 
 function summarizeJobs(run) {
   const { created, jobs, updated } = collectRunTimingContext(run);
+  if (jobs.length === 0) {
+    throw new Error("CI run timing summary requires at least one job");
+  }
   const completedJobs = jobs.filter((job) => job.started !== null && job.completed !== null);
   const successfulDurations = jobs
     .filter((job) => job.status === "completed" && job.conclusion === "success")
@@ -380,7 +386,13 @@ export function parseRunTimingArgs(args) {
       index = recentOption.nextIndex;
       continue;
     }
-    explicitRunId ??= arg;
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown CI run timing option: ${arg}`);
+    }
+    if (explicitRunId) {
+      throw new Error(`Unexpected CI run id argument: ${arg}`);
+    }
+    explicitRunId = arg;
   }
 
   return {
@@ -403,9 +415,13 @@ function consumePositiveIntFlag(args, index, flag) {
   if (arg !== flag) {
     return null;
   }
+  const rawValue = args[index + 1];
+  if (!rawValue || rawValue.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
   return {
     nextIndex: index + 1,
-    value: parsePositiveInt(args[index + 1], flag),
+    value: parsePositiveInt(rawValue, flag),
   };
 }
 

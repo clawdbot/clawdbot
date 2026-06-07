@@ -22,11 +22,12 @@ struct OpenClawProBackground: View {
                     LinearGradient(
                         colors: [
                             OpenClawBrand.accent.opacity(0.05),
+                            OpenClawBrand.accent.opacity(0.02),
                             .clear,
                         ],
                         startPoint: .topTrailing,
                         endPoint: .bottomLeading)
-                        .frame(height: 260)
+                        .frame(height: 620)
                         .ignoresSafeArea()
                 }
             }

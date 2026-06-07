@@ -50,6 +50,20 @@ type MockCompactionResult =
       result?: undefined;
     };
 
+type MockResolvedModel = {
+  model: {
+    id: string;
+    provider: string;
+    contextWindow: number;
+    api: string;
+    reasoning?: boolean;
+  };
+  error: null;
+  authStorage: Record<string, unknown>;
+  modelRegistry: Record<string, unknown>;
+};
+type MockResolveModelAsync = (..._args: unknown[]) => Promise<MockResolvedModel>;
+
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentReply: vi.fn(
@@ -102,7 +116,7 @@ export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
-export const mockedResolveModelAsync = vi.fn(async () => ({
+export const mockedResolveModelAsync = vi.fn<MockResolveModelAsync>(async () => ({
   model: {
     id: "test-model",
     provider: "anthropic",

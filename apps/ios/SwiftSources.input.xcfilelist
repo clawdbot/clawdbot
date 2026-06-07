@@ -1,6 +1,7 @@
 Sources/Calendar/CalendarService.swift
 Sources/Camera/CameraController.swift
 Sources/Capabilities/NodeCapabilityRouter.swift
+Sources/Chat/AppleReviewDemoChatTransport.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceInfoHelper.swift

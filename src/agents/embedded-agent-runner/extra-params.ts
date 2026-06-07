@@ -828,8 +828,10 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isDeepSeekV4OpenAICompatibleModel,
+      shouldPatchModel: (model) =>
+        isDeepSeekV4OpenAICompatibleModel(model) && deepSeekV4NativeThinkingAllowedByCompat(model),
     });
+    ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
 
     // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
     // format. When MiMo is reached through an unowned proxy/custom provider
@@ -864,7 +866,7 @@ function applyPostPluginStreamWrappers(
   // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
-  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
   const rawChatTemplateKwargs = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
@@ -920,12 +922,78 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
 }
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
+}
+
+function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    model.provider !== "microsoft-foundry" &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
+}
+
+function isMicrosoftFoundryProviderId(provider: unknown): boolean {
+  if (typeof provider !== "string") {
+    return false;
+  }
+  const normalizedProvider = provider.trim().toLowerCase();
+  return (
+    normalizedProvider === "microsoft-foundry" ||
+    normalizedProvider.startsWith("microsoft-foundry-")
+  );
+}
+
+/**
+ * The DeepSeek V4 wrapper emits the deepseek-native `thinking: { type }` wire
+ * format (plus `reasoning_effort`). Honor an explicit `compat.thinkingFormat`
+ * override that selects a different reasoning format: some OpenAI-compatible
+ * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
+ * parameter outright, even `thinking: { type: "disabled" }`. When the format is
+ * unset we keep id-based auto-detection so genuine DeepSeek V4 endpoints still
+ * receive the native thinking payload; an explicit `"deepseek"` also keeps it.
+ */
+function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
+  const compat = (model as ProviderRuntimeModel).compat;
+  const thinkingFormat = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
+  return thinkingFormat === undefined || thinkingFormat === "deepseek";
+}
+
+function createDeepSeekV4NonNativeCompatSanitizerWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  return (model, context, options) => {
+    if (!shouldSanitizeDeepSeekV4NonNativeFields(model)) {
+      return baseStreamFn(model, context, options);
+    }
+    return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
+      delete payload.thinking;
+      stripDeepSeekV4ReasoningContent(payload);
+    });
+  };
+}
+
+function shouldSanitizeDeepSeekV4NonNativeFields(model: Parameters<StreamFn>[0]): boolean {
+  return (
+    isDeepSeekV4OpenAICompletionsModel(model) &&
+    (isMicrosoftFoundryProviderId(model.provider) ||
+      !deepSeekV4NativeThinkingAllowedByCompat(model))
+  );
+}
+
+function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    delete (message as Record<string, unknown>).reasoning_content;
+  }
 }
 
 const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([

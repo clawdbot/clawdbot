@@ -52,6 +52,10 @@
       "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
       "default": "./src/number-runtime.ts"
     },
+    "./outbound-media": {
+      "types": "./dist/src/plugin-sdk/outbound-media.d.ts",
+      "default": "./src/outbound-media.ts"
+    },
     "./secure-random-runtime": {
       "types": "./dist/src/plugin-sdk/secure-random-runtime.d.ts",
       "default": "./src/secure-random-runtime.ts"

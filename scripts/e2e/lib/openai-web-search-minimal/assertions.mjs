@@ -46,7 +46,7 @@ function scanSuccessRequest(logPath) {
       return;
     }
     const entry = JSON.parse(trimmed);
-    if (entry.path !== "/v1/responses") {
+    if (entry.method !== "POST" || entry.path !== "/v1/responses") {
       return;
     }
     responseCount += 1;
@@ -115,15 +115,10 @@ function assertSuccessRequest() {
     );
   }
   const tools = Array.isArray(success.body.tools) ? success.body.tools : [];
-  const hasWebSearch = tools.some(
-    (tool) =>
-      tool?.type === "web_search" ||
-      (tool?.type === "function" &&
-        (tool?.name === "web_search" || tool?.function?.name === "web_search")),
-  );
-  if (!hasWebSearch) {
+  const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
+  if (!hasNativeWebSearch) {
     throw new Error(
-      `success request did not include web_search. Body: ${JSON.stringify(success.body)}`,
+      `success request did not include native web_search. Body: ${JSON.stringify(success.body)}`,
     );
   }
   if (success.body.reasoning?.effort === "minimal") {

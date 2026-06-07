@@ -8,6 +8,7 @@ import {
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
   filterFindingsBySeverity,
+  parseArgs,
   parseSnapshotKey,
   readBoundedBulkAdvisoryErrorText,
   runPnpmAuditProd,
@@ -15,6 +16,19 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 describe("pnpm-audit-prod", () => {
+  it("parses explicit audit severity flags", () => {
+    expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
+    expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
+  });
+
+  it("rejects missing audit severity flag values", () => {
+    expect(() => parseArgs(["--min-severity"])).toThrow("--min-severity requires a value");
+    expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
+      "--min-severity requires a value",
+    );
+    expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
+  });
+
   it("parses scoped snapshot keys with peer suffixes", () => {
     expect(parseSnapshotKey("@scope/pkg@1.2.3(peer@4.5.6)")).toEqual({
       packageName: "@scope/pkg",

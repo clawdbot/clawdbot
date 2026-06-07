@@ -19,6 +19,7 @@ import {
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
+  assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
@@ -224,10 +225,15 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
 
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
-  const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+  const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
+  assertMemoryWikiSourceSyncStateCapacity({
+    state,
+    group: "bridge",
+    incomingCount: artifacts.length,
+  });
   const agentIdsByWorkspace = new Map<string, string[]>();
   for (const artifact of publicArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);

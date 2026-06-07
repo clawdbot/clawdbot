@@ -184,6 +184,75 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("streams QA session transcript summaries across read chunk boundaries", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-stream-");
+    const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:stream": { sessionId: "session-stream", sessionFile: "stream.jsonl" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(storeDir, "stream.jsonl"),
+      [
+        JSON.stringify({ message: { role: "user", content: "x".repeat(70 * 1024) } }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                name: "message",
+                input: { action: "send", text: "hello" },
+              },
+            ],
+          },
+        }),
+        "{ malformed json",
+        JSON.stringify({ message: { role: "assistant", content: "Sent." } }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        "agent:qa:stream",
+      ),
+    ).resolves.toEqual({
+      finalText: "Sent.",
+      hasDirectReplySelfMessage: true,
+    });
+  });
+
+  it("fails closed when a QA session transcript line is oversized", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-long-line-");
+    const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:long-line": { sessionId: "session-long-line", sessionFile: "long-line.jsonl" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(storeDir, "long-line.jsonl"), "x".repeat(1024 * 1024 + 1), "utf8");
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        "agent:qa:long-line",
+      ),
+    ).rejects.toThrow("session transcript line exceeded 1048576 bytes");
+  });
+
   it("fails closed when a requested QA session transcript entry is missing", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-missing-");
 

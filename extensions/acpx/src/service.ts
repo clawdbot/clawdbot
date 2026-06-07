@@ -9,6 +9,10 @@ import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
   AcpRuntime,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
@@ -22,13 +26,24 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
-import { createAcpxProcessLeaseStore, type AcpxProcessLeaseStore } from "./process-lease.js";
+import {
+  createAcpxProcessLeaseStore,
+  openAcpxProcessLeaseStateStore,
+  type AcpxProcessLeaseStore,
+} from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
+import {
+  ACPX_GATEWAY_INSTANCE_KEY,
+  ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  ACPX_GATEWAY_INSTANCE_NAMESPACE,
+  normalizeAcpxGatewayInstanceRecord,
+  type AcpxGatewayInstanceRecord,
+} from "./state.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -56,6 +71,7 @@ type AcpxRuntimeFactoryParams = {
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
+  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
@@ -233,21 +249,30 @@ async function withStartupProbeTimeout<T>(params: {
   }
 }
 
-async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
-  const filePath = path.join(stateDir, "gateway-instance-id");
-  try {
-    const existing = (await fs.readFile(filePath, "utf8")).trim();
-    if (existing) {
-      return existing;
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+function openGatewayInstanceStateStore(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): PluginStateKeyedStore<AcpxGatewayInstanceRecord> {
+  return openKeyedStore<AcpxGatewayInstanceRecord>({
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
+  });
+}
+
+async function resolveGatewayInstanceId(
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+): Promise<string> {
+  const store = openGatewayInstanceStateStore(openKeyedStore);
+  const existing = normalizeAcpxGatewayInstanceRecord(
+    await store.lookup(ACPX_GATEWAY_INSTANCE_KEY),
+  );
+  if (existing) {
+    return existing.instanceId;
   }
   const next = randomUUID();
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  await store.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    instanceId: next,
+    createdAt: Date.now(),
+  });
   return next;
 }
 
@@ -314,6 +339,10 @@ export function createAcpxRuntimeService(
         ctx.logger.info("skipping embedded acpx runtime backend (OPENCLAW_SKIP_ACPX_RUNTIME=1)");
         return;
       }
+      const openKeyedStore = params.openKeyedStore;
+      if (!openKeyedStore) {
+        throw new Error("ACPX runtime service requires plugin keyed state");
+      }
 
       const basePluginConfig = await measureAcpxStartup(ctx, "config.resolve", () =>
         resolveAcpxPluginConfig({
@@ -338,9 +367,11 @@ export function createAcpxRuntimeService(
         await fs.mkdir(wrapperRoot, { recursive: true });
       });
       const gatewayInstanceId = await measureAcpxStartup(ctx, "gateway-instance-id", () =>
-        resolveGatewayInstanceId(ctx.stateDir),
+        resolveGatewayInstanceId(openKeyedStore),
       );
-      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const processLeaseStore = createAcpxProcessLeaseStore({
+        store: openAcpxProcessLeaseStateStore(openKeyedStore),
+      });
       const startupReap = await measureAcpxStartup(ctx, "process-leases.reap", () =>
         reapOpenAcpxProcessLeases({
           gatewayInstanceId,

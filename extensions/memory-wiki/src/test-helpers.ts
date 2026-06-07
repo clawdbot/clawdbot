@@ -1,6 +1,7 @@
 // Memory Wiki helper module supports test helpers behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, vi } from "vitest";
@@ -27,6 +28,46 @@ type MemoryWikiPluginApiHarness = {
   registerMemoryPromptSupplement: ReturnType<typeof vi.fn>;
   registerTool: ReturnType<typeof vi.fn>;
 };
+
+function createMemoryKeyedStore<T>() {
+  const values = new Map<string, T>();
+  return {
+    async register(key: string, value: T) {
+      values.set(key, value);
+    },
+    async registerIfAbsent(key: string, value: T) {
+      if (values.has(key)) {
+        return false;
+      }
+      values.set(key, value);
+      return true;
+    },
+    async lookup(key: string) {
+      return values.get(key);
+    },
+    async consume(key: string) {
+      const value = values.get(key);
+      values.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return values.delete(key);
+    },
+    async entries() {
+      return [...values.entries()].map(
+        ([key, value]) =>
+          ({
+            key,
+            value,
+            createdAt: 0,
+          }) satisfies PluginStateEntry<T>,
+      );
+    },
+    async clear() {
+      values.clear();
+    },
+  };
+}
 
 export function createMemoryWikiTestHarness() {
   const tempDirs: string[] = [];
@@ -80,7 +121,11 @@ export function createMemoryWikiTestHarness() {
       name: "Memory Wiki",
       source: "test",
       config: {},
-      runtime: {} as OpenClawPluginApi["runtime"],
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(<T>() => createMemoryKeyedStore<T>()),
+        },
+      } as unknown as OpenClawPluginApi["runtime"],
       registerCli,
       registerGatewayMethod,
       registerMemoryCorpusSupplement,

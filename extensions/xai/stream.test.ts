@@ -170,6 +170,41 @@ describe("xai stream wrappers", () => {
     expectXaiFastToolStreamShaping(capture);
   });
 
+  it("leaves tool-call argument html entities untouched, delegating decode to the core path", async () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call_1",
+      name: "write",
+      arguments: { content: "&amp;amp;" },
+    };
+    const assistant = {
+      role: "assistant",
+      content: [toolCall],
+      stopReason: "toolUse",
+    };
+    const baseStream = buildEventStreamFn([
+      { type: "toolcall_end", contentIndex: 0, toolCall, partial: assistant },
+      { type: "done", reason: "toolUse", message: assistant },
+    ]);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStream,
+      extraParams: { tool_stream: false },
+    } as never);
+
+    const events = await collectEvents(
+      wrapped!(
+        { api: "openai-responses", provider: "xai", id: "grok-4.3" } as Model<"openai-responses">,
+        { messages: [], tools: [] } as unknown as Context,
+        {},
+      ),
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<{ arguments?: { content?: string } }> };
+    };
+    expect(done.message?.content?.[0]?.arguments?.content).toBe("&amp;amp;");
+  });
+
   it("promotes standalone Grok-style tool text to a structured tool call", async () => {
     const rawToolText = '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}';
     const baseStream = buildEventStreamFn([

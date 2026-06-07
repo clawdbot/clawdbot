@@ -20,6 +20,7 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "./reply/get-reply.types.js";
@@ -477,6 +478,7 @@ export async function dispatchInboundMessage(params: {
   toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const finalized = measureDiagnosticsTimelineSpanSync(
@@ -512,6 +514,7 @@ export async function dispatchInboundMessage(params: {
             dispatcher: params.dispatcher,
             replyOptions,
             replyResolver: params.replyResolver,
+            onSessionMetadataChanges: params.onSessionMetadataChanges,
           }),
         {
           phase: "agent-turn",
@@ -531,6 +534,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
   const foregroundReplyFence = beginForegroundReplyFence(finalized);
@@ -597,6 +601,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
         ...params.replyOptions,
         ...replyOptions,
       },
+      onSessionMetadataChanges: params.onSessionMetadataChanges,
     });
   } finally {
     try {

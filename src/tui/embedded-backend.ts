@@ -36,10 +36,6 @@ import {
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
-  injectTimestamp,
-  timestampOptsFromConfig,
-} from "../gateway/server-methods/agent-timestamp.js";
-import {
   augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
@@ -983,10 +979,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
       const result = await agentCommandFromIngress(
         {
-          message: injectTimestamp(params.message, timestampOptsFromConfig(cfg)),
+          // The per-message timestamp prefix is applied at the single LLM
+          // boundary (normalizeMessagesForLlmBoundary) from each message's own
+          // timestamp, so the current turn and historical turns carry identical
+          // bytes on the wire. See: https://github.com/openclaw/openclaw/issues/3658
+          message: params.message,
           sessionKey: canonicalKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),

@@ -20,16 +20,35 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
-const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_COMMAND_MS",
+);
+const READY_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_READY_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_READY_MS",
+);
+const RPC_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
+  15000,
+  "OPENCLAW_SECRET_PROOF_RPC_MS",
+);
 const TEARDOWN_GRACE_MS = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
+  "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
 );
 const OUTPUT_CAPTURE_LIMIT_BYTES = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES,
   4 * 1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_OUTPUT_BYTES",
+);
+const RESOLVER_STDIN_LIMIT_BYTES = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES,
+  1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES",
 );
 const RESULTS_PATH =
   process.env.OPENCLAW_SECRET_PROOF_RESULTS_PATH?.trim() ||
@@ -42,13 +61,42 @@ function requireFullMatrix() {
   return process.env.OPENCLAW_SECRET_PROOF_FULL === "1";
 }
 
-function readPositiveInt(raw, fallback) {
+function allowProofSkips() {
+  return process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS === "1";
+}
+
+function skipProof(evidence) {
+  return { status: "skip", evidence };
+}
+
+function isSkippedProofResult(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.status === "skip" &&
+    typeof value.evidence === "string"
+  );
+}
+
+function collectBlockingProofResults(entries = results) {
+  return entries.filter(
+    (entry) => entry.status === "fail" || (entry.status === "skip" && !allowProofSkips()),
+  );
+}
+
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -123,6 +171,12 @@ function createOutputCapture(label, options = {}) {
     },
     text() {
       return output;
+    },
+    reset() {
+      output = "";
+      bytes = 0;
+      truncated = false;
+      scanTail = "";
     },
     leakedForbiddenValue() {
       return leakedForbiddenValue;
@@ -303,7 +357,7 @@ function runCommand(command, args, options = {}) {
       }
       abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
-      const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      const result = { code, signal, stdout: stdout.text(), stderr: stderr.text() };
       if (aborted) {
         reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
         return;
@@ -311,6 +365,18 @@ function runCommand(command, args, options = {}) {
       if (timedOut) {
         terminateProcessTree(child, "SIGKILL");
         reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+        return;
+      }
+      if (result.signal && options.allowFailure !== true) {
+        reject(
+          new Error(
+            scrub(
+              `command terminated by signal (${result.signal}): ${command} ${args.join(" ")}\n${
+                result.stderr || result.stdout
+              }`,
+            ),
+          ),
+        );
         return;
       }
       if (result.code !== 0 && options.allowFailure !== true) {
@@ -564,15 +630,36 @@ if (!storePath) {
   console.error("missing PROOF_SECRET_STORE_PATH");
   process.exit(4);
 }
+const stdinLimitBytes = ${RESOLVER_STDIN_LIMIT_BYTES};
 
 function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
+    let failed = false;
+    const fail = (error) => {
+      if (failed) {
+        return;
+      }
+      failed = true;
+      reject(error);
+    };
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > stdinLimitBytes) {
+        fail(new Error(\`resolver stdin exceeded \${stdinLimitBytes} bytes\`));
+        process.stdin.destroy();
+        return;
+      }
       body += chunk;
     });
-    process.stdin.on("end", () => resolve(body));
+    process.stdin.on("error", fail);
+    process.stdin.on("end", () => {
+      if (!failed) {
+        resolve(body);
+      }
+    });
   });
 }
 
@@ -1043,10 +1130,18 @@ async function runWithProof(name, description, fn) {
   try {
     const evidence = await fn();
     const elapsedMs = Date.now() - started;
-    results.push({ name, status: "pass", elapsedMs, evidence });
+    if (isSkippedProofResult(evidence)) {
+      const entry = { name, status: "skip", elapsedMs, evidence: evidence.evidence };
+      results.push(entry);
+      console.log(`[SKIP] ${name} ${description} (${elapsedMs}ms) ${scrub(evidence.evidence)}`);
+      return entry;
+    }
+    const entry = { name, status: "pass", elapsedMs, evidence };
+    results.push(entry);
     console.log(
       `[PASS] ${name} ${description} (${elapsedMs}ms) ${evidence ? scrub(evidence) : ""}`,
     );
+    return entry;
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -1237,7 +1332,9 @@ async function p8ManagedServiceEnvProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENCLAW_SECRET_PROOF_SERVICE=1 is required for full matrix service proof");
     }
-    return "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host";
+    return skipProof(
+      "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host",
+    );
   }
   await withProofEnv("p8", async (envCtx) => {
     const port = await allocatePort();
@@ -1467,7 +1564,9 @@ async function p12OpenAiLiveProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENAI_API_KEY is required for full matrix OpenAI proof");
     }
-    return "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile";
+    return skipProof(
+      "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile",
+    );
   }
   await withProofEnv(
     "p12",
@@ -1548,7 +1647,7 @@ async function runPtySecretsConfigurePreset(envCtx) {
     cwd: command.options.cwd ?? process.cwd(),
     env: command.options.env ?? envCtx.env,
   });
-  let output = "";
+  const output = createOutputCapture("secrets configure stdout");
   let phase = "providers-menu";
   const sendKeys = (keys) => {
     keys.forEach((key, index) => {
@@ -1558,22 +1657,23 @@ async function runPtySecretsConfigurePreset(envCtx) {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error(`secrets configure preset timed out: ${scrub(output)}`));
+      reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`));
     }, 60000);
     child.onData((data) => {
-      output += data;
-      if (phase === "providers-menu" && output.includes("Configure secret providers")) {
+      output.append(data);
+      const outputText = output.text();
+      if (phase === "providers-menu" && outputText.includes("Configure secret providers")) {
         phase = "selecting-preset";
         sendKeys(["\x1b[B", "\r"]);
         return;
       }
-      if (phase === "selecting-preset" && output.includes("Select plugin preset")) {
+      if (phase === "selecting-preset" && outputText.includes("Select plugin preset")) {
         phase = "preset-selected";
         sendKeys(["\r"]);
-        output = "";
+        output.reset();
         return;
       }
-      if (phase === "preset-selected" && output.includes("Configure secret providers")) {
+      if (phase === "preset-selected" && outputText.includes("Configure secret providers")) {
         phase = "continue-selected";
         sendKeys(["\x1b[A", "\r"]);
       }
@@ -1581,10 +1681,10 @@ async function runPtySecretsConfigurePreset(envCtx) {
     child.onExit(({ exitCode }) => {
       clearTimeout(timer);
       if (exitCode !== 0) {
-        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output)}`));
+        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output.text())}`));
         return;
       }
-      resolve(output);
+      resolve(output.text());
     });
   });
 }
@@ -1790,19 +1890,24 @@ async function main() {
   if (runError) {
     throw toLintErrorObject(runError, "Non-Error thrown");
   }
-  const failed = results.filter((entry) => entry.status !== "pass");
-  if (failed.length > 0) {
+  const blockingResults = collectBlockingProofResults();
+  if (blockingResults.length > 0) {
     process.exitCode = 1;
   }
 }
 
 export {
+  collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  runPtySecretsConfigurePreset,
+  runWithProof,
   runCommand,
+  skipProof,
   startGateway,
   waitForManagedGatewayStatus,
+  writeProofPlugin,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

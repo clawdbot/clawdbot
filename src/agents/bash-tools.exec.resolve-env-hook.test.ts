@@ -34,8 +34,11 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: vi.fn(() => []),
   getShellPathFromLoginShell: vi.fn(() => null),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  shouldDeferShellEnvFallback: vi.fn(() => false),
+  shouldEnableShellEnvFallback: vi.fn(() => false),
 }));
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({

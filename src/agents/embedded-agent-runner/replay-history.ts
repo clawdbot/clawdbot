@@ -18,6 +18,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -235,15 +236,6 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-// `provider:"openclaw"` assistant entries written by the channel-delivery
-// transcript mirror (`model:"delivery-mirror"`, see config/sessions/transcript.ts)
-// and by the Gateway transcript-inject helper (`model:"gateway-injected"`, see
-// gateway/server-methods/chat-transcript-inject.ts) are user-visible transcript
-// records, not model output. Replaying them to the actual provider duplicates
-// content and, on Bedrock or strict OpenAI-compatible providers, can also
-// trigger turn-ordering rejections.
-const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -275,19 +267,6 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
-}
-
-function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = (message as { provider?: unknown }).provider;
-  const model = (message as { model?: unknown }).model;
-  return (
-    provider === "openclaw" &&
-    typeof model === "string" &&
-    TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model)
-  );
 }
 
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
@@ -357,7 +336,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       out.push(message);
       continue;
     }
-    if (isTranscriptOnlyOpenclawAssistant(message)) {
+    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
       // Drop from the in-memory replay copy; the persisted JSONL keeps the
       // entry so user-facing transcript surfaces are unchanged.
       touched = true;

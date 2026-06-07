@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
-APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
+APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
@@ -76,6 +76,16 @@ check_signing_keys() {
     | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
 }
 
+canonicalize_app_bundle() {
+  if [[ -z "${APP_BUNDLE}" ]]; then
+    return 0
+  fi
+  if [[ ! -d "${APP_BUNDLE}" ]]; then
+    fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"
+  fi
+  APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd -P)"
+}
+
 trap cleanup EXIT INT TERM
 
 for arg in "$@"; do
@@ -113,6 +123,7 @@ done
 if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]; then
   fail "Cannot use --sign and --no-sign together"
 fi
+canonicalize_app_bundle
 
 mkdir -p "$(dirname "$LOG_PATH")"
 rm -f "$LOG_PATH"
@@ -129,30 +140,60 @@ acquire_lock
 
 kill_all_openclaw() {
   for _ in {1..10}; do
-    pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "OpenClaw" 2>/dev/null || true
-    if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "OpenClaw" >/dev/null 2>&1; then
+    local pids=""
+    pids="$(openclaw_process_pids)"
+    if [[ -z "${pids}" ]]; then
       return 0
     fi
+    while IFS= read -r pid; do
+      kill "${pid}" 2>/dev/null || true
+    done <<< "${pids}"
     sleep 0.3
   done
+  [[ -z "$(openclaw_process_pids)" ]]
+}
+
+known_openclaw_executables() {
+  if [[ -n "${APP_BUNDLE}" ]]; then
+    printf '%s\n' "${APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"
+  fi
+  printf '%s\n' \
+    "${ROOT_DIR}/dist/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}" \
+    "/Applications/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}" \
+    "${DEBUG_PROCESS_PATTERN}" \
+    "${LOCAL_PROCESS_PATTERN}" \
+    "${RELEASE_PROCESS_PATTERN}"
+}
+
+openclaw_process_pids() {
+  local pattern=""
+  while IFS= read -r pattern; do
+    [[ -n "${pattern}" ]] || continue
+    process_pids_matching "${pattern}"
+  done < <(known_openclaw_executables) | sort -u
+}
+
+process_pids_matching() {
+  local pattern="$1"
+  ps axww -o pid=,command= 2>/dev/null \
+    | while read -r pid command_line; do
+        [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+        [[ "${pid}" != "$$" ]] || continue
+        [[ "${command_line}" == *"${pattern}"* ]] || continue
+        printf '%s\n' "${pid}"
+      done
 }
 
 stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Kill all running instances first.
-log "==> Killing existing OpenClaw instances"
-kill_all_openclaw
+# 1) Stop launchd supervision, then kill all running instances.
 stop_launch_agent
+log "==> Killing existing OpenClaw instances"
+if ! kill_all_openclaw; then
+  fail "OpenClaw instances did not exit after cleanup attempts"
+fi
 
 # Bundle Gateway-hosted plugin assets.
 run_step "bundle plugin assets" bash -lc "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
@@ -189,14 +230,12 @@ run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" ]]; then
-    if [[ -d "${APP_BUNDLE}" ]]; then
-      return 0
-    fi
-    fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"
+    canonicalize_app_bundle
+    return 0
   fi
 
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+    APP_BUNDLE="$(cd "${ROOT_DIR}/dist/OpenClaw.app" && pwd -P)"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
@@ -204,7 +243,7 @@ choose_app_bundle() {
   fi
 
   if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
+    APP_BUNDLE="$(cd "/Applications/OpenClaw.app" && pwd -P)"
     return 0
   fi
 
@@ -258,11 +297,11 @@ run_step "launch app" env -i \
   TMPDIR="${TMPDIR:-/tmp}" \
   PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open "${APP_BUNDLE}" ${ATTACH_ONLY_ARGS[@]:+"${ATTACH_ONLY_ARGS[@]}"}
+  /usr/bin/open -n "${APP_BUNDLE}" ${ATTACH_ONLY_ARGS[@]:+"${ATTACH_ONLY_ARGS[@]}"}
 
 # 5) Verify the app is alive.
 sleep 1.5
-if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
+if [[ -n "$(process_pids_matching "${APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}")" ]]; then
   log "OK: OpenClaw is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."

@@ -103,7 +103,7 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.PATCH.`,
     );
   }
   return spec;
@@ -163,12 +163,12 @@ function parsePublishedReleaseVersion(spec) {
   return {
     year: Number(match[1]),
     month: Number(match[2]),
-    day: Number(match[3]),
+    patch: Number(match[3]),
   };
 }
 
 function comparePublishedReleaseVersion(a, b) {
-  return a.year - b.year || a.month - b.month || a.day - b.day;
+  return a.year - b.year || a.month - b.month || a.patch - b.patch;
 }
 
 function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
@@ -179,7 +179,7 @@ function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
   if (!version) {
     return true;
   }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
 }
 
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {

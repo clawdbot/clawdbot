@@ -158,6 +158,17 @@ export function resolveEmbeddingProviderAdapterId(
   }
 }
 
+export function resolveEmbeddingProviderAdapterTransport(
+  providerId: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): MemoryEmbeddingProviderAdapter["transport"] {
+  try {
+    return getAdapter(providerId, config).transport;
+  } catch {
+    return undefined;
+  }
+}
+
 async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,

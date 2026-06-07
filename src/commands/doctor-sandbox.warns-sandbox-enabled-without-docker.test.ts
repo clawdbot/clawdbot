@@ -258,6 +258,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
         kind: "containers",
         registryPath: "/tmp/openclaw/sandbox/containers.json",
         shardedDir: "/tmp/openclaw/sandbox/containers",
+        source: "monolithic",
         exists: true,
         valid: true,
         entries: 2,
@@ -270,8 +271,8 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(note).toHaveBeenCalledWith(
       [
         "Legacy sandbox registry files detected.",
-        "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
-        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+        "- containers monolithic: /tmp/openclaw/sandbox/containers.json (2 entries)",
+        "Run openclaw doctor --fix to migrate them to SQLite.",
       ].join("\n"),
       "Sandbox",
     );
@@ -283,6 +284,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
         kind: "containers",
         registryPath: "/tmp/openclaw/sandbox/containers.json",
         shardedDir: "/tmp/openclaw/sandbox/containers",
+        source: "monolithic",
         exists: true,
         valid: true,
         entries: 2,
@@ -305,7 +307,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
+      "- Migrated containers registry into 2 SQLite rows.",
       "Doctor changes",
     );
   });

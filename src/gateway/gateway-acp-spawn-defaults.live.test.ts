@@ -24,6 +24,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { sleep } from "../utils.js";
+import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -37,6 +38,10 @@ const LIVE_TIMEOUT_MS = resolvePositiveInteger(
   process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_TIMEOUT_MS,
   240_000,
 );
+
+function snapshotAcpSpawnDefaultsLiveEnv(): LiveEnvSnapshot {
+  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+}
 
 function resolvePositiveInteger(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
@@ -265,17 +270,7 @@ describeLive("gateway live (ACP spawn defaults)", () => {
   it(
     "applies existing subagent defaults to live ACP spawns without leaking primary agent model",
     async () => {
-      const previous = {
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        stateDir: process.env.OPENCLAW_STATE_DIR,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        port: process.env.OPENCLAW_GATEWAY_PORT,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-        codexHome: process.env.CODEX_HOME,
-      };
+      const previousEnv = snapshotAcpSpawnDefaultsLiveEnv();
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-acp-spawn-"));
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
       const tempStateDir = path.join(tempRoot, "state");
@@ -285,6 +280,7 @@ describeLive("gateway live (ACP spawn defaults)", () => {
       const subagentModel = resolveSubagentModel();
       const thinking = resolveThinking();
       const sessionKeys: string[] = [];
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -310,12 +306,12 @@ describeLive("gateway live (ACP spawn defaults)", () => {
       clearPluginLoaderCache();
       resetPluginRuntimeStateForTest();
 
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
         await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
         await waitForAcpBackendReady();
         const runtimeCfg = getRuntimeConfig();
@@ -368,67 +364,26 @@ describeLive("gateway live (ACP spawn defaults)", () => {
         });
         expect(primaryOnlyEntry.acp?.runtimeOptions?.model).not.toBe("anthropic/claude-sonnet-4-6");
       } finally {
-        const runtimeCfg = getRuntimeConfig();
-        for (const sessionKey of sessionKeys) {
-          await getAcpSessionManager()
-            .closeSession({
-              cfg: runtimeCfg,
-              sessionKey,
-              reason: "live-acp-spawn-defaults-test-cleanup",
-              discardPersistentState: true,
-              clearMeta: true,
-              requireAcpSession: false,
-            })
-            .catch(() => {});
-        }
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-        await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        if (previous.configPath === undefined) {
-          delete process.env.OPENCLAW_CONFIG_PATH;
-        } else {
-          process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-        }
-        if (previous.stateDir === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
-        } else {
-          process.env.OPENCLAW_STATE_DIR = previous.stateDir;
-        }
-        if (previous.token === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        } else {
-          process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-        }
-        if (previous.port === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_PORT;
-        } else {
-          process.env.OPENCLAW_GATEWAY_PORT = previous.port;
-        }
-        if (previous.skipChannels === undefined) {
-          delete process.env.OPENCLAW_SKIP_CHANNELS;
-        } else {
-          process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-        }
-        if (previous.skipGmail === undefined) {
-          delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-        } else {
-          process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-        }
-        if (previous.skipCron === undefined) {
-          delete process.env.OPENCLAW_SKIP_CRON;
-        } else {
-          process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-        }
-        if (previous.skipCanvas === undefined) {
-          delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-        } else {
-          process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
-        }
-        if (previous.codexHome === undefined) {
-          delete process.env.CODEX_HOME;
-        } else {
-          process.env.CODEX_HOME = previous.codexHome;
+        try {
+          const runtimeCfg = getRuntimeConfig();
+          for (const sessionKey of sessionKeys) {
+            await getAcpSessionManager()
+              .closeSession({
+                cfg: runtimeCfg,
+                sessionKey,
+                reason: "live-acp-spawn-defaults-test-cleanup",
+                discardPersistentState: true,
+                clearMeta: true,
+                requireAcpSession: false,
+              })
+              .catch(() => {});
+          }
+          clearConfigCache();
+          clearRuntimeConfigSnapshot();
+          await server?.close();
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreLiveEnv(previousEnv);
         }
       }
     },

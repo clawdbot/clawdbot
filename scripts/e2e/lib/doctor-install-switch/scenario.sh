@@ -33,7 +33,7 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 )
 npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
 if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz" >"$npm_log" 2>&1; then
-  cat "$npm_log"
+  openclaw_e2e_print_log "$npm_log"
   exit 1
 fi
 
@@ -136,7 +136,7 @@ run_flow() {
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   rm -f "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"
@@ -150,7 +150,7 @@ run_flow() {
   assert_entrypoint "$unit_path" "$install_expected"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
 
@@ -187,7 +187,7 @@ run_proxy_env_flow() {
     HTTPS_PROXY="https://proxy.local:7890" \
     NO_PROXY="localhost,127.0.0.1" \
     "$npm_bin" gateway install --force >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
@@ -200,7 +200,7 @@ run_proxy_env_flow() {
   } >>"$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_UPDATE_IN_PROGRESS=1 \
     node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
@@ -231,7 +231,7 @@ run_wrapper_flow() {
   local unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force >"$install_log" 2>&1; then
-    cat "$install_log"
+    openclaw_e2e_print_log "$install_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -239,7 +239,7 @@ run_wrapper_flow() {
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --force >"$reinstall_log" 2>&1; then
-    cat "$reinstall_log"
+    openclaw_e2e_print_log "$reinstall_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -248,7 +248,7 @@ run_wrapper_flow() {
 
   sed -i "/^Environment=OPENCLAW_WRAPPER=/d" "$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    cat "$env_repair_log"
+    openclaw_e2e_print_log "$env_repair_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
@@ -256,26 +256,26 @@ run_wrapper_flow() {
 
   sed -i "s#^Environment=OPENCLAW_WRAPPER=.*#Environment=OPENCLAW_WRAPPER=/tmp/stale-openclaw-wrapper#" "$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" >"$env_repair_log" 2>&1; then
-    cat "$env_repair_log"
+    openclaw_e2e_print_log "$env_repair_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes >"$doctor_log" 2>&1; then
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   if ! grep -Fq "Gateway service invokes OPENCLAW_WRAPPER:" "$doctor_log"; then
     echo "Expected doctor to report active wrapper"
-    cat "$doctor_log"
+    openclaw_e2e_print_log "$doctor_log"
     exit 1
   fi
   assert_exec_arg "$unit_path" 1 "$wrapper"
   assert_env_value "$unit_path" "OPENCLAW_WRAPPER" "$wrapper"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_WRAPPER= "$npm_bin" gateway install --force >"$clear_log" 2>&1; then
-    cat "$clear_log"
+    openclaw_e2e_print_log "$clear_log"
     exit 1
   fi
   assert_no_env_key "$unit_path" "OPENCLAW_WRAPPER"

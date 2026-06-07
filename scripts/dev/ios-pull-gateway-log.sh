@@ -27,5 +27,10 @@ xcrun devicectl device copy from \
   --source Documents/openclaw-gateway.log \
   --destination "$DEST" >/dev/null
 
+if [[ ! -s "$DEST" ]]; then
+  echo "Gateway log pull produced an empty file: $DEST" >&2
+  exit 1
+fi
+
 echo "Pulled to: $DEST"
 tail -n 200 "$DEST"

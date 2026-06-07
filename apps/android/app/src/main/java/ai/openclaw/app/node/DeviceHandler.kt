@@ -30,8 +30,7 @@ private const val MAX_DEVICE_APPS_LIMIT = 200
 private const val DEVICE_APPS_SYSTEM_FLAGS =
   ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
 
-internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean =
-  (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
+internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean = (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
 
 internal data class DeviceAppEntry(
   val label: String,

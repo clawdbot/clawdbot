@@ -492,6 +492,15 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps release-check workflow edits on release workflow regression tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
+      {
+        mode: "targets",
+        targets: ["test/scripts/package-acceptance-workflow.test.ts"],
+      },
+    );
+  });
+
   it("keeps workflow sanity script edits on workflow guard tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/check-workflows.mjs"])).toEqual({
       mode: "targets",

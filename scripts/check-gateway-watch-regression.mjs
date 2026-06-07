@@ -51,6 +51,7 @@ const WATCH_GATEWAY_SKIP_ENV = {
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 
 /**
  * Appends watch output while preserving only the diagnostic tail.
@@ -416,7 +417,8 @@ function readProcessTreeCpuMs(rootPid) {
  * Reports whether gateway watch output contains a ready marker.
  */
 export function hasGatewayReadyLog(text) {
-  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+  const normalized = text.replaceAll(ANSI_ESCAPE_PATTERN, "");
+  return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
 }
 
 async function waitForGatewayReady(readText, timeoutMs) {
@@ -794,6 +796,65 @@ export function writeBuildAndRuntimePostBuildStamps(params = {}) {
   writeRuntimePostBuildStamp({ cwd });
 }
 
+/**
+ * Collects pass/fail findings for the bounded gateway watch regression run.
+ */
+export function collectGatewayWatchFindings(params) {
+  const {
+    cpuMs,
+    distRuntimeByteGrowth,
+    distRuntimeFileGrowth,
+    options,
+    watchBuildReason,
+    watchResult,
+    watchTriggeredBuild,
+  } = params;
+  const failures = [];
+  const warnings = [];
+  if (watchResult.spawnError) {
+    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
+  }
+  if (!watchResult.readyBeforeWindow) {
+    failures.push("gateway:watch did not report ready before the idle CPU window");
+  }
+  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
+    failures.push(
+      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  } else if (watchResult.timingFileMissing) {
+    warnings.push(
+      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
+    );
+  }
+  if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
+    failures.push(
+      "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
+    );
+  }
+  if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
+    failures.push(
+      `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
+    );
+  }
+  if (distRuntimeByteGrowth > options.distRuntimeByteGrowthMax) {
+    failures.push(
+      `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
+    );
+  }
+  if (!Number.isFinite(cpuMs)) {
+    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
+  } else if (cpuMs > options.cpuFailMs) {
+    failures.push(
+      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
+    );
+  } else if (cpuMs > options.cpuWarnMs) {
+    warnings.push(
+      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
+    );
+  }
+  return { failures, warnings };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
@@ -898,46 +959,15 @@ async function main() {
 
   console.log(JSON.stringify(summary, null, 2));
 
-  const failures = [];
-  const warnings = [];
-  if (watchResult.spawnError) {
-    failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
-  }
-  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
-    failures.push(
-      "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
-    );
-  } else if (watchResult.timingFileMissing) {
-    warnings.push(
-      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
-    );
-  }
-  if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
-    failures.push(
-      "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
-    );
-  }
-  if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
-    failures.push(
-      `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
-    );
-  }
-  if (distRuntimeByteGrowth > options.distRuntimeByteGrowthMax) {
-    failures.push(
-      `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
-    );
-  }
-  if (!Number.isFinite(cpuMs)) {
-    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
-  } else if (cpuMs > options.cpuFailMs) {
-    failures.push(
-      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
-    );
-  } else if (cpuMs > options.cpuWarnMs) {
-    warnings.push(
-      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
-    );
-  }
+  const { failures, warnings } = collectGatewayWatchFindings({
+    cpuMs,
+    distRuntimeByteGrowth,
+    distRuntimeFileGrowth,
+    options,
+    watchBuildReason,
+    watchResult,
+    watchTriggeredBuild,
+  });
 
   for (const message of warnings) {
     warn(message);

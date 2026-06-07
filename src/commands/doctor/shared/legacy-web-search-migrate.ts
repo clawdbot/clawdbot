@@ -21,14 +21,19 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["minimax", "minimax"],
   ["ollama", "ollama"],
   ["parallel", "parallel"],
+  ["parallel-free", "parallel"],
   ["perplexity", "perplexity"],
   ["searxng", "searxng"],
   ["tavily", "tavily"],
 ]);
 
-// Tavily and Parallel only ever used the plugin-owned config path, so there is
-// no legacy `tools.web.search.<id>.*` shape to migrate for them.
-const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["parallel", "tavily"]);
+// Tavily and Parallel (paid + free) only ever used the plugin-owned config path,
+// so there is no legacy `tools.web.search.<id>.*` shape to migrate for them.
+const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set([
+  "parallel",
+  "parallel-free",
+  "tavily",
+]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
 function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {

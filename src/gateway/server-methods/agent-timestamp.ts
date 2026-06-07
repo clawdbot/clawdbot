@@ -24,14 +24,45 @@ export interface TimestampInjectionOptions {
 }
 
 /**
+ * Build a `[DOW YYYY-MM-DD HH:MM TZ] ` prefix string from an explicit date.
+ *
+ * Returns undefined if formatting fails (malformed timezone etc.).
+ * Does NOT guard against TIMESTAMP_ENVELOPE_PATTERN or CRON_TIME_MARKER —
+ * callers that need those guards should use {@link injectTimestamp} instead.
+ *
+ * This is the primitive used by the persistence path to stamp each stored
+ * message with ITS OWN arrival timestamp (not the current wall-clock time),
+ * so historical messages carry a stable, immutable prefix.
+ */
+export function buildTimestampPrefix(
+  date: Date,
+  opts?: Pick<TimestampInjectionOptions, "timezone">,
+): string | undefined {
+  const timezone = opts?.timezone ?? "UTC";
+  const formatted = formatZonedTimestamp(date, { timeZone: timezone });
+  if (!formatted) {
+    return undefined;
+  }
+  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
+  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
+  const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
+    date,
+  );
+  return `[${dow} ${formatted}] `;
+}
+
+/**
  * Injects a compact timestamp prefix into a message if one isn't already
  * present. Uses the same `YYYY-MM-DD HH:MM TZ` format as channel envelope
  * timestamps ({@link formatZonedTimestamp}), keeping token cost low (~7
  * tokens) and format consistent across all agent contexts.
  *
- * Used by the gateway `agent` and `chat.send` handlers to give TUI, web,
- * spawned subagents, `sessions_send`, and heartbeat wake events date/time
- * awareness — without modifying the system prompt (which is cached).
+ * NOTE: The standard user-turn path no longer calls this. Per-message stamps
+ * are now applied once at the LLM boundary (normalizeMessagesForLlmBoundary)
+ * from each message's own timestamp, so storage stays bare and the current and
+ * historical sends are byte-identical — eliminating the prompt-cache bust
+ * described in issue #3658. This helper is retained only for any remaining
+ * non-user-turn callers and as the shared prefix primitive's wrapper.
  *
  * Channel messages (Discord, Telegram, etc.) already have timestamps via
  * envelope formatting and take a separate code path — they never reach
@@ -56,20 +87,12 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   }
 
   const now = opts?.now ?? new Date();
-  const timezone = opts?.timezone ?? "UTC";
-
-  const formatted = formatZonedTimestamp(now, { timeZone: timezone });
-  if (!formatted) {
+  const prefix = buildTimestampPrefix(now, opts);
+  if (!prefix) {
     return message;
   }
 
-  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
-  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
-  const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
-    now,
-  );
-
-  return `[${dow} ${formatted}] ${message}`;
+  return `${prefix}${message}`;
 }
 
 /**

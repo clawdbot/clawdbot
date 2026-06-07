@@ -36,4 +36,38 @@ describe("resolveCronExecutionRetryHint", () => {
       retryable: false,
     });
   });
+
+  it("does not classify bare 5xx-looking numbers as server_error", () => {
+    for (const message of [
+      "context limit 512 exceeded",
+      "process exited with 503 lines of output",
+      "ENOENT: no such file '/var/run/app-540.sock'",
+      "killed worker pid 511 after deadline",
+      "assertion failed: expected 500 got 0",
+      "error 500 got 0",
+      "process exited with code 500",
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["server_error"])).toEqual({
+        retryable: false,
+      });
+    }
+  });
+
+  it("classifies genuine HTTP 5xx errors as server_error", () => {
+    for (const message of [
+      "HTTP 503 Service Unavailable",
+      "received status 500 from upstream",
+      "500 Internal Server Error",
+      "502 Bad Gateway",
+      "upstream returned 5xx",
+      "response code: 502",
+      "503",
+      "500",
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["server_error"])).toEqual({
+        retryable: true,
+        category: "server_error",
+      });
+    }
+  });
 });

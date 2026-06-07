@@ -601,7 +601,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
-        BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+        BodyForAgent: "Reply with exactly: Yay! I did it!",
         BodyForCommands: "",
         CommandBody: "",
         CommandAuthorized: true,

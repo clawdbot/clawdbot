@@ -1,24 +1,24 @@
 // Device Pair plugin module implements notify behavior.
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+  DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+  DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+  DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+  notifyRequestStoreKey,
+  notifySubscriberKey,
+  notifySubscriberStoreKey,
+  type NotifySeenRequest,
+  type NotifySubscription,
+} from "./notify-state.js";
 
-const NOTIFY_STATE_FILE = "device-pair-notify.json";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
-const NOTIFY_MAX_SEEN_AGE_MS = 24 * 60 * 60 * 1000;
-
-type NotifySubscription = {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  mode: "persistent" | "once";
-  addedAtMs: number;
-};
 
 type NotifyStateFile = {
   subscribers: NotifySubscription[];
@@ -79,112 +79,79 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-function resolveNotifyStatePath(stateDir: string): string {
-  return path.join(stateDir, NOTIFY_STATE_FILE);
+function openNotifySubscriberStore(
+  api: OpenClawPluginApi,
+): PluginStateKeyedStore<NotifySubscription> {
+  return api.runtime.state.openKeyedStore<NotifySubscription>({
+    namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+    maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+  });
 }
 
-function normalizeNotifyState(raw: unknown): NotifyStateFile {
-  const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-  const subscribersRaw = Array.isArray(root.subscribers) ? root.subscribers : [];
-  const notifiedRaw =
-    typeof root.notifiedRequestIds === "object" && root.notifiedRequestIds !== null
-      ? (root.notifiedRequestIds as Record<string, unknown>)
-      : {};
+function openNotifySeenRequestStore(
+  api: OpenClawPluginApi,
+): PluginStateKeyedStore<NotifySeenRequest> {
+  return api.runtime.state.openKeyedStore<NotifySeenRequest>({
+    namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+    maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+    defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+  });
+}
 
-  const subscribers: NotifySubscription[] = [];
-  for (const item of subscribersRaw) {
-    if (typeof item !== "object" || item === null) {
-      continue;
-    }
-    const record = item as Record<string, unknown>;
-    const to = normalizeOptionalString(record.to) ?? "";
-    if (!to) {
-      continue;
-    }
-    const accountId = normalizeOptionalString(record.accountId) ?? undefined;
-    const messageThreadId =
-      typeof record.messageThreadId === "string"
-        ? normalizeOptionalString(record.messageThreadId) || undefined
-        : typeof record.messageThreadId === "number" && Number.isFinite(record.messageThreadId)
-          ? Math.trunc(record.messageThreadId)
-          : undefined;
-    const mode = record.mode === "once" ? "once" : "persistent";
-    const addedAtMs =
-      typeof record.addedAtMs === "number" && Number.isFinite(record.addedAtMs)
-        ? Math.trunc(record.addedAtMs)
-        : Date.now();
-    subscribers.push({
-      to,
-      accountId,
-      messageThreadId,
-      mode,
-      addedAtMs,
-    });
-  }
+async function readNotifyState(api: OpenClawPluginApi): Promise<NotifyStateFile> {
+  const subscriberStore = openNotifySubscriberStore(api);
+  const seenRequestStore = openNotifySeenRequestStore(api);
+  const [subscriberEntries, seenRequestEntries] = await Promise.all([
+    subscriberStore.entries(),
+    seenRequestStore.entries(),
+  ]);
 
+  const subscribers = subscriberEntries
+    .map((entry) => entry.value)
+    .toSorted((a, b) => a.addedAtMs - b.addedAtMs);
   const notifiedRequestIds: Record<string, number> = {};
-  for (const [requestId, ts] of Object.entries(notifiedRaw)) {
-    const normalizedRequestId = normalizeOptionalString(requestId);
-    if (!normalizedRequestId) {
+  for (const entry of seenRequestEntries) {
+    const requestId = normalizeOptionalString(entry.value.requestId);
+    const notifiedAtMs = entry.value.notifiedAtMs;
+    if (!requestId || !Number.isFinite(notifiedAtMs) || notifiedAtMs <= 0) {
       continue;
     }
-    if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
-      continue;
-    }
-    notifiedRequestIds[normalizedRequestId] = Math.trunc(ts);
+    notifiedRequestIds[requestId] = Math.trunc(notifiedAtMs);
   }
 
   return { subscribers, notifiedRequestIds };
 }
 
-async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return normalizeNotifyState(JSON.parse(content));
-  } catch {
-    return { subscribers: [], notifiedRequestIds: {} };
+async function writeNotifyState(api: OpenClawPluginApi, state: NotifyStateFile): Promise<void> {
+  const subscriberStore = openNotifySubscriberStore(api);
+  const nextSubscribers = new Map(
+    state.subscribers.map((subscriber) => [notifySubscriberStoreKey(subscriber), subscriber]),
+  );
+  for (const entry of await subscriberStore.entries()) {
+    if (!nextSubscribers.has(entry.key)) {
+      await subscriberStore.delete(entry.key);
+    }
   }
-}
+  for (const [key, subscriber] of nextSubscribers) {
+    await subscriberStore.register(key, subscriber);
+  }
 
-async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
-  const content = JSON.stringify(state, null, 2);
-  await replaceFileAtomic({
-    filePath,
-    content: `${content}\n`,
-    tempPrefix: ".device-pair-notify",
-  });
-}
-
-function notifySubscriberKey(subscriber: {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): string {
-  return JSON.stringify([
-    subscriber.to,
-    subscriber.accountId ?? "",
-    normalizeNotifyThreadKey(subscriber.messageThreadId),
-  ]);
-}
-
-function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
-  if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
-    return String(Math.trunc(messageThreadId));
+  const seenRequestStore = openNotifySeenRequestStore(api);
+  const nextSeenRequests = new Map(
+    Object.entries(state.notifiedRequestIds).map(([requestId, notifiedAtMs]) => [
+      notifyRequestStoreKey(requestId),
+      { requestId, notifiedAtMs },
+    ]),
+  );
+  for (const entry of await seenRequestStore.entries()) {
+    if (!nextSeenRequests.has(entry.key)) {
+      await seenRequestStore.delete(entry.key);
+    }
   }
-  if (typeof messageThreadId !== "string") {
-    return "";
-  }
-  const normalized = normalizeOptionalString(messageThreadId);
-  if (!normalized) {
-    return "";
-  }
-  if (!/^-?\d+$/u.test(normalized)) {
-    return normalized;
-  }
-  try {
-    return BigInt(normalized).toString();
-  } catch {
-    return normalized;
+  for (const [key, value] of nextSeenRequests) {
+    await seenRequestStore.register(key, value, {
+      ttlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+    });
   }
 }
 
@@ -317,19 +284,16 @@ async function notifySubscriber(params: {
   }
 }
 
-async function notifyPendingPairingRequests(params: {
-  api: OpenClawPluginApi;
-  statePath: string;
-}): Promise<void> {
-  const state = await readNotifyState(params.statePath);
+async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
+  const state = await readNotifyState(params.api);
   const pairing = await listDevicePairing();
-  const pending = pairing.pending as PendingPairingRequest[];
+  const pending: PendingPairingRequest[] = pairing.pending;
   const now = Date.now();
   const pendingIds = new Set(pending.map((entry) => entry.requestId));
   let changed = false;
 
   for (const [requestId, ts] of Object.entries(state.notifiedRequestIds)) {
-    if (!pendingIds.has(requestId) || now - ts > NOTIFY_MAX_SEEN_AGE_MS) {
+    if (!pendingIds.has(requestId) || now - ts > DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS) {
       delete state.notifiedRequestIds[requestId];
       changed = true;
     }
@@ -376,7 +340,7 @@ async function notifyPendingPairingRequests(params: {
   }
 
   if (changed) {
-    await writeNotifyState(params.statePath, state);
+    await writeNotifyState(params.api, state);
   }
 }
 
@@ -399,9 +363,7 @@ export async function armPairNotifyOnce(params: {
     return false;
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
+  const state = await readNotifyState(params.api);
   let changed = false;
 
   if (upsertNotifySubscriber(state.subscribers, target, "once")) {
@@ -409,7 +371,7 @@ export async function armPairNotifyOnce(params: {
   }
 
   if (changed) {
-    await writeNotifyState(statePath, state);
+    await writeNotifyState(params.api, state);
   }
   return true;
 }
@@ -435,15 +397,13 @@ export async function handleNotifyCommand(params: {
     return { text: "Could not resolve Telegram target for this chat." };
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
+  const state = await readNotifyState(params.api);
   const targetKey = notifySubscriberKey(target);
   const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
 
   if (params.action === "on" || params.action === "enable") {
     if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
-      await writeNotifyState(statePath, state);
+      await writeNotifyState(params.api, state);
     }
     return {
       text:
@@ -458,7 +418,7 @@ export async function handleNotifyCommand(params: {
     );
     if (currentIndex !== -1) {
       state.subscribers.splice(currentIndex, 1);
-      await writeNotifyState(statePath, state);
+      await writeNotifyState(params.api, state);
     }
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
@@ -499,10 +459,9 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
 
   return {
     id: "device-pair-notifier",
-    start: async (ctx) => {
-      const statePath = resolveNotifyStatePath(ctx.stateDir);
+    start: async () => {
       const tick = async () => {
-        await notifyPendingPairingRequests({ api, statePath });
+        await notifyPendingPairingRequests({ api });
       };
 
       await tick().catch((err: unknown) => {

@@ -45,6 +45,19 @@ describe("provider public artifacts", () => {
     ).toBe(providerConfig);
   });
 
+  it("loads MiniMax thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("minimax");
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M2.7" })
+        ?.defaultLevel,
+    ).toBe("off");
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "minimax", modelId: "MiniMax-M3" })
+        ?.defaultLevel,
+    ).toBe("adaptive");
+  });
+
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {
     const bundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-"));
     const pluginDir = path.join(bundledPluginsDir, "openai");

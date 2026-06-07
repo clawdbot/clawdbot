@@ -16,8 +16,17 @@ import {
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
+const pairingMocks = vi.hoisted(() => ({
+  getPairingAdapter: vi.fn<
+    () => {
+      idLabel: string;
+      normalizeAllowEntry?: (entry: string) => string;
+    } | null
+  >(() => null),
+}));
+
 vi.mock("../channels/plugins/pairing.js", () => ({
-  getPairingAdapter: () => null,
+  getPairingAdapter: pairingMocks.getPairingAdapter,
 }));
 
 import {
@@ -56,6 +65,7 @@ afterAll(() => {
 
 beforeEach(() => {
   clearPairingAllowFromReadCacheForTest();
+  pairingMocks.getPairingAdapter.mockReset();
   nextRandomInt = 0;
   randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;
   setDefaultRandomIntMock();
@@ -309,6 +319,53 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
 }
 
 describe("pairing store", () => {
+  it("normalizes allowlist entries through channel pairing adapters", async () => {
+    pairingMocks.getPairingAdapter.mockReturnValue({
+      idLabel: "Telegram user",
+      normalizeAllowEntry: (entry: string) => entry.replace(/^telegram:/i, ""),
+    });
+
+    await withTempStateDir(async (stateDir, env) => {
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:1001",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: true, allowFrom: ["1001"] });
+      expect(await readChannelAllowFromStore("telegram", env, "main")).toEqual(["1001"]);
+      expect(readChannelAllowFromStoreSync("telegram", env, "main")).toEqual(["1001"]);
+
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "main",
+        allowFrom: ["telegram:1002", "telegram:*"],
+      });
+      clearPairingAllowFromReadCacheForTest();
+      expect(await readChannelAllowFromStore("telegram", env, "main")).toEqual(["1002"]);
+
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:*",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: false, allowFrom: ["1002"] });
+
+      await expect(
+        removeChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:1002",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: true, allowFrom: [] });
+    });
+  });
+
   it("skips malformed persisted pairing requests while approving valid codes", async () => {
     await withTempStateDir(async (stateDir, env) => {
       const now = new Date().toISOString();

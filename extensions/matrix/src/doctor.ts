@@ -72,8 +72,8 @@ export function formatMatrixLegacyCryptoPreview(
       [
         `- Matrix encrypted-state migration is pending for account "${plan.accountId}".`,
         `- Legacy crypto store: ${plan.legacyCryptoPath}`,
-        `- New recovery key file: ${plan.recoveryKeyPath}`,
-        `- Migration state file: ${plan.statePath}`,
+        `- Recovery key state: Matrix SQLite state (imports ${plan.recoveryKeyPath} if present)`,
+        `- Migration state: Matrix SQLite state (imports ${plan.statePath} if present)`,
         '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
       ].join("\n"),
     );

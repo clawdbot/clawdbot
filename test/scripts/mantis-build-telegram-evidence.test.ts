@@ -18,7 +18,7 @@ afterEach(() => {
   }
 });
 
-function makeTelegramOutput() {
+function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-evidence-test-"));
   tempDirs.push(dir);
   mkdirSync(dir, { recursive: true });
@@ -40,6 +40,7 @@ function makeTelegramOutput() {
           rttMs: 1234,
         },
       ],
+      ...summary,
     }),
   );
   writeFileSync(
@@ -55,7 +56,9 @@ function makeTelegramOutput() {
       },
     ]),
   );
-  writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
+  if (includeReport) {
+    writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
+  }
   return dir;
 }
 
@@ -118,6 +121,39 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     expect(result.manifest.artifacts.some((artifact) => artifact.kind === "motionPreview")).toBe(
       true,
     );
+  });
+
+  it("does not fabricate a required report artifact for passing Telegram summaries", () => {
+    const dir = makeTelegramOutput({ includeReport: false });
+
+    expect(() => writeTelegramEvidence(["--output-dir", dir])).toThrow(
+      "Missing Telegram QA report for passing summary",
+    );
+  });
+
+  it("keeps a placeholder report for failing Telegram summaries", () => {
+    const dir = makeTelegramOutput({
+      includeReport: false,
+      summary: {
+        counts: { total: 1, passed: 0, failed: 1 },
+        scenarios: [
+          {
+            details: "Timed out.",
+            id: "telegram-status-command",
+            status: "fail",
+            title: "Telegram status command reply",
+          },
+        ],
+      },
+    });
+
+    const result = writeTelegramEvidence(["--output-dir", dir]);
+
+    expect(result.manifest.comparison.pass).toBe(false);
+    expect(readFileSync(path.join(dir, "telegram-qa-report.md"), "utf8")).toContain(
+      "Telegram QA report was unavailable",
+    );
+    expect(loadEvidenceManifest(result.manifestPath).comparison.pass).toBe(false);
   });
 
   it("marks the comparison failed when any Telegram scenario fails", () => {

@@ -1,7 +1,26 @@
 // Workspace fixture writer commands for E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { readTextFileTail } from "../text-file-utils.mjs";
 import { assert, readJson, requireArg, write, writeJson } from "./common.mjs";
+
+const AGENTS_DELETE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
 
 function writeOpenWebUiWorkspace() {
   const workspace =
@@ -34,13 +53,24 @@ function writeAgentsDeleteConfig() {
 }
 
 function assertAgentsDeleteResult([outputPath]) {
+  const resolvedOutputPath = requireArg(outputPath, "outputPath");
+  const outputStat = fs.statSync(resolvedOutputPath);
+  if (outputStat.isFile() && outputStat.size > AGENTS_DELETE_OUTPUT_MAX_BYTES) {
+    throw new Error(
+      `agents delete --json output exceeded ${AGENTS_DELETE_OUTPUT_MAX_BYTES} bytes:\nstdout tail=${readTextFileTail(
+        resolvedOutputPath,
+        ERROR_DETAIL_TAIL_BYTES,
+      )}`,
+    );
+  }
   let parsed;
   try {
-    parsed = readJson(requireArg(outputPath, "outputPath"));
+    parsed = readJson(resolvedOutputPath);
   } catch (error) {
     console.error("agents delete --json did not emit valid JSON:");
-    console.error(fs.readFileSync(outputPath, "utf8").trim());
-    throw error;
+    console.error(readTextFileTail(resolvedOutputPath, ERROR_DETAIL_TAIL_BYTES).trim());
+    const message = error instanceof Error ? error.message.split("\n").at(0) : String(error);
+    throw new Error(`agents delete --json parse failed: ${message}`, { cause: error });
   }
   for (const [actual, expected, label] of [
     [parsed.agentId, "ops", "agentId"],

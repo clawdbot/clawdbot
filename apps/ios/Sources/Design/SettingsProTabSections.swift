@@ -60,14 +60,14 @@ extension SettingsProTab {
         HStack(spacing: 12) {
             ProIconBadge(
                 systemName: "antenna.radiowaves.left.and.right",
-                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                color: self.gatewayStatusColor)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Connection")
                     .font(.subheadline.weight(.semibold))
-                Text(self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText)
+                Text(self.gatewayStatusDetail)
                     .font(.caption)
-                    .foregroundStyle(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                    .foregroundStyle(self.gatewayStatusColor)
             }
 
             Spacer(minLength: 8)
@@ -100,7 +100,8 @@ extension SettingsProTab {
                 title: "Reconnect",
                 icon: "arrow.triangle.2.circlepath",
                 color: OpenClawBrand.warn,
-                isBusy: self.isReconnectingGateway)
+                isBusy: self.isReconnectingGateway,
+                isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
             {
                 Task { await self.reconnectGateway() }
             }
@@ -118,6 +119,13 @@ extension SettingsProTab {
 
     var settingsListSection: some View {
         VStack(spacing: 10) {
+            self.settingsListRow(
+                icon: "checkmark.shield.fill",
+                title: "Approvals",
+                detail: self.approvalsDetail,
+                route: .approvals,
+                color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
+                badgeValue: self.pendingApproval == nil ? nil : "1")
             self.settingsListRow(
                 icon: "person.2",
                 title: "Permissions",
@@ -156,11 +164,13 @@ extension SettingsProTab {
         icon: String,
         title: String,
         detail: String,
-        route: SettingsRoute) -> some View
+        route: SettingsRoute,
+        color: Color = .secondary,
+        badgeValue: String? = nil) -> some View
     {
         NavigationLink(value: route) {
             HStack(spacing: 12) {
-                ProIconBadge(systemName: icon, color: .secondary)
+                ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
@@ -170,6 +180,9 @@ extension SettingsProTab {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
+                if let badgeValue {
+                    ProValuePill(value: badgeValue, color: color)
+                }
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -189,6 +202,8 @@ extension SettingsProTab {
                     switch route {
                     case .gateway:
                         self.gatewayDestination
+                    case .approvals:
+                        self.approvalsDestination
                     case .permissions:
                         self.permissionsDestination
                     case .voice:
@@ -204,12 +219,8 @@ extension SettingsProTab {
                     }
                 }
                 .padding(.top, 18)
-                .padding(.bottom, SettingsLayout.bottomContentPadding)
+                .padding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
-            .contentMargins(.bottom, self.bottomScrollMargin, for: .scrollContent)
-            SettingsBottomOverlayInsetReader(inset: self.$bottomOverlayInset)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
         }
         .navigationTitle(self.title(for: route))
         .navigationBarTitleDisplayMode(.inline)
@@ -224,9 +235,9 @@ extension SettingsProTab {
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
-                detail: self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText,
-                value: self.gatewayConnected ? "online" : "offline",
-                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+                detail: self.gatewayStatusDetail,
+                value: self.gatewayStatusValue,
+                color: self.gatewayStatusColor)
 
             self.detailListCard {
                 self.detailRow("Address", value: self.gatewayAddress)
@@ -235,7 +246,7 @@ extension SettingsProTab {
                 Divider()
                 self.detailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
                 Divider()
-                self.detailRow("Active Agent", value: self.appModel.activeAgentName)
+                self.detailRow("Default Agent", value: self.appModel.activeAgentName)
                 Divider()
                 self.detailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
             }
@@ -252,6 +263,89 @@ extension SettingsProTab {
             self.discoveredGatewaysCard
             self.gatewayAdvancedCard
         }
+    }
+
+    var approvalsDestination: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            self.detailStatusCard(
+                icon: "checkmark.shield.fill",
+                title: "Approvals",
+                detail: self.pendingApproval == nil ? "No gateway actions are waiting for review." :
+                    "Review the pending gateway action.",
+                value: self.pendingApproval == nil ? "clear" : "1 waiting",
+                color: self.pendingApproval == nil ? OpenClawBrand.ok : OpenClawBrand.warn)
+
+            self.approvalsReviewCard
+        }
+    }
+
+    var approvalsReviewCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let pendingApproval {
+                    VStack(spacing: 0) {
+                        ForEach(Array(self.approvalItems.enumerated()), id: \.element.id) { index, item in
+                            SettingsApprovalRow(item: item)
+                            if index < self.approvalItems.count - 1 {
+                                Divider().padding(.leading, 46)
+                            }
+                        }
+                    }
+
+                    if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
+                        Text(errorText)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(OpenClawBrand.danger)
+                    }
+
+                    HStack(spacing: 8) {
+                        Button {
+                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
+                        } label: {
+                            Label("Allow", systemImage: "checkmark")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
+
+                        if pendingApproval.allowsAllowAlways {
+                            Button {
+                                Task {
+                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
+                                }
+                            } label: {
+                                Label("Always", systemImage: "checkmark.shield")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                        }
+
+                        Button(role: .destructive) {
+                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
+                        } label: {
+                            Label("Deny", systemImage: "xmark")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
+
+                        Spacer(minLength: 0)
+                    }
+                    .controlSize(.small)
+                } else {
+                    HStack(spacing: 12) {
+                        ProIconBadge(systemName: "checkmark.shield.fill", color: OpenClawBrand.ok)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("No approvals waiting")
+                                .font(.subheadline.weight(.semibold))
+                            Text(self.approvalEmptyDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var permissionsDestination: some View {
@@ -296,7 +390,7 @@ extension SettingsProTab {
                 title: "Health Check",
                 detail: "Run app, permission, and gateway-adjacent checks without editing setup.",
                 value: self.diagnosticsHealthValue,
-                color: self.gatewayConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
+                color: self.gatewayDiagnosticConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             ProCard(radius: SettingsLayout.cardRadius) {
                 self.gatewayActionButton(
@@ -410,6 +504,7 @@ extension SettingsProTab {
         icon: String,
         color: Color,
         isBusy: Bool,
+        isDisabled: Bool = false,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
@@ -431,7 +526,7 @@ extension SettingsProTab {
             }
         }
         .buttonStyle(.plain)
-        .disabled(isBusy)
+        .disabled(isBusy || isDisabled)
     }
 
     func toggleCard(
@@ -503,7 +598,7 @@ extension SettingsProTab {
     var agentSelectionCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Active Agent")
+                Text("Default Agent")
                     .font(.subheadline.weight(.semibold))
                 Picker("Agent", selection: self.$selectedAgentPickerId) {
                     Text("Default").tag("")
@@ -514,7 +609,7 @@ extension SettingsProTab {
                         Text(name.isEmpty ? agent.id : name).tag(agent.id)
                     }
                 }
-                Text("Controls which agent Chat and Talk use.")
+                Text("Used for new Chat and Talk sessions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -616,7 +711,7 @@ extension SettingsProTab {
     var manualGatewayCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+                self.settingsButtonToggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
                 TextField("Host", text: self.$manualGatewayHost)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -624,7 +719,7 @@ extension SettingsProTab {
                 TextField("Port", text: self.manualPortBinding)
                     .keyboardType(.numberPad)
                     .textFieldStyle(.roundedBorder)
-                Toggle("Use TLS", isOn: self.$manualGatewayTLS)
+                self.settingsButtonToggle("Use TLS", isOn: self.$manualGatewayTLS)
                 self.gatewayActionButton(
                     title: "Connect Manual",
                     icon: "network",
@@ -643,16 +738,21 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
+                self.settingsButtonToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
                 SecureField("Gateway Password", text: self.$gatewayPassword)
                     .textFieldStyle(.roundedBorder)
-                Button("Reset Onboarding", role: .destructive) {
+                Button(role: .destructive) {
                     self.showResetOnboardingAlert = true
+                } label: {
+                    Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -665,8 +765,13 @@ extension SettingsProTab {
                     self.appModel.setVoiceWakeEnabled(enabled)
                 }
                 self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
+                    guard !self.appModel.isAppleReviewDemoModeEnabled else {
+                        self.talkEnabled = false
+                        return
+                    }
                     self.appModel.setTalkEnabled(enabled)
                 }
+                .disabled(self.appModel.isAppleReviewDemoModeEnabled)
                 Picker("Speech Language", selection: self.$talkSpeechLocale) {
                     ForEach(TalkSpeechLocale.supportedOptions()) { option in
                         Text(option.label).tag(option.id)
@@ -744,11 +849,10 @@ extension SettingsProTab {
     var diagnosticsAdvancedCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
-                    .onChange(of: self.discoveryDebugLogsEnabled) { _, enabled in
-                        self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
-                    }
-                Toggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
+                self.settingsButtonToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
+                    self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
+                }
+                self.settingsButtonToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
                 NavigationLink {
                     GatewayDiscoveryDebugLogView()
                 } label: {
@@ -793,6 +897,44 @@ extension SettingsProTab {
         Toggle(title, isOn: isOn)
             .onChange(of: isOn.wrappedValue) { _, enabled in
                 onChange?(enabled)
+            }
+    }
+
+    func settingsButtonToggle(
+        _ title: String,
+        isOn: Binding<Bool>,
+        onChange: ((Bool) -> Void)? = nil) -> some View
+    {
+        // Settings switch rows need full-width taps; wrapping Toggle crashes this NavigationStack on iOS 26.
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
+            }
+            .font(.subheadline)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+        .onChange(of: isOn.wrappedValue) { _, enabled in
+            onChange?(enabled)
+        }
+    }
+
+    func settingsSwitchIndicator(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .frame(width: 52, height: 32)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 28, height: 28)
+                    .padding(2)
+                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
             }
     }
 

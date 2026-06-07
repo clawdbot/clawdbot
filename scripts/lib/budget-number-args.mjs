@@ -24,10 +24,14 @@ export function budgetFloatFlag(flag, key) {
       if (argv[index] !== flag) {
         return null;
       }
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${flag} requires a value`);
+      }
       return {
         nextIndex: index + 1,
         apply(target) {
-          const parsed = parseBudgetNumber(argv[index + 1], flag);
+          const parsed = parseBudgetNumber(value, flag);
           if (parsed === null) {
             throw new Error(`${flag} requires a value`);
           }

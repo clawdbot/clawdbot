@@ -66,10 +66,12 @@ class GatewayDiscovery(
   private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val _gateways = MutableStateFlow<List<GatewayEndpoint>>(emptyList())
+
   /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
   private val _statusText = MutableStateFlow("Searching…")
+
   /** Short diagnostic text shown by connect UI while discovery is running. */
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 

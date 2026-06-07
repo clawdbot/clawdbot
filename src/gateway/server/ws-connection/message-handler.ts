@@ -180,7 +180,7 @@ class NodePairingRateLimitError extends Error {
   }
 }
 
-/** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
+/** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
 function isReleasedVersion(version: string): boolean {

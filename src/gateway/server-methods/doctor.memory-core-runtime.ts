@@ -6,6 +6,7 @@
  */
 export {
   dedupeDreamDiaryEntries,
+  loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
   previewRemHarness,
   removeBackfillDiaryEntries,

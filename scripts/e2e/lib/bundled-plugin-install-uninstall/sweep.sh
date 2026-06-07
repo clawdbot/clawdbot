@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/lib/docker-e2e-logs.sh
 
 if [ -f dist/index.mjs ]; then
   OPENCLAW_ENTRY="dist/index.mjs"
@@ -33,7 +34,7 @@ run_logged_sweep_command() {
     return 0
   else
     local status=$?
-    cat "$log_file"
+    docker_e2e_print_log "$log_file"
     if [ "$status" -eq 124 ]; then
       echo "Bundled plugin sweep command timed out after $sweep_command_timeout: $label" >&2
     else
@@ -75,10 +76,10 @@ for plugin_entry in "${plugin_entries[@]}"; do
   run_logged_sweep_command "install $plugin_id" "$install_log" \
     node "$OPENCLAW_ENTRY" plugins install "$plugin_id"
   if lifecycle_trace_enabled; then
-    cat "$install_log"
+    docker_e2e_print_log "$install_log"
   fi
   install_finished_at="$(now_ms)"
-  node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config"
+  node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_root"
   installed_asserted_at="$(now_ms)"
   if [[ "${OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE:-1}" != "0" ]]; then
     echo "Running bundled plugin runtime smoke: $plugin_id ($plugin_dir)"
@@ -94,7 +95,7 @@ for plugin_entry in "${plugin_entries[@]}"; do
   run_logged_sweep_command "uninstall $plugin_id" "$uninstall_log" \
     node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force
   if lifecycle_trace_enabled; then
-    cat "$uninstall_log"
+    docker_e2e_print_log "$uninstall_log"
   fi
   uninstall_finished_at="$(now_ms)"
   node "$probe" assert-uninstalled "$plugin_id" "$plugin_dir"

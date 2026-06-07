@@ -13,7 +13,7 @@ on:
         default: true
         type: boolean
       public_release_branch:
-        description: Public branch that contains the release tag commit, usually main or release/YYYY.M.D
+        description: Public branch that contains the release tag commit, usually main or release/YYYY.M.PATCH
         required: false
         default: main
         type: string
@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${PUBLIC_RELEASE_BRANCH}" != "main" && ! "${PUBLIC_RELEASE_BRANCH}" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "public_release_branch must be main or release/YYYY.M.D, got ${PUBLIC_RELEASE_BRANCH}." >&2
+            echo "public_release_branch must be main or release/YYYY.M.PATCH, got ${PUBLIC_RELEASE_BRANCH}." >&2
             exit 1
           fi
           RELEASE_SHA=$(git rev-parse HEAD)

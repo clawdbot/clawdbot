@@ -1,8 +1,9 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
-import type { Context, Model, Tool } from "../types.js";
-import { convertResponsesMessages } from "./openai-responses-shared.js";
+import type { AssistantMessage, Context, Model, Tool } from "../types.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { convertResponsesMessages, processResponsesStream } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
@@ -31,6 +32,32 @@ const proxyOpenAIModel = {
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
+
+function createAssistantOutput(): AssistantMessage {
+  return {
+    role: "assistant",
+    api: nativeOpenAIModel.api,
+    provider: nativeOpenAIModel.provider,
+    model: nativeOpenAIModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    content: [],
+  };
+}
+
+async function* responseEvents(events: Array<Record<string, unknown>>) {
+  for (const event of events) {
+    yield event as never;
+  }
+}
 
 describe("convertResponsesTools", () => {
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
@@ -326,5 +353,131 @@ describe("convertResponsesMessages", () => {
       call_id: "call_abc",
     });
     expect(functionCall).not.toHaveProperty("id");
+  });
+
+  it("keeps encrypted reasoning replay item ids when requested", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need continuity.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_foundry_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: true },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(input.find((item) => item.type === "reasoning")).toMatchObject({
+      type: "reasoning",
+      id: "rs_foundry_prior",
+      encrypted_content: "ciphertext",
+      summary: [],
+    });
+  });
+});
+
+describe("processResponsesStream", () => {
+  it.each([
+    ["omits arguments", undefined],
+    ["sends empty arguments", ""],
+  ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          delta: '{"path":"docs/gateway/local-models.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
+          item_id: "fc_read",
+          name: "read",
+          output_index: 0,
+          sequence_number: 3,
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_1",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+    stream.end();
+    await collect;
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "docs/gateway/local-models.md" },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
   });
 });

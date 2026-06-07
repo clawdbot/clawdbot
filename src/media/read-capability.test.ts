@@ -4,13 +4,27 @@ import type { OpenClawConfig } from "../config/types.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 
+const channelPluginMocks = vi.hoisted(() => ({
+  getLoadedChannelPlugin: vi.fn<
+    () =>
+      | {
+          groups?: {
+            resolveToolPolicy?: (params: unknown) => { deny?: string[]; allow?: string[] };
+          };
+        }
+      | undefined
+  >(() => undefined),
+}));
+
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
+  getLoadedChannelPlugin: channelPluginMocks.getLoadedChannelPlugin,
 }));
 
 describe("resolveAgentScopedOutboundMediaAccess", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
 
   it("preserves caller-provided workspaceDir from mediaAccess", () => {
@@ -91,6 +105,38 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeUndefined();
     expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+  });
+
+  it("honors plugin-owned group tool policy with channel metadata", () => {
+    const resolveToolPolicy = vi.fn(() => ({ deny: ["read"] }));
+    channelPluginMocks.getLoadedChannelPlugin.mockReturnValue({
+      groups: { resolveToolPolicy },
+    });
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:slack:group:C123",
+      groupChannel: "#incidents",
+      groupSpace: "team-a",
+      accountId: "workspace-1",
+      requesterSenderId: "U123",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeUndefined();
+    expect(resolveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: "C123",
+        groupChannel: "#incidents",
+        groupSpace: "team-a",
+        accountId: "workspace-1",
+        senderId: "U123",
+      }),
+    );
   });
 
   it("keeps host reads enabled when sender group policy allows read", () => {

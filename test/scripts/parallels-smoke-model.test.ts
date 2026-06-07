@@ -17,6 +17,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  extractLastOpenClawVersionFromLog,
   modelProviderConfigBatchJson,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -157,6 +158,20 @@ describe("Parallels smoke model selection", () => {
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+
+  it("extracts the last OpenClaw version from a bounded log tail", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-log-tail-"));
+    const logPath = join(tempDir, "phase.log");
+    try {
+      writeFileSync(logPath, ["OpenClaw 0.0.1", "x".repeat(4096), "OpenClaw 2026.6.7"].join("\n"));
+
+      await expect(extractLastOpenClawVersionFromLog(logPath, undefined, 128)).resolves.toBe(
+        "2026.6.7",
+      );
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
 
   beforeAll(() => {
     invalidProviderResult = spawnNodeEvalSync(
@@ -997,6 +1012,39 @@ setInterval(() => {}, 1000);
           quiet: true,
         }),
       ).rejects.toThrow(/failed to write Parallels host command log/u);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("streams host command logs instead of retaining them in memory", async () => {
+    const source = readFileSync(TS_PATHS.hostCommand, "utf8");
+    const runStreamingBlock = source.slice(source.indexOf("export async function runStreaming"));
+    expect(runStreamingBlock).toContain("createWriteStream");
+    expect(runStreamingBlock).toContain("child.kill(signal)");
+    expect(runStreamingBlock).toContain("writeLogChunk(chunk)");
+    expect(runStreamingBlock).not.toContain('let log = ""');
+    expect(runStreamingBlock).not.toContain("log += text");
+    expect(runStreamingBlock).not.toContain("writeFile(options.logPath, log");
+
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-log-"));
+    const logPath = join(tempDir, "stream.log");
+    try {
+      const status = await runStreaming(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('x'.repeat(128 * 1024)); process.stderr.write('stream-done');",
+        ],
+        {
+          logPath,
+          quiet: true,
+        },
+      );
+
+      expect(status).toBe(0);
+      expect(statSync(logPath).size).toBeGreaterThan(128 * 1024);
+      expect(readFileSync(logPath, "utf8")).toContain("stream-done");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

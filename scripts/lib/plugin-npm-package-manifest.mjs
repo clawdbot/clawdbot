@@ -678,18 +678,25 @@ export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   }
 }
 
-function parseRunArgs(argv) {
-  if (argv[0] !== "--run") {
-    throw new Error(
-      "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]",
-    );
-  }
+const RUN_USAGE =
+  "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";
+
+function readRunPackageDir(argv) {
   const packageDir = argv[1];
+  if (!packageDir || packageDir.startsWith("--")) {
+    throw new Error(RUN_USAGE);
+  }
+  return packageDir;
+}
+
+export function parseRunArgs(argv) {
+  if (argv[0] !== "--run") {
+    throw new Error(RUN_USAGE);
+  }
+  const packageDir = readRunPackageDir(argv);
   const separatorIndex = argv.indexOf("--", 2);
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
-    throw new Error(
-      "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]",
-    );
+    throw new Error(RUN_USAGE);
   }
   return {
     packageDir,

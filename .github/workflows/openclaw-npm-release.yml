@@ -391,7 +391,7 @@ jobs:
             tideclaw_alpha_publish=true
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]]; then
-            echo "Real publish runs must be dispatched from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
+            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
 

@@ -108,7 +108,7 @@ docker_e2e_run_with_harness \
     trap dump_logs_on_error ERR
     tsx scripts/e2e/mcp-code-mode-gateway-seed.ts >/tmp/mcp-code-mode-live-seed.log
     gateway_pid=\"\$(openclaw_e2e_start_gateway \"\$entry\" $PORT /tmp/mcp-code-mode-live-gateway.log)\"
-    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-code-mode-live-gateway.log 480
+    openclaw_e2e_wait_gateway_ready \"\$gateway_pid\" /tmp/mcp-code-mode-live-gateway.log 480 $PORT
     tsx scripts/e2e/mcp-code-mode-gateway-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

@@ -104,6 +104,7 @@ class MicCaptureManager(
   private val messageQueue = ArrayDeque<String>()
   private val messageQueueLock = Any()
   private var flushedPartialTranscript: String? = null
+
   // Correlates chat events with the idempotency key generated before sendChat returns.
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null

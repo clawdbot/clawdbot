@@ -141,6 +141,33 @@ describe("channel message flows dev runner", () => {
     expect(sendFinal).not.toHaveBeenCalled();
   });
 
+  it("fails thinking-final when the final send does not return a message id", async () => {
+    const stream = {
+      update: vi.fn(() => {}),
+      flush: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      messageId: vi.fn(() => 17),
+      forceNewMessage: vi.fn(),
+    };
+
+    await expect(
+      runTelegramThinkingFinalFlow(
+        {
+          cfg: {} as OpenClawConfig,
+          delayMs: 0,
+          target: "123",
+          thinkingUpdates: ["Checking the request."],
+        },
+        {
+          createDraftStream: vi.fn(() => stream),
+          sendFinal: vi.fn(async () => ({})),
+          sleep: vi.fn(async () => {}),
+        },
+      ),
+    ).rejects.toThrow("thinking-final final send did not return a durable Telegram message id");
+  });
+
   it("streams working updates through native message drafts before the final answer", async () => {
     const draft = {
       update: vi.fn(async () => true),
@@ -212,6 +239,29 @@ describe("channel message flows dev runner", () => {
 
     expect(draft.stop).toHaveBeenCalledOnce();
     expect(sendFinal).not.toHaveBeenCalled();
+  });
+
+  it("fails working-final when the final send does not return a message id", async () => {
+    const draft = {
+      update: vi.fn(async () => true),
+      stop: vi.fn(async () => {}),
+    };
+
+    await expect(
+      runTelegramWorkingFinalFlow(
+        {
+          cfg: {} as OpenClawConfig,
+          delayMs: 0,
+          durationMs: 12_000,
+          target: "123",
+        },
+        {
+          createNativeToolProgressDraft: vi.fn(() => draft),
+          sendFinal: vi.fn(async () => ({})),
+          sleep: vi.fn(async () => {}),
+        },
+      ),
+    ).rejects.toThrow("working-final final send did not return a durable Telegram message id");
   });
 
   it("uses two second progress update cadence by default", async () => {

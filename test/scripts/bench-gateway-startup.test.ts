@@ -54,8 +54,31 @@ describe("gateway startup benchmark script", () => {
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(
+      testing.parseOptions([
+        "--case",
+        "default",
+        "--output",
+        "startup.json",
+        "--json",
+        "--runs",
+        "2",
+      ]),
+    ).toMatchObject({
+      cases: [{ id: "default" }],
+      json: true,
+      output: "startup.json",
+      runs: 2,
+    });
     expect(() => testing.parsePositiveInt("2abc", 1, "--runs")).toThrow(
       /--runs must be an integer/u,
+    );
+    expect(() => testing.parseOptions(["--output", "--case", "default"])).toThrow(
+      "--output requires a value",
+    );
+    expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
+    expect(() => testing.parseOptions(["--runs", "--warmup", "0"])).toThrow(
+      "--runs requires a value",
     );
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });

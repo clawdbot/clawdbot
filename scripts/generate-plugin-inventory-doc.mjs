@@ -25,11 +25,13 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["duckduckgo", "/tools/duckduckgo-search"],
   ["exa", "/tools/exa-search"],
   ["firecrawl", "/tools/firecrawl"],
+  ["parallel", "/tools/parallel-search"],
   ["perplexity", "/tools/perplexity-search"],
   ["policy", "/cli/policy"],
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
 ]);
+const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
 
@@ -72,6 +74,29 @@ function docLink({ label, href }) {
 
 function pluginReferencePath(id) {
   return `/plugins/reference/${id}`;
+}
+
+function hasGeneratedReferencePage(record) {
+  if (!SKIPPED_REFERENCE_PAGE_IDS.has(record.id)) {
+    return true;
+  }
+  if (PLUGIN_DOC_ALIASES.has(record.id)) {
+    return false;
+  }
+  throw new Error(`skipped plugin reference page ${record.id} needs a plugin doc alias`);
+}
+
+function pluginInventoryHref(record) {
+  if (hasGeneratedReferencePage(record)) {
+    return pluginReferencePath(record.id);
+  }
+  return PLUGIN_DOC_ALIASES.get(record.id) ?? null;
+}
+
+function pluginReferenceLabel(record) {
+  const label = escapeInventoryText(record.id);
+  const href = pluginInventoryHref(record);
+  return href ? docLink({ href, label }) : label;
 }
 
 function humanizeId(value) {
@@ -215,7 +240,8 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   const links = [];
   const pluginAlias = PLUGIN_DOC_ALIASES.get(manifest.id) ?? PLUGIN_DOC_ALIASES.get(dirName);
   if (pluginAlias) {
-    pushUniqueDocLink(links, { href: pluginAlias, label: manifest.id ?? dirName });
+    const pluginAliasLabel = manifest.id ?? dirName;
+    pushUniqueDocLink(links, { href: pluginAlias, label: pluginAliasLabel });
   }
 
   const channelDoc = normalizeDocPath(packageJson.openclaw?.channel?.docsPath);
@@ -336,37 +362,21 @@ function resolveStatus({ dirName, packageJson, excludedDirs }) {
   return "source";
 }
 
-function escapeCell(value) {
-  return String(value).replaceAll("\n", " ").replaceAll("|", "\\|");
+function escapeInventoryText(value) {
+  return String(value).replaceAll("\n", " ").trim();
 }
 
-function renderTable(records) {
-  const rows = [
-    ["Plugin", "Description", "Distribution", "Surface"],
-    ...records.map((record) => [
-      docLink({ href: pluginReferencePath(record.id), label: escapeCell(record.id) }),
-      escapeCell(record.description),
-      `\`${escapeCell(record.packageName)}\`<br />${escapeCell(record.installRoute)}`,
-      escapeCell(record.surface),
-    ]),
-  ];
-  const widths = rows[0].map((_, index) => Math.max(...rows.map((row) => row[index].length), 3));
-  const lines = [];
-  lines.push(formatTableRow(rows[0], widths));
-  lines.push(
-    formatTableRow(
-      widths.map((width) => "-".repeat(width)),
-      widths,
-    ),
-  );
-  for (const row of rows.slice(1)) {
-    lines.push(formatTableRow(row, widths));
+function renderInventoryList(records) {
+  if (records.length === 0) {
+    return "_None._";
   }
-  return lines.join("\n");
-}
 
-function formatTableRow(row, widths) {
-  return `| ${row.map((cell, index) => cell.padEnd(widths[index])).join(" | ")} |`;
+  return records
+    .map(
+      (record) =>
+        `- **${pluginReferenceLabel(record)}** (\`${escapeInventoryText(record.packageName)}\`) - ${escapeInventoryText(record.installRoute)}. ${escapeInventoryText(record.description)}`,
+    )
+    .join("\n\n");
 }
 
 function renderRelatedDocs(record) {
@@ -443,6 +453,7 @@ ${record.surface}${manualBlock ? `\n\n${manualBlock}` : ""}${relatedDocs ? `\n\n
 }
 
 function renderReferenceIndex(records) {
+  const referenceCount = records.filter(hasGeneratedReferencePage).length;
   return `---
 summary: "Generated index of OpenClaw plugin reference pages"
 read_when:
@@ -460,7 +471,8 @@ This page is generated from \`extensions/*/package.json\` and
 pnpm plugins:inventory:gen
 \`\`\`
 
-${renderTable(records)}
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
+generated plugin reference pages by distribution, package, and description.
 `;
 }
 
@@ -532,7 +544,7 @@ function collectPluginRecords() {
 
 function writeGeneratedDocs(records) {
   fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
-  for (const record of records) {
+  for (const record of records.filter(hasGeneratedReferencePage)) {
     const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
     const manualSections = readManualReferenceSections(relativePath);
     fs.writeFileSync(
@@ -547,7 +559,7 @@ function writeGeneratedDocs(records) {
 function readGeneratedDocs(records) {
   return [
     [REFERENCE_INDEX_PATH, renderReferenceIndex(records)],
-    ...records.map((record) => {
+    ...records.filter(hasGeneratedReferencePage).map((record) => {
       const relativePath = path.join(REFERENCE_DIR, `${record.id}.md`);
       return [relativePath, renderReferencePage(record, readManualReferenceSections(relativePath))];
     }),
@@ -592,9 +604,9 @@ dependencies are available.
 
 ## Install a plugin
 
-Use the **Distribution** column to decide whether install is needed. Plugins that
-say \`included in OpenClaw\` are already present in the core package. Official
-external packages need one install, then a Gateway restart.
+Use the install route in each entry to decide whether install is needed. Plugins
+that say \`included in OpenClaw\` are already present in the core package.
+Official external packages need one install, then a Gateway restart.
 
 For example, Discord is an official external package:
 
@@ -611,17 +623,25 @@ explicit source. After install, follow the plugin's setup doc, such as
 [Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
 commands.
 
+Each entry lists the package, distribution route, and description.
+
 ## Core npm package
 
-${renderTable(groups.core)}
+${groups.core.length} plugins
+
+${renderInventoryList(groups.core)}
 
 ## Official external packages
 
-${renderTable(groups.external)}
+${groups.external.length} plugins
+
+${renderInventoryList(groups.external)}
 
 ## Source checkout only
 
-${renderTable(groups.source)}
+${groups.source.length} plugins
+
+${renderInventoryList(groups.source)}
 `;
 }
 

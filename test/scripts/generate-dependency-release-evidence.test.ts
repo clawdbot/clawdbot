@@ -7,6 +7,7 @@ import {
   DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
   createDependencyEvidenceManifest,
+  parseArgs,
   renderDependencyEvidenceStepSummary,
   renderDependencyEvidenceSummary,
   resolvePreviousReleaseTag,
@@ -71,6 +72,31 @@ describe("generate-dependency-release-evidence", () => {
         packageVersion: "2026.5.13-beta.1",
       }),
     ).toBe("v2026.5.13-beta.1");
+  });
+
+  it("rejects missing dependency evidence CLI option values", () => {
+    expect(() =>
+      parseArgs(["--output-dir", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --output-dir <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --release-ref <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--base-ref"]),
+    ).toThrow("Expected --base-ref <value>.");
+    expect(() =>
+      parseArgs([
+        "--output-dir",
+        "evidence",
+        "--release-ref",
+        "v2026.5.13",
+        "--npm-dist-tag",
+        "latest",
+        "--github-output",
+        "--github-step-summary",
+        "summary.md",
+      ]),
+    ).toThrow("Expected --github-output <value>.");
   });
 
   it("falls back to fetching tags when local previous-release resolution misses", () => {

@@ -303,6 +303,43 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
+  it("allows ordinary spaces in host persistence paths and quotes generated mounts", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(activeSandbox.rootDir, "config with spaces");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace with spaces");
+    const authProfileSecretDir = join(activeSandbox.rootDir, "auth secrets with spaces");
+    const homeVolumeDir = join(activeSandbox.rootDir, "home volume with spaces");
+    const extraMountSource = join(activeSandbox.rootDir, "extra data");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_AUTH_PROFILE_SECRET_DIR: authProfileSecretDir,
+      OPENCLAW_HOME_VOLUME: homeVolumeDir,
+      OPENCLAW_EXTRA_MOUNTS: `${extraMountSource}:/mnt/extra data:ro`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("cannot contain whitespace");
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain(`OPENCLAW_CONFIG_DIR=${configDir}`);
+    expect(envFile).toContain(`OPENCLAW_WORKSPACE_DIR=${workspaceDir}`);
+    expect(envFile).toContain(`OPENCLAW_AUTH_PROFILE_SECRET_DIR=${authProfileSecretDir}`);
+
+    const extraCompose = await readFile(
+      join(activeSandbox.rootDir, "docker-compose.extra.yml"),
+      "utf8",
+    );
+    expect(extraCompose).toContain(`"${homeVolumeDir}:/home/node"`);
+    expect(extraCompose).toContain(`"${configDir}:/home/node/.openclaw"`);
+    expect(extraCompose).toContain(`"${workspaceDir}:/home/node/.openclaw/workspace"`);
+    expect(extraCompose).toContain(
+      `"${authProfileSecretDir}:/home/node/.config/openclaw"`,
+    );
+    expect(extraCompose).toContain(`"${extraMountSource}:/mnt/extra data:ro"`);
+  });
+
   it("persists explicit Docker Bonjour opt-in overrides", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
@@ -781,7 +818,7 @@ describe("scripts/docker/setup.sh", () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(
       compose.split(
-        "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw",
+        '"${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"',
       ),
     ).toHaveLength(3);
   });

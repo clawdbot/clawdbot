@@ -157,6 +157,29 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
   return modelRef.slice(0, slash) === providerId ? modelRef.slice(slash + 1) : modelRef;
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectImageLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:image-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function buildLiveCases(params: {
   providerId: string;
   modelRef: string;
@@ -304,13 +327,21 @@ describeLive("image generation live (provider sweep)", () => {
         `[live:image-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toStrictEqual([]);
-        console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toStrictEqual([]);
+      expectImageLiveSweepPassed({ attempted, failures, providerFilter, skipped });
     },
     15 * 60_000,
   );
+});
+
+describe("image generation live provider filter coverage", () => {
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    expect(() =>
+      expectImageLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["openai"]),
+        skipped: ["openai: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: openai/u);
+  });
 });

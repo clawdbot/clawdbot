@@ -128,6 +128,29 @@ function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
   maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
+function formatProviderFilter(filter: Set<string> | null): string {
+  return filter ? [...filter].toSorted((a, b) => a.localeCompare(b)).join(", ") : "";
+}
+
+function expectMusicLiveSweepPassed(params: {
+  attempted: string[];
+  failures: string[];
+  providerFilter: Set<string> | null;
+  skipped: string[];
+}): void {
+  if (params.attempted.length === 0) {
+    expect(params.failures).toStrictEqual([]);
+    if (params.providerFilter && params.providerFilter.size > 0) {
+      throw new Error(
+        `[live:music-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
+      );
+    }
+    console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
+    return;
+  }
+  expect(params.failures).toStrictEqual([]);
+}
+
 function resolveLiveLyrics(providerId: string): string | undefined {
   if (providerId !== "minimax") {
     return undefined;
@@ -301,13 +324,21 @@ describeLive("music generation provider live", () => {
         `[live:music-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      if (attempted.length === 0) {
-        expect(failures).toStrictEqual([]);
-        console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
-        return;
-      }
-      expect(failures).toStrictEqual([]);
+      expectMusicLiveSweepPassed({ attempted, failures, providerFilter, skipped });
     },
     10 * 60_000,
   );
+});
+
+describe("music generation live provider filter coverage", () => {
+  it("fails filtered sweeps when no requested provider is attempted", () => {
+    expect(() =>
+      expectMusicLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: new Set(["minimax"]),
+        skipped: ["minimax: no usable auth"],
+      }),
+    ).toThrow(/requested provider filter produced no live attempts: minimax/u);
+  });
 });

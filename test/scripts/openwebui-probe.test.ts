@@ -1,6 +1,6 @@
 // Openwebui Probe tests cover openwebui probe script behavior.
 import { spawn } from "node:child_process";
-import { createServer, type Server as HttpServer } from "node:http";
+import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -78,6 +78,15 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
       });
     });
   });
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<string> {
+  let body = "";
+  request.setEncoding("utf8");
+  for await (const chunk of request) {
+    body += chunk;
+  }
+  return body;
 }
 
 describe("scripts/e2e/openwebui-probe.mjs", () => {
@@ -299,6 +308,91 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
         model: "openclaw/default",
         ok: true,
       });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("runs chat mode through Open WebUI chat completions and validates the nonce", async () => {
+    const chatRequests: unknown[] = [];
+    const server = createServer(async (request, response) => {
+      if (request.url === "/api/v1/auths/signin") {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "openwebui-session=test; Path=/",
+        });
+        response.end(JSON.stringify({ token: "test-token" }));
+        return;
+      }
+      if (request.url === "/api/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
+        return;
+      }
+      if (request.url === "/api/chat/completions") {
+        expect(request.headers.authorization).toBe("Bearer test-token");
+        expect(request.headers.cookie).toContain("openwebui-session=test");
+        chatRequests.push(JSON.parse(await readRequestBody(request)));
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            choices: [{ message: { content: "OpenClaw replied with nonce-123" } }],
+          }),
+        );
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const baseUrl = await listen(server);
+    try {
+      const result = await runProbe(baseUrl, { OPENWEBUI_SMOKE_MODE: "chat" });
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        model: "openclaw/default",
+        ok: true,
+        reply: "OpenClaw replied with nonce-123",
+      });
+      expect(chatRequests).toEqual([
+        {
+          messages: [{ content: "reply with nonce-123", role: "user" }],
+          model: "openclaw/default",
+        },
+      ]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("fails chat mode when the Open WebUI reply omits the expected nonce", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/api/v1/auths/signin") {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "openwebui-session=test; Path=/",
+        });
+        response.end(JSON.stringify({ token: "test-token" }));
+        return;
+      }
+      if (request.url === "/api/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "openclaw/default" }] }));
+        return;
+      }
+      if (request.url === "/api/chat/completions") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ message: { content: "missing the marker" } }));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const baseUrl = await listen(server);
+    try {
+      const result = await runProbe(baseUrl, { OPENWEBUI_SMOKE_MODE: "chat" });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('chat reply missing nonce: "missing the marker"');
     } finally {
       server.close();
     }

@@ -1998,7 +1998,7 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
   });
 
-  it("injects a timestamp into the message passed to agentCommand", async () => {
+  it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
 
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -2014,7 +2014,7 @@ describe("gateway agent handler", () => {
     );
 
     const callArgs = await waitForAgentCommandCall<{ message?: string }>();
-    expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+    expect(callArgs.message).toBe("Is it the weekend?");
 
     resetTimeConfig();
   });
@@ -4990,7 +4990,7 @@ describe("gateway agent handler", () => {
     expect(result.meta?.agentMeta?.sessionId).toBe("global-work-reset-session");
   });
 
-  it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
+  it("uses /reset suffix as the post-reset message for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
     mocks.performGatewaySessionReset.mockClear();
@@ -5011,7 +5011,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
+    const call = await expectResetCall("check status");
     expect(call?.sessionId).toBe("reset-session-id");
 
     resetTimeConfig();

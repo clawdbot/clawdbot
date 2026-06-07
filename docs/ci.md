@@ -116,7 +116,7 @@ Manual CI dispatches run the same job graph as normal CI but force every non-And
 Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref.
 
 ```bash
-gh workflow run ci.yml --ref release/YYYY.M.D
+gh workflow run ci.yml --ref release/YYYY.M.PATCH
 gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
@@ -196,7 +196,7 @@ stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
 `OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
-from `release/YYYY.M.D` or `main` after the release tag exists and after the
+from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
@@ -204,8 +204,8 @@ dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.D \
-  -f tag=vYYYY.M.D-beta.N \
+  --ref release/YYYY.M.PATCH \
+  -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f npm_dist_tag=beta
 ```
@@ -334,7 +334,7 @@ gh workflow run package-acceptance.yml \
   --ref main \
   -f workflow_ref=main \
   -f source=ref \
-  -f package_ref=release/YYYY.M.D \
+  -f package_ref=release/YYYY.M.PATCH \
   -f suite_profile=package \
   -f telegram_mode=mock-openai
 

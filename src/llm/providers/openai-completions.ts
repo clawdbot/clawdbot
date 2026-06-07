@@ -1274,6 +1274,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
+  const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
   const cacheControlFormat =
     provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
@@ -1287,16 +1288,18 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
-    requiresReasoningContentOnAssistantMessages: isDeepSeek,
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
     thinkingFormat: isDeepSeek
       ? "deepseek"
-      : isZai
-        ? "zai"
-        : isTogether
-          ? "together"
-          : provider === "openrouter" || baseUrl.includes("openrouter.ai")
-            ? "openrouter"
-            : "openai",
+      : isXiaomi
+        ? "deepseek"
+        : isZai
+          ? "zai"
+          : isTogether
+            ? "together"
+            : provider === "openrouter" || baseUrl.includes("openrouter.ai")
+              ? "openrouter"
+              : "openai",
     openRouterRouting: {},
     vercelGatewayRouting: {},
     zaiToolStream: false,

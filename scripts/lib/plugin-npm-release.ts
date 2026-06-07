@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
-import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
 export type PluginPackageJson = {
   name?: string;
@@ -124,7 +124,7 @@ export function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${version}".`,
     );
     return null;
   }
@@ -251,7 +251,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -465,6 +465,31 @@ export function resolveChangedPublishablePluginPackages(params: {
   return params.plugins.filter((plugin) => changed.has(plugin.extensionId));
 }
 
+export function collectPluginReleaseVersionFloorErrors(
+  plugins: readonly Pick<PublishablePluginPackage, "packageName" | "version">[],
+): string[] {
+  return plugins.flatMap((plugin) =>
+    collectReleaseVersionFloorErrors(plugin.version).map(
+      (error) => `${plugin.packageName}@${plugin.version}: ${error}`,
+    ),
+  );
+}
+
+export function assertPluginReleaseVersionFloors(
+  plugins: readonly Pick<PublishablePluginPackage, "packageName" | "version">[],
+  label: string,
+): void {
+  const errors = collectPluginReleaseVersionFloorErrors(plugins);
+  if (errors.length === 0) {
+    return;
+  }
+  throw new Error(
+    `${label} rejected plugin versions below the release floor:\n${errors
+      .map((error) => `- ${error}`)
+      .join("\n")}`,
+  );
+}
+
 function isPluginVersionPublished(packageName: string, version: string): boolean {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
@@ -520,6 +545,12 @@ export function collectPluginReleasePlan(params?: {
               changedExtensionIds,
             })
           : allPublishable;
+
+  const explicitPublishSelection =
+    params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;
+  if (explicitPublishSelection) {
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin NPM release plan");
+  }
 
   const all = selectedPublishable.map((plugin) =>
     Object.assign({}, plugin, {

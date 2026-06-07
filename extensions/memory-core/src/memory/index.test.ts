@@ -68,6 +68,8 @@ vi.mock("./embeddings.js", () => {
         };
       },
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
+    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+      providerId === "local" ? "local" : "remote",
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -294,7 +296,7 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: params.provider ?? "openai",
+            ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
@@ -974,6 +976,25 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("closes stale default managers when provider requirement changes", async () => {
+    const storePath = path.join(workspaceDir, "index-provider-requirement-cache.sqlite");
+    const implicitCfg = createCfg({ storePath });
+    const implicit = requireManager(
+      await getMemorySearchManager({ cfg: implicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(implicit);
+    await implicit.probeEmbeddingAvailability();
+
+    const explicitCfg = createCfg({ storePath, provider: "openai" });
+    const explicit = requireManager(
+      await getMemorySearchManager({ cfg: explicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(explicit);
+
+    expect(explicit === implicit).toBe(false);
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("retries embedding provider close before releasing the manager", async () => {
     providerCloseFailuresRemaining = 1;
     const cfg = createCfg({
@@ -1604,6 +1625,12 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
+    expect(status.custom?.providerUnavailableReason).toBe("No API key found for provider");
+    expect(status.custom?.providerState).toEqual({
+      mode: "fts-only",
+      reason: "No API key found for provider",
+      attemptedProviderId: "openai",
+    });
 
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -1611,6 +1638,56 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {
+    forceNoProvider = true;
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-required-provider-missing.sqlite"),
+      provider: "openai",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.search("Alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=local/,
+      );
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+        /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
+      forceNoProvider = false;
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("Alpha");
+      expect(results.length).toBeGreaterThan(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-required-provider-runtime-missing.sqlite"),
+      provider: "openai",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      (
+        manager as unknown as {
+          provider: null;
+        }
+      ).provider = null;
+
+      await expect(manager.search("Alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {

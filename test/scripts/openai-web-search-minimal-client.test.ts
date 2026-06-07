@@ -40,4 +40,76 @@ describe("scripts/e2e/lib/openai-web-search-minimal/client.mjs", () => {
       }),
     ).toThrow(/reject mode failed for an unexpected reason/u);
   });
+
+  it("accepts success mode only when the final assistant reply contains the marker", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: {
+          meta: { finalAssistantVisibleText: `done: ${testing.SUCCESS_MARKER}` },
+          status: "ok",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts success markers from non-error reply payload text", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: {
+          payloads: [{ text: testing.SUCCESS_MARKER }],
+          status: "ok",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts success markers from the gateway agent result envelope", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: {
+          result: {
+            meta: { finalAssistantVisibleText: testing.SUCCESS_MARKER },
+            payloads: [{ text: "secondary reply" }],
+          },
+          status: "ok",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails success mode when the agent run completes without the marker", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: { status: "ok" },
+      }),
+    ).toThrow(/completed without success marker/u);
+  });
+
+  it("does not accept success markers from error payload text", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: {
+          payloads: [{ isError: true, text: testing.SUCCESS_MARKER }],
+          status: "ok",
+        },
+      }),
+    ).toThrow(/completed without success marker/u);
+  });
+
+  it("keeps non-ok success mode failures distinct from marker failures", () => {
+    expect(() =>
+      testing.validateSuccessResult({
+        ok: true,
+        value: {
+          meta: { finalAssistantVisibleText: testing.SUCCESS_MARKER },
+          status: "blocked",
+        },
+      }),
+    ).toThrow(/agent run did not complete successfully/u);
+  });
 });

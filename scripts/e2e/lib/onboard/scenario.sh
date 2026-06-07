@@ -77,18 +77,22 @@ start_gateway() {
 }
 
 wait_for_gateway() {
-  for _ in $(seq 1 20); do
+  local wait_attempts="${OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS:-20}"
+  local wait_interval_s="${OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S:-1}"
+  local saw_listening_log="false"
+  for _ in $(seq 1 "$wait_attempts"); do
     if openclaw_e2e_probe_tcp 127.0.0.1 18789 500 >/dev/null 2>&1; then
       return 0
     fi
     if [ -f "$GATEWAY_LOG_PATH" ] && grep -E -q "listening on ws://[^ ]+:18789" "$GATEWAY_LOG_PATH"; then
-      if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
-        return 0
-      fi
+      saw_listening_log="true"
     fi
-    sleep 1
+    sleep "$wait_interval_s"
   done
   echo "Gateway failed to start"
+  if [ "$saw_listening_log" = "true" ]; then
+    echo "Gateway log reported listening, but TCP probe never succeeded"
+  fi
   cat "$GATEWAY_LOG_PATH" || true
   return 1
 }

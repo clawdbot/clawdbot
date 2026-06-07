@@ -47,7 +47,6 @@ import {
   mergeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
@@ -280,8 +279,12 @@ async function deliverQueuedSessionDelivery(params: {
   let dispatchError: unknown;
   const ctxPayload = finalizeInboundContext(
     {
+      // The per-message timestamp prefix is applied at the single LLM boundary
+      // (normalizeMessagesForLlmBoundary) from each message's own timestamp, so
+      // the current turn and historical turns carry identical bytes on the wire.
+      // See: https://github.com/openclaw/openclaw/issues/3658
       Body: userMessage,
-      BodyForAgent: injectTimestamp(userMessage, timestampOptsFromConfig(cfg)),
+      BodyForAgent: userMessage,
       BodyForCommands: "",
       RawBody: userMessage,
       CommandBody: "",

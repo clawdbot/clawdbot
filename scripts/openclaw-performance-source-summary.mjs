@@ -4,16 +4,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = { baselineSourceDir: null, sourceDir: null, output: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const readValue = () => {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error(`Missing value for ${arg}`);
-      }
+      const value = readOptionValue(argv, index, arg);
       index += 1;
       return value;
     };
@@ -54,22 +60,31 @@ function readJsonIfExists(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readRequiredJson(filePath, label) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`[source-performance] missing required ${label}: ${filePath}`);
+  }
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function formatMs(value) {
-  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}ms` : "n/a";
+  return finiteNumber(value) ? `${value.toFixed(1)}ms` : "n/a";
 }
 
 function formatMb(value) {
-  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}MB` : "n/a";
+  return finiteNumber(value) ? `${value.toFixed(1)}MB` : "n/a";
 }
 
 function formatBytesAsMb(value) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? formatMb(value / 1024 / 1024)
-    : "n/a";
+  return finiteNumber(value) ? formatMb(value / 1024 / 1024) : "n/a";
 }
 
 function formatRatio(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "n/a";
+  return finiteNumber(value) ? value.toFixed(3) : "n/a";
 }
 
 function metric(stats, key = "p50") {
@@ -128,32 +143,163 @@ function table(headers, rows) {
   ];
 }
 
-function loadMockHelloSummaries(sourceDir) {
+function validateMockHelloSummary(summary, filePath) {
+  const counts = summary?.counts;
+  const scenarios = Array.isArray(summary?.scenarios) ? summary.scenarios : null;
+  if (
+    !isNonNegativeInteger(counts?.total) ||
+    !isNonNegativeInteger(counts?.passed) ||
+    !isNonNegativeInteger(counts?.failed) ||
+    counts.total <= 0 ||
+    counts.failed !== 0 ||
+    counts.passed !== counts.total
+  ) {
+    throw new Error(`[source-performance] invalid mock hello summary counts: ${filePath}`);
+  }
+  if (!scenarios || scenarios.length !== counts.total) {
+    throw new Error(`[source-performance] invalid mock hello scenario evidence: ${filePath}`);
+  }
+  const passedScenarios = scenarios.filter((scenario) => scenario?.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario?.status === "fail").length;
+  const invalidScenario = scenarios.find(
+    (scenario) => !["pass", "fail", "skip"].includes(String(scenario?.status)),
+  );
+  if (invalidScenario || passedScenarios !== counts.passed || failedScenarios !== counts.failed) {
+    throw new Error(`[source-performance] invalid mock hello scenario evidence: ${filePath}`);
+  }
+  const metrics = summary?.metrics;
+  const requiredMetrics = [
+    "wallMs",
+    "gatewayCpuCoreRatio",
+    "gatewayProcessRssStartBytes",
+    "gatewayProcessRssEndBytes",
+    "gatewayProcessRssDeltaBytes",
+  ];
+  const missingMetric = requiredMetrics.find((key) => !finiteNumber(metrics?.[key]));
+  if (missingMetric) {
+    throw new Error(`[source-performance] missing mock hello metric ${missingMetric}: ${filePath}`);
+  }
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function loadMockHelloSummaries(sourceDir, { required = false } = {}) {
   const root = path.join(sourceDir, "mock-hello");
   if (!fs.existsSync(root)) {
+    if (required) {
+      throw new Error(`[source-performance] missing required mock hello directory: ${root}`);
+    }
     return [];
   }
-  return fs
+  const summaries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
       id: entry.name,
-      summary: readJsonIfExists(path.join(root, entry.name, "qa-suite-summary.json")),
+      summaryPath: path.join(root, entry.name, "qa-suite-summary.json"),
     }))
-    .filter((entry) => entry.summary != null)
+    .filter((entry) => fs.existsSync(entry.summaryPath))
+    .map((entry) => ({
+      id: entry.id,
+      summary: JSON.parse(fs.readFileSync(entry.summaryPath, "utf8")),
+      summaryPath: entry.summaryPath,
+    }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
+  if (required && summaries.length === 0) {
+    throw new Error(`[source-performance] missing required mock hello summaries: ${root}`);
+  }
+  if (required) {
+    for (const entry of summaries) {
+      validateMockHelloSummary(entry.summary, entry.summaryPath);
+    }
+  }
+  return summaries.map(({ id, summary }) => ({ id, summary }));
 }
 
-function loadSourceArtifacts(sourceDir) {
+function validateStartupArtifact(startup, filePath) {
+  if (!Array.isArray(startup?.results) || startup.results.length === 0) {
+    throw new Error(`[source-performance] missing gateway startup results: ${filePath}`);
+  }
+  for (const result of startup.results) {
+    if (
+      !finiteNumber(result?.summary?.readyzMs?.p50) ||
+      !finiteNumber(result?.summary?.maxRssMb?.p95) ||
+      !finiteNumber(result?.summary?.cpuCoreRatio?.p95)
+    ) {
+      throw new Error(
+        `[source-performance] incomplete gateway startup metrics for ${result?.id ?? "unknown"}: ${filePath}`,
+      );
+    }
+  }
+}
+
+function validateCliArtifact(cli, filePath) {
+  if (!Array.isArray(cli?.primary?.cases) || cli.primary.cases.length === 0) {
+    throw new Error(`[source-performance] missing CLI startup cases: ${filePath}`);
+  }
+  for (const entry of cli.primary.cases) {
+    if (
+      !finiteNumber(entry?.summary?.durationMs?.p50) ||
+      !finiteNumber(entry?.summary?.maxRssMb?.p95)
+    ) {
+      throw new Error(
+        `[source-performance] incomplete CLI startup metrics for ${entry?.id ?? "unknown"}: ${filePath}`,
+      );
+    }
+  }
+}
+
+function validateExtensionMemoryArtifact(extensionMemory, filePath) {
+  if (!Array.isArray(extensionMemory?.topByDeltaMb) || extensionMemory.topByDeltaMb.length === 0) {
+    throw new Error(`[source-performance] missing extension memory rows: ${filePath}`);
+  }
+  for (const entry of extensionMemory.topByDeltaMb) {
+    if (!finiteNumber(entry?.maxRssMb) || !finiteNumber(entry?.deltaFromBaselineMb)) {
+      throw new Error(
+        `[source-performance] incomplete extension memory metrics for ${entry?.dir ?? "unknown"}: ${filePath}`,
+      );
+    }
+  }
+}
+
+function validateGatewaySummaryArtifact(gatewaySummary, filePath) {
+  if (!Array.isArray(gatewaySummary?.observations)) {
+    throw new Error(`[source-performance] missing gateway observation summary: ${filePath}`);
+  }
+}
+
+function loadSourceArtifacts(sourceDir, { required = false } = {}) {
   if (!sourceDir || !fs.existsSync(sourceDir)) {
+    if (required) {
+      throw new Error(`[source-performance] missing required source dir: ${sourceDir}`);
+    }
     return null;
   }
-  return {
-    startup: readJsonIfExists(path.join(sourceDir, "gateway-cpu", "gateway-startup-bench.json")),
-    cli: readJsonIfExists(path.join(sourceDir, "cli-startup.json")),
-    extensionMemory: readJsonIfExists(path.join(sourceDir, "extension-memory.json")),
-    mockHelloSummaries: loadMockHelloSummaries(sourceDir),
+  const stat = fs.statSync(sourceDir);
+  if (!stat.isDirectory()) {
+    throw new Error(`[source-performance] source path is not a directory: ${sourceDir}`);
+  }
+  const startupPath = path.join(sourceDir, "gateway-cpu", "gateway-startup-bench.json");
+  const cliPath = path.join(sourceDir, "cli-startup.json");
+  const extensionMemoryPath = path.join(sourceDir, "extension-memory.json");
+  const artifacts = {
+    startup: required
+      ? readRequiredJson(startupPath, "gateway startup artifact")
+      : readJsonIfExists(startupPath),
+    cli: required ? readRequiredJson(cliPath, "CLI startup artifact") : readJsonIfExists(cliPath),
+    extensionMemory: required
+      ? readRequiredJson(extensionMemoryPath, "extension memory artifact")
+      : readJsonIfExists(extensionMemoryPath),
+    mockHelloSummaries: loadMockHelloSummaries(sourceDir, { required }),
   };
+  if (required) {
+    validateStartupArtifact(artifacts.startup, startupPath);
+    validateCliArtifact(artifacts.cli, cliPath);
+    validateExtensionMemoryArtifact(artifacts.extensionMemory, extensionMemoryPath);
+  }
+  return artifacts;
 }
 
 function buildStartupRows(startup) {
@@ -344,15 +490,12 @@ function buildObservationRows(summary) {
   ]);
 }
 
-function buildMarkdown(sourceDir, baselineSourceDir) {
-  const current = loadSourceArtifacts(sourceDir) ?? {
-    startup: null,
-    cli: null,
-    extensionMemory: null,
-    mockHelloSummaries: [],
-  };
+export function buildMarkdown(sourceDir, baselineSourceDir) {
+  const current = loadSourceArtifacts(sourceDir, { required: true });
   const baseline = loadSourceArtifacts(baselineSourceDir);
-  const gatewaySummary = readJsonIfExists(path.join(sourceDir, "gateway-cpu", "summary.json"));
+  const gatewaySummaryPath = path.join(sourceDir, "gateway-cpu", "summary.json");
+  const gatewaySummary = readRequiredJson(gatewaySummaryPath, "gateway observation summary");
+  validateGatewaySummaryArtifact(gatewaySummary, gatewaySummaryPath);
   const memoryDeltaRows = buildMemoryDeltaRows(current, baseline);
 
   const lines = [
@@ -445,9 +588,16 @@ async function main() {
   }
 }
 
-main().catch(
-  /** @param {unknown} error */ (error) => {
-    console.error(error instanceof Error ? error.stack : String(error));
-    process.exitCode = 1;
-  },
-);
+function isCliEntry() {
+  const cliArg = process.argv[1];
+  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
+}
+
+if (isCliEntry()) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.stack : String(error));
+      process.exitCode = 1;
+    },
+  );
+}

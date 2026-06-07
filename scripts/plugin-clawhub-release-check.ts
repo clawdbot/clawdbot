@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   collectClawHubPublishablePluginPackages,
   collectClawHubVersionGateErrors,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolveSelectedClawHubPublishablePluginPackages,
 } from "./lib/plugin-clawhub-release.ts";
@@ -22,6 +23,10 @@ export async function runPluginClawHubReleaseCheck(argv: string[]) {
     selectionMode,
     gitRange,
   });
+
+  if (selectionMode !== undefined || selection.length > 0) {
+    assertPluginReleaseVersionFloors(selected, "plugin-clawhub-release-check");
+  }
 
   if (gitRange) {
     const errors = collectClawHubVersionGateErrors({

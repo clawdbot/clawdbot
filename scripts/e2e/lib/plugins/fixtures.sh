@@ -15,6 +15,37 @@ openclaw_plugins_cleanup_fixture_servers() {
   done
 }
 
+openclaw_plugins_print_fixture_log() {
+  local log_file="$1"
+  if declare -F docker_e2e_print_log >/dev/null 2>&1; then
+    docker_e2e_print_log "$log_file"
+    return
+  fi
+  if [ ! -f "$log_file" ]; then
+    return
+  fi
+
+  local max_bytes="${OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES:-65536}"
+  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
+    max_bytes="65536"
+  else
+    max_bytes="$((10#$max_bytes))"
+  fi
+
+  local log_bytes
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="${log_bytes//[[:space:]]/}"
+  if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+    log_bytes="0"
+  fi
+  if [ "$log_bytes" -le "$max_bytes" ]; then
+    cat "$log_file"
+    return
+  fi
+  echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
+  tail -c "$max_bytes" "$log_file"
+}
+
 openclaw_plugins_register_fixture_pid_file() {
   local pid_file="$1"
   OPENCLAW_PLUGINS_FIXTURE_PID_FILES+=("$pid_file")
@@ -178,13 +209,13 @@ start_npm_fixture_registry() {
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
-      cat "$server_log"
+      openclaw_plugins_print_fixture_log "$server_log"
       return 1
     fi
     sleep 0.1
   done
 
-  cat "$server_log"
+  openclaw_plugins_print_fixture_log "$server_log"
   echo "Timed out waiting for npm fixture registry." >&2
   return 1
 }

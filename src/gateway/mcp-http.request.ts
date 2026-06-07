@@ -14,7 +14,25 @@ import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
+const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
 const MCP_HTTP_BODY_TOO_LARGE_CODE = "ETOOBIG";
+const MCP_HTTP_BODY_TIMEOUT_CODE = "ETIMEDOUT";
+const MCP_HTTP_BODY_CLOSED_CODE = "ECONNRESET";
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
 
 function shouldLogMcpLoopbackHttp(): boolean {
   return (
@@ -173,33 +191,40 @@ export function validateMcpLoopbackRequest(params: {
   return { senderIsOwner };
 }
 
-export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
+export async function readMcpHttpBody(
+  req: IncomingMessage,
+  options: { maxBytes?: number; timeoutMs?: number } = {},
+): Promise<string> {
   return await new Promise((resolve, reject) => {
+    const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? MAX_MCP_BODY_BYTES));
+    const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS));
     const chunks: Buffer[] = [];
     let received = 0;
     let settled = false;
     // Remove listeners on every terminal path; oversized bodies keep the error
     // listener briefly so Node can deliver the pause/error safely.
-    const cleanup = (options?: { keepErrorListener?: boolean }) => {
+    const cleanup = (cleanupOptions?: { keepErrorListener?: boolean }) => {
       req.off("data", onData);
       req.off("end", onEnd);
-      if (options?.keepErrorListener !== true) {
+      req.off("close", onClose);
+      if (cleanupOptions?.keepErrorListener !== true) {
         req.off("error", onError);
       }
+      clearTimeout(timeout);
     };
-    const rejectOnce = (error: Error, options?: { keepErrorListener?: boolean }) => {
+    const rejectOnce = (error: Error, rejectOptions?: { keepErrorListener?: boolean }) => {
       if (settled) {
         return;
       }
       settled = true;
-      cleanup(options);
+      cleanup(rejectOptions);
       reject(error);
     };
     const onData = (chunk: Buffer) => {
       received += chunk.length;
-      if (received > MAX_MCP_BODY_BYTES) {
+      if (received > maxBytes) {
         req.pause();
-        rejectOnce(createMcpHttpBodyTooLargeError(), { keepErrorListener: true });
+        rejectOnce(createMcpHttpBodyTooLargeError(maxBytes), { keepErrorListener: true });
         return;
       }
       chunks.push(chunk);
@@ -215,15 +240,37 @@ export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
     const onError = (error: Error) => {
       rejectOnce(error);
     };
+    const onClose = () => {
+      rejectOnce(createMcpHttpBodyClosedError());
+    };
+    const timeout = setTimeout(() => {
+      req.pause();
+      rejectOnce(createMcpHttpBodyTimeoutError(), { keepErrorListener: true });
+    }, timeoutMs);
+    timeout.unref?.();
+
     req.on("data", onData);
     req.on("end", onEnd);
+    req.on("close", onClose);
     req.on("error", onError);
   });
 }
 
-function createMcpHttpBodyTooLargeError(): Error & { code: string } {
-  return Object.assign(new Error(`Request body exceeds ${MAX_MCP_BODY_BYTES} bytes`), {
+function createMcpHttpBodyTooLargeError(maxBytes: number): Error & { code: string } {
+  return Object.assign(new Error(`Request body exceeds ${maxBytes} bytes`), {
     code: MCP_HTTP_BODY_TOO_LARGE_CODE,
+  });
+}
+
+function createMcpHttpBodyTimeoutError(): Error & { code: string } {
+  return Object.assign(new Error("Request body timed out"), {
+    code: MCP_HTTP_BODY_TIMEOUT_CODE,
+  });
+}
+
+function createMcpHttpBodyClosedError(): Error & { code: string } {
+  return Object.assign(new Error("Request body connection closed"), {
+    code: MCP_HTTP_BODY_CLOSED_CODE,
   });
 }
 
@@ -233,6 +280,18 @@ export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { c
     error !== null &&
     (error as { code?: unknown }).code === MCP_HTTP_BODY_TOO_LARGE_CODE
   );
+}
+
+export function isMcpHttpBodyTimeoutError(error: unknown): error is Error & { code: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === MCP_HTTP_BODY_TIMEOUT_CODE
+  );
+}
+
+export function resolveMcpHttpBodyTimeoutMs(): number {
+  return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
 export function resolveMcpRequestContext(

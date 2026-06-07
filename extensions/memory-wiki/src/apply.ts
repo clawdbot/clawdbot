@@ -56,6 +56,8 @@ export type ApplyMemoryWikiMutation =
   | CreateSynthesisMemoryWikiMutation
   | UpdateMetadataMemoryWikiMutation;
 
+type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
+
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
@@ -85,9 +87,21 @@ function normalizeMutationConfidence(
   });
 }
 
+function normalizeMemoryWikiMutationOp(
+  op: MemoryWikiMutationInputOp,
+): ApplyMemoryWikiMutation["op"] {
+  if (op === "synthesis") {
+    return "create_synthesis";
+  }
+  if (op === "metadata") {
+    return "update_metadata";
+  }
+  return op;
+}
+
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = rawParams as {
-    op: ApplyMemoryWikiMutation["op"];
+    op: MemoryWikiMutationInputOp;
     title?: string;
     body?: string;
     lookup?: string;
@@ -98,7 +112,8 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     confidence?: number | null;
     status?: string;
   };
-  if (params.op === "create_synthesis") {
+  const op = normalizeMemoryWikiMutationOp(params.op);
+  if (op === "create_synthesis") {
     if (!params.title?.trim()) {
       throw new Error("wiki mutation requires title for create_synthesis.");
     }

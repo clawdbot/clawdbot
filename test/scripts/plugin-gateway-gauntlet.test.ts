@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildObservationGuardFailures,
   createGauntletPrebuildCommand,
   hasGauntletWorkRows,
   parseArgs,
@@ -34,6 +35,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -58,7 +60,13 @@ describe("plugin gateway gauntlet helpers", () => {
         scenarioIds: ["channel-chat-baseline"],
         startedAt: "2026-05-30T00:00:00.000Z",
       },
-      scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
+      scenarios: [
+        {
+          name: "channel-chat-baseline",
+          status: "pass",
+          steps: [{ name: "mock step", status: "pass" }],
+        },
+      ],
     };
   }
 
@@ -752,6 +760,34 @@ setInterval(() => {}, 1000);
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
+  it("parses observation failure mode from CLI and env", () => {
+    expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION", "1");
+    expect(parseArgs(["--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+  });
+
+  it("promotes gauntlet observations to guard failures when requested", () => {
+    const observations = [
+      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
+    ];
+
+    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
+    expect(buildObservationGuardFailures(observations, true)).toEqual([
+      {
+        kind: "observation:phase-rss-high",
+        message: "Gauntlet observation threshold exceeded: phase-rss-high",
+        observation: observations[0],
+      },
+    ]);
+  });
+
   it("cleans the isolated run root after an explicitly empty dry run", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const result = spawnSync(
@@ -1076,6 +1112,161 @@ setInterval(() => {}, 1000);
         qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
       }),
     );
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const qaSummaryJson = JSON.stringify({
+      counts: { failed: 0, passed: 1, total: 1 },
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: {
+        concurrency: 1,
+        fastMode: false,
+        finishedAt: "2026-05-30T00:00:01.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        primaryModelName: "gpt-5.5",
+        primaryProvider: "mock-openai",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline"],
+        startedAt: "2026-05-30T00:00:00.000Z",
+      },
+      scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
+    });
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail:
+          "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
+        diagnosticFailure: "qa-summary-invalid",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("fails successful QA chunks whose scenario statuses disagree with counts", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const qaSummaryJson = JSON.stringify({
+      counts: { failed: 0, passed: 1, total: 2 },
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: {
+        concurrency: 1,
+        fastMode: false,
+        finishedAt: "2026-05-30T00:00:01.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        primaryModelName: "gpt-5.5",
+        primaryProvider: "mock-openai",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+        startedAt: "2026-05-30T00:00:00.000Z",
+      },
+      scenarios: [
+        { name: "channel-chat-baseline", status: "pass", steps: [] },
+        { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
+      ],
+    });
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "gateway-restart-inflight-run",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail:
+          "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
+        diagnosticFailure: "qa-summary-invalid",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
     expect(summary.isolatedRunRootPreserved).toBe(true);
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   });

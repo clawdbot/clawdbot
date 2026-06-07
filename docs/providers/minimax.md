@@ -176,7 +176,7 @@ Choose your preferred auth method and follow the setup steps.
     ```
 
     <Warning>
-    On the Anthropic-compatible streaming path, OpenClaw disables MiniMax thinking by default unless you explicitly set `thinking` yourself. MiniMax's streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks, which can leak internal reasoning into visible output if left enabled implicitly.
+    On the Anthropic-compatible streaming path, OpenClaw disables MiniMax M2.x thinking by default unless you explicitly set `thinking` yourself. M2.x's streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks, which can leak internal reasoning into visible output if left enabled implicitly. MiniMax-M3 (and forward-compatible M3.x) is exempt from this default: M3 emits proper Anthropic thinking blocks and requires thinking active to produce visible content, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
     </Warning>
 
     <Note>
@@ -400,9 +400,11 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Thinking defaults">
-    On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` unless thinking is already explicitly set in params/config.
+    On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models unless thinking is already explicitly set in params/config.
 
-    This prevents MiniMax's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
+    This prevents M2.x's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
+
+    MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so the wrapper keeps M3 on the provider's omitted/adaptive thinking path.
 
   </Accordion>
 

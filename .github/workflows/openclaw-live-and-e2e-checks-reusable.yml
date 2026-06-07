@@ -887,7 +887,7 @@ jobs:
           summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
@@ -897,7 +897,7 @@ jobs:
         with:
           name: docker-e2e-${{ matrix.chunk_id }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   plan_docker_lane_groups:
     needs: validate_selected_ref
@@ -1147,7 +1147,7 @@ jobs:
           summary=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1157,7 +1157,7 @@ jobs:
         with:
           name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
@@ -1274,7 +1274,7 @@ jobs:
           summary=".artifacts/docker-tests/release-openwebui/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1284,7 +1284,7 @@ jobs:
         with:
           name: docker-e2e-openwebui
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   prepare_docker_e2e_image:
     needs: validate_selected_ref
@@ -1918,7 +1918,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -2038,7 +2038,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

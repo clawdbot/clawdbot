@@ -5,6 +5,14 @@ import path from "node:path";
 /**
  * Parses shared `--root`, `--json`, and `--markdown` flags for report scripts.
  */
+function readReportOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`Expected ${optionName} <value>.`);
+  }
+  return value;
+}
+
 export function parseReportCliArgs(argv) {
   const options = {
     rootDir: process.cwd(),
@@ -17,15 +25,18 @@ export function parseReportCliArgs(argv) {
       continue;
     }
     if (arg === "--root") {
-      options.rootDir = argv[++index];
+      options.rootDir = readReportOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--json") {
-      options.jsonPath = argv[++index];
+      options.jsonPath = readReportOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
+      options.markdownPath = readReportOptionValue(argv, index, arg);
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);

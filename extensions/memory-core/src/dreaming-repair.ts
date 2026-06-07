@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  clearMemoryCoreWorkspaceNamespace,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+} from "./dreaming-state.js";
 
 type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
@@ -123,6 +128,19 @@ async function moveToArchive(params: {
   const destination = path.join(params.archiveDir, `${baseName}.${randomUUID()}`);
   await fs.rename(params.targetPath, destination);
   return destination;
+}
+
+async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
+  await Promise.all([
+    clearMemoryCoreWorkspaceNamespace({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    }),
+    clearMemoryCoreWorkspaceNamespace({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
 }
 
 export async function auditDreamingArtifacts(params: {
@@ -256,6 +274,18 @@ export async function repairDreamingArtifacts(params: {
   if (sessionIngestionDestination) {
     archivedSessionIngestion = true;
     archivedPaths.push(sessionIngestionDestination);
+  }
+
+  if (sessionCorpusDestination || sessionIngestionDestination) {
+    try {
+      await clearSessionIngestionState(workspaceDir);
+    } catch (err) {
+      warnings.push(
+        `Failed clearing dreaming session-ingestion SQLite state: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   if (params.archiveDiary) {

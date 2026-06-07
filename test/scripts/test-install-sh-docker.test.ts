@@ -457,11 +457,20 @@ describe("bun global install smoke", () => {
     );
     expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
     expect(script).toContain(
-      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
+    expect(script).toContain("cleanup_restore_dist() {");
+    expect(script).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
+    expect(script).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
+    expect(script).toContain('mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX"');
+    expect(script).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
+    expect(script).toContain('&& mv "$backup_dir" "$ROOT_DIR/dist"');
     expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).toContain("cleanup_restore_dist\n    return 1");
+    expect(script).not.toContain("trap cleanup_restore_dist RETURN");
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
+    expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
   });
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {

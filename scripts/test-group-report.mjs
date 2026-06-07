@@ -24,6 +24,9 @@ const DEFAULT_OUTPUT = ".artifacts/test-perf/group-report.json";
 const DEFAULT_COMPARE_OUTPUT = ".artifacts/test-perf/group-report-compare.json";
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
+const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
+const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
+const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
 
 function usage() {
   return [
@@ -55,6 +58,18 @@ function usage() {
     "  pnpm test:perf:groups --full-suite --allow-failures",
     "  pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-first-fix.json",
   ].join("\n");
+}
+
+function readRequiredValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function readPositiveIntValue(argv, index, flag) {
+  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
 }
 
 /**
@@ -102,60 +117,60 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--config") {
-      args.configs.push(argv[index + 1] ?? "");
+      args.configs.push(readRequiredValue(argv, index, "--config"));
       index += 1;
       continue;
     }
     if (arg === "--compare") {
       args.compare = {
-        before: argv[index + 1] ?? "",
-        after: argv[index + 2] ?? "",
+        before: readRequiredValue(argv, index, "--compare"),
+        after: readRequiredValue(argv, index + 1, "--compare"),
       };
       index += 2;
       continue;
     }
     if (arg === "--report") {
-      args.reports.push(argv[index + 1] ?? "");
+      args.reports.push(readRequiredValue(argv, index, "--report"));
       index += 1;
       continue;
     }
     if (arg === "--group-by") {
-      args.groupBy = argv[index + 1] ?? args.groupBy;
+      args.groupBy = readRequiredValue(argv, index, "--group-by");
       index += 1;
       continue;
     }
     if (arg === "--output") {
-      args.output = argv[index + 1] ?? args.output;
+      args.output = readRequiredValue(argv, index, "--output");
       index += 1;
       continue;
     }
     if (arg === "--limit") {
-      args.limit = parsePositiveInt(argv[index + 1], "--limit");
+      args.limit = readPositiveIntValue(argv, index, "--limit");
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = parsePositiveInt(argv[index + 1], "--max-test-ms");
+      args.maxTestMs = readPositiveIntValue(argv, index, "--max-test-ms");
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = parsePositiveInt(argv[index + 1], "--timeout-ms");
+      args.timeoutMs = readPositiveIntValue(argv, index, "--timeout-ms");
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = parsePositiveInt(argv[index + 1], "--kill-grace-ms");
+      args.killGraceMs = readPositiveIntValue(argv, index, "--kill-grace-ms");
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = parsePositiveInt(argv[index + 1], "--concurrency");
+      args.concurrency = readPositiveIntValue(argv, index, "--concurrency");
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = parsePositiveInt(argv[index + 1], "--top-files");
+      args.topFiles = readPositiveIntValue(argv, index, "--top-files");
       index += 1;
       continue;
     }
@@ -220,11 +235,19 @@ function formatSpawnError(error) {
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
 export function spawnText(command, args, options) {
-  const maxBuffer = 1024 * 1024 * 64;
+  const maxBuffer = options.maxBufferBytes ?? DEFAULT_SPAWN_OUTPUT_MAX_BYTES;
+  const maxLogBytes = options.maxLogBytes ?? DEFAULT_SPAWN_LOG_MAX_BYTES;
+  const tailBytes = options.outputTailBytes ?? DEFAULT_SPAWN_OUTPUT_TAIL_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   const killGraceMs = options.killGraceMs ?? DEFAULT_TIMEOUT_KILL_GRACE_MS;
   const useProcessGroup = process.platform !== "win32";
+  const logPath = options.logPath ?? null;
   return new Promise((resolve) => {
+    let logFd = null;
+    if (logPath) {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      logFd = fs.openSync(logPath, "w");
+    }
     const child = spawn(command, args, {
       cwd: options.cwd,
       detached: useProcessGroup,
@@ -232,6 +255,9 @@ export function spawnText(command, args, options) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let outputTail = Buffer.alloc(0);
+    let stderrTail = Buffer.alloc(0);
+    let streamedLogBytes = 0;
     let outputExceeded = false;
     let timedOut = false;
     let settled = false;
@@ -245,7 +271,9 @@ export function spawnText(command, args, options) {
           return;
         } catch (error) {
           if (error && error.code !== "ESRCH") {
-            output += `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`;
+            appendDiagnostic(
+              `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
+            );
           }
         }
       }
@@ -291,7 +319,7 @@ export function spawnText(command, args, options) {
       killTimer = setTimeout(() => {
         waitingForKillGrace = false;
         killTimer = null;
-        output += message;
+        appendDiagnostic(message);
         signalChild("SIGKILL");
         if (childClosedResult) {
           finish(childClosedResult);
@@ -301,7 +329,7 @@ export function spawnText(command, args, options) {
     };
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      output += `\n[test-group-report] command timed out after ${String(timeoutMs)}ms\n`;
+      appendDiagnostic(`\n[test-group-report] command timed out after ${String(timeoutMs)}ms\n`);
       signalChild("SIGTERM");
       scheduleKill(
         `[test-group-report] command did not exit after ${String(killGraceMs)}ms grace; sending SIGKILL\n`,
@@ -318,12 +346,77 @@ export function spawnText(command, args, options) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      if (logFd !== null) {
+        fs.closeSync(logFd);
+        logFd = null;
+      }
       resolve(result);
     };
-    const appendOutput = (chunk) => {
+    function appendTail(chunk, target = "output") {
+      if (tailBytes < 1) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      const currentTail = target === "stderr" ? stderrTail : outputTail;
+      if (buffer.byteLength >= tailBytes) {
+        if (target === "stderr") {
+          stderrTail = buffer.subarray(buffer.byteLength - tailBytes);
+        } else {
+          outputTail = buffer.subarray(buffer.byteLength - tailBytes);
+        }
+        return;
+      }
+      let nextTail = Buffer.concat([currentTail, buffer]);
+      if (nextTail.byteLength > tailBytes) {
+        nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
+      }
+      if (target === "stderr") {
+        stderrTail = nextTail;
+      } else {
+        outputTail = nextTail;
+      }
+    }
+    function appendDiagnostic(message) {
+      const buffer = Buffer.from(message, "utf8");
+      if (logFd !== null) {
+        fs.writeSync(logFd, buffer);
+        appendTail(buffer);
+        return;
+      }
+      output += message;
+    }
+    const appendOutput = (chunk, streamName) => {
+      if (logFd !== null) {
+        if (outputExceeded) {
+          return;
+        }
+        const remainingLogBytes = maxLogBytes - streamedLogBytes;
+        const chunkToWrite =
+          chunk.byteLength > remainingLogBytes ? chunk.subarray(0, remainingLogBytes) : chunk;
+        if (chunkToWrite.byteLength > 0) {
+          fs.writeSync(logFd, chunkToWrite);
+          streamedLogBytes += chunkToWrite.byteLength;
+          appendTail(chunkToWrite);
+          if (streamName === "stderr") {
+            appendTail(chunkToWrite, "stderr");
+          }
+        }
+        if (chunk.byteLength > remainingLogBytes) {
+          outputExceeded = true;
+          appendDiagnostic(
+            `\n[test-group-report] output log exceeded ${String(maxLogBytes)} bytes\n`,
+          );
+          signalChild("SIGTERM");
+          scheduleKill(
+            "[test-group-report] command did not exit after output log limit; sending SIGKILL\n",
+          );
+        }
+        return;
+      }
       if (outputExceeded) {
         return;
       }
+
       output += chunk.toString("utf8");
       if (Buffer.byteLength(output) > maxBuffer) {
         outputExceeded = true;
@@ -334,16 +427,24 @@ export function spawnText(command, args, options) {
         );
       }
     };
-    child.stdout?.on("data", appendOutput);
-    child.stderr?.on("data", appendOutput);
+    function streamedOutput() {
+      const tail = outputTail.toString("utf8");
+      const stderr = stderrTail.toString("utf8");
+      if (!stderr || tail.includes(stderr)) {
+        return tail;
+      }
+      return `${tail}\n${stderr}`;
+    }
+    child.stdout?.on("data", (chunk) => appendOutput(chunk, "stdout"));
+    child.stderr?.on("data", (chunk) => appendOutput(chunk, "stderr"));
     child.on("error", (error) => {
-      output += `${String(error)}\n`;
+      appendDiagnostic(`${String(error)}\n`);
     });
     child.on("close", (code, signal) => {
       const result = {
         status: outputExceeded || timedOut ? 1 : (code ?? 1),
         signal,
-        output,
+        output: logFd === null ? output : streamedOutput(),
         timedOut,
       };
       if (waitingForKillGrace && processGroupIsAlive()) {
@@ -389,11 +490,11 @@ async function runVitestJsonReport(params) {
         .join(" "),
     },
     killGraceMs: params.killGraceMs,
+    logPath: params.logPath,
     timeoutMs: params.timeoutMs,
   });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
   const output = result.output;
-  fs.writeFileSync(params.logPath, output, "utf8");
   return {
     config: params.config,
     elapsedMs,
@@ -406,16 +507,184 @@ async function runVitestJsonReport(params) {
 }
 
 function readReportInput(entry) {
+  const report = JSON.parse(fs.readFileSync(entry.reportPath, "utf8"));
+  if (!report || typeof report !== "object" || !Array.isArray(report.testResults)) {
+    throw new Error("missing testResults array");
+  }
+  if (report.testResults.length === 0) {
+    throw new Error("empty testResults array");
+  }
   return {
     config: entry.config,
-    report: JSON.parse(fs.readFileSync(entry.reportPath, "utf8")),
+    report,
     reportPath: entry.reportPath,
     run: entry.run ?? null,
   };
 }
 
+export function readReportInputs(entries) {
+  const invalid = [];
+  const missing = [];
+  const reports = [];
+  for (const entry of entries) {
+    if (!fs.existsSync(entry.reportPath)) {
+      missing.push(entry);
+      continue;
+    }
+    try {
+      reports.push(readReportInput(entry));
+    } catch (error) {
+      invalid.push({
+        entry,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { invalid, missing, reports };
+}
+
 function readGroupedReport(reportPath) {
-  return JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  validateGroupedReport(report, reportPath);
+  return report;
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validateCounter(counter, reportPath, fieldName, index = null) {
+  const fieldLabel = String(fieldName);
+  const label = index === null ? fieldLabel : `${fieldLabel}[${String(index)}]`;
+  const displayPath = String(reportPath);
+  if (!counter || typeof counter !== "object" || Array.isArray(counter)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${displayPath}: ${label} must be an object`,
+    );
+  }
+  for (const key of ["durationMs", "fileCount", "testCount"]) {
+    if (!isFiniteNumber(counter[key])) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${displayPath}: ${label}.${key} must be a finite number`,
+      );
+    }
+  }
+}
+
+function validateCounterRows(report, reportPath, fieldName) {
+  const rows = report[fieldName];
+  if (!Array.isArray(rows)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: ${fieldName} must be an array`,
+    );
+  }
+  rows.forEach((row, index) => {
+    validateCounter(row, reportPath, fieldName, index);
+    if (typeof row.key !== "string" || !row.key) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: ${fieldName}[${index}].key must be a non-empty string`,
+      );
+    }
+  });
+}
+
+function validateTopFileRows(report, reportPath) {
+  if (!Array.isArray(report.topFiles)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: topFiles must be an array`,
+    );
+  }
+  report.topFiles.forEach((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}] must be an object`,
+      );
+    }
+    for (const key of ["config", "file", "group"]) {
+      if (typeof row[key] !== "string" || !row[key]) {
+        throw new Error(
+          `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}].${key} must be a non-empty string`,
+        );
+      }
+    }
+    for (const key of ["durationMs", "testCount"]) {
+      if (!isFiniteNumber(row[key])) {
+        throw new Error(
+          `[test-group-report] invalid grouped report ${reportPath}: topFiles[${index}].${key} must be a finite number`,
+        );
+      }
+    }
+  });
+}
+
+function validateRunRows(report, reportPath) {
+  if (!Array.isArray(report.runs)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: runs must be an array`,
+    );
+  }
+  report.runs.forEach((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must be an object`,
+      );
+    }
+    if (typeof row.config !== "string" && typeof row.label !== "string") {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must include config or label`,
+      );
+    }
+    if (!isFiniteNumber(row.elapsedMs) || !isFiniteNumber(row.status)) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}] must include finite elapsedMs and status`,
+      );
+    }
+    if (
+      row.maxRssBytes !== null &&
+      row.maxRssBytes !== undefined &&
+      !isFiniteNumber(row.maxRssBytes)
+    ) {
+      throw new Error(
+        `[test-group-report] invalid grouped report ${reportPath}: runs[${index}].maxRssBytes must be finite when present`,
+      );
+    }
+  });
+}
+
+function validateGroupedReport(report, reportPath) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: report must be an object`,
+    );
+  }
+  if (report.command !== "test-group-report") {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: command must be test-group-report`,
+    );
+  }
+  if (!["area", "folder", "top"].includes(report.groupBy)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: groupBy must be area, folder, or top`,
+    );
+  }
+  validateCounter(report.totals, reportPath, "totals");
+  validateCounterRows(report, reportPath, "groups");
+  validateCounterRows(report, reportPath, "configs");
+  validateTopFileRows(report, reportPath);
+  if (!Array.isArray(report.slowTests)) {
+    throw new Error(
+      `[test-group-report] invalid grouped report ${reportPath}: slowTests must be an array`,
+    );
+  }
+  validateRunRows(report, reportPath);
+  if (
+    report.groups.length === 0 &&
+    report.configs.length === 0 &&
+    report.topFiles.length === 0 &&
+    report.runs.length === 0
+  ) {
+    throw new Error(`[test-group-report] invalid grouped report ${reportPath}: no evidence rows`);
+  }
 }
 
 /**
@@ -583,6 +852,7 @@ async function runReportPlans(params) {
           console.error(
             `[test-group-report] missing JSON report for failed config; see ${run.logPath}`,
           );
+          exitCode = 1;
           includeEntry = false;
         } else {
           console.error(
@@ -666,9 +936,28 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const reportInputs = runEntries
-    .filter((entry) => fs.existsSync(entry.reportPath))
-    .map(readReportInput);
+  const reportInputsResult = readReportInputs(runEntries);
+  if (reportInputsResult.missing.length > 0) {
+    for (const entry of reportInputsResult.missing) {
+      console.error(
+        `[test-group-report] missing JSON report for ${entry.config}: ${entry.reportPath}`,
+      );
+    }
+    process.exit(1);
+  }
+  if (reportInputsResult.invalid.length > 0) {
+    for (const { entry, reason } of reportInputsResult.invalid) {
+      console.error(
+        `[test-group-report] invalid JSON report for ${entry.config}: ${entry.reportPath} (${reason})`,
+      );
+    }
+    process.exit(1);
+  }
+  const reportInputs = reportInputsResult.reports;
+  if (reportInputs.length === 0) {
+    console.error("[test-group-report] no valid JSON reports were available");
+    process.exit(1);
+  }
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
     maxTestMs: args.maxTestMs,

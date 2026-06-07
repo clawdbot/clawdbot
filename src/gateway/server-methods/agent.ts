@@ -149,7 +149,6 @@ import {
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import {
   readTerminalSnapshotFromGatewayDedupe,
   setGatewayDedupeEntry,
@@ -1594,13 +1593,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
-      // Inject timestamp into user-authored messages that don't already have one.
-      // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
-      // formatting in a separate code path — they never reach this handler.
+      // The per-message timestamp prefix is now applied at the single LLM
+      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
+      // own timestamp, so the current turn and all historical turns carry
+      // identical bytes on the wire. The transient gateway injectTimestamp call
+      // is removed — stamping the live turn here would diverge from the bare
+      // stored history and bust the prompt cache.
       // See: https://github.com/openclaw/openclaw/issues/3658
-      if (!isRawModelRun && inputProvenance?.kind !== "inter_session") {
-        message = injectTimestamp(message, timestampOptsFromConfig(cfg));
-      }
 
       if (requestedSessionKey) {
         const sessionLoadOptions = {

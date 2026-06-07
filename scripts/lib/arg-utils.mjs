@@ -114,7 +114,7 @@ function readFlagOptionValue(argv, index, flag) {
     return null;
   }
   const value = argv[index + 1];
-  if (!value) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };

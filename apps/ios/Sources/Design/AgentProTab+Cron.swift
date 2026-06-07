@@ -99,14 +99,14 @@ extension AgentProTab {
                     } label: {
                         Label("Run", systemImage: "play.fill")
                     }
-                    .disabled(busy || !self.gatewayConnected)
+                    .disabled(busy || !self.liveGatewayConnected)
 
                     Button {
                         Task { await self.setCronJob(job, enabled: !job.enabled) }
                     } label: {
                         Label(job.enabled ? "Pause" : "Enable", systemImage: job.enabled ? "pause.fill" : "checkmark")
                     }
-                    .disabled(busy || !self.gatewayConnected)
+                    .disabled(busy || !self.liveGatewayConnected)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
@@ -149,7 +149,7 @@ extension AgentProTab {
         success: String,
         action: () async throws -> Void) async
     {
-        guard self.gatewayConnected else { return }
+        guard self.liveGatewayConnected else { return }
         self.cronActionBusyIDs.insert(job.id)
         self.cronActionStatusText = nil
         defer { self.cronActionBusyIDs.remove(job.id) }

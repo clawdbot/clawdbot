@@ -38,6 +38,19 @@ describe("secret target registry", () => {
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
+  });
+
   it("returns null when no config target path matches", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 

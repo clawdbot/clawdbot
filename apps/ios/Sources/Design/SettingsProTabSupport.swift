@@ -1,9 +1,9 @@
 import Darwin
 import SwiftUI
-import UIKit
 
 enum SettingsRoute: Hashable {
     case gateway
+    case approvals
     case permissions
     case voice
     case diagnostics
@@ -15,109 +15,51 @@ enum SettingsRoute: Hashable {
 enum SettingsLayout {
     static let cardRadius: CGFloat = 12
     static let rowHeight: CGFloat = 58
-    static let bottomContentPadding: CGFloat = 12
 }
 
-struct SettingsBottomOverlayInsetReader: UIViewRepresentable {
-    @Binding var inset: CGFloat
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(inset: self.$inset)
-    }
-
-    func makeUIView(context: Context) -> SettingsBottomOverlayInsetProbeView {
-        let view = SettingsBottomOverlayInsetProbeView()
-        view.onInsetChange = { value in
-            context.coordinator.updateInset(value)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: SettingsBottomOverlayInsetProbeView, context: Context) {
-        context.coordinator.inset = self.$inset
-        uiView.onInsetChange = { value in
-            context.coordinator.updateInset(value)
-        }
-        uiView.updateInset()
-    }
-
-    final class Coordinator {
-        var inset: Binding<CGFloat>
-
-        init(inset: Binding<CGFloat>) {
-            self.inset = inset
-        }
-
-        func updateInset(_ value: CGFloat) {
-            let rounded = max(0, ceil(value))
-            guard abs(self.inset.wrappedValue - rounded) > 0.5 else { return }
-            self.inset.wrappedValue = rounded
-        }
-    }
+struct SettingsApprovalItem: Identifiable {
+    let id: String
+    let icon: String
+    let title: String
+    let detail: String
+    let priority: String
+    let color: Color
 }
 
-final class SettingsBottomOverlayInsetProbeView: UIView {
-    var onInsetChange: ((CGFloat) -> Void)?
+struct SettingsApprovalRow: View {
+    let item: SettingsApprovalItem
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        self.updateInset()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        self.updateInset()
-    }
-
-    func updateInset() {
-        let value = self.visibleTabBarHeight()
-        DispatchQueue.main.async { [weak self] in
-            self?.onInsetChange?(value)
-        }
-    }
-
-    private func visibleTabBarHeight() -> CGFloat {
-        let tabBarController = self.nearestViewController()?.tabBarController
-            ?? self.findTabBarController(in: self.window?.rootViewController)
-        guard let tabBar = tabBarController?.tabBar,
-              !tabBar.isHidden,
-              tabBar.alpha > 0.01,
-              tabBar.window != nil,
-              self.window != nil
-        else {
-            return 0
-        }
-
-        let tabFrame = tabBar.convert(tabBar.bounds, to: nil)
-        guard tabFrame.height.isFinite else { return 0 }
-        return max(0, tabFrame.height)
-    }
-
-    private func nearestViewController() -> UIViewController? {
-        var responder: UIResponder? = self
-        while let current = responder {
-            if let viewController = current as? UIViewController {
-                return viewController
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: self.item.icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(self.item.color)
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(self.item.detail)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            responder = current.next
+            Spacer(minLength: 8)
+            Text(self.item.priority)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(self.item.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background {
+                    Capsule()
+                        .fill(self.item.color.opacity(0.10))
+                }
         }
-        return nil
-    }
-
-    private func findTabBarController(in viewController: UIViewController?) -> UITabBarController? {
-        guard let viewController else { return nil }
-        if let tabBarController = viewController as? UITabBarController {
-            return tabBarController
-        }
-        if let tabBarController = self.findTabBarController(in: viewController.presentedViewController) {
-            return tabBarController
-        }
-        for child in viewController.children {
-            if let tabBarController = self.findTabBarController(in: child) {
-                return tabBarController
-            }
-        }
-        return nil
+        .padding(.vertical, 7)
     }
 }
 

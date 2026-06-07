@@ -251,11 +251,14 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelSearchQueries(six)).toEqual(["a", "b", "c", "d", "e"]);
   });
 
-  it("normalizes session ids, rejecting blanks and overlong values", () => {
-    expect(testing.normalizeParallelSessionId("session-abc")).toBe("session-abc");
-    expect(testing.normalizeParallelSessionId("  ")).toBeUndefined();
-    expect(testing.normalizeParallelSessionId(undefined)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(1001))).toBeUndefined();
+  it("normalizes session ids, rejecting blanks and values past the given limit", () => {
+    expect(testing.normalizeParallelSessionId("session-abc", 1000)).toBe("session-abc");
+    expect(testing.normalizeParallelSessionId("  ", 1000)).toBeUndefined();
+    expect(testing.normalizeParallelSessionId(undefined, 1000)).toBeUndefined();
+    expect(testing.normalizeParallelSessionId("x".repeat(1001), 1000)).toBeUndefined();
+    // Free Search MCP caps session_id at 100, so the tighter limit drops longer ids.
+    expect(testing.normalizeParallelSessionId("x".repeat(101), 100)).toBeUndefined();
+    expect(testing.normalizeParallelSessionId("x".repeat(100), 100)).toBe("x".repeat(100));
   });
 
   it("normalizes client_model identifiers", () => {

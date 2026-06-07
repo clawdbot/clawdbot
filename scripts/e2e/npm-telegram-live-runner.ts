@@ -25,6 +25,18 @@ function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
 }
 
+async function shouldFailPackageTelegramRun(
+  result: { summaryPath: string },
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (parseBoolean(env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES)) {
+    return false;
+  }
+  const { readQaSuiteFailedScenarioCountFromFile } =
+    await import("../../extensions/qa-lab/src/suite-summary.ts");
+  return (await readQaSuiteFailedScenarioCountFromFile(result.summaryPath)) > 0;
+}
+
 async function resolveTrustedOpenClawCommand(rawCommand: string) {
   if (!path.isAbsolute(rawCommand)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must be an absolute path.");
@@ -80,10 +92,7 @@ async function main() {
   process.stdout.write(`Package Telegram QA report: ${result.reportPath}\n`);
   process.stdout.write(`Package Telegram QA summary: ${result.summaryPath}\n`);
   process.stdout.write(`Package Telegram QA observed messages: ${result.observedMessagesPath}\n`);
-  if (
-    !parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES) &&
-    result.scenarios.some((scenario) => scenario.status === "fail")
-  ) {
+  if (await shouldFailPackageTelegramRun(result)) {
     process.exitCode = 1;
   }
 }
@@ -109,5 +118,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
+  shouldFailPackageTelegramRun,
 };
 export { testing as __testing };

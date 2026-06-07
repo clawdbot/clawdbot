@@ -16,6 +16,11 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import {
+  buildManagedServiceHandoffUnavailableMessage,
+  formatManagedServiceUpdateCommand,
+  startManagedServiceUpdateHandoff,
+} from "../../infra/update-managed-service-handoff.js";
+import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
@@ -27,11 +32,6 @@ import {
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import {
-  buildManagedServiceHandoffUnavailableMessage,
-  formatManagedServiceUpdateCommand,
-  startManagedServiceUpdateHandoff,
-} from "./update-managed-service-handoff.js";
 import { assertValidParams } from "./validation.js";
 
 const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
@@ -146,7 +146,10 @@ export const updateHandlers: GatewayRequestHandlers = {
           durationMs: 0,
         };
       } else if (installSurface.kind === "global") {
-        const command = formatManagedServiceUpdateCommand(timeoutMs);
+        const command = formatManagedServiceUpdateCommand({
+          timeoutMs,
+          channel: configChannel ?? undefined,
+        });
         if (supervisor) {
           try {
             const startedAt = Date.now();
@@ -157,6 +160,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
+              channel: configChannel ?? undefined,
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,

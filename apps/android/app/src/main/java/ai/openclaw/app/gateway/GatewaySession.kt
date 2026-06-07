@@ -77,6 +77,8 @@ data class GatewayConnectErrorDetails(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean? = null,
   val reason: String? = null,
+  val requestId: String? = null,
+  val retryable: Boolean = false,
 )
 
 /**
@@ -120,6 +122,7 @@ class GatewaySession(
   private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (GatewayHelloSummary) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
+  private val onConnectFailure: (error: ErrorShape, pauseReconnect: Boolean) -> Unit = { _, _ -> },
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
@@ -127,6 +130,7 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
+    private val PAIRING_REQUEST_ID_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
   }
 
   /**
@@ -923,6 +927,8 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                requestId = normalizePairingRequestId(it["requestId"].asStringOrNull()),
+                retryable = it["retryable"].asBooleanOrNull() == true,
               )
             }
           ErrorShape(code, msg, details)
@@ -946,6 +952,11 @@ class GatewaySession(
         return
       }
       onEvent(event, payloadJson)
+    }
+
+    private fun normalizePairingRequestId(requestId: String?): String? {
+      val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+      return trimmed.takeIf { PAIRING_REQUEST_ID_PATTERN.matches(it) }
     }
 
     private suspend fun awaitConnectNonce(): String =
@@ -1061,10 +1072,14 @@ class GatewaySession(
       } catch (err: Throwable) {
         attempt += 1
         onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
-        if (
-          err is GatewayConnectFailure &&
-          shouldPauseReconnectAfterAuthFailure(err.gatewayError)
-        ) {
+        val gatewayConnectFailure = err as? GatewayConnectFailure
+        val pauseForAuthFailure =
+          gatewayConnectFailure
+            ?.let { shouldPauseReconnectAfterAuthFailure(it.gatewayError) } == true
+        if (gatewayConnectFailure != null) {
+          onConnectFailure(gatewayConnectFailure.gatewayError, pauseForAuthFailure)
+        }
+        if (pauseForAuthFailure) {
           reconnectPausedForAuthFailure = true
           continue
         }

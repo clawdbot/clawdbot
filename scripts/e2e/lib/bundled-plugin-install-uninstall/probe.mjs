@@ -56,6 +56,10 @@ function pathReferencesPackagedBundledRoot(value) {
   return bundledRuntimeRootFragments.some((fragment) => normalized.includes(fragment));
 }
 
+function pathsEqualForProbe(actual, expected) {
+  return normalizePathForProbe(actual) === normalizePathForProbe(expected);
+}
+
 function resolveOpenClawEntry() {
   if (process.env.OPENCLAW_ENTRY) {
     return process.env.OPENCLAW_ENTRY;
@@ -173,7 +177,7 @@ async function selectedManifestEntries() {
   return selected;
 }
 
-function assertInstalled(pluginId, pluginDir, requiresConfig) {
+function assertInstalled(pluginId, pluginDir, requiresConfig, selectedPluginRoot = "") {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
   const config = readJson(configPath);
@@ -187,13 +191,22 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
       `expected bundled install record source=path for ${pluginId}, got ${record.source}`,
     );
   }
-  if (
-    typeof record.sourcePath !== "string" ||
-    !pathReferencesBundledRuntime(record.sourcePath, pluginDir)
-  ) {
+  const sourcePath = typeof record.sourcePath === "string" ? record.sourcePath : "";
+  if (!sourcePath) {
     throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
   }
-  if (normalizePathForProbe(record.installPath) !== normalizePathForProbe(record.sourcePath)) {
+  if (selectedPluginRoot && !pathsEqualForProbe(sourcePath, selectedPluginRoot)) {
+    throw new Error(
+      `bundled source path for ${pluginId} did not match selected root: expected ${selectedPluginRoot}, got ${record.sourcePath}`,
+    );
+  }
+  if (!selectedPluginRoot && !pathReferencesBundledRuntime(sourcePath, pluginDir)) {
+    throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
+  }
+  if (selectedPluginRoot && !fs.existsSync(sourcePath)) {
+    throw new Error(`bundled source path for ${pluginId} does not exist: ${record.sourcePath}`);
+  }
+  if (!pathsEqualForProbe(record.installPath, record.sourcePath)) {
     throw new Error(`bundled install path should equal source path for ${pluginId}`);
   }
   const paths = config.plugins?.load?.paths || [];
@@ -246,13 +259,13 @@ function assertUninstalled(pluginId, pluginDir) {
   }
 }
 
-const [command, pluginId, pluginDir, requiresConfig] = process.argv.slice(2);
+const [command, pluginId, pluginDir, requiresConfig, selectedPluginRoot] = process.argv.slice(2);
 if (command === "select") {
   for (const entry of await selectedManifestEntries()) {
     console.log(`${entry.id}\t${entry.dir}\t${entry.requiresConfig ? "1" : "0"}\t${entry.rootDir}`);
   }
 } else if (command === "assert-installed") {
-  assertInstalled(pluginId, pluginDir, requiresConfig === "1");
+  assertInstalled(pluginId, pluginDir, requiresConfig === "1", selectedPluginRoot);
 } else if (command === "assert-uninstalled") {
   assertUninstalled(pluginId, pluginDir);
 } else {

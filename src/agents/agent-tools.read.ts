@@ -15,6 +15,11 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+  resolveMediaReferenceSandboxPath,
+} from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -31,6 +36,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import { resolveReadPath } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -899,6 +905,13 @@ export function createOpenClawReadTool(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
+    resolvePath: (filePath: string, cwd: string) => {
+      const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
+      const resolvedPath = classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl
+        ? resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved
+        : filePath;
+      return resolveReadPath(resolvedPath, cwd);
+    },
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

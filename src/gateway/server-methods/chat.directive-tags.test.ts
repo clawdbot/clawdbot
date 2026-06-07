@@ -60,6 +60,11 @@ const mockState = vi.hoisted(() => ({
   dispatchWait: null as Promise<void> | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
   dispatchErrorAfterDelivery: null as Error | null,
+  sessionMetadataChanges: [] as Array<{
+    sessionKey: string;
+    agentId?: string;
+    reason: "command-metadata";
+  }>,
   triggerAgentRunStart: false,
   triggerUserMessagePersisted: false,
   runtimeUserMessagePersistencePending: null as Promise<void> | null,
@@ -208,6 +213,13 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
       };
+      onSessionMetadataChanges?: (
+        changes: Array<{
+          sessionKey: string;
+          agentId?: string;
+          reason: "command-metadata";
+        }>,
+      ) => void;
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
@@ -250,6 +262,9 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       if (mockState.dispatchErrorAfterAgentRunStart) {
         throw mockState.dispatchErrorAfterAgentRunStart;
+      }
+      if (mockState.sessionMetadataChanges.length > 0) {
+        params.onSessionMetadataChanges?.(mockState.sessionMetadataChanges);
       }
       if (mockState.dispatchedReplies.length > 0) {
         for (const reply of mockState.dispatchedReplies) {
@@ -659,6 +674,8 @@ function createChatContext(): Pick<
   | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
   | "getRuntimeConfig"
+  | "broadcastToConnIds"
+  | "getSessionEventSubscriberConnIds"
   | "logGateway"
 > {
   return {
@@ -701,6 +718,8 @@ function createChatContext(): Pick<
         },
       }) as never,
     registerToolEventRecipient: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
@@ -791,6 +810,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchWait = null;
     mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.dispatchErrorAfterDelivery = null;
+    mockState.sessionMetadataChanges = [];
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.triggerUserMessagePersisted = false;
@@ -823,6 +843,79 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.beforeMessageWriteContent = null;
     mockState.beforeMessageWriteCalls = [];
     mockState.dispatchBlockedByBeforeAgentRun = false;
+  });
+
+  it("broadcasts session metadata changes reported by chat command dispatch", async () => {
+    createTranscriptFixture("openclaw-chat-send-session-metadata-");
+    mockState.sessionEntry = {
+      goal: {
+        status: "active",
+        objective: "ship session updates",
+      },
+    };
+    mockState.sessionMetadataChanges = [
+      {
+        sessionKey: "agent:main:main",
+        reason: "command-metadata",
+      },
+    ];
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-session-metadata",
+      message: "/goal pause waiting",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        (context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
+      ).toBe(1);
+    });
+    const call = mockCallAt(context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>, 0);
+    const payload = call?.[1] as { ts?: unknown } | undefined;
+    expect(call?.[0]).toBe("sessions.changed");
+    expect(call?.[2]).toEqual(new Set(["conn-1"]));
+    expect(call?.[3]).toEqual({ dropIfSlow: true });
+    expect(payload).toMatchObject({
+      sessionKey: "agent:main:main",
+      reason: "command-metadata",
+    });
+    expect(typeof payload?.ts).toBe("number");
+  });
+
+  it("broadcasts session metadata changes before later command dispatch failure", async () => {
+    createTranscriptFixture("openclaw-chat-send-session-metadata-error-");
+    mockState.sessionMetadataChanges = [
+      {
+        sessionKey: "agent:main:main",
+        reason: "command-metadata",
+      },
+    ];
+    mockState.dispatchErrorAfterDelivery = new Error("delivery failed after metadata");
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-session-metadata-error",
+      message: "/goal pause waiting",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-command-session-metadata-error")?.ok).toBe(false);
+    });
+    const call = mockCallAt(context.broadcastToConnIds as unknown as ReturnType<typeof vi.fn>, 0);
+    expect(call?.[0]).toBe("sessions.changed");
+    expect(call?.[1]).toMatchObject({
+      sessionKey: "agent:main:main",
+      reason: "command-metadata",
+    });
   });
 
   it("persists non-agent delivery mirrors with the chat send idempotency key", async () => {

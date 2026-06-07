@@ -428,6 +428,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     providerIdPathSegmentIndex: 2,
   },
   {
+    id: "talk.realtime.providers.*.apiKey",
+    targetType: "talk.realtime.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "talk.realtime.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 3,
+  },
+  {
     id: "tools.web.search.apiKey",
     targetType: "tools.web.search.apiKey",
     configFile: "openclaw.json",

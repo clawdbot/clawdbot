@@ -21,6 +21,7 @@ import {
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution, FlowOption } from "./types.js";
@@ -431,6 +432,42 @@ export async function runSearchSetupFlow(
 
   const existingProvider = config.tools?.web?.search?.provider;
 
+  const defaultProvider: SearchProvider = (() => {
+    if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
+      return existingProvider;
+    }
+    // Mirror the runtime auto-detect selection (honors autoDetectOrder and
+    // configured credentials, incl. keyless defaults) so accepting the setup
+    // default writes the same provider the gateway would pick — e.g. Parallel
+    // Search (Free), not whichever ready provider happens to sort first
+    // alphabetically. Resolve over the providers actually shown in setup
+    // (`providerOptions`) so the default can't pick an option that isn't listed
+    // or force-load runtime code for an install-catalog-only provider.
+    // Clear any existing provider id before auto-detecting: the valid-existing
+    // case already returned above, so a leftover value here is stale/invalid/
+    // disabled and would otherwise make the resolver short-circuit to
+    // providers[0] (e.g. Brave) instead of the keyless default. Keep the rest of
+    // the search config so configured credentials are still detected.
+    const searchForAutoDetect = {
+      ...config.tools?.web?.search,
+      provider: undefined,
+    } as Parameters<typeof resolveWebSearchProviderId>[0]["search"];
+    const autoDetectedId = resolveWebSearchProviderId({
+      config,
+      search: searchForAutoDetect,
+      providers: [...providerOptions],
+    });
+    const autoDetected = providerOptions.find((entry) => entry.id === autoDetectedId);
+    if (autoDetected) {
+      return autoDetected.id;
+    }
+    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
+    if (detected) {
+      return detected.id;
+    }
+    return providerOptions[0].id;
+  })();
+
   const options = providerOptions.map((entry) => {
     const hint =
       entry.requiresCredential === false
@@ -440,17 +477,6 @@ export async function runSearchSetupFlow(
           : entry.hint;
     return { value: entry.id, label: entry.label, hint };
   });
-
-  const defaultProvider: SearchProvider = (() => {
-    if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
-      return existingProvider;
-    }
-    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
-    if (detected) {
-      return detected.id;
-    }
-    return providerOptions[0].id;
-  })();
 
   const choice = await prompter.select({
     message: t("wizard.search.providerPrompt"),

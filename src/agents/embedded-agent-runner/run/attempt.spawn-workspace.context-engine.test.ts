@@ -1860,9 +1860,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const lastCall = hoisted.preemptiveCompactionCalls.at(-1);
     expect(lastCall).toHaveProperty("unwindowedMessages");
     const unwindowed = (lastCall as { unwindowedMessages?: AgentMessage[] }).unwindowedMessages;
-    // The snapshot must reflect the true pre-assembly state, not the in-place
-    // windowed array that assemble mutated.
-    expect(unwindowed).toEqual([preassemblyMarker]);
+    // The snapshot must reflect the true pre-assembly state after LLM-boundary
+    // stamping, not the in-place windowed array that assemble mutated.
+    expect(unwindowed).toHaveLength(1);
+    const [unwindowedMessage] = unwindowed ?? [];
+    expect(unwindowedMessage).toMatchObject({ role: "user", timestamp: 1 });
+    const unwindowedContent = (unwindowedMessage as { content?: unknown } | undefined)?.content;
+    expect(unwindowedContent).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] /),
+    );
+    expect(unwindowedContent).toContain(hugeHistory);
+    expect(unwindowedContent).not.toContain("windowed");
+  });
+
+  it("passes the boundary-stamped current prompt to llm_input hooks", async () => {
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "llm_input"),
+      runLlmInput,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+    });
+
+    const params = mockParams(runLlmInput as MockCallSource, 0, "llm_input params");
+    expect(params.prompt).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] hello$/),
+    );
   });
 
   it("keeps gateway model runs independent from agent context and session history", async () => {

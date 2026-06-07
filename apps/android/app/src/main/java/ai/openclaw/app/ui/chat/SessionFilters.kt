@@ -82,7 +82,12 @@ fun resolveCompactSessionChoices(
     )
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
-  val pinnedRank = listOf(mainKey, current).filter { it.isNotBlank() }.distinct().withIndex().associate { it.value to it.index }
+  val pinnedRank =
+    listOf(mainKey, current)
+      .filter { it.isNotBlank() }
+      .distinct()
+      .withIndex()
+      .associate { it.value to it.index }
   val unpinnedRank = pinnedRank.size
 
   return allChoices

@@ -1,4 +1,5 @@
 // Microsoft Foundry tests cover index plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -781,6 +782,60 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
+  it("keeps replay item ids for Foundry encrypted reasoning continuations", async () => {
+    const provider = registerProvider();
+    let capturedReplayIds: boolean | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedReplayIds = (options as { replayResponsesItemIds?: boolean } | undefined)
+        ?.replayResponsesItemIds;
+      return {} as never;
+    };
+
+    const wrappedStreamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      modelId: "gpt-5.4",
+      model: buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }),
+      extraParams: {},
+      config: {},
+      agentDir: defaultFoundryAgentDir,
+    } as never);
+
+    expect(wrappedStreamFn).toBeTypeOf("function");
+    await wrappedStreamFn?.(
+      buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }) as never,
+      { systemPrompt: "system", messages: [] } as never,
+      {},
+    );
+
+    expect(capturedReplayIds).toBe(true);
+  });
+
+  it("leaves Foundry chat completions streams unwrapped by Responses defaults", () => {
+    const provider = registerProvider();
+    const baseStreamFn: StreamFn = () => ({}) as never;
+
+    expect(
+      provider.wrapStreamFn?.({
+        streamFn: baseStreamFn,
+        modelId: "gpt-4o-mini",
+        model: buildFoundryModel({
+          id: "gpt-4o-mini",
+          name: "gpt-4o-mini",
+          api: "openai-completions",
+        }),
+        extraParams: {},
+        config: {},
+        agentDir: defaultFoundryAgentDir,
+      } as never),
+    ).toBe(baseStreamFn);
+  });
+
   it("marks Foundry chat models as not supporting reasoning_effort", () => {
     const result = buildFoundryAuthResult({
       profileId: "microsoft-foundry:default",
@@ -821,6 +876,38 @@ describe("microsoft-foundry plugin", () => {
       "high",
     ]);
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("emits only persisted-schema thinkingLevelMap level keys for Entra ID reasoning onboarding (openclaw#91011)", () => {
+    // The persisted ModelDefinitionSchema only accepts these ModelThinkingLevel keys; if the writer
+    // emits one outside the set, updateConfig rolls the Entra ID onboarding write back.
+    const allowedThinkingLevels = new Set([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.1-chat",
+      modelNameHint: "gpt-5.1-chat",
+      api: "openai-responses",
+      authMethod: "entra-id",
+    });
+
+    const thinkingLevelMap =
+      result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]?.thinkingLevelMap;
+    expect(thinkingLevelMap).toBeDefined();
+    for (const [level, value] of Object.entries(thinkingLevelMap ?? {})) {
+      expect(allowedThinkingLevels.has(level)).toBe(true);
+      expect(value === null || typeof value === "string").toBe(true);
+    }
   });
 
   it("records model-name reasoning effort limits for Foundry deployment aliases", () => {

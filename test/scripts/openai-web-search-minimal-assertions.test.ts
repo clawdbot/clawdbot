@@ -26,6 +26,7 @@ describe("openai web-search minimal assertions", () => {
             reasoning: { effort: "low" },
             tools: [{ type: "web_search" }],
           },
+          method: "POST",
           path: "/v1/responses",
         })}\n`,
       );
@@ -49,6 +50,7 @@ describe("openai web-search minimal assertions", () => {
               reasoning: { effort: "low" },
               tools: [{ type: "web_search" }],
             },
+            method: "POST",
             path: "/v1/responses",
           },
         )}\n`,
@@ -95,6 +97,7 @@ describe("openai web-search minimal assertions", () => {
             input: `DO_NOT_DUMP_OLD_RESPONSE${"x".repeat(70 * 1024)}recent response tail`,
             tools: [{ type: "web_search" }],
           },
+          method: "POST",
           path: "/v1/responses",
         })}\n`,
       );
@@ -105,6 +108,32 @@ describe("openai web-search minimal assertions", () => {
       expect(result.stderr).toContain("Recent /v1/responses:");
       expect(result.stderr).toContain("recent response tail");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_RESPONSE");
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects function-shaped web_search as native Responses proof", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-web-search-minimal-"));
+    try {
+      const logPath = path.join(dir, "requests.jsonl");
+      writeFileSync(
+        logPath,
+        `${JSON.stringify({
+          body: {
+            input: "OPENCLAW_SCHEMA_E2E_OK",
+            reasoning: { effort: "low" },
+            tools: [{ name: "web_search", type: "function" }],
+          },
+          method: "POST",
+          path: "/v1/responses",
+        })}\n`,
+      );
+
+      const result = runAssertSuccessRequest(logPath);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("success request did not include native web_search");
     } finally {
       rmSync(dir, { force: true, recursive: true });
     }

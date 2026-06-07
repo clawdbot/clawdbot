@@ -7,6 +7,7 @@ import {
   collectDependencyOwnershipSurfaceCheckErrors,
   collectDependencyOwnershipSurfaceReport,
   packageNameFromLockKey,
+  parseArgs,
   renderDependencyOwnershipSurfaceMarkdownReport,
 } from "../../scripts/dependency-ownership-surface-report.mjs";
 
@@ -34,6 +35,25 @@ describe("packageNameFromLockKey", () => {
   it("extracts scoped and unscoped names from pnpm snapshot keys", () => {
     expect(packageNameFromLockKey("@scope/pkg@1.2.3(peer@1.0.0)")).toBe("@scope/pkg");
     expect(packageNameFromLockKey("left-pad@1.3.0")).toBe("left-pad");
+  });
+});
+
+describe("parseArgs", () => {
+  it("rejects missing markdown artifact paths", () => {
+    expect(() => parseArgs(["--markdown"])).toThrow("--markdown requires a value");
+    expect(() => parseArgs(["--markdown", "--json"])).toThrow("--markdown requires a value");
+    expect(() => parseArgs(["--markdown", ""])).toThrow("--markdown requires a value");
+  });
+
+  it("keeps json as a boolean or optional artifact path", () => {
+    expect(parseArgs(["--json"])).toMatchObject({
+      asJson: true,
+      jsonPath: null,
+    });
+    expect(parseArgs(["--json", "report.json"])).toMatchObject({
+      asJson: true,
+      jsonPath: "report.json",
+    });
   });
 });
 

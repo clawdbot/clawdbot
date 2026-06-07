@@ -19,6 +19,7 @@ import {
   isServerErrorMessage,
 } from "../../plugin-sdk/test-env.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
+import { isLiveAuthDrift } from "../live-test-provider-drift.js";
 import { createImageTool, testing } from "./image-tool.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
@@ -115,6 +116,7 @@ function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);
   return (
     isBillingErrorMessage(message) ||
+    isLiveAuthDrift(message) ||
     isOverloadedErrorMessage(message) ||
     isServerErrorMessage(message) ||
     /timed out|operation was aborted/i.test(message)

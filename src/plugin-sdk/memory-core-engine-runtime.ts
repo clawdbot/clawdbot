@@ -3,11 +3,13 @@
  * Prefer vendor-neutral memory-host SDK subpaths for new plugin code.
  */
 import type { OpenClawConfig } from "../config/types.js";
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 import type { MemorySearchManager } from "./memory-core-host-engine-storage.js";
+import type { OpenKeyedStoreOptions, PluginStateKeyedStore } from "./plugin-state-runtime.js";
 
 /** Doctor metadata for a built-in memory embedding provider. */
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
@@ -110,6 +112,9 @@ type MemoryIndexManagerFacade = {
 };
 
 type FacadeModule = {
+  configureMemoryCoreDreamingState: (
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
   auditShortTermPromotionArtifacts: (params: {
     workspaceDir: string;
     qmd?: {
@@ -144,10 +149,14 @@ type FacadeModule = {
 };
 
 function loadFacadeModule(): FacadeModule {
-  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  const module = loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });
+  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<T>("memory-core", options),
+  );
+  return module;
 }
 /** Audit short-term promotion artifacts in an agent workspace. */
 export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((

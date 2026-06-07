@@ -10101,4 +10101,37 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     const assistant = getAssistantMessage(params);
     expect(assistant.reasoning_details).toEqual([reasoningDetail]);
   });
+
+  // issue #89660: a custom OpenAI-compatible proxy (not auto-detected as DeepSeek/
+  // Xiaomi/Kimi) can opt into the DeepSeek reasoning-content replay contract by
+  // setting compat.requiresReasoningContentOnAssistantMessages in config. getCompat
+  // must resolve `compat.X ?? detected.X` (matching every sibling field) instead of
+  // using `detected.X` alone, so the explicit config flag is honored in this transport.
+  const customReasoningProxyModel = {
+    id: "my-proxy/r1-pro",
+    name: "Custom Reasoning Proxy",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://my-proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  } satisfies Model<"openai-completions">;
+
+  it("honors compat.requiresReasoningContentOnAssistantMessages from config on a custom provider (#89660)", () => {
+    const resolved = testing.getCompat({
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    } as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
+    const resolved = testing.getCompat(customReasoningProxyModel as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
+  });
 });

@@ -6,9 +6,9 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -20,7 +20,20 @@ import {
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
-import { asRecord } from "./dreaming-shared.js";
+import { asRecord, formatErrorMessage } from "./dreaming-shared.js";
+import {
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
+  SHORT_TERM_META_NAMESPACE,
+  SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+  SHORT_TERM_RECALL_NAMESPACE,
+  memoryCoreStateReference,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+  readMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntry,
+} from "./dreaming-state.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
@@ -40,12 +53,25 @@ const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
 const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
-const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
-const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
+export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "short-term-recall.json",
+);
+export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "phase-signals.json",
+);
+export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "short-term-promotion.lock",
+);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const DREAMING_ENTRY_LIST_LIMIT = 8;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -59,7 +85,6 @@ const GENERIC_DAY_HEADING_RE =
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
-const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
 type PromotionWeights = {
   frequency: number;
@@ -100,7 +125,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-type ShortTermRecallStore = {
+export type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -115,10 +140,19 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-type ShortTermPhaseSignalStore = {
+export type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;
+};
+
+type ShortTermStoreMeta = {
+  updatedAt: string;
+};
+
+type ShortTermLockEntry = {
+  owner: string;
+  acquiredAt: number;
 };
 
 type PromotionComponents = {
@@ -251,6 +285,43 @@ type ApplyShortTermPromotionsResult = {
   compactedSections: number;
   /** Dates of the compacted promotion sections, oldest first. */
   compactedDates: string[];
+};
+
+export type ShortTermDreamingStatsEntry = {
+  key: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  recallCount: number;
+  dailyCount: number;
+  groundedCount: number;
+  totalSignalCount: number;
+  lightHits: number;
+  remHits: number;
+  phaseHitCount: number;
+  promotedAt?: string;
+  lastRecalledAt?: string;
+};
+
+export type ShortTermDreamingStats = {
+  shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  groundedSignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
+  promotedTotal: number;
+  promotedToday: number;
+  storePath: string;
+  phaseSignalPath: string;
+  phaseSignalError?: string;
+  lastPromotedAt?: string;
+  shortTermEntries: ShortTermDreamingStatsEntry[];
+  signalEntries: ShortTermDreamingStatsEntry[];
+  promotedEntries: ShortTermDreamingStatsEntry[];
 };
 
 function clampScore(value: number): number {
@@ -471,7 +542,7 @@ function calculateConsolidationComponent(recallDays: string[]): number {
     return 0.2;
   }
   const parsed = recallDays
-    .map((value) => Date.parse(`${value}T00:00:00.000Z`))
+    .map((recallDay) => Date.parse(recallDay + "T00:00:00.000Z"))
     .filter((value) => Number.isFinite(value))
     .toSorted((left, right) => left - right);
   if (parsed.length <= 1) {
@@ -495,7 +566,7 @@ function emptyStore(nowIso: string): ShortTermRecallStore {
   };
 }
 
-function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
+export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
     return emptyStore(nowIso);
   }
@@ -541,7 +612,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
-            .map((valueValue) => normalizeIsoDay(String(valueValue)))
+            .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
             .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
@@ -731,37 +802,15 @@ function calculatePhaseSignalBoost(
 }
 
 function resolveStorePath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
+  return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
 }
 
 function resolvePhaseSignalPath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
+  return memoryCoreStateReference(SHORT_TERM_PHASE_SIGNAL_NAMESPACE, workspaceDir);
 }
 
 function resolveLockPath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
-}
-
-function resolveShortTermArtifactsDir(workspaceDir: string): string {
-  return path.dirname(resolveLockPath(workspaceDir));
-}
-
-async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> {
-  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
-  const existing = ensuredShortTermDirs.get(artifactsDir);
-  if (existing) {
-    await existing;
-    return;
-  }
-  const ensuring = fs
-    .mkdir(artifactsDir, { recursive: true })
-    .then(() => undefined)
-    .catch((err: unknown) => {
-      ensuredShortTermDirs.delete(artifactsDir);
-      throw err;
-    });
-  ensuredShortTermDirs.set(artifactsDir, ensuring);
-  await ensuring;
+  return memoryCoreStateReference(SHORT_TERM_LOCK_NAMESPACE, workspaceDir);
 }
 
 function parseLockOwnerPid(raw: string): number | null {
@@ -828,65 +877,72 @@ async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promi
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
-  const lockPath = resolveLockPath(workspaceDir);
-  return withInProcessShortTermLock(lockPath, async () => {
-    await ensureShortTermArtifactsDir(workspaceDir);
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockRef = resolveLockPath(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  return withInProcessShortTermLock(lockKey, async () => {
     const startedAt = Date.now();
 
     while (true) {
-      try {
-        const lockHandle = await fs.open(lockPath, "wx");
-        await lockHandle
-          .writeFile(`${process.pid}:${Date.now()}\n`, "utf-8")
-          .catch(() => undefined);
+      const owner = `${process.pid}:${Date.now()}`;
+      const acquired = await lockStore.registerIfAbsent(lockKey, {
+        owner,
+        acquiredAt: Date.now(),
+      });
+      if (acquired) {
         try {
           return await task();
         } finally {
-          await lockHandle.close().catch(() => undefined);
-          await fs.unlink(lockPath).catch(() => undefined);
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
-          throw err;
-        }
-
-        const ageMs = await fs
-          .stat(lockPath)
-          .then((stats) => Date.now() - stats.mtimeMs)
-          .catch(() => 0);
-        if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
-          if (await canStealStaleLock(lockPath)) {
-            await fs.unlink(lockPath).catch(() => undefined);
-            continue;
+          const current = await lockStore.lookup(lockKey).catch(() => undefined);
+          if (current?.owner === owner) {
+            await lockStore.delete(lockKey).catch(() => false);
           }
         }
-
-        if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
-          throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`, {
-            cause: err,
-          });
-        }
-
-        await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
       }
+
+      const existing = await lockStore.lookup(lockKey);
+      if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
+        const ownerPid = parseLockOwnerPid(existing.owner);
+        if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
+          await lockStore.delete(lockKey);
+          continue;
+        }
+      }
+
+      if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for short-term promotion lock at ${lockRef}`);
+      }
+
+      await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
     }
   });
 }
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
-  try {
-    const store = normalizeStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
-      nowIso,
-    );
-    enforceShortTermRecallStoreRetention(store);
-    return store;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return emptyStore(nowIso);
-    }
-    throw err;
-  }
+  const [entryRows, metaRows] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const meta = metaRows.find((entry) => entry.key === "recall")?.value;
+  const store = normalizeShortTermRecallStore(
+    {
+      version: 1,
+      updatedAt: meta?.updatedAt ?? nowIso,
+      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
+    },
+    nowIso,
+  );
+  enforceShortTermRecallStoreRetention(store);
+  return store;
 }
 
 function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
@@ -897,7 +953,10 @@ function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
   };
 }
 
-function normalizePhaseSignalStore(raw: unknown, nowIso: string): ShortTermPhaseSignalStore {
+export function normalizeShortTermPhaseSignalStore(
+  raw: unknown,
+  nowIso: string,
+): ShortTermPhaseSignalStore {
   const record = asRecord(raw);
   if (!record) {
     return emptyPhaseSignalStore(nowIso);
@@ -953,36 +1012,62 @@ async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermPhaseSignalStore> {
-  try {
-    return normalizePhaseSignalStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
-      nowIso,
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return emptyPhaseSignalStore(nowIso);
-    }
-    throw err;
-  }
+  const [entryRows, metaRows] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermPhaseSignalEntry>({
+      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const meta = metaRows.find((entry) => entry.key === "phase")?.value;
+  return normalizeShortTermPhaseSignalStore(
+    {
+      version: 1,
+      updatedAt: meta?.updatedAt ?? nowIso,
+      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
+    },
+    nowIso,
+  );
 }
 
 async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
-  await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: "phase",
+      value: { updatedAt: store.updatedAt },
+    }),
+  ]);
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   enforceShortTermRecallSnippetCap(store);
   enforceShortTermRecallStoreRetention(store);
-  await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: "recall",
+      value: { updatedAt: store.updatedAt },
+    }),
+  ]);
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {
@@ -997,6 +1082,240 @@ export function isShortTermMemoryPath(filePath: string): boolean {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
+}
+
+function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
+  const normalized = normalizeMemoryPath(rawPath);
+  const workspaceNormalized = normalizeMemoryPath(workspaceDir);
+  if (path.isAbsolute(rawPath) && normalized.startsWith(`${workspaceNormalized}/`)) {
+    return normalized.slice(workspaceNormalized.length + 1);
+  }
+  return normalized;
+}
+
+function toNonNegativeInt(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(num));
+}
+
+function parseEntryRangeFromKey(
+  key: string,
+  fallbackStartLine: unknown,
+  fallbackEndLine: unknown,
+): { startLine: number; endLine: number } {
+  const startLine = toNonNegativeInt(fallbackStartLine);
+  const endLine = toNonNegativeInt(fallbackEndLine);
+  if (startLine > 0 && endLine > 0) {
+    return { startLine, endLine };
+  }
+  const match = key.match(/:(\d+):(\d+)$/);
+  if (match) {
+    return {
+      startLine: Math.max(1, toNonNegativeInt(match[1])),
+      endLine: Math.max(1, toNonNegativeInt(match[2])),
+    };
+  }
+  return { startLine: 1, endLine: 1 };
+}
+
+function compareDreamingStatsEntryByRecency(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
+    if (bMs !== aMs) {
+      return bMs - aMs;
+    }
+  }
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  return a.path.localeCompare(b.path);
+}
+
+function compareDreamingStatsEntryBySignals(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  if (b.phaseHitCount !== a.phaseHitCount) {
+    return b.phaseHitCount - a.phaseHitCount;
+  }
+  return compareDreamingStatsEntryByRecency(a, b);
+}
+
+function compareDreamingStatsEntryByPromotion(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  const aMs = a.promotedAt ? Date.parse(a.promotedAt) : Number.NEGATIVE_INFINITY;
+  const bMs = b.promotedAt ? Date.parse(b.promotedAt) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
+    if (bMs !== aMs) {
+      return bMs - aMs;
+    }
+  }
+  return compareDreamingStatsEntryBySignals(a, b);
+}
+
+function trimDreamingStatsEntries(
+  entries: ShortTermDreamingStatsEntry[],
+  compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
+): ShortTermDreamingStatsEntry[] {
+  const selected: ShortTermDreamingStatsEntry[] = [];
+  for (const entry of entries) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (compare(entry, selected[index]) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
+        selected.pop();
+      }
+    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.push(entry);
+    }
+  }
+  return selected;
+}
+
+export async function loadShortTermPromotionDreamingStats(params: {
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+}): Promise<ShortTermDreamingStats> {
+  const workspaceDir = params.workspaceDir.trim();
+  const nowIso = new Date(params.nowMs).toISOString();
+  const store = await readStore(workspaceDir, nowIso);
+  let phaseSignalError: string | undefined;
+  let phaseStore: ShortTermPhaseSignalStore;
+  try {
+    phaseStore = await readPhaseSignalStore(workspaceDir, nowIso);
+  } catch (err) {
+    phaseSignalError = formatErrorMessage(err);
+    phaseStore = emptyPhaseSignalStore(nowIso);
+  }
+  let shortTermCount = 0;
+  let recallSignalCount = 0;
+  let dailySignalCount = 0;
+  let groundedSignalCount = 0;
+  let totalSignalCount = 0;
+  let phaseSignalCount = 0;
+  let lightPhaseHitCount = 0;
+  let remPhaseHitCount = 0;
+  let promotedTotal = 0;
+  let promotedToday = 0;
+  let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
+  let latestPromotedAt: string | undefined;
+  const activeKeys = new Set<string>();
+  const activeEntries = new Map<string, ShortTermDreamingStatsEntry>();
+  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
+  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+
+  for (const [entryKey, entry] of Object.entries(store.entries)) {
+    if (entry.source !== "memory" || !entry.path || !isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
+    const recallCount = toNonNegativeInt(entry.recallCount);
+    const dailyCount = toNonNegativeInt(entry.dailyCount);
+    const groundedCount = toNonNegativeInt(entry.groundedCount);
+    const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
+    const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entry.path);
+    const detail: ShortTermDreamingStatsEntry = {
+      key: entryKey,
+      path: normalizedEntryPath,
+      startLine: range.startLine,
+      endLine: Math.max(range.startLine, range.endLine),
+      snippet: normalizeSnippet(entry.snippet) || normalizedEntryPath,
+      recallCount,
+      dailyCount,
+      groundedCount,
+      totalSignalCount: totalEntrySignalCount,
+      lightHits: 0,
+      remHits: 0,
+      phaseHitCount: 0,
+      ...(entry.lastRecalledAt ? { lastRecalledAt: entry.lastRecalledAt } : {}),
+    };
+    if (!entry.promotedAt) {
+      shortTermCount += 1;
+      activeKeys.add(entryKey);
+      recallSignalCount += recallCount;
+      dailySignalCount += dailyCount;
+      groundedSignalCount += groundedCount;
+      totalSignalCount += totalEntrySignalCount;
+      shortTermEntries.push(detail);
+      activeEntries.set(entryKey, detail);
+      continue;
+    }
+    promotedTotal += 1;
+    promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
+    const promotedAtMs = Date.parse(entry.promotedAt);
+    if (
+      Number.isFinite(promotedAtMs) &&
+      isSameMemoryDreamingDay(promotedAtMs, params.nowMs, params.timezone)
+    ) {
+      promotedToday += 1;
+    }
+    if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
+      latestPromotedAtMs = promotedAtMs;
+      latestPromotedAt = entry.promotedAt;
+    }
+  }
+
+  for (const [key, phaseEntry] of Object.entries(phaseStore.entries)) {
+    if (!activeKeys.has(key)) {
+      continue;
+    }
+    const lightHits = toNonNegativeInt(phaseEntry.lightHits);
+    const remHits = toNonNegativeInt(phaseEntry.remHits);
+    lightPhaseHitCount += lightHits;
+    remPhaseHitCount += remHits;
+    phaseSignalCount += lightHits + remHits;
+    const detail = activeEntries.get(key);
+    if (detail) {
+      detail.lightHits = lightHits;
+      detail.remHits = remHits;
+      detail.phaseHitCount = lightHits + remHits;
+    }
+  }
+
+  return {
+    shortTermCount,
+    recallSignalCount,
+    dailySignalCount,
+    groundedSignalCount,
+    totalSignalCount,
+    phaseSignalCount,
+    lightPhaseHitCount,
+    remPhaseHitCount,
+    promotedTotal,
+    promotedToday,
+    storePath: resolveStorePath(workspaceDir),
+    phaseSignalPath: resolvePhaseSignalPath(workspaceDir),
+    shortTermEntries: trimDreamingStatsEntries(
+      shortTermEntries,
+      compareDreamingStatsEntryByRecency,
+    ),
+    signalEntries: trimDreamingStatsEntries(shortTermEntries, compareDreamingStatsEntryBySignals),
+    promotedEntries: trimDreamingStatsEntries(
+      promotedEntries,
+      compareDreamingStatsEntryByPromotion,
+    ),
+    ...(phaseSignalError ? { phaseSignalError } : {}),
+    ...(latestPromotedAt ? { lastPromotedAt: latestPromotedAt } : {}),
+  };
 }
 
 async function shortTermRecallSourceExists(params: {
@@ -2180,7 +2499,6 @@ export async function auditShortTermPromotionArtifacts(params: {
   const storePath = resolveStorePath(workspaceDir);
   const lockPath = resolveLockPath(workspaceDir);
   const issues: ShortTermAuditIssue[] = [];
-  let exists = false;
   let entryCount = 0;
   let promotedCount = 0;
   let spacedEntryCount = 0;
@@ -2189,86 +2507,73 @@ export async function auditShortTermPromotionArtifacts(params: {
   let invalidEntryCount = 0;
   let updatedAt: string | undefined;
 
-  try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    exists = true;
-    if (raw.trim().length === 0) {
+  const nowIso = new Date().toISOString();
+  const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
+    namespace: SHORT_TERM_RECALL_NAMESPACE,
+    workspaceDir,
+  });
+  const exists = rawEntries.length > 0;
+  if (exists) {
+    const parsed = {
+      version: 1,
+      updatedAt: nowIso,
+      entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
+    };
+    const store = normalizeShortTermRecallStore(parsed, nowIso);
+    const normalizedEntryCount = Object.keys(store.entries).length;
+    updatedAt = store.updatedAt;
+    entryCount = normalizedEntryCount;
+    promotedCount = Object.values(store.entries).filter((entry) =>
+      Boolean(entry.promotedAt),
+    ).length;
+    spacedEntryCount = Object.values(store.entries).filter(
+      (entry) => (entry.recallDays?.length ?? 0) > 1,
+    ).length;
+    conceptTaggedEntryCount = Object.values(store.entries).filter(
+      (entry) => (entry.conceptTags?.length ?? 0) > 0,
+    ).length;
+    conceptTagScripts = summarizeConceptTagScriptCoverage(
+      Object.values(store.entries)
+        .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
+        .map((entry) => entry.conceptTags ?? []),
+    );
+    invalidEntryCount = rawEntries.length - entryCount;
+    if (invalidEntryCount > 0) {
       issues.push({
         severity: "warn",
-        code: "recall-store-empty",
-        message: "Short-term recall store is empty.",
+        code: "recall-store-invalid",
+        message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
         fixable: true,
       });
-    } else {
-      const nowIso = new Date().toISOString();
-      const parsed = JSON.parse(raw) as unknown;
-      const store = normalizeStore(parsed, nowIso);
-      const normalizedEntryCount = Object.keys(store.entries).length;
-      updatedAt = store.updatedAt;
-      entryCount = normalizedEntryCount;
-      promotedCount = Object.values(store.entries).filter((entry) =>
-        Boolean(entry.promotedAt),
-      ).length;
-      spacedEntryCount = Object.values(store.entries).filter(
-        (entry) => (entry.recallDays?.length ?? 0) > 1,
-      ).length;
-      conceptTaggedEntryCount = Object.values(store.entries).filter(
-        (entry) => (entry.conceptTags?.length ?? 0) > 0,
-      ).length;
-      conceptTagScripts = summarizeConceptTagScriptCoverage(
-        Object.values(store.entries)
-          .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
-          .map((entry) => entry.conceptTags ?? []),
-      );
-      invalidEntryCount = Object.keys(asRecord(parsed)?.entries ?? {}).length - entryCount;
-      if (invalidEntryCount > 0) {
-        issues.push({
-          severity: "warn",
-          code: "recall-store-invalid",
-          message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
-          fixable: true,
-        });
-      }
-      if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
-        issues.push({
-          severity: "warn",
-          code: "recall-store-over-limit",
-          message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
-          fixable: true,
-        });
-      }
     }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
+    if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
       issues.push({
-        severity: "error",
-        code: "recall-store-unreadable",
-        message: `Short-term recall store is unreadable: ${code ?? "error"}.`,
-        fixable: false,
+        severity: "warn",
+        code: "recall-store-over-limit",
+        message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        fixable: true,
       });
     }
   }
 
-  try {
-    const stat = await fs.stat(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (lockEntry) {
+    const ageMs = Date.now() - lockEntry.acquiredAt;
+    const ownerPid = parseLockOwnerPid(lockEntry.owner);
+    if (
+      ageMs > SHORT_TERM_LOCK_STALE_MS &&
+      (ownerPid === null || !isProcessLikelyAlive(ownerPid))
+    ) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
         message: "Short-term promotion lock appears stale.",
         fixable: true,
-      });
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      issues.push({
-        severity: "warn",
-        code: "recall-lock-unreadable",
-        message: `Short-term promotion lock could not be inspected: ${code ?? "error"}.`,
-        fixable: false,
       });
     }
   }
@@ -2342,28 +2647,37 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
-  try {
-    const lockPath = resolveLockPath(workspaceDir);
-    const stat = await fs.stat(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
-      await fs.unlink(lockPath).catch(() => undefined);
-      removedStaleLock = true;
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
+    const ownerPid = parseLockOwnerPid(lockEntry.owner);
+    if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
+      removedStaleLock = await lockStore.delete(lockKey);
     }
   }
 
   await withShortTermLock(workspaceDir, async () => {
-    const storePath = resolveStorePath(workspaceDir);
-    try {
-      const raw = await fs.readFile(storePath, "utf-8");
-      const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : emptyStore(nowIso);
-      const rawEntries = Object.keys(asRecord(parsed)?.entries ?? {}).length;
-      const normalized = normalizeStore(parsed, nowIso);
-      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
+    const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    });
+    if (rawEntries.length > 0) {
+      const normalized = normalizeShortTermRecallStore(
+        {
+          version: 1,
+          updatedAt: nowIso,
+          entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
+        },
+        nowIso,
+      );
+      removedInvalidEntries = Math.max(
+        0,
+        rawEntries.length - Object.keys(normalized.entries).length,
+      );
       const nextEntries = Object.fromEntries(
         Object.entries(normalized.entries).map(([key, entry]) => {
           const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
@@ -2393,17 +2707,16 @@ export async function repairShortTermPromotionArtifacts(params: {
         entries: nextEntries,
       };
       removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
-      const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
-      if (comparableRaw !== `${raw.trimEnd()}\n`) {
+      const needsRewrite =
+        removedInvalidEntries > 0 ||
+        removedOverflowEntries > 0 ||
+        JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
+      if (needsRewrite) {
         await writeStore(workspaceDir, {
           ...comparableStore,
           updatedAt: nowIso,
         });
         rewroteStore = true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
       }
     }
   });
@@ -2465,6 +2778,64 @@ export const testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
+  readRecallStore: readStore,
+  readPhaseSignalStore,
+  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
+    const record = asRecord(raw);
+    const entries = asRecord(record?.entries);
+    await Promise.all([
+      writeMemoryCoreWorkspaceEntries({
+        namespace: SHORT_TERM_RECALL_NAMESPACE,
+        workspaceDir,
+        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+      }),
+      writeMemoryCoreWorkspaceEntry({
+        namespace: SHORT_TERM_META_NAMESPACE,
+        workspaceDir,
+        key: "recall",
+        value: {
+          updatedAt:
+            typeof record?.updatedAt === "string" && record.updatedAt.trim()
+              ? record.updatedAt
+              : new Date().toISOString(),
+        },
+      }),
+    ]);
+  },
+  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
+    const record = asRecord(raw);
+    const entries = asRecord(record?.entries);
+    await Promise.all([
+      writeMemoryCoreWorkspaceEntries({
+        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+        workspaceDir,
+        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+      }),
+      writeMemoryCoreWorkspaceEntry({
+        namespace: SHORT_TERM_META_NAMESPACE,
+        workspaceDir,
+        key: "phase",
+        value: {
+          updatedAt:
+            typeof record?.updatedAt === "string" && record.updatedAt.trim()
+              ? record.updatedAt
+              : new Date().toISOString(),
+        },
+      }),
+    ]);
+  },
+  writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
+    await openMemoryCoreStateStore<ShortTermLockEntry>({
+      namespace: SHORT_TERM_LOCK_NAMESPACE,
+      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
+  },
+  deleteShortTermLock: async (workspaceDir: string) => {
+    await openMemoryCoreStateStore<ShortTermLockEntry>({
+      namespace: SHORT_TERM_LOCK_NAMESPACE,
+      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
+  },
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,

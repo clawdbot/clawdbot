@@ -4,6 +4,7 @@ import {
   createDependencyChangesReport,
   dependencyDiffPathspecs,
   isDependencyFile,
+  parseArgs,
 } from "../../scripts/dependency-changes-report.mjs";
 
 describe("dependency-changes-report", () => {
@@ -57,5 +58,18 @@ describe("dependency-changes-report", () => {
   it("includes plugin shrinkwrap files in git diff pathspecs", () => {
     expect(dependencyDiffPathspecs()).toContain("extensions/*/package-lock.json");
     expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
+  });
+
+  it("rejects missing report artifact path option values", () => {
+    for (const flag of [
+      "--root",
+      "--base-ref",
+      "--base-lockfile",
+      "--head-lockfile",
+      "--json",
+      "--markdown",
+    ]) {
+      expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
+    }
   });
 });

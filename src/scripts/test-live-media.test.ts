@@ -6,16 +6,8 @@ const collectProviderApiKeysMock = vi.fn((provider: string) =>
   process.env[`TEST_AUTH_${provider.toUpperCase()}`] ? ["test-key"] : [],
 );
 
-vi.mock("../../src/infra/shell-env.js", () => ({
-  loadShellEnvFallback: loadShellEnvFallbackMock,
-}));
-
-vi.mock("../../src/agents/live-auth-keys.js", () => ({
-  collectProviderApiKeys: collectProviderApiKeysMock,
-}));
-
 function requirePlanEntry(
-  plan: ReturnType<typeof import("../../scripts/test-live-media.ts").buildRunPlan>,
+  plan: Awaited<ReturnType<typeof import("../../scripts/test-live-media.ts").buildRunPlan>>,
   suiteId: string,
 ) {
   const entry = plan.find((candidate) => candidate.suite.id === suiteId);
@@ -40,7 +32,11 @@ describe("test-live-media", () => {
     vi.stubEnv("TEST_AUTH_VYDRA", "1");
 
     const { buildRunPlan, parseArgs } = await import("../../scripts/test-live-media.ts");
-    const plan = buildRunPlan(parseArgs([]));
+    const plan = await buildRunPlan(parseArgs([]), {
+      collectProviderApiKeysImpl: collectProviderApiKeysMock,
+      getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
+      loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
+    });
 
     expect(plan.map((entry) => entry.suite.id)).toEqual(["image", "music", "video"]);
     expect(requirePlanEntry(plan, "image").providers).toEqual([
@@ -61,8 +57,13 @@ describe("test-live-media", () => {
 
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const { buildRunPlan, parseArgs } = await import("../../scripts/test-live-media.ts");
-    const plan = buildRunPlan(
+    const plan = await buildRunPlan(
       parseArgs(["video", "--video-providers", "fal,openai,runway", "--all-providers"]),
+      {
+        collectProviderApiKeysImpl: collectProviderApiKeysMock,
+        getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
+        loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
+      },
     );
 
     expect(plan).toHaveLength(1);

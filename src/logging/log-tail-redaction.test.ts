@@ -4,10 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 
-const originalEnv = captureEnv(["OPENCLAW_CONFIG_PATH"]);
 let tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
@@ -17,7 +16,6 @@ async function makeTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  originalEnv.restore();
   setLoggerOverride(null);
   resetLogger();
   await Promise.all(tempDirs.map((dir) => fs.rm(dir, { force: true, recursive: true })));
@@ -48,10 +46,12 @@ describe("readConfiguredLogTail redaction", () => {
       ].join("\n"),
       "utf8",
     );
-    process.env.OPENCLAW_CONFIG_PATH = configFile;
     setLoggerOverride({ file: logFile });
 
-    const payload = await readConfiguredLogTail({ limit: 10 });
+    const payload = await withEnvAsync(
+      { OPENCLAW_CONFIG_PATH: configFile },
+      async () => await readConfiguredLogTail({ limit: 10 }),
+    );
     const text = payload.lines.join("\n");
 
     expect(text).toContain("Authorization: Basic ***");

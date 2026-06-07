@@ -1,10 +1,12 @@
 // Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { saveCronStore } from "../cron/store.js";
-import { captureEnv } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   formatCronSessionDiagnosticFields,
   formatStoppedCronSessionDiagnosticFields,
@@ -14,7 +16,7 @@ import {
 } from "./diagnostic-session-context.js";
 
 let tempDir: string | undefined;
-let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+let testState: OpenClawTestState | undefined;
 
 function writeJsonl(filePath: string, rows: unknown[]) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -22,18 +24,17 @@ function writeJsonl(filePath: string, rows: unknown[]) {
 }
 
 describe("diagnostic session context", () => {
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnostic-session-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-diagnostic-session-",
+    });
+    tempDir = testState.stateDir;
   });
 
-  afterEach(() => {
-    envSnapshot?.restore();
-    envSnapshot = undefined;
-    if (tempDir) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  afterEach(async () => {
+    await testState?.cleanup();
+    testState = undefined;
     tempDir = undefined;
   });
 

@@ -14,19 +14,30 @@ import {
   resolveMatrixAccountStorageRoot,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../storage-paths.js";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  MATRIX_RECOVERY_KEY_FILENAME,
+  migrateLegacyMatrixLegacyCryptoMigrationFileToStore,
+  migrateLegacyMatrixRecoveryKeyFileToStore,
+  readMatrixIdbSnapshotJson,
+  scoreMatrixCryptoStateInStore,
+  writeMatrixIdbSnapshotJson,
+} from "../crypto-state-store.js";
 import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
-const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
-const RECOVERY_KEY_FILENAME = "recovery-key.json";
-const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
-
 type LegacyMoveRecord = {
   sourcePath: string;
   targetPath: string;
+  label: string;
+};
+
+type LegacyArchiveRecord = {
+  sourcePath: string;
   label: string;
 };
 
@@ -41,12 +52,12 @@ type StoredRootMetadata = {
 };
 
 function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
+  rootDir: string;
   storagePath: string;
   cryptoPath: string;
 } {
   const stateDir = getMatrixRuntime().state.resolveStateDir(env, os.homedir);
-  const legacy = resolveMatrixLegacyFlatStoragePaths(stateDir);
-  return { storagePath: legacy.storagePath, cryptoPath: legacy.cryptoPath };
+  return resolveMatrixLegacyFlatStoragePaths(stateDir);
 }
 
 function assertLegacyMigrationAccountSelection(params: { accountKey: string }): void {
@@ -71,7 +82,7 @@ function assertLegacyMigrationAccountSelection(params: { accountKey: string }): 
 
 function scoreStorageRoot(rootDir: string): number {
   let score = 0;
-  if (fs.existsSync(path.join(rootDir, "bot-storage.json"))) {
+  if (readStoredRootMetadata(rootDir).currentTokenStateClaimed === true) {
     score += 8;
   }
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
@@ -80,15 +91,16 @@ function scoreStorageRoot(rootDir: string): number {
   if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
     score += 4;
   }
-  if (fs.existsSync(path.join(rootDir, LEGACY_CRYPTO_MIGRATION_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME))) {
     score += 3;
   }
-  if (fs.existsSync(path.join(rootDir, RECOVERY_KEY_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME))) {
     score += 2;
   }
-  if (fs.existsSync(path.join(rootDir, IDB_SNAPSHOT_FILENAME))) {
+  if (fs.existsSync(path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME))) {
     score += 2;
   }
+  score += scoreMatrixCryptoStateInStore(rootDir);
   if (fs.existsSync(path.join(rootDir, STORAGE_META_FILENAME))) {
     score += 1;
   }
@@ -305,8 +317,8 @@ export function resolveMatrixStoragePaths(params: {
     storagePath: path.join(rootDir, "bot-storage.json"),
     cryptoPath: path.join(rootDir, "crypto"),
     metaPath: path.join(rootDir, STORAGE_META_FILENAME),
-    recoveryKeyPath: path.join(rootDir, "recovery-key.json"),
-    idbSnapshotPath: path.join(rootDir, IDB_SNAPSHOT_FILENAME),
+    recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
+    idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
     tokenHash,
   };
@@ -336,23 +348,52 @@ export async function maybeMigrateLegacyStorage(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const legacy = resolveLegacyStoragePaths(params.env);
-  const hasLegacyStorage = fs.existsSync(legacy.storagePath);
+  const hasFlatLegacyStorageFile = fs.existsSync(legacy.storagePath);
+  const hasAccountScopedLegacyStorageFile = fs.existsSync(params.storagePaths.storagePath);
+  const syncCache =
+    hasFlatLegacyStorageFile || hasAccountScopedLegacyStorageFile
+      ? await import("./file-sync-store.js")
+      : null;
+  const hasFlatLegacyStorage =
+    hasFlatLegacyStorageFile &&
+    (await syncCache?.readLegacyMatrixSyncCacheState(legacy.rootDir)) !== null;
+  const hasAccountScopedLegacyStorage =
+    hasAccountScopedLegacyStorageFile &&
+    (await syncCache?.readLegacyMatrixSyncCacheState(params.storagePaths.rootDir)) !== null;
   const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
-  if (!hasLegacyStorage && !hasLegacyCrypto) {
+  const hasAccountScopedRecoveryKey = fs.existsSync(params.storagePaths.recoveryKeyPath);
+  const hasAccountScopedIdbSnapshot = fs.existsSync(params.storagePaths.idbSnapshotPath);
+  const hasAccountScopedLegacyCryptoMigration = fs.existsSync(
+    path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
+  );
+  if (
+    !hasFlatLegacyStorage &&
+    !hasAccountScopedLegacyStorage &&
+    !hasLegacyCrypto &&
+    !hasAccountScopedRecoveryKey &&
+    !hasAccountScopedIdbSnapshot &&
+    !hasAccountScopedLegacyCryptoMigration
+  ) {
     return;
   }
-  const hasTargetStorage = fs.existsSync(params.storagePaths.storagePath);
   const hasTargetCrypto = fs.existsSync(params.storagePaths.cryptoPath);
-  // Continue partial migrations one artifact at a time; only skip items whose targets already exist.
-  const shouldMigrateStorage = hasLegacyStorage && !hasTargetStorage;
   const shouldMigrateCrypto = hasLegacyCrypto && !hasTargetCrypto;
-  if (!shouldMigrateStorage && !shouldMigrateCrypto) {
+  if (
+    !hasFlatLegacyStorage &&
+    !hasAccountScopedLegacyStorage &&
+    !shouldMigrateCrypto &&
+    !hasAccountScopedRecoveryKey &&
+    !hasAccountScopedIdbSnapshot &&
+    !hasAccountScopedLegacyCryptoMigration
+  ) {
     return;
   }
 
-  assertLegacyMigrationAccountSelection({
-    accountKey: params.storagePaths.accountKey,
-  });
+  if (hasFlatLegacyStorage || hasLegacyCrypto) {
+    assertLegacyMigrationAccountSelection({
+      accountKey: params.storagePaths.accountKey,
+    });
+  }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
   const { maybeCreateMatrixMigrationSnapshot } = await import("./migration-snapshot.runtime.js");
@@ -363,19 +404,28 @@ export async function maybeMigrateLegacyStorage(params: {
   });
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
   const moved: LegacyMoveRecord[] = [];
+  const pendingArchives: LegacyArchiveRecord[] = [];
   const skippedExistingTargets: string[] = [];
   try {
-    if (shouldMigrateStorage) {
-      moveLegacyStoragePathOrThrow({
-        sourcePath: legacy.storagePath,
-        targetPath: params.storagePaths.storagePath,
-        label: "sync store",
+    if (hasAccountScopedLegacyStorage) {
+      await migrateLegacySyncCacheToSqlite({
+        sourceRootDir: params.storagePaths.rootDir,
+        sourcePath: params.storagePaths.storagePath,
+        targetRootDir: params.storagePaths.rootDir,
+        label: "account sync cache",
         moved,
+        pendingArchives,
       });
-    } else if (hasLegacyStorage) {
-      skippedExistingTargets.push(
-        `- sync store remains at ${legacy.storagePath} because ${params.storagePaths.storagePath} already exists`,
-      );
+    }
+    if (hasFlatLegacyStorage) {
+      await migrateLegacySyncCacheToSqlite({
+        sourceRootDir: legacy.rootDir,
+        sourcePath: legacy.storagePath,
+        targetRootDir: params.storagePaths.rootDir,
+        label: "flat sync cache",
+        moved,
+        pendingArchives,
+      });
     }
     if (shouldMigrateCrypto) {
       moveLegacyStoragePathOrThrow({
@@ -389,6 +439,30 @@ export async function maybeMigrateLegacyStorage(params: {
         `- crypto store remains at ${legacy.cryptoPath} because ${params.storagePaths.cryptoPath} already exists`,
       );
     }
+    if (hasAccountScopedRecoveryKey) {
+      migrateLegacyMatrixRecoveryKeyFileToStore(params.storagePaths.rootDir);
+      moved.push({
+        sourcePath: params.storagePaths.recoveryKeyPath,
+        targetPath: `${params.storagePaths.rootDir} SQLite recovery key state`,
+        label: "recovery key",
+      });
+    }
+    if (hasAccountScopedLegacyCryptoMigration) {
+      migrateLegacyMatrixLegacyCryptoMigrationFileToStore(params.storagePaths.rootDir);
+      moved.push({
+        sourcePath: path.join(params.storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
+        targetPath: `${params.storagePaths.rootDir} SQLite legacy crypto migration state`,
+        label: "legacy crypto migration",
+      });
+    }
+    if (hasAccountScopedIdbSnapshot) {
+      await migrateLegacyIdbSnapshotToSqlite({
+        storageRootDir: params.storagePaths.rootDir,
+        snapshotPath: params.storagePaths.idbSnapshotPath,
+        moved,
+        pendingArchives,
+      });
+    }
   } catch (err) {
     const rollbackError = rollbackLegacyMoves(moved);
     throw new Error(
@@ -397,6 +471,12 @@ export async function maybeMigrateLegacyStorage(params: {
         : `Failed migrating legacy Matrix client storage: ${String(err)}`,
       { cause: err },
     );
+  }
+  for (const archive of pendingArchives) {
+    archiveLegacyStoragePath({
+      ...archive,
+      skippedExistingTargets,
+    });
   }
   if (moved.length > 0) {
     logger.info(
@@ -410,6 +490,97 @@ export async function maybeMigrateLegacyStorage(params: {
       `matrix: legacy client storage still exists in the flat path because some account-scoped targets already existed.\n${skippedExistingTargets.join("\n")}`,
     );
   }
+}
+
+async function migrateLegacyIdbSnapshotToSqlite(params: {
+  storageRootDir: string;
+  snapshotPath: string;
+  moved: LegacyMoveRecord[];
+  pendingArchives: LegacyArchiveRecord[];
+}): Promise<void> {
+  if (readMatrixIdbSnapshotJson(params.storageRootDir)) {
+    params.pendingArchives.push({
+      sourcePath: params.snapshotPath,
+      label: "IndexedDB snapshot",
+    });
+    return;
+  }
+  const { readLegacyMatrixIdbSnapshotState } = await import("../sdk/idb-persistence.js");
+  const snapshot = await readLegacyMatrixIdbSnapshotState(params.storageRootDir);
+  if (!snapshot) {
+    return;
+  }
+  writeMatrixIdbSnapshotJson({
+    storageRootDir: params.storageRootDir,
+    snapshotJson: JSON.stringify(snapshot),
+    databaseCount: snapshot.length,
+  });
+  params.moved.push({
+    sourcePath: params.snapshotPath,
+    targetPath: `${params.storageRootDir} SQLite IndexedDB snapshot state`,
+    label: "IndexedDB snapshot",
+  });
+  params.pendingArchives.push({
+    sourcePath: params.snapshotPath,
+    label: "IndexedDB snapshot",
+  });
+}
+
+async function migrateLegacySyncCacheToSqlite(params: {
+  sourceRootDir: string;
+  sourcePath: string;
+  targetRootDir: string;
+  label: string;
+  moved: LegacyMoveRecord[];
+  pendingArchives: LegacyArchiveRecord[];
+}): Promise<void> {
+  const syncCache = await import("./file-sync-store.js");
+  const persisted = await syncCache.readLegacyMatrixSyncCacheState(params.sourceRootDir);
+  if (!persisted) {
+    return;
+  }
+  const store = getMatrixRuntime().state.openKeyedStore<
+    import("./file-sync-store.js").MatrixSyncCacheRecord
+  >(syncCache.openMatrixSyncCacheStoreOptions(params.targetRootDir));
+  if (
+    !(await syncCache.hasMatrixSyncCacheStateInStore({
+      storageRootDir: params.targetRootDir,
+      store,
+    }))
+  ) {
+    await syncCache.writeMatrixSyncCacheStateToStore({
+      storageRootDir: params.targetRootDir,
+      payload: persisted,
+      store,
+    });
+    claimCurrentTokenStorageState({
+      rootDir: params.targetRootDir,
+    });
+    params.moved.push({
+      sourcePath: params.sourcePath,
+      targetPath: `${params.targetRootDir} SQLite sync cache`,
+      label: params.label,
+    });
+  }
+  params.pendingArchives.push({
+    sourcePath: params.sourcePath,
+    label: params.label,
+  });
+}
+
+function archiveLegacyStoragePath(params: {
+  sourcePath: string;
+  label: string;
+  skippedExistingTargets: string[];
+}): void {
+  const archivedLegacyStoragePath = `${params.sourcePath}.migrated`;
+  if (fs.existsSync(archivedLegacyStoragePath)) {
+    params.skippedExistingTargets.push(
+      `- ${params.label} remains at ${params.sourcePath} because ${archivedLegacyStoragePath} already exists`,
+    );
+    return;
+  }
+  fs.renameSync(params.sourcePath, archivedLegacyStoragePath);
 }
 
 function moveLegacyStoragePathOrThrow(params: {

@@ -61,6 +61,25 @@ export function resolveSpawnCommand(command, args, execPath = process.execPath) 
   };
 }
 
+/**
+ * Reads the signal-forwarding force-kill grace period.
+ */
+export function resolveForceKillDelayMs(env = process.env) {
+  const raw = env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS;
+  if (raw === undefined || raw === "") {
+    return 5_000;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
+  }
+  return parsed;
+}
+
 function main(argv = process.argv.slice(2)) {
   if (isRunWithEnvHelpRequest(argv)) {
     console.log(USAGE);
@@ -70,6 +89,14 @@ function main(argv = process.argv.slice(2)) {
   let parsed;
   try {
     parsed = parseRunWithEnvArgs(argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+
+  let forceKillDelayMs;
+  try {
+    forceKillDelayMs = resolveForceKillDelayMs();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);
@@ -85,10 +112,6 @@ function main(argv = process.argv.slice(2)) {
     },
     stdio: "inherit",
   });
-  const forceKillDelayMs = Math.max(
-    1,
-    Number.parseInt(process.env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS ?? "5000", 10) || 5_000,
-  );
   let forwardedSignal = null;
   let forceKillTimer = null;
   // Keep the child in the foreground process group so TTY signals such as

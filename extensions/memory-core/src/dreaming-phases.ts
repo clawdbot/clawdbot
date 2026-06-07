@@ -19,7 +19,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
@@ -28,6 +28,14 @@ import {
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  DREAMING_DAILY_INGESTION_NAMESPACE,
+  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+  SESSION_SEEN_HASHES_PER_CHUNK,
+  readMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntries,
+} from "./dreaming-state.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
@@ -80,12 +88,16 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
-const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
+export const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "daily-ingestion.json",
+);
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
-const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
+export const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
   "memory",
   ".dreams",
   "session-ingestion.json",
@@ -438,7 +450,7 @@ type DailyIngestionState = {
   files: Record<string, DailyIngestionFileState>;
 };
 
-function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
+export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
   if (!filesRaw) {
@@ -480,24 +492,24 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  try {
-    return normalizeDailyIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 1, files: {} };
-    }
-    throw err;
-  }
+  const entries = await readMemoryCoreWorkspaceEntries<DailyIngestionFileState>({
+    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+    workspaceDir,
+  });
+  return normalizeDailyIngestionState({
+    version: 1,
+    files: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
+  });
 }
 
 async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
+  await writeMemoryCoreWorkspaceEntries({
+    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+    workspaceDir,
+    entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
   });
 }
 
@@ -532,7 +544,7 @@ function normalizeWorkspaceKey(workspaceDir: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
+export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
   const files: Record<string, SessionIngestionFileState> = {};
@@ -583,25 +595,67 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
-  try {
-    return normalizeSessionIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 3, files: {}, seenMessages: {} };
+  const [fileEntries, seenChunks] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<SessionIngestionFileState>({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const seenMessages: Record<string, string[]> = {};
+  const chunksByScope = new Map<string, Array<{ index: number; hashes: string[] }>>();
+  for (const chunk of seenChunks) {
+    const scope = chunk.value.scope.trim();
+    if (!scope) {
+      continue;
     }
-    throw err;
+    const chunks = chunksByScope.get(scope) ?? [];
+    chunks.push({ index: chunk.value.index, hashes: chunk.value.hashes });
+    chunksByScope.set(scope, chunks);
   }
+  for (const [scope, chunks] of chunksByScope) {
+    seenMessages[scope] = chunks
+      .toSorted((a, b) => a.index - b.index)
+      .flatMap((chunk) => chunk.hashes);
+  }
+  return normalizeSessionIngestionState({
+    version: 3,
+    files: Object.fromEntries(fileEntries.map((entry) => [entry.key, entry.value])),
+    seenMessages,
+  });
 }
 
 async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  const seenEntries = Object.entries(state.seenMessages).flatMap(([scope, hashes]) =>
+    Array.from({ length: Math.ceil(hashes.length / SESSION_SEEN_HASHES_PER_CHUNK) }, (_, index) => {
+      const chunkHashes = hashes.slice(
+        index * SESSION_SEEN_HASHES_PER_CHUNK,
+        (index + 1) * SESSION_SEEN_HASHES_PER_CHUNK,
+      );
+      return {
+        key: `${scope}:${index}`,
+        value: { scope, index, hashes: chunkHashes },
+      };
+    }),
+  );
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+      entries: seenEntries,
+    }),
+  ]);
 }
 
 function trimTrackedSessionScopes(
@@ -1889,6 +1943,8 @@ async function runPhaseIfTriggered(
 export const testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  readDailyIngestionState,
+  readSessionIngestionState,
   // Exposed for the #80613 regression test that exercises CJK-aware dedupe.
   dedupeEntries,
   constants: {

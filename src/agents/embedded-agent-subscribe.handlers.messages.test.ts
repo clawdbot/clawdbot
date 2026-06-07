@@ -478,6 +478,141 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
+  it("uses incremental deltas for same-item phased streams", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
+    const partial = {
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        {
+          type: "text",
+          textSignature: signature,
+          get text() {
+            throw new Error("full partial text should not be read");
+          },
+        },
+      ],
+    };
+
+    const createPhasedDelta = (delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial,
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createPhasedDelta("Hello"));
+    handleMessageUpdate(context, createPhasedDelta(" world"));
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello", phase: "final_answer" },
+      },
+      {
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world", phase: "final_answer" },
+      },
+    ]);
+  });
+
+  it("keeps same-item phased stream deltas on the user-visible sanitizer path", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
+    const partial = {
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        {
+          type: "text",
+          textSignature: signature,
+          get text() {
+            throw new Error("full partial text should not be read");
+          },
+        },
+      ],
+    };
+
+    const createPhasedDelta = (delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial,
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createPhasedDelta("Visible\n<tool_call>{"));
+    handleMessageUpdate(
+      context,
+      createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>'),
+    );
+    handleMessageUpdate(context, createPhasedDelta("\nDone."));
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Visible", delta: "Visible", phase: "final_answer" },
+      },
+      {
+        stream: "assistant",
+        data: { text: "Visible\n\nDone.", delta: "\n\nDone.", phase: "final_answer" },
+      },
+    ]);
+  });
+
+  it("keeps sanitizer context when a same-item phased stream starts hidden", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
+    const partial = {
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        {
+          type: "text",
+          textSignature: signature,
+          get text() {
+            throw new Error("full partial text should not be read");
+          },
+        },
+      ],
+    };
+
+    const createPhasedDelta = (delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial,
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createPhasedDelta("<tool_call>{"));
+    handleMessageUpdate(
+      context,
+      createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.'),
+    );
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Done.", delta: "Done.", phase: "final_answer" },
+      },
+    ]);
+  });
+
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();

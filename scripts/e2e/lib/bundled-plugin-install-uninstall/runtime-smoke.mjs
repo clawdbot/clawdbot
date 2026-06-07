@@ -8,42 +8,33 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
-const OUTPUT_CAPTURE_CHARS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
+const OUTPUT_CAPTURE_CHARS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS",
   1024 * 1024,
 );
-const LOG_SCAN_BYTES = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
+const LOG_SCAN_BYTES = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES",
   256 * 1024,
 );
-const GATEWAY_LOG_CAPTURE_BYTES = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES,
+const GATEWAY_LOG_CAPTURE_BYTES = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_GATEWAY_LOG_BYTES",
   16 * 1024 * 1024,
 );
-const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
-const READY_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
-  900000,
-);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS, 60000);
-const RPC_READY_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
+const WATCHDOG_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS", 1000);
+const READY_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS", 900000);
+const RPC_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS", 60000);
+const RPC_READY_TIMEOUT_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS",
   210000,
 );
-const COMMAND_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS,
-  120000,
-);
-const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
-  5000,
-);
-const GATEWAY_TEARDOWN_GRACE_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS,
+const COMMAND_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS", 120000);
+const HTTP_PROBE_TIMEOUT_MS = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS", 5000);
+const GATEWAY_TEARDOWN_GRACE_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_GRACE_MS",
   10000,
 );
-const GATEWAY_TEARDOWN_KILL_GRACE_MS = readPositiveInt(
-  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS,
+const GATEWAY_TEARDOWN_KILL_GRACE_MS = readPositiveIntEnv(
+  "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS",
   1000,
 );
 const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
@@ -62,13 +53,23 @@ const activeGatewayChildren = new Set();
 const parentSignalHandlers = new Map();
 let parentCleanupInstalled = false;
 
-function readPositiveInt(raw, fallback) {
+function readPositiveIntEnv(name, fallback) {
+  return readPositiveInt(process.env[name], fallback, name);
+}
+
+function readPositiveInt(raw, fallback, name) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return parsed;
 }
 
 function readJson(file) {
@@ -662,7 +663,7 @@ export async function waitForReady(params) {
 }
 
 async function fetchHttpProbeStatus(port, pathName, options = {}) {
-  const { timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
+  const { parseJson = false, timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
   const controller = new AbortController();
   const clearProbeTimer = timeoutMs
     ? setTimeout(() => {
@@ -673,7 +674,19 @@ async function fetchHttpProbeStatus(port, pathName, options = {}) {
     const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
       signal: controller.signal,
     });
-    const status = { ok: res.ok, status: res.status };
+    const status = { ok: res.ok, status: res.status, body: undefined, bodyText: undefined };
+    if (parseJson) {
+      const text = await res.text();
+      status.bodyText = text;
+      if (text.trim()) {
+        try {
+          status.body = JSON.parse(text);
+        } catch {
+          status.body = undefined;
+        }
+      }
+      return status;
+    }
     await res.body?.cancel().catch(() => {});
     return status;
   } finally {
@@ -705,7 +718,7 @@ async function assertHttpOk(port, pathName) {
     } catch (error) {
       lastError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw toLintErrorObject(
     lastError ?? new Error(`${pathName} did not return HTTP 200`),
@@ -713,26 +726,65 @@ async function assertHttpOk(port, pathName) {
   );
 }
 
-async function assertReadyzProbe(options) {
+function listReadyzFailingComponents(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  if (body.ready !== false || !Array.isArray(body.failing)) {
+    return undefined;
+  }
+  const failing = body.failing.filter((entry) => typeof entry === "string" && entry.length > 0);
+  if (failing.length !== body.failing.length || failing.length === 0) {
+    return undefined;
+  }
+  return failing;
+}
+
+function isAllowedDegradedReadyz(res, allowedFailures) {
+  if (res.status !== 503 || allowedFailures.size === 0) {
+    return false;
+  }
+  const failing = listReadyzFailingComponents(res.body);
+  if (!failing) {
+    return false;
+  }
+  return failing.every((entry) => allowedFailures.has(entry));
+}
+
+function formatHttpProbeBody(res) {
+  if (res.body !== undefined) {
+    return JSON.stringify(res.body);
+  }
+  const text = typeof res.bodyText === "string" ? res.bodyText.trim() : "";
+  if (!text) {
+    return "null";
+  }
+  return JSON.stringify(text.length > 500 ? `${text.slice(0, 500)}...` : text);
+}
+
+export async function assertReadyzProbe(options) {
+  const allowedFailures = new Set(options.allowedDegradedReadyzFailures ?? []);
   const started = Date.now();
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetchHttpProbeStatus(options.port, "/readyz");
+      const res = await fetchHttpProbeStatus(options.port, "/readyz", { parseJson: true });
       if (res.ok) {
         return;
       }
-      if (options.allowDegradedReadyz) {
+      if (isAllowedDegradedReadyz(res, allowedFailures)) {
         console.log(
-          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
+          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
+            listReadyzFailingComponents(res.body),
+          )}`,
         );
         return;
       }
-      lastError = new Error(`/readyz returned HTTP ${res.status}`);
+      lastError = new Error(`/readyz returned HTTP ${res.status}: ${formatHttpProbeBody(res)}`);
     } catch (error) {
       lastError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw toLintErrorObject(
     lastError ?? new Error("/readyz did not return HTTP 200"),
@@ -838,6 +890,10 @@ function hasOwnPayloadField(raw, field) {
   );
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
@@ -854,6 +910,36 @@ export function unwrapRpcPayload(raw) {
   return raw;
 }
 
+export function assertGatewayHealthPayload(payload, label = "health") {
+  if (!isRecord(payload)) {
+    throw new Error(`${label} returned invalid payload: expected object.`);
+  }
+  if (payload.ok !== true) {
+    throw new Error(`${label} returned invalid payload: expected ok=true.`);
+  }
+  if (!Number.isFinite(payload.ts)) {
+    throw new Error(`${label} returned invalid payload: expected numeric ts.`);
+  }
+  if (!Number.isFinite(payload.durationMs)) {
+    throw new Error(`${label} returned invalid payload: expected numeric durationMs.`);
+  }
+  if (typeof payload.defaultAgentId !== "string" || payload.defaultAgentId.trim() === "") {
+    throw new Error(`${label} returned invalid payload: expected defaultAgentId.`);
+  }
+  if (!Array.isArray(payload.agents)) {
+    throw new Error(`${label} returned invalid payload: expected agents array.`);
+  }
+  if (!isRecord(payload.channels)) {
+    throw new Error(`${label} returned invalid payload: expected channels object.`);
+  }
+  if (!Array.isArray(payload.channelOrder)) {
+    throw new Error(`${label} returned invalid payload: expected channelOrder array.`);
+  }
+  if (!isRecord(payload.sessions)) {
+    throw new Error(`${label} returned invalid payload: expected sessions object.`);
+  }
+}
+
 async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
   if (requiresConfig) {
     console.log(`Runtime smoke skipped for ${pluginId}: plugin requires config`);
@@ -866,7 +952,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3;
   const config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
@@ -905,7 +991,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
       port,
       env,
       pluginId,
-      allowDegradedReadyz: plan.channels.length > 0,
+      allowedDegradedReadyzFailures: plan.channels,
     });
     await runManifestProbes(plan, { entrypoint, port, env, pluginId });
     await runWatchdog({ child, logPath, port, entrypoint, env, pluginId });
@@ -921,7 +1007,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
 async function assertBaseGatewayProbes(options) {
   await assertHttpOk(options.port, "/healthz");
   await assertReadyzProbe(options);
-  await retryRpcCall("health", {}, options);
+  assertGatewayHealthPayload(await retryRpcCall("health", {}, options));
 }
 
 async function runManifestProbes(plan, options) {
@@ -1054,7 +1140,10 @@ async function runWatchdog(options) {
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );
   }
-  await retryRpcCall("health", {}, options);
+  assertGatewayHealthPayload(
+    await retryRpcCall("health", {}, options),
+    `${options.pluginId} watchdog health`,
+  );
   assertGatewayLogNotTruncated(options.logPath);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);
@@ -1196,9 +1285,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     return;
   }
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) +
-    pluginIndex * 3 +
-    1;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 1;
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
@@ -1251,9 +1338,7 @@ async function smokeOpenAiTts(pluginIndex) {
     return;
   }
   const port =
-    readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) +
-    pluginIndex * 3 +
-    2;
+    readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE", 19000) + pluginIndex * 3 + 2;
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(

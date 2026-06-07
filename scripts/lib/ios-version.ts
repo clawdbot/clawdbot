@@ -7,8 +7,8 @@ const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
 const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
 const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
 
-const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
-const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:alpha\.\d+|beta\.\d+|\d+))?$/u;
+const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.[1-9]\d*)$/u;
+const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.[1-9]\d*)(?:-(?:alpha\.\d+|beta\.\d+|\d+))?$/u;
 
 type IosVersionManifest = {
   version: string;
@@ -38,7 +38,9 @@ export function normalizePinnedIosVersion(rawVersion: string): string {
 
   const match = PINNED_IOS_VERSION_PATTERN.exec(trimmed);
   if (!match) {
-    throw new Error(`Invalid iOS version '${rawVersion}'. Expected pinned CalVer like 2026.4.6.`);
+    throw new Error(
+      `Invalid iOS version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
+    );
   }
 
   return match[1] ?? trimmed;
@@ -53,7 +55,7 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
   const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
   if (!match) {
     throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-alpha.N, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
   }
 

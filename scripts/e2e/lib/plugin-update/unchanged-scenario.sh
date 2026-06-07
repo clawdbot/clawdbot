@@ -23,7 +23,7 @@ trap 'openclaw_e2e_stop_process "${registry_pid:-}"' EXIT
 
 if ! node "$probe" wait-registry; then
   echo "Local npm metadata registry failed to start"
-  cat /tmp/openclaw-e2e-registry.log || true
+  openclaw_e2e_print_log /tmp/openclaw-e2e-registry.log
   exit 1
 fi
 
@@ -42,9 +42,9 @@ set -e
 if [ "$plugin_update_status" -ne 0 ]; then
   echo "Plugin update command failed or timed out after ${plugin_update_timeout_seconds}s (status ${plugin_update_status})"
   echo "--- plugin update output ---"
-  cat /tmp/plugin-update-output.log || true
+  openclaw_e2e_print_log /tmp/plugin-update-output.log
   echo "--- local registry output ---"
-  cat /tmp/openclaw-e2e-registry.log || true
+  openclaw_e2e_print_log /tmp/openclaw-e2e-registry.log
   exit "$plugin_update_status"
 fi
 
@@ -52,11 +52,11 @@ if [ -n "$before_config_hash" ]; then
   after_config_hash="$(sha256sum "$OPENCLAW_CONFIG_PATH" | awk '{print $1}')"
   if [ "$before_config_hash" != "$after_config_hash" ]; then
     echo "Config changed unexpectedly for modern package $package_version"
-    cat /tmp/plugin-update-output.log
+    openclaw_e2e_print_log /tmp/plugin-update-output.log
     exit 1
   fi
 fi
 
 node "$probe" assert-snapshot /tmp/plugin-update-before.json
 node "$probe" assert-output /tmp/plugin-update-output.log
-cat /tmp/plugin-update-output.log
+openclaw_e2e_print_log /tmp/plugin-update-output.log

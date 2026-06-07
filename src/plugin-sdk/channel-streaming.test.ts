@@ -361,6 +361,22 @@ describe("channel-streaming", () => {
     ).toBe("Shelling\n\n• I'm checking whether the generated video exists or if the…");
   });
 
+  it("falls back to plain commentary when compaction drops the closing italic marker", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 32 } } },
+        lines: [
+          {
+            kind: "item",
+            text: `_${"x".repeat(80)}_`,
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe(`${"x".repeat(30)}…`);
+  });
+
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
     const line = buildChannelProgressDraftLine(
       {

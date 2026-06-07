@@ -1,11 +1,11 @@
 // Install download tests cover downloading skill archives before extraction.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
-import { setTempStateDir } from "../test-support/install-download-test-utils.js";
+import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
 import {
   fetchWithSsrFGuardMock,
   hasBinaryMock,
@@ -144,16 +144,16 @@ function mockTarExtractionFlow(params: {
 }
 
 let workspaceDir = "";
+let testState: OpenClawTestState | undefined;
 beforeAll(async () => {
-  workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
-  setTempStateDir(workspaceDir);
+  testState = await createInstallDownloadTestState();
+  workspaceDir = testState.workspaceDir;
 });
 
 afterAll(async () => {
-  if (workspaceDir) {
-    await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-    workspaceDir = "";
-  }
+  await testState?.cleanup();
+  testState = undefined;
+  workspaceDir = "";
 });
 
 beforeEach(() => {

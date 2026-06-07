@@ -151,6 +151,7 @@ export type EmbeddedAgentSubscribeState = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalAborted?: boolean;
   hadDeterministicSideEffect?: boolean;
   pendingEventChain: Promise<void> | null;
 

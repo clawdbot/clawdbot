@@ -4,39 +4,69 @@
 import { pathToFileURL } from "node:url";
 
 export type SparkleBuildFloors = {
-  dateKey: number;
+  releaseKey: number;
   legacyFloor: number;
   laneFloor: number;
   lane: number;
 };
 
-const CALVER_REGEX = /^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$/;
+const RELEASE_VERSION_REGEX = /^([0-9]{4})\.([0-9]{1,2})\.([1-9][0-9]*)([.-].*)?$/;
+const MONTHLY_PATCH_SPARKLE_BUILD_ADOPTION = {
+  year: 2026,
+  month: 6,
+  patch: 5,
+};
+
+function compareReleaseParts(
+  left: { year: number; month: number; patch: number },
+  right: { year: number; month: number; patch: number },
+): number {
+  if (left.year !== right.year) {
+    return Math.sign(left.year - right.year);
+  }
+  if (left.month !== right.month) {
+    return Math.sign(left.month - right.month);
+  }
+  return Math.sign(left.patch - right.patch);
+}
+
+function usesMonthlyPatchSparkleBuild(version: {
+  year: number;
+  month: number;
+  patch: number;
+}): boolean {
+  return compareReleaseParts(version, MONTHLY_PATCH_SPARKLE_BUILD_ADOPTION) >= 0;
+}
+
+function legacyDateReleaseKey(year: number, month: number, patch: number): number {
+  return Number(`${year}${String(month).padStart(2, "0")}${String(patch).padStart(2, "0")}`);
+}
+
+function monthlyPatchReleaseKey(year: number, month: number, patch: number): number {
+  return (year - 2000) * 100_000_000 + month * 1_000_000 + patch * 100;
+}
 
 export function sparkleBuildFloorsFromShortVersion(
   shortVersion: string,
 ): SparkleBuildFloors | null {
-  const match = CALVER_REGEX.exec(shortVersion.trim());
+  const match = RELEASE_VERSION_REGEX.exec(shortVersion.trim());
   if (!match) {
     return null;
   }
 
   const year = Number.parseInt(match[1], 10);
   const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
+  const patch = Number.parseInt(match[3], 10);
   if (
     !Number.isInteger(year) ||
     !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
+    !Number.isInteger(patch) ||
     month < 1 ||
     month > 12 ||
-    day < 1 ||
-    day > 31
+    patch < 1
   ) {
     return null;
   }
-
-  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
-  const legacyFloor = Number(`${dateKey}0`);
 
   let lane = 90;
   const suffix = match[4] ?? "";
@@ -49,8 +79,22 @@ export function sparkleBuildFloorsFromShortVersion(
     }
   }
 
-  const laneFloor = Number(`${dateKey}${String(lane).padStart(2, "0")}`);
-  return { dateKey, legacyFloor, laneFloor, lane };
+  if (usesMonthlyPatchSparkleBuild({ year, month, patch })) {
+    // Keep old appcast entries byte-stable, then switch to YYMMPPPPLL so
+    // monthly patches beyond 31 stay monotonic without pretending to be dates.
+    const releaseKey = monthlyPatchReleaseKey(year, month, patch);
+    return {
+      releaseKey,
+      legacyFloor: releaseKey,
+      laneFloor: releaseKey + lane,
+      lane,
+    };
+  }
+
+  const releaseKey = legacyDateReleaseKey(year, month, patch);
+  const legacyFloor = Number(`${releaseKey}0`);
+  const laneFloor = Number(`${releaseKey}${String(lane).padStart(2, "0")}`);
+  return { releaseKey, legacyFloor, laneFloor, lane };
 }
 
 export function canonicalSparkleBuildFromVersion(shortVersion: string): number | null {

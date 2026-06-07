@@ -95,7 +95,7 @@ struct GatewayQuickSetupSheet: View {
                     .buttonStyle(.bordered)
                     .disabled(self.connecting)
 
-                    Toggle("Don’t show this again", isOn: self.$quickSetupDismissed)
+                    self.fullRowToggle("Don’t show this again", isOn: self.$quickSetupDismissed)
                         .padding(.top, 4)
                 } else {
                     Text("No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.")
@@ -133,6 +133,23 @@ struct GatewayQuickSetupSheet: View {
     private var bestCandidate: GatewayDiscoveryModel.DiscoveredGateway? {
         // Prefer whatever discovery says is first; the list is already name-sorted.
         self.gatewayController.gateways.first
+    }
+
+    private func fullRowToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(title, isOn: isOn)
+            .contentShape(Rectangle())
+            .overlay {
+                // Keep Toggle semantics for accessibility while making the full visual row tappable.
+                Button {
+                    isOn.wrappedValue.toggle()
+                } label: {
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+            }
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {

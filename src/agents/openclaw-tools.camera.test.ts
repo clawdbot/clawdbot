@@ -12,7 +12,12 @@ const { callGateway } = vi.hoisted(() => ({
 
 vi.mock("../gateway/call.js", () => ({ callGateway }));
 vi.mock("../media/media-services.js", () => ({
+  buildImageResizeSideGrid: vi.fn(() => [1200]),
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
+  IMAGE_REDUCE_QUALITY_STEPS: [85],
+  isImageProcessorUnavailableError: vi.fn(() => false),
+  MAX_IMAGE_INPUT_PIXELS: 25_000_000,
+  readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 

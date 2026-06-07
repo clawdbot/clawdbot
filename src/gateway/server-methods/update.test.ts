@@ -125,11 +125,14 @@ vi.mock("./restart-request.js", () => ({
   }),
 }));
 
-vi.mock("./update-managed-service-handoff.js", () => ({
+vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
-  formatManagedServiceUpdateCommand: (timeoutMs?: number) =>
-    timeoutMs
-      ? `openclaw update --yes --timeout ${Math.ceil(timeoutMs / 1000)}`
+  formatManagedServiceUpdateCommand: (params?: {
+    timeoutMs?: number;
+    channel?: "stable" | "beta" | "dev";
+  }) =>
+    params?.timeoutMs
+      ? `openclaw update --yes --timeout ${Math.ceil(params.timeoutMs / 1000)}`
       : "openclaw update --yes",
   buildManagedServiceHandoffUnavailableMessage: (command: string) =>
     `Run \`${command}\` from a shell outside the gateway service.`,

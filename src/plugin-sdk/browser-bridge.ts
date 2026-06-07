@@ -2,7 +2,7 @@
  * Public SDK facade for starting and stopping the bundled browser bridge server.
  */
 import type { Server } from "node:http";
-import type { ResolvedBrowserConfig } from "./browser-profiles.js";
+import type { ResolvedBrowserConfig } from "./browser-types.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 /** Running browser bridge server state returned to plugin callers. */

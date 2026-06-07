@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveBillingDrift } from "./live-test-provider-drift.js";
+import { isLiveAuthDrift, isLiveBillingDrift } from "./live-test-provider-drift.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -143,9 +143,15 @@ describeAnthropicLive("embedded agent extra params (anthropic live)", () => {
         usage?: { service_tier?: string };
       };
       const errorMessage = json.error?.message ?? `HTTP ${res.status}`;
-      if (!res.ok && isLiveBillingDrift(errorMessage)) {
-        console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
-        return null;
+      if (!res.ok) {
+        if (isLiveBillingDrift(errorMessage)) {
+          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
+          return null;
+        }
+        if (isLiveAuthDrift(errorMessage)) {
+          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: auth drift`);
+          return null;
+        }
       }
       expect(res.ok, errorMessage).toBe(true);
       return json;

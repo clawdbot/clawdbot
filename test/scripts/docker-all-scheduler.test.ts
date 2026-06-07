@@ -1,6 +1,6 @@
 // Docker All Scheduler tests cover docker all scheduler script behavior.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -144,6 +144,115 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(result.stderr).not.toContain("at ");
     } finally {
       rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects release-path configs that schedule zero Docker lanes", () => {
+    const logDir = mkdtempSync(`${tmpdir()}/openclaw-docker-all-`);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_CHUNK: "openwebui",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI: "0",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("Dry run complete");
+      expect(result.stderr).toContain("resolved zero Docker lanes");
+      expect(result.stderr).toContain("profile=release-path");
+      expect(result.stderr).toContain("releaseChunk=openwebui");
+      expect(result.stderr).toContain("includeOpenWebUI=0");
+      expect(result.stderr).not.toContain("at ");
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
+  });
+
+  posixIt("writes Docker run artifacts when cleanup smoke fails", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-all-cleanup-`);
+    const logDir = path.join(root, "logs");
+    const packageTgz = path.join(root, "openclaw-current.tgz");
+    const fakePnpm = path.join(root, "pnpm");
+    writeFileSync(packageTgz, "fake package\n", "utf8");
+    writeFileSync(
+      fakePnpm,
+      `#!/usr/bin/env node
+const command = process.argv.slice(2).join(" ");
+if (command === "test:docker:cleanup") {
+  console.error("cleanup smoke failed intentionally");
+  process.exit(42);
+}
+process.exit(0);
+`,
+      "utf8",
+    );
+    chmodSync(fakePnpm, 0o755);
+
+    try {
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_PARALLELISM: "16",
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
+          OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
+          OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: "16",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("cleanup smoke failed intentionally");
+
+      const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
+      expect(summary.status).toBe("failed");
+      expect(summary.failures).toHaveLength(1);
+      expect(summary.failures[0]).toMatchObject({
+        name: "cleanup-smoke",
+        rerunCommand: "pnpm test:docker:cleanup",
+        status: 42,
+        targetable: false,
+      });
+      expect(summary.lanes.some((lane: { name?: string }) => lane.name === "cleanup-smoke")).toBe(
+        false,
+      );
+      expect(summary.phases.at(-1)).toMatchObject({
+        name: "cleanup-smoke",
+        status: "failed",
+      });
+
+      const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
+      expect(failureIndex.status).toBe("failed");
+      expect(failureIndex.combinedGhWorkflowCommand).toBeUndefined();
+      expect(failureIndex.lanes[0]?.ghWorkflowCommand).toBeUndefined();
+      expect(failureIndex.lanes).toEqual([
+        expect.objectContaining({
+          lane: "cleanup-smoke",
+          rerunCommand: "pnpm test:docker:cleanup",
+          status: 42,
+          targetable: false,
+        }),
+      ]);
+      const cleanupLog = readFileSync(path.join(logDir, "cleanup-smoke.log"), "utf8");
+      expect(cleanupLog).toContain("cleanup smoke failed intentionally");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
     }
   });
 

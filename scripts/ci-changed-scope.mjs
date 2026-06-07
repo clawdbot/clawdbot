@@ -322,16 +322,25 @@ function isDirectRun() {
 }
 
 /** @param {string[]} argv */
-function parseArgs(argv) {
+function readRefValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+/** @param {string[]} argv */
+export function parseArgs(argv) {
   const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
-      args.base = argv[i + 1] ?? "";
+      args.base = readRefValue(argv, i, "--base");
       i += 1;
       continue;
     }
     if (argv[i] === "--head") {
-      args.head = argv[i + 1] ?? "HEAD";
+      args.head = readRefValue(argv, i, "--head");
       i += 1;
       continue;
     }
@@ -343,8 +352,8 @@ function parseArgs(argv) {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
   try {
+    const args = parseArgs(process.argv.slice(2));
     const changedPaths = listChangedPaths(
       args.base,
       args.head,

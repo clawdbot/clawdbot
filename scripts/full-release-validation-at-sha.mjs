@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Dispatches full release validation against a temporary SHA-pinned branch.
 import { execFileSync, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const WORKFLOW = "full-release-validation.yml";
 const DEFAULT_INPUTS = {
@@ -41,7 +42,15 @@ function runStatus(command, args, options = {}) {
   });
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     sha: "",
     branch: "",
@@ -57,11 +66,13 @@ function parseArgs(argv) {
       process.exit(0);
     }
     if (arg === "--sha") {
-      args.sha = argv[++i] ?? "";
+      args.sha = readOptionValue(argv, i, arg);
+      i += 1;
       continue;
     }
     if (arg === "--branch") {
-      args.branch = argv[++i] ?? "";
+      args.branch = readOptionValue(argv, i, arg);
+      i += 1;
       continue;
     }
     if (arg === "--keep-branch") {
@@ -84,7 +95,8 @@ function parseArgs(argv) {
       break;
     }
     if (arg === "-f") {
-      const assignment = argv[++i] ?? "";
+      const assignment = readOptionValue(argv, i, arg);
+      i += 1;
       const [key, ...valueParts] = assignment.split("=");
       if (!key || valueParts.length === 0) {
         throw new Error(`Invalid -f assignment: ${assignment}`);
@@ -257,9 +269,11 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }

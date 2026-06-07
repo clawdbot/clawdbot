@@ -3,12 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 let stateDir = "";
 
 const mocks = vi.hoisted(() => {
@@ -88,10 +91,12 @@ describe("skills workshop cli", () => {
   };
 
   beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skills-cli-workshop-state-",
+    });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-");
-    stateDir = await tempDirs.make("openclaw-skills-cli-workshop-state-");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    stateDir = testState.stateDir;
     mocks.runtimeStdout.length = 0;
     mocks.runtimeErrors.length = 0;
     mocks.defaultRuntime.log.mockClear();
@@ -102,7 +107,7 @@ describe("skills workshop cli", () => {
   });
 
   afterEach(async () => {
-    envSnapshot.restore();
+    await testState.cleanup();
     await tempDirs.cleanup();
   });
 

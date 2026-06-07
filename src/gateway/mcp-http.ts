@@ -19,7 +19,9 @@ import {
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   isMcpHttpBodyTooLargeError,
+  isMcpHttpBodyTimeoutError,
   readMcpHttpBody,
+  resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
@@ -41,6 +43,50 @@ type McpLoopbackServer = {
 
 let activeMcpLoopbackServer: McpLoopbackServer | undefined;
 let activeMcpLoopbackServerPromise: Promise<McpLoopbackServer> | null = null;
+
+function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_parse_error" } {
+  return Object.assign(new Error("MCP JSON parse error"), {
+    cause: error,
+    code: "mcp_json_parse_error" as const,
+  });
+}
+
+function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json_parse_error" } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "mcp_json_parse_error"
+  );
+}
+
+function parseMcpJsonBody(body: string): JsonRpcRequest | JsonRpcRequest[] {
+  try {
+    return JSON.parse(body) as JsonRpcRequest | JsonRpcRequest[];
+  } catch (error) {
+    throw createMcpJsonParseError(error);
+  }
+}
+
+function readJsonRpcRequestId(message: unknown) {
+  if (!isRecord(message)) {
+    return null;
+  }
+  const id = message.id;
+  return typeof id === "string" || typeof id === "number" || id === null ? id : undefined;
+}
+
+function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
+  return isRecord(message) && message.jsonrpc === "2.0" && typeof message.method === "string";
+}
+
+function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
+  if (Array.isArray(parsed)) {
+    return parsed.map((message) =>
+      jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
+    );
+  }
+  return jsonRpcError(readJsonRpcRequestId(parsed), -32603, "Internal error");
+}
 
 function shouldLogMcpLoopbackTraffic(): boolean {
   return (
@@ -106,9 +152,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
+      let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
       try {
-        const body = await readMcpHttpBody(req);
-        const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
+        const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
+        parsed = parseMcpJsonBody(body);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
@@ -128,7 +175,9 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const messages = Array.isArray(parsed) ? parsed : [parsed];
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,
-          methods: messages.map((message) => message.method),
+          methods: messages.map((message) =>
+            isJsonRpcRequest(message) ? message.method : undefined,
+          ),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner === true,
@@ -137,6 +186,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         });
         const responses: object[] = [];
         for (const message of messages) {
+          if (!isJsonRpcRequest(message)) {
+            responses.push(jsonRpcError(readJsonRpcRequestId(message), -32600, "Invalid Request"));
+            continue;
+          }
           const response = await handleMcpJsonRpc({
             message,
             tools: scopedTools.tools,
@@ -186,9 +239,17 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             res.end(JSON.stringify({ error: "payload_too_large" }), () => {
               req.destroy();
             });
-          } else {
+          } else if (isMcpHttpBodyTimeoutError(error)) {
+            res.writeHead(408, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "request_body_timeout" }), () => {
+              req.destroy();
+            });
+          } else if (isMcpJsonParseError(error)) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          } else {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(jsonRpcInternalError(parsed)));
           }
         }
       } finally {

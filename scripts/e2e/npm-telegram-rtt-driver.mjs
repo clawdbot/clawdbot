@@ -22,12 +22,26 @@ const botApiBodyMaxBytes = readPositiveIntEnv(
 );
 const maxWarmFailures = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_MAX_FAILURES", warmSampleCount);
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
-const scenarioIds = new Set(
-  (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
+const supportedScenarioIds = new Set(["telegram-mentioned-message-reply"]);
+const requestedScenarioIds = (
+  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+if (requestedScenarioIds.length === 0) {
+  throw new Error("OPENCLAW_NPM_TELEGRAM_SCENARIOS must include at least one RTT scenario");
+}
+
+const unknownScenarioIds = requestedScenarioIds.filter(
+  (scenarioId) => !supportedScenarioIds.has(scenarioId),
 );
+if (unknownScenarioIds.length > 0) {
+  throw new Error(`unknown OPENCLAW_NPM_TELEGRAM_SCENARIOS: ${unknownScenarioIds.join(", ")}`);
+}
+
+const scenarioIds = new Set(requestedScenarioIds);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
@@ -196,8 +210,8 @@ async function waitForSutReply(params) {
         continue;
       }
       const replyMatches = message.reply_to_message?.message_id === params.requestMessageId;
-      const anySutReplyMatches = params.allowAnySutReply;
-      if (replyMatches || anySutReplyMatches || params.matchText) {
+      const textMatches = params.matchText ? text.includes(params.matchText) : false;
+      if (replyMatches || textMatches) {
         return message;
       }
     }
@@ -357,7 +371,7 @@ async function main() {
 
   const scenarios = [];
   const canary = await runScenario({
-    allowAnySutReply: true,
+    allowAnySutReply: false,
     id: "telegram-canary",
     input: `/status@${sutMe.username}`,
     sutId: sutMe.id,

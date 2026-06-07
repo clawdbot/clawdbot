@@ -19,7 +19,7 @@ function loadParallelWebSearchRuntime(): Promise<ParallelWebSearchRuntime> {
 
 // Mirrors Parallel's recommended search tool schema:
 // https://docs.parallel.ai/search/best-practices#search-tool-definition
-const ParallelSearchSchema = {
+export const ParallelSearchSchema = {
   type: "object",
   properties: {
     objective: {

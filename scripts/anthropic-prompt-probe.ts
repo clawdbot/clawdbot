@@ -61,6 +61,13 @@ const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
   min: 1,
   raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
 });
+const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
+  fallback: 2 * 1024 * 1024,
+  label: "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
+  min: 1,
+  raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
+});
+const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
@@ -120,6 +127,7 @@ type StoppableGatewayChild = {
 };
 
 type ClosableLogFile = {
+  appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -283,12 +291,22 @@ async function withTimeout<T>(
   return await Promise.race([promise, sleep(timeoutMs).then(() => fallback())]);
 }
 
-async function readRequestBody(req: http.IncomingMessage): Promise<Buffer> {
+async function readRequestBody(
+  req: http.IncomingMessage,
+  maxBytes = CAPTURE_PROXY_MAX_BODY_BYTES,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > maxBytes) {
+      req.destroy();
+      throw new Error(`Anthropic capture proxy request body exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(buffer);
   }
-  return Buffer.concat(chunks);
+  return Buffer.concat(chunks, totalBytes);
 }
 
 function extractProxyCapture(rawBody: string, req: http.IncomingMessage): ProxyCapture {
@@ -520,11 +538,32 @@ async function startGatewayProcess(params: {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  child.stdout.on("data", (chunk) => void logFile.appendFile(chunk));
-  child.stderr.on("data", (chunk) => void logFile.appendFile(chunk));
+  const pendingLogWrites = new Set<Promise<void>>();
+  const logWriteErrors: unknown[] = [];
+  const trackLogWrite = (chunk: Buffer) => {
+    const write = logFile.appendFile(chunk).catch((error: unknown) => {
+      logWriteErrors.push(error);
+      throw error;
+    });
+    pendingLogWrites.add(write);
+    void write
+      .finally(() => {
+        pendingLogWrites.delete(write);
+      })
+      .catch(() => undefined);
+  };
+  child.stdout.on("data", trackLogWrite);
+  child.stderr.on("data", trackLogWrite);
   return {
     async stop(): Promise<boolean> {
-      return await stopGatewayPromptChild(child, logFile);
+      return await stopGatewayPromptChild(
+        child,
+        logFile,
+        1_500,
+        1_500,
+        pendingLogWrites,
+        logWriteErrors,
+      );
     },
   };
 }
@@ -534,6 +573,8 @@ async function stopGatewayPromptChild(
   logFile: ClosableLogFile,
   sigintTimeoutMs = 1_500,
   sigkillTimeoutMs = 1_500,
+  pendingLogWrites: Iterable<Promise<void>> = [],
+  logWriteErrors: readonly unknown[] = [],
 ): Promise<boolean> {
   let exited = child.exitCode !== null || child.signalCode !== null;
   const exitPromise = exited
@@ -560,7 +601,14 @@ async function stopGatewayPromptChild(
       () => false,
     );
   }
+  const failedLogWrite = (await Promise.allSettled(pendingLogWrites)).find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
   await logFile.close();
+  const logWriteError = failedLogWrite?.reason ?? logWriteErrors[0];
+  if (logWriteError) {
+    throw new Error(`Anthropic prompt gateway log write failed: ${String(logWriteError)}`);
+  }
   return exited;
 }
 
@@ -579,9 +627,29 @@ async function waitForGatewayReady(url: string, token: string): Promise<void> {
   throw new Error(lastError);
 }
 
-async function readLogTail(logPath: string): Promise<string> {
-  const raw = await fs.readFile(logPath, "utf8").catch(() => "");
-  return redactForDevToolLog(raw.split(/\r?\n/).slice(-40).join("\n").trim());
+async function readLogTail(logPath: string, maxBytes = GATEWAY_LOG_TAIL_BYTES): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("maxBytes must be a positive integer");
+  }
+  const logFile = await fs.open(logPath, "r").catch(() => undefined);
+  if (!logFile) {
+    return "";
+  }
+  try {
+    const stat = await logFile.stat();
+    if (stat.size <= 0) {
+      return "";
+    }
+    const length = Math.min(stat.size, maxBytes);
+    const position = Math.max(0, stat.size - length);
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await logFile.read(buffer, 0, length, position);
+    const raw = buffer.subarray(0, bytesRead).toString("utf8");
+    const lineAlignedRaw = position > 0 ? raw.replace(/^[^\n]*(?:\r?\n|$)/u, "") : raw;
+    return redactForDevToolLog(lineAlignedRaw.split(/\r?\n/).slice(-40).join("\n").trim());
+  } finally {
+    await logFile.close();
+  }
 }
 
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
@@ -768,6 +836,8 @@ export const testing = {
   cleanupPromptProbeTmpDir,
   matchesExtraUsage400,
   promptProbeTmpResult,
+  readLogTail,
+  readRequestBody,
   resolveAnthropicUpstreamUrl,
   stopGatewayPromptChild,
   summarizeCapture,

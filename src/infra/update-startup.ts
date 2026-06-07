@@ -1,6 +1,7 @@
 // Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -15,8 +16,12 @@ import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { writeJson } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { scheduleGatewaySigusr1Restart } from "./restart.js";
+import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
+import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -47,6 +52,9 @@ type AutoUpdateRunResult = {
   stdout?: string;
   stderr?: string;
   reason?: string;
+  command?: string;
+  logPath?: string;
+  restartDelayMs?: number;
 };
 
 export type UpdateAvailable = {
@@ -72,6 +80,7 @@ const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
+const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -248,11 +257,74 @@ function resolveStableAutoApplyAtMs(params: {
   return firstSeenMs + baseDelayMs + jitterMs;
 }
 
+function resolveAutoUpdateHandoffRoot(root: string | undefined): string {
+  if (root?.trim()) {
+    return root;
+  }
+  try {
+    return process.cwd();
+  } catch {
+    return os.homedir();
+  }
+}
+
+function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): number {
+  return supervisor === "systemd" ? MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS : 0;
+}
+
+async function startManagedServiceAutoUpdateHandoff(params: {
+  channel: "stable" | "beta";
+  timeoutMs: number;
+  root?: string;
+  supervisor: RespawnSupervisor;
+}): Promise<AutoUpdateRunResult> {
+  const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
+  const handoffId = randomUUID();
+  try {
+    const started = await startManagedServiceUpdateHandoff({
+      root: resolveAutoUpdateHandoffRoot(params.root),
+      timeoutMs: params.timeoutMs,
+      channel: params.channel,
+      restartDelayMs,
+      supervisor: params.supervisor,
+      handoffId,
+      meta: {
+        handoffId,
+        note: "background auto-update",
+      },
+    });
+    return {
+      ok: true,
+      code: 0,
+      reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+      command: started.command,
+      logPath: started.logPath,
+      restartDelayMs,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: null,
+      reason: String(err),
+    };
+  }
+}
+
 async function runAutoUpdateCommand(params: {
   channel: "stable" | "beta";
   timeoutMs: number;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
+  const supervisor = detectRespawnSupervisor(process.env, process.platform);
+  if (supervisor) {
+    return await startManagedServiceAutoUpdateHandoff({
+      channel: params.channel,
+      timeoutMs: params.timeoutMs,
+      root: params.root,
+      supervisor,
+    });
+  }
+
   const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
@@ -386,6 +458,7 @@ export async function runGatewayUpdateCheck(params: {
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
   };
+  let pendingAutoUpdateRestartDelayMs: number | null = null;
 
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;
@@ -484,9 +557,18 @@ export async function runGatewayUpdateCheck(params: {
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
-          root: root ?? undefined,
+          root: root ?? status.root ?? undefined,
         });
-        if (outcome.ok) {
+        if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
+          pendingAutoUpdateRestartDelayMs = outcome.restartDelayMs ?? 0;
+          params.log.info("auto-update handoff started", {
+            channel,
+            version: resolved.version,
+            tag,
+            ...(outcome.command ? { command: outcome.command } : {}),
+            ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+          });
+        } else if (outcome.ok) {
           nextState.autoLastSuccessVersion = resolved.version;
           nextState.autoLastSuccessAt = resolveUpdateCheckTimestamp(now);
           params.log.info("auto-update applied", {
@@ -515,6 +597,14 @@ export async function runGatewayUpdateCheck(params: {
   }
 
   await writeState(statePath, nextState);
+  if (pendingAutoUpdateRestartDelayMs !== null) {
+    scheduleGatewaySigusr1Restart({
+      delayMs: pendingAutoUpdateRestartDelayMs,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
+    });
+  }
 }
 
 export function scheduleGatewayUpdateCheck(params: {

@@ -39,6 +39,10 @@ function config() {
   return readJson(process.env.OPENCLAW_CONFIG_PATH ?? openclawPath("openclaw.json"));
 }
 
+function requiredConfig() {
+  return readRequiredJson(process.env.OPENCLAW_CONFIG_PATH ?? openclawPath("openclaw.json"));
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -117,7 +121,7 @@ function printInstallPath(pluginId) {
 }
 
 function assertUninstalled(pluginId) {
-  const cfg = config();
+  const cfg = requiredConfig();
   const record = recordFor(pluginId);
   assert(!record, `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);

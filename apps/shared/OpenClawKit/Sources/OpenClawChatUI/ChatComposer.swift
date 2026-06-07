@@ -45,6 +45,7 @@ struct OpenClawChatComposer: View {
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
     let composerChrome: OpenClawChatView.ComposerChrome
+    let isComposerEnabled: Bool
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
 
@@ -108,6 +109,12 @@ struct OpenClawChatComposer: View {
         .onAppear {
             self.shouldFocusTextView = true
         }
+        #else
+        .onChange(of: self.isComposerEnabled) { _, isEnabled in
+                if !isEnabled {
+                    self.isFocused = false
+                }
+            }
         #endif
     }
 
@@ -204,6 +211,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.plain)
             .controlSize(.small)
+            .disabled(!self.isComposerEnabled)
         } else {
             Button {
                 self.pickFilesMac()
@@ -214,6 +222,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(!self.isComposerEnabled)
         }
         #else
         if self.composerChrome == .clean {
@@ -224,6 +233,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.plain)
             .controlSize(.small)
+            .disabled(!self.isComposerEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -235,6 +245,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(!self.isComposerEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -486,10 +497,12 @@ struct OpenClawChatComposer: View {
             ChatComposerTextView(
                 text: self.$viewModel.input,
                 shouldFocus: self.$shouldFocusTextView,
+                isEnabled: self.isComposerEnabled,
                 onSend: {
-                    self.viewModel.send()
+                    self.sendDraftIfEnabled()
                 },
                 onPasteImageAttachment: { data, fileName, mimeType in
+                    guard self.isComposerEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
@@ -504,7 +517,7 @@ struct OpenClawChatComposer: View {
                 .lineLimit(1...4)
                 .submitLabel(.send)
                 .onSubmit {
-                    self.viewModel.send()
+                    self.sendDraftIfEnabled()
                 }
                 .frame(
                     minHeight: self.textMinHeight,
@@ -514,6 +527,7 @@ struct OpenClawChatComposer: View {
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
+                .disabled(!self.isComposerEnabled)
             #endif
         }
     }
@@ -542,7 +556,7 @@ struct OpenClawChatComposer: View {
                 .disabled(self.viewModel.isAborting)
             } else {
                 Button {
-                    self.viewModel.send()
+                    self.sendDraftIfEnabled()
                 } label: {
                     if self.viewModel.isSending {
                         ProgressView().controlSize(.mini)
@@ -556,14 +570,14 @@ struct OpenClawChatComposer: View {
                 .frame(width: self.sendButtonSize, height: self.sendButtonSize)
                 .background(
                     RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .fill(self.viewModel.canSend ? self.sendButtonFill : Color.secondary
+                        .fill(self.canSendMessage ? self.sendButtonFill : Color.secondary
                             .opacity(0.32)))
                 .overlay(
                     RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(self.viewModel.canSend ? 0.18 : 0.08), lineWidth: 1))
+                        .strokeBorder(Color.white.opacity(self.canSendMessage ? 0.18 : 0.08), lineWidth: 1))
                 .contentShape(RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous))
                 .accessibilityLabel("Send message")
-                .disabled(!self.viewModel.canSend)
+                .disabled(!self.canSendMessage)
             }
         }
     }
@@ -641,6 +655,10 @@ struct OpenClawChatComposer: View {
         self.userAccent ?? OpenClawChatTheme.userBubble
     }
 
+    private var canSendMessage: Bool {
+        self.isComposerEnabled && self.viewModel.canSend
+    }
+
     private var connectionStatusText: String {
         self.connectionOK ? "Gateway connected" : "Connecting..."
     }
@@ -656,6 +674,7 @@ struct OpenClawChatComposer: View {
 
     #if os(macOS)
     private func pickFilesMac() {
+        guard self.isComposerEnabled else { return }
         let panel = NSOpenPanel()
         panel.title = "Select image attachments"
         panel.allowsMultipleSelection = true
@@ -668,6 +687,7 @@ struct OpenClawChatComposer: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard self.isComposerEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
         for item in fileProviders {
@@ -684,6 +704,10 @@ struct OpenClawChatComposer: View {
     }
     #else
     private func loadPhotosPickerItems(_ items: [PhotosPickerItem]) async {
+        guard self.isComposerEnabled else {
+            self.pickerItems = []
+            return
+        }
         for item in items {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else { continue }
@@ -699,6 +723,11 @@ struct OpenClawChatComposer: View {
         self.pickerItems = []
     }
     #endif
+
+    private func sendDraftIfEnabled() {
+        guard self.isComposerEnabled else { return }
+        self.viewModel.send()
+    }
 }
 
 #if os(macOS)
@@ -708,6 +737,7 @@ import UniformTypeIdentifiers
 private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
+    var isEnabled: Bool
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
 
@@ -743,9 +773,14 @@ private struct ChatComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.isEditable = self.isEnabled
+        textView.isSelectable = self.isEnabled
 
-        if self.shouldFocus, let window = scrollView.window {
+        if self.shouldFocus, self.isEnabled, let window = scrollView.window {
             window.makeFirstResponder(textView)
+            self.shouldFocus = false
+        } else if !self.isEnabled, scrollView.window?.firstResponder == textView {
+            scrollView.window?.makeFirstResponder(nil)
             self.shouldFocus = false
         }
 

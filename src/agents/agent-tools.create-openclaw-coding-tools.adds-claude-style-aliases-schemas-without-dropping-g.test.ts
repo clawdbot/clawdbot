@@ -75,6 +75,26 @@ describe("createOpenClawCodingTools read behavior", () => {
     }
   });
 
+  it("maps inbound media refs to sandbox-staged media for reads", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-sbx-"));
+    const mediaId = "webchat-upload.txt";
+    const mediaPath = path.join(tmpDir, "media", "inbound", mediaId);
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, "sandbox media", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      const result = await readTool.execute("read-media-sbx", {
+        path: `media://inbound/${mediaId}`,
+      });
+      expect(extractToolText(result)).toContain("sandbox media");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds capped continuation guidance when aggregated read output reaches budget", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-cap-"));
     const filePath = path.join(tmpDir, "huge.txt");

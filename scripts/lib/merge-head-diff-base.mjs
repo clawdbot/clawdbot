@@ -60,7 +60,15 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
   }
 }
 
-function parseArgs(argv) {
+function readRefValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     base: "",
     head: "HEAD",
@@ -69,12 +77,12 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base") {
-      args.base = argv[index + 1] ?? "";
+      args.base = readRefValue(argv, index, "--base");
       index += 1;
       continue;
     }
     if (arg === "--head") {
-      args.head = argv[index + 1] ?? "HEAD";
+      args.head = readRefValue(argv, index, "--head");
       index += 1;
       continue;
     }

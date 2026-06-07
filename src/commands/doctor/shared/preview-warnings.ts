@@ -779,6 +779,9 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+  const { collectBlockedLegacyOpenAICodexProviderWarnings } =
+    await import("./legacy-config-migrations.runtime.models.js");
+  warnings.push(...collectBlockedLegacyOpenAICodexProviderWarnings(params.cfg));
 
   const { collectActiveToolSchemaProjectionWarnings } =
     await import("./active-tool-schema-warnings.js");

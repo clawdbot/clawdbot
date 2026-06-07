@@ -7,6 +7,7 @@ import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
@@ -97,10 +98,7 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   provider?: unknown;
   model?: unknown;
 }): boolean {
-  return (
-    message.provider === "openclaw" &&
-    (message.model === "delivery-mirror" || message.model === "gateway-injected")
-  );
+  return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
 }
 
 export async function resolveSessionTranscriptFile(params: {

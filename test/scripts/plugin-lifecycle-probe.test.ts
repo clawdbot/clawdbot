@@ -1,6 +1,6 @@
 // Plugin Lifecycle Probe tests cover plugin lifecycle probe script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,5 +71,17 @@ describe("plugin lifecycle matrix probe", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(`failed to read JSON from ${inspectPath}`);
+  });
+
+  it("rejects unreadable config during uninstall proof", () => {
+    const dir = makeTempDir();
+    const configPath = path.join(dir, ".openclaw", "openclaw.json");
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "{ malformed\n", "utf8");
+
+    const result = runProbe(["assert-uninstalled", "lifecycle-claw"], dir);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`failed to read JSON from ${configPath}`);
   });
 });

@@ -246,7 +246,7 @@ Notes:
 
 The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex
 Computer Use and `cua-driver mcp` control a local macOS desktop through MCP
-tools; the iOS app exposes iPhone and iPad capabilities through OpenClaw node commands
+tools; the iOS app exposes iPhone capabilities through OpenClaw node commands
 such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
 
 Agents can still operate the iOS app through OpenClaw by invoking node

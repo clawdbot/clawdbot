@@ -39,7 +39,7 @@ docker_e2e_docker_cmd run -d \
   bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
-if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT || grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
+if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT"; then
   echo "Gateway failed to start"
   docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/gateway-net-e2e.log 120
   exit 1

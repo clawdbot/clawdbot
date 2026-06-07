@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,17 +40,19 @@ fun ChatMessageListCard(
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
-  val displayMessages = remember(messages) { messages.asReversed() }
-  val stream = streamingAssistantText?.trim()
+  val timeline =
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+      buildChatTimeline(
+        messages = messages,
+        pendingRunCount = pendingRunCount,
+        pendingToolCalls = pendingToolCalls,
+        streamingAssistantText = streamingAssistantText,
+      )
+    }
 
-  // New list items/tool rows should animate into view, but token streaming should not restart
-  // that animation on every delta.
-  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size) {
-    listState.animateScrollToItem(index = 0)
-  }
-  LaunchedEffect(stream) {
-    if (!stream.isNullOrEmpty()) {
-      listState.scrollToItem(index = 0)
+  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
+    timeline.scrollTargetIndex?.let { index ->
+      listState.animateScrollToItem(index = index)
     }
   }
 
@@ -64,32 +66,17 @@ fun ChatMessageListCard(
         androidx.compose.foundation.layout
           .PaddingValues(bottom = 8.dp),
     ) {
-      // With reverseLayout = true, index 0 renders at the BOTTOM.
-      // So we emit newest items first: streaming → tools → typing → messages (newest→oldest).
-      if (!stream.isNullOrEmpty()) {
-        item(key = "stream") {
-          ChatStreamingAssistantBubble(text = stream)
+      itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
+        when (item) {
+          is ChatTimelineItem.Message -> ChatMessageBubble(message = item.message)
+          is ChatTimelineItem.PendingTools -> ChatPendingToolsBubble(toolCalls = item.toolCalls)
+          is ChatTimelineItem.StreamingAssistant -> ChatStreamingAssistantBubble(text = item.text)
+          ChatTimelineItem.Thinking -> ChatTypingIndicatorBubble()
         }
-      }
-
-      if (pendingToolCalls.isNotEmpty()) {
-        item(key = "tools") {
-          ChatPendingToolsBubble(toolCalls = pendingToolCalls)
-        }
-      }
-
-      if (pendingRunCount > 0) {
-        item(key = "typing") {
-          ChatTypingIndicatorBubble()
-        }
-      }
-
-      items(items = displayMessages, key = { it.id }) { message ->
-        ChatMessageBubble(message = message)
       }
     }
 
-    if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && streamingAssistantText.isNullOrBlank()) {
+    if (timeline.items.isEmpty()) {
       if (historyLoading) {
         LoadingChatHint(modifier = Modifier.align(Alignment.Center))
       } else {

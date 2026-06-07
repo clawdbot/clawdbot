@@ -40,6 +40,10 @@ function sanitizeAssistantText(text: string): string {
   return sanitizeAssistantVisibleText(text);
 }
 
+export function sanitizeAssistantVisibleStreamText(text: string): string {
+  return sanitizeUserFacingText(sanitizeAssistantText(text), { errorContext: false });
+}
+
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
   const errorContext = msg.stopReason === "error";
   return sanitizeUserFacingText(extracted, { errorContext });

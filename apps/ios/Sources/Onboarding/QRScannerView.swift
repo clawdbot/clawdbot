@@ -4,6 +4,7 @@ import VisionKit
 
 struct QRScannerView: UIViewControllerRepresentable {
     let onGatewayLink: (GatewayConnectDeepLink) -> Void
+    let onSetupCode: (String) -> Void
     let onError: (String) -> Void
     let onDismiss: () -> Void
 
@@ -69,6 +70,13 @@ struct QRScannerView: UIViewControllerRepresentable {
                     self.handled = true
                     Task { @MainActor in
                         self.parent.onGatewayLink(link)
+                    }
+                    return
+                }
+                if AppleReviewDemoMode.isSetupCode(payload) {
+                    self.handled = true
+                    Task { @MainActor in
+                        self.parent.onSetupCode(payload)
                     }
                     return
                 }

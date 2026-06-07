@@ -8,6 +8,8 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
+MAX_MEMORY_MIB="${OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB:-8192}"
+MAX_CPU_PERCENT="${OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT:-1600}"
 # Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
 # compatibility smoke. Callers can still override this explicitly.
 MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.5}"
@@ -56,12 +58,57 @@ if [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
   exit 2
 fi
 
+STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-stats.XXXXXX")"
+PROBE_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-probe.XXXXXX")"
+STATS_STOP_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-openwebui-stats-stop.XXXXXX")"
+STATS_PIDS=()
+
 cleanup() {
+  rm -f "$STATS_STOP_FILE"
+  for stats_pid in "${STATS_PIDS[@]:-}"; do
+    wait "$stats_pid" 2>/dev/null || true
+  done
   docker_e2e_docker_cmd rm -f "$OW_NAME" >/dev/null 2>&1 || true
   docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
   docker_e2e_docker_cmd network rm "$NET_NAME" >/dev/null 2>&1 || true
+  rm -f "$STATS_LOG" "$PROBE_LOG"
 }
 trap cleanup EXIT
+
+sample_openwebui_stats_once() {
+  docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$GW_NAME" "$OW_NAME" >>"$STATS_LOG" 2>/dev/null || true
+}
+
+start_openwebui_stats_sampler() {
+  (
+    while [ -e "$STATS_STOP_FILE" ]; do
+      for container_name in "$GW_NAME" "$OW_NAME"; do
+        if docker_e2e_docker_cmd inspect "$container_name" >/dev/null 2>&1; then
+          docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$container_name" >>"$STATS_LOG" 2>/dev/null || true
+        fi
+      done
+      sleep 2
+    done
+  ) &
+  STATS_PIDS+=("$!")
+}
+
+stop_openwebui_stats_samplers() {
+  rm -f "$STATS_STOP_FILE"
+  for stats_pid in "${STATS_PIDS[@]:-}"; do
+    wait "$stats_pid" 2>/dev/null || true
+  done
+  STATS_PIDS=()
+}
+
+assert_openwebui_stats() {
+  if [ -s "$STATS_LOG" ]; then
+    node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" openwebui
+  else
+    echo "Open WebUI Docker stats were not captured" >&2
+    return 1
+  fi
+}
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
 
@@ -102,6 +149,7 @@ docker_e2e_docker_cmd run -d \
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null
+start_openwebui_stats_sampler
 
 echo "Waiting for gateway HTTP surface..."
 if ! docker_e2e_wait_container_bash "$GW_NAME" 240 1 "OPENCLAW_HTTP_PROBE_BEARER='$TOKEN' node scripts/e2e/lib/openwebui/http-probe.mjs 'http://127.0.0.1:$PORT/v1/models' 200"; then
@@ -141,6 +189,7 @@ if ! docker_e2e_wait_container_bash_while_running "$OW_NAME" "$GW_NAME" 240 1 "n
   docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
+sample_openwebui_stats_once
 
 echo "Waiting for gateway model endpoint after Open WebUI startup..."
 if ! docker_e2e_wait_container_bash "$GW_NAME" 90 5 "OPENCLAW_HTTP_PROBE_BEARER='$TOKEN' OPENCLAW_HTTP_PROBE_TIMEOUT_MS=8000 node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$GW_NAME:$PORT/v1/models' 200"; then
@@ -150,9 +199,11 @@ if ! docker_e2e_wait_container_bash "$GW_NAME" 90 5 "OPENCLAW_HTTP_PROBE_BEARER=
   docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
+sample_openwebui_stats_once
 
 echo "Running Open WebUI -> OpenClaw smoke..."
-if ! docker_e2e_docker_cmd exec \
+set +e
+docker_e2e_docker_cmd exec \
   -e "OPENWEBUI_BASE_URL=http://$OW_NAME:$WEBUI_PORT" \
   -e "OPENWEBUI_ADMIN_EMAIL=$ADMIN_EMAIL" \
   -e "OPENWEBUI_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
@@ -163,14 +214,25 @@ if ! docker_e2e_docker_cmd exec \
   -e "OPENWEBUI_MODEL_RETRY_MS=5000" \
   -e "OPENWEBUI_FETCH_TIMEOUT_MS=$PROBE_FETCH_TIMEOUT_MS" \
   "$GW_NAME" \
-  node /app/scripts/e2e/openwebui-probe.mjs >/tmp/openwebui-probe.log 2>&1; then
-  cat /tmp/openwebui-probe.log 2>/dev/null || true
+  node /app/scripts/e2e/openwebui-probe.mjs >"$PROBE_LOG" 2>&1 &
+probe_pid="$!"
+wait "$probe_pid"
+probe_status="$?"
+set -e
+
+if [ "$probe_status" -ne 0 ]; then
+  stop_openwebui_stats_samplers
+  cat "$PROBE_LOG" 2>/dev/null || true
   echo "Open WebUI probe failed; gateway log tail:"
   docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
   docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
   echo "Open WebUI container logs:"
   docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  assert_openwebui_stats || true
   exit 1
 fi
 
+sample_openwebui_stats_once
+stop_openwebui_stats_samplers
+assert_openwebui_stats
 echo "OK"

@@ -38,6 +38,16 @@ const providerEndpointPlugins = vi.hoisted(() => [
       },
       {
         endpointClass: "google-vertex",
+        hosts: ["aiplatform.eu.rep.googleapis.com"],
+        googleVertexRegion: "eu",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.us.rep.googleapis.com"],
+        googleVertexRegion: "us",
+      },
+      {
+        endpointClass: "google-vertex",
         hostSuffixes: ["-aiplatform.googleapis.com"],
         googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
@@ -729,6 +739,23 @@ describe("provider attribution", () => {
       endpointClass: "google-vertex",
       hostname: "aiplatform.googleapis.com",
       googleVertexRegion: "global",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.eu.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.eu.rep.googleapis.com",
+      googleVertexRegion: "eu",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.us.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.us.rep.googleapis.com",
+      googleVertexRegion: "us",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://discoveryengine.eu.rep.googleapis.com"), {
+      endpointClass: "custom",
+      hostname: "discoveryengine.eu.rep.googleapis.com",
     });
 
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {

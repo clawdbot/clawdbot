@@ -302,13 +302,10 @@ internal fun providerCommandSubtitle(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
-  if (!isConnected) return "Connect Gateway to load models"
-  val expiringProviderCount = expiringModelProviderCount(providers)
-  if (expiringProviderCount > 0) return "$expiringProviderCount providers expiring"
-  val readyProviderCount = readyModelProviderCount(providers, models)
+  if (!isConnected) return "Connect Gateway to view providers"
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
-  if (models.isNotEmpty()) return "${models.size} models available"
-  return "Configure model access"
+  return "No ready providers"
 }
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */

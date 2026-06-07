@@ -198,6 +198,16 @@ function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
 }
 
+function readOpenClawGatewayInstanceIdFromRecord(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { openclawGatewayInstanceId } = record as { openclawGatewayInstanceId?: unknown };
+  return typeof openclawGatewayInstanceId === "string"
+    ? openclawGatewayInstanceId.trim() || undefined
+    : undefined;
+}
+
 function extractGeneratedWrapperPath(command: string | undefined): string {
   const parts = splitCommandParts(command ?? "");
   return (
@@ -906,9 +916,12 @@ export class AcpxRuntime implements AcpRuntime {
     if (!rootPid || !rootCommand) {
       return;
     }
+    const expectedGatewayInstanceId = readOpenClawGatewayInstanceIdFromRecord(record);
     await cleanupOpenClawOwnedAcpxProcessTree({
       rootPid,
       rootCommand,
+      ...(leaseId ? { expectedLeaseId: leaseId } : {}),
+      ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
       wrapperRoot: this.wrapperRoot,
       deps: this.processCleanupDeps,
     });

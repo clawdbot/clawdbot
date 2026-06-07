@@ -1,6 +1,5 @@
 // Memory Core tests cover tools.citations plugin behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -17,6 +16,7 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager-mock.js";
+import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import { testing as memoryToolsTesting } from "./tools.js";
 import {
@@ -283,13 +283,15 @@ describe("memory tools", () => {
       });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
-      };
-      const entries = Object.values(store.entries ?? {});
-      expect(entries).toHaveLength(1);
+      const entries = await waitFor(async () => {
+        const store = await shortTermPromotionTesting.readRecallStore(
+          workspaceDir,
+          new Date().toISOString(),
+        );
+        const values = Object.values(store.entries);
+        expect(values).toHaveLength(1);
+        return values;
+      });
       const entry = entries[0];
       expect(entry?.path).toBe("memory/2026-04-03.md");
       expect(entry?.recallCount).toBe(1);

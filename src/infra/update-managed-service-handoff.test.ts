@@ -5,12 +5,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
+import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   cleanupStaleManagedServiceUpdateHandoffs,
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
-} from "../../infra/update-managed-service-handoff-cleanup.js";
+} from "./update-managed-service-handoff-cleanup.js";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(() => ({
@@ -20,7 +20,9 @@ const { spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessModule } = await import("./node-child-process.test-support.js");
+  const { mockNodeChildProcessModule } = await import(
+    "../gateway/server-methods/node-child-process.test-support.js"
+  );
   return mockNodeChildProcessModule({
     spawn: spawnMock as unknown as typeof import("node:child_process").spawn,
   });
@@ -205,6 +207,7 @@ describe("managed service update handoff", () => {
       execPath: "/usr/local/bin/node",
       argv1: "/opt/openclaw/openclaw.mjs",
       handoffId: "handoff-123",
+      channel: "beta",
       supervisor: "systemd",
       env: {
         PATH: binDir,
@@ -249,6 +252,8 @@ describe("managed service update handoff", () => {
       "update",
       "--yes",
       "--json",
+      "--channel",
+      "beta",
       "--timeout",
       "1800",
     ]);

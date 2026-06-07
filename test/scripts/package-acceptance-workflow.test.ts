@@ -41,6 +41,7 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  permissions?: Record<string, string>;
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -654,6 +655,12 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core",
+    );
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
+    );
     expect(workflow).toContain("suite_id: native-live-src-infra");
     expect(workflow).toContain(
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
@@ -1095,7 +1102,12 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
-    expect(workflow).toContain("QA release-check lanes are advisory");
+    expect(workflow).toContain("disabled_required_lanes=()");
+    expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
+    expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
+    expect(workflow).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -1132,9 +1144,42 @@ describe("package artifact reuse", () => {
       );
       expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
       expect(releaseWorkflow).toContain(
+        `needs.resolve_target.outputs.qa_live_${lower}_enabled == 'true'`,
+      );
+      expect(releaseWorkflow).not.toContain(
         `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
       );
       expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
+  });
+
+  it("fails Docker E2E release lanes when summary artifacts are missing", () => {
+    const cases = [
+      {
+        jobName: "validate_docker_e2e",
+        summaryStep: "Summarize Docker E2E chunk",
+        uploadStep: "Upload Docker E2E chunk artifacts",
+      },
+      {
+        jobName: "validate_docker_lanes",
+        summaryStep: "Summarize targeted Docker E2E lanes",
+        uploadStep: "Upload targeted Docker E2E artifacts",
+      },
+      {
+        jobName: "validate_docker_openwebui",
+        summaryStep: "Summarize Open WebUI Docker E2E chunk",
+        uploadStep: "Upload Open WebUI Docker E2E artifacts",
+      },
+    ];
+
+    for (const item of cases) {
+      const job = workflowJob(LIVE_E2E_WORKFLOW, item.jobName);
+      const summaryStep = workflowStep(job, item.summaryStep);
+      const uploadStep = workflowStep(job, item.uploadStep);
+
+      expect(summaryStep.run, item.jobName).toContain("summary missing:");
+      expect(summaryStep.run, item.jobName).toContain("exit 1");
+      expect(uploadStep.with?.["if-no-files-found"], item.jobName).toBe("error");
     }
   });
 
@@ -1261,7 +1306,7 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(fullReleaseDocs, [
       "pre-publish candidate",
       "cross_os_suite_filter",
-      "QA release-check lanes are advisory",
+      "QA release-check failures block normal release validation",
       "silently skip that",
       "Telegram package lane",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
@@ -1358,6 +1403,61 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
       "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     ]);
+  });
+
+  it("keeps release QA status artifacts blocking in the verifier", () => {
+    const advisoryJobNames = [
+      "qa_lab_parity_lane_release_checks",
+      "qa_lab_parity_report_release_checks",
+      "qa_lab_runtime_parity_release_checks",
+      "qa_live_matrix_release_checks",
+      "qa_live_telegram_release_checks",
+      "qa_live_discord_release_checks",
+      "qa_live_whatsapp_release_checks",
+      "qa_live_slack_release_checks",
+    ];
+
+    for (const jobName of advisoryJobNames) {
+      const job = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName);
+      expect(job["continue-on-error"], jobName).toBe(true);
+
+      const recordStep = workflowStep(job, "Record advisory status");
+      expect(recordStep.if, jobName).toBe("always()");
+      expect(recordStep.run, jobName).toContain("status_path=");
+      expect(recordStep.run, jobName).toContain(".artifacts/release-check-status");
+      expect(recordStep.env?.RELEASE_CHECK_STEP_OUTCOMES, jobName).toContain("upload_");
+
+      const uploadStep = workflowStep(job, "Upload advisory status");
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.uses, jobName).toBe("actions/upload-artifact@v7");
+      expect(uploadStep.with?.name, jobName).toContain("release-check-status-");
+      expect(uploadStep.with?.path, jobName).toMatch(
+        /^\.artifacts\/release-check-status\/.+\.env$/u,
+      );
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+
+    const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
+    expect(summary.permissions?.actions).toBe("read");
+    const downloadStep = workflowStep(summary, "Download advisory status artifacts");
+    expect(downloadStep["continue-on-error"]).toBe(true);
+    expect(downloadStep.uses).toBe("actions/download-artifact@v8");
+    expect(downloadStep.with?.pattern).toBe("release-check-status-*");
+    expect(downloadStep.with?.["merge-multiple"]).toBe(true);
+
+    const verifyStep = workflowStep(summary, "Verify release check results");
+    expectTextToIncludeAll(verifyStep.run, [
+      "release_check_result()",
+      'elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then',
+      'elif [[ "$fallback" == "success" ]]; then',
+      "advisory_status_override_allowed()",
+      'if advisory_status_override_allowed "$name"; then',
+      "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
+      "::error::${name} ended with ${result}",
+    ]);
+    expect(verifyStep.run).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {

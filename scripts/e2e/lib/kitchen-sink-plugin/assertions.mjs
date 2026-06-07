@@ -8,11 +8,36 @@ const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_FINDING_CONTEXT_CHARS = 2048;
+const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnv("KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES", 20_000);
+const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
+const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
+const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
+const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "KITCHEN_SINK_EXPECT_FAILURE_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
+
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${raw}`);
+  }
+  return parsed;
+}
 
 function resolveHomePath(value) {
   if (value === "~") {
@@ -24,9 +49,21 @@ function resolveHomePath(value) {
   return value;
 }
 
+function readTextFileBounded(file, maxBytes, label) {
+  const stats = fs.statSync(file);
+  if (stats.size > maxBytes) {
+    throw new Error(`${label} exceeded ${maxBytes} bytes: ${file} (${stats.size} bytes)`);
+  }
+  return fs.readFileSync(file, "utf8");
+}
+
 function expectFailure() {
   const outputFile = process.argv[3];
-  const output = fs.readFileSync(outputFile, "utf8");
+  const output = readTextFileBounded(
+    outputFile,
+    EXPECT_FAILURE_OUTPUT_MAX_BYTES,
+    "expected failure output",
+  );
   const source = process.env.KITCHEN_SINK_SOURCE;
   const spec = process.env.KITCHEN_SINK_SPEC;
   const displayedSpec = source === "npm" ? spec.replace(/^npm:/u, "") : spec;
@@ -46,29 +83,127 @@ function scanTextFileLines(file, onLine) {
   const fd = fs.openSync(file, "r");
   try {
     const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
-    let carry = "";
+    let currentLine = "";
     let lineNumber = 1;
+    const emitLine = (line, info = {}) => onLine(line, lineNumber, info);
+    const appendLineText = (text, complete) => {
+      currentLine += text;
+      while (currentLine.length > LOG_SCAN_MAX_LINE_CHARS) {
+        const segment = currentLine.slice(0, LOG_SCAN_MAX_LINE_CHARS);
+        currentLine = currentLine.slice(LOG_SCAN_MAX_LINE_CHARS - LOG_SCAN_SEGMENT_OVERLAP_CHARS);
+        if (!emitLine(segment, { truncated: true })) {
+          return false;
+        }
+      }
+      if (complete) {
+        if (!emitLine(currentLine)) {
+          return false;
+        }
+        currentLine = "";
+        lineNumber += 1;
+      }
+      return true;
+    };
+
     while (true) {
       const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const text = buffer.subarray(0, bytesRead).toString("utf8");
       const lines = text.split(/\r?\n/u);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        if (onLine(line, lineNumber) === false) {
+      for (let index = 0; index < lines.length - 1; index += 1) {
+        if (!appendLineText(lines[index], true)) {
           return;
         }
-        lineNumber += 1;
+      }
+      if (!appendLineText(lines.at(-1) ?? "", false)) {
+        return;
       }
     }
-    if (carry.length > 0) {
-      onLine(carry, lineNumber);
+    if (currentLine.length > 0) {
+      onLine(currentLine, lineNumber);
     }
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function formatFindingLine(line, pattern, info = {}) {
+  const matchIndex = Math.max(0, line.search(pattern));
+  const halfWindow = Math.floor(LOG_SCAN_FINDING_CONTEXT_CHARS / 2);
+  const start = Math.max(0, matchIndex - halfWindow);
+  const end = Math.min(line.length, start + LOG_SCAN_FINDING_CONTEXT_CHARS);
+  const prefix = start > 0 ? "... " : "";
+  const suffix = end < line.length || info.truncated ? " ..." : "";
+  return `${prefix}${line.slice(start, end)}${suffix}`;
+}
+
+function shouldScanLogFile(entry) {
+  if (!(/\.(?:log|jsonl)$/u.test(entry) || /openclaw-kitchen-sink-/u.test(path.basename(entry)))) {
+    return false;
+  }
+  return !normalizedPath(entry).includes("/.npm/_logs/");
+}
+
+function scanLogFiles(roots, onFile) {
+  let scannedFiles = 0;
+  let visitedEntries = 0;
+  for (const root of roots) {
+    const pending = [{ entry: root, counted: false }];
+    while (pending.length > 0) {
+      const pendingEntry = pending.pop();
+      const entry = pendingEntry?.entry;
+      if (!entry || !fs.existsSync(entry)) {
+        continue;
+      }
+      if (!pendingEntry.counted) {
+        visitedEntries += 1;
+        if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+          throw new Error(
+            `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+          );
+        }
+      }
+      const entryType = pendingEntry.dirent ?? fs.lstatSync(entry);
+      if (entryType.isSymbolicLink()) {
+        continue;
+      }
+      if (entryType.isDirectory()) {
+        const dir = fs.opendirSync(entry);
+        try {
+          let child;
+          while ((child = dir.readSync()) !== null) {
+            visitedEntries += 1;
+            if (visitedEntries > LOG_SCAN_MAX_ENTRIES) {
+              throw new Error(
+                `kitchen-sink log scan exceeded ${LOG_SCAN_MAX_ENTRIES} filesystem entries`,
+              );
+            }
+            pending.push({
+              counted: true,
+              dirent: child,
+              entry: path.join(entry, child.name),
+            });
+          }
+        } finally {
+          dir.closeSync();
+        }
+        continue;
+      }
+      if (!shouldScanLogFile(entry)) {
+        continue;
+      }
+      scannedFiles += 1;
+      if (scannedFiles > LOG_SCAN_MAX_FILES) {
+        throw new Error(`kitchen-sink log scan exceeded ${LOG_SCAN_MAX_FILES} candidate files`);
+      }
+      if (!onFile(entry, scannedFiles)) {
+        return scannedFiles;
+      }
+    }
+  }
+  return scannedFiles;
 }
 
 function scanLogs() {
@@ -76,32 +211,6 @@ function scanLogs() {
     throw new Error("KITCHEN_SINK_TMP_DIR is required for kitchen-sink log scans");
   }
   const roots = [scratchRoot, path.join(process.env.HOME, ".openclaw")];
-  const files = [];
-  const visit = (entry) => {
-    if (!fs.existsSync(entry)) {
-      return;
-    }
-    const stat = fs.lstatSync(entry);
-    if (stat.isSymbolicLink()) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(entry)) {
-        visit(path.join(entry, child));
-      }
-      return;
-    }
-    if (/\.(?:log|jsonl)$/u.test(entry) || /openclaw-kitchen-sink-/u.test(path.basename(entry))) {
-      if (normalizedPath(entry).includes("/.npm/_logs/")) {
-        return;
-      }
-      files.push(entry);
-    }
-  };
-  for (const root of roots) {
-    visit(root);
-  }
-
   const deny = [
     /\buncaught exception\b/iu,
     /\bunhandled rejection\b/iu,
@@ -117,29 +226,36 @@ function scanLogs() {
   ];
   const findings = [];
   let omittedFindings = false;
-  for (const file of files) {
-    scanTextFileLines(file, (line, lineNumber) => {
+  const scannedFiles = scanLogFiles(roots, (file) => {
+    scanTextFileLines(file, (line, lineNumber, info) => {
       if (allow.some((pattern) => pattern.test(line))) {
         return true;
       }
-      if (deny.some((pattern) => pattern.test(line))) {
+      const matchedPattern = deny.find((pattern) => pattern.test(line));
+      if (matchedPattern) {
         if (findings.length >= LOG_SCAN_MAX_FINDINGS) {
           omittedFindings = true;
           return false;
         }
-        findings.push(`${file}:${lineNumber}: ${line}`);
+        findings.push(`${file}:${lineNumber}: ${formatFindingLine(line, matchedPattern, info)}`);
       }
       return true;
     });
     if (omittedFindings) {
-      break;
+      return false;
     }
+    return true;
+  });
+  if (scannedFiles === 0) {
+    throw new Error(
+      "kitchen-sink log scan found no files under the isolated scratch root or OpenClaw home",
+    );
   }
   if (findings.length > 0) {
     const suffix = omittedFindings ? "\n... additional findings omitted" : "";
     throw new Error(`unexpected error-like log lines:\n${findings.join("\n")}${suffix}`);
   }
-  console.log(`log scan passed (${files.length} file(s))`);
+  console.log(`log scan passed (${scannedFiles} file(s))`);
 }
 
 function readConfig() {
@@ -357,9 +473,21 @@ function assertInstalled() {
   const list = readJson(scratchFile(`kitchen-sink-${label}-plugins.json`));
   const inspect = readJson(scratchFile(`kitchen-sink-${label}-inspect.json`));
   const allInspect = readJson(scratchFile(`kitchen-sink-${label}-inspect-all.json`));
+  if (!Array.isArray(allInspect)) {
+    throw new Error("kitchen-sink inspect --all output was not an array");
+  }
   const plugin = (list.plugins || []).find((entry) => entry.id === pluginId);
   if (!plugin) {
     throw new Error(`kitchen-sink plugin not found after install: ${pluginId}`);
+  }
+  const allInspectPlugin = allInspect.find((entry) => entry?.plugin?.id === pluginId);
+  if (!allInspectPlugin) {
+    throw new Error(`kitchen-sink plugin missing from inspect --all output: ${pluginId}`);
+  }
+  if (!allInspectPlugin.plugin?.enabled || allInspectPlugin.plugin?.status !== "loaded") {
+    throw new Error(
+      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}`,
+    );
   }
   if (plugin.status !== "loaded") {
     throw new Error(`unexpected kitchen-sink status after enable: ${plugin.status}`);
@@ -367,7 +495,7 @@ function assertInstalled() {
   if (inspect.plugin?.id !== pluginId) {
     throw new Error(`unexpected inspected kitchen-sink plugin id: ${inspect.plugin?.id}`);
   }
-  if (inspect.plugin?.enabled !== true || inspect.plugin?.status !== "loaded") {
+  if (!inspect.plugin?.enabled || inspect.plugin?.status !== "loaded") {
     throw new Error(
       `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
     );
@@ -384,7 +512,7 @@ function assertInstalled() {
   const diagnostics = [
     ...(list.diagnostics || []),
     ...(inspect.diagnostics || []),
-    ...(allInspect.diagnostics || []),
+    ...(allInspectPlugin.diagnostics || []),
   ];
   const errorMessages = new Set(
     diagnostics.filter((diag) => diag?.level === "error").map((diag) => String(diag.message || "")),
@@ -443,7 +571,13 @@ function assertInstalled() {
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     if (surfaceMode === "full") {
       expectIncludesAny(inspect.commands, ["kitchen", "kitchen-sink-command"], "commands");
-      expectIncludesAny(toolNames, ["kitchen_sink_text", "kitchen-sink-tool"], "tools");
+      for (const toolName of [
+        "kitchen_sink_text",
+        "kitchen_sink_search",
+        "kitchen_sink_image_job",
+      ]) {
+        expectIncludes(toolNames, toolName, "tools");
+      }
     } else {
       expectIncludes(inspect.commands, "kitchen", "commands");
       expectIncludes(toolNames, "kitchen_sink_text", "tools");

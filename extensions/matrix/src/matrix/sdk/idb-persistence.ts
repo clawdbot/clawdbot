@@ -3,6 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  readMatrixIdbSnapshotJson,
+  writeMatrixIdbSnapshotJson,
+} from "../crypto-state-store.js";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -226,23 +231,63 @@ function resolveDefaultIdbSnapshotPath(): string {
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
   const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
   for (const resolvedPath of candidatePaths) {
-    if (!fs.existsSync(resolvedPath)) {
-      continue;
-    }
+    const storageRootDir = path.dirname(resolvedPath);
     try {
       const restored = await withFileLock(
         resolvedPath,
         MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
         async () => {
+          try {
+            const storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+            if (storedSnapshotJson) {
+              const snapshot = parseSnapshotPayload(storedSnapshotJson);
+              if (snapshot) {
+                await restoreIndexedDatabases(snapshot);
+                LogService.info(
+                  "IdbPersistence",
+                  `Restored ${snapshot.length} IndexedDB database(s) from Matrix SQLite state`,
+                );
+                return true;
+              }
+            }
+          } catch (err) {
+            LogService.warn(
+              "IdbPersistence",
+              "Failed to restore IndexedDB snapshot from SQLite:",
+              err,
+            );
+          }
+
+          if (!fs.existsSync(resolvedPath)) {
+            return false;
+          }
           const data = fs.readFileSync(resolvedPath, "utf8");
           const snapshot = parseSnapshotPayload(data);
           if (!snapshot) {
             return false;
           }
+          let migratedToSqlite = false;
+          try {
+            writeMatrixIdbSnapshotJson({
+              storageRootDir,
+              snapshotJson: data,
+              databaseCount: snapshot.length,
+            });
+            archiveLegacyIdbSnapshotFile(resolvedPath);
+            migratedToSqlite = true;
+          } catch (err) {
+            LogService.warn(
+              "IdbPersistence",
+              `Failed to migrate IndexedDB snapshot to SQLite from ${resolvedPath}:`,
+              err,
+            );
+          }
           await restoreIndexedDatabases(snapshot);
           LogService.info(
             "IdbPersistence",
-            `Restored ${snapshot.length} IndexedDB database(s) from ${resolvedPath}`,
+            migratedToSqlite
+              ? `Migrated and restored ${snapshot.length} IndexedDB database(s) from ${resolvedPath}`
+              : `Restored ${snapshot.length} IndexedDB database(s) from legacy snapshot ${resolvedPath}`,
           );
           return true;
         },
@@ -277,8 +322,12 @@ export async function persistIdbToDisk(params?: {
         if (snapshot.length === 0) {
           return 0;
         }
-        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
-        fs.chmodSync(snapshotPath, 0o600);
+        writeMatrixIdbSnapshotJson({
+          storageRootDir: path.dirname(snapshotPath),
+          snapshotJson: JSON.stringify(snapshot),
+          databaseCount: snapshot.length,
+        });
+        archiveLegacyIdbSnapshotFile(snapshotPath);
         return snapshot.length;
       },
     );
@@ -287,11 +336,39 @@ export async function persistIdbToDisk(params?: {
     }
     LogService.debug(
       "IdbPersistence",
-      `Persisted ${persistedCount} IndexedDB database(s) to ${snapshotPath}`,
+      `Persisted ${persistedCount} IndexedDB database(s) to Matrix SQLite state`,
     );
   } catch (err) {
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);
   }
+}
+
+export async function readLegacyMatrixIdbSnapshotState(
+  storageRootDir: string,
+): Promise<IdbDatabaseSnapshot[] | null> {
+  const snapshotPath = path.join(storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
+  if (!fs.existsSync(snapshotPath)) {
+    return null;
+  }
+  try {
+    return await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
+      const snapshot = parseSnapshotPayload(fs.readFileSync(snapshotPath, "utf8"));
+      return snapshot;
+    });
+  } catch {
+    return null;
+  }
+}
+
+function archiveLegacyIdbSnapshotFile(snapshotPath: string): void {
+  if (!fs.existsSync(snapshotPath)) {
+    return;
+  }
+  const archivedPath = `${snapshotPath}.migrated`;
+  if (fs.existsSync(archivedPath)) {
+    return;
+  }
+  fs.renameSync(snapshotPath, archivedPath);
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

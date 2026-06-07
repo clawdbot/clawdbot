@@ -1,7 +1,8 @@
 // Host Command script supports OpenClaw repository automation.
 import { spawn, spawnSync, type SpawnOptions, type SpawnSyncReturns } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { resolveNpmRunner } from "../../npm-runner.mjs";
 import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
@@ -431,15 +432,38 @@ export async function runStreaming(
   return await new Promise((resolve, reject) => {
     const env = { ...process.env, ...options.env };
     const invocation = resolveHostCommandInvocation(command, args, { env });
+    const logStream = options.logPath
+      ? createWriteStream(options.logPath, { encoding: "utf8", flags: "w" })
+      : undefined;
+    let logStreamError: Error | undefined;
+    const detached = process.platform !== "win32" && options.timeoutMs != null;
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd ?? repoRoot,
-      detached: process.platform !== "win32" && options.timeoutMs != null,
+      detached,
       env: invocation.env ?? env,
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     } satisfies SpawnOptions);
     const childPid = child.pid;
+    const signalStreamingChild = (signal: NodeJS.Signals): void => {
+      if (detached) {
+        signalHostCommandProcess(childPid, signal);
+        return;
+      }
+      try {
+        child.kill(signal);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") {
+          warn(`failed to send ${signal} to host command process: ${code ?? String(error)}`);
+        }
+      }
+    };
+    logStream?.on("error", (error) => {
+      logStreamError = error;
+      signalStreamingChild("SIGTERM");
+    });
     const parentSignalHandlers = new Map<NodeJS.Signals, () => void>();
     const removeParentSignalHandlers = (): void => {
       for (const [signal, handler] of parentSignalHandlers) {
@@ -459,10 +483,22 @@ export async function runStreaming(
       }
     }
 
-    let log = "";
+    const writeLogChunk = (chunk: Buffer): void => {
+      if (!logStream || logStream.destroyed) {
+        return;
+      }
+      if (!logStream.write(chunk)) {
+        child.stdout?.pause();
+        child.stderr?.pause();
+        logStream.once("drain", () => {
+          child.stdout?.resume();
+          child.stderr?.resume();
+        });
+      }
+    };
     const append = (chunk: Buffer): void => {
       const text = chunk.toString("utf8");
-      log += text;
+      writeLogChunk(chunk);
       if (!options.quiet) {
         process.stdout.write(text);
       }
@@ -470,7 +506,7 @@ export async function runStreaming(
     child.stdout?.on("data", append);
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      log += text;
+      writeLogChunk(chunk);
       if (!options.quiet) {
         process.stderr.write(text);
       }
@@ -498,6 +534,7 @@ export async function runStreaming(
         clearTimeout(killTimer);
       }
       removeParentSignalHandlers();
+      logStream?.destroy();
       reject(error);
     });
     child.on("close", (code, signal) => {
@@ -510,10 +547,14 @@ export async function runStreaming(
         }
         removeParentSignalHandlers();
         if (timedOut) {
-          signalHostCommandProcess(childPid, "SIGKILL");
+          signalStreamingChild("SIGKILL");
         }
-        if (options.logPath) {
-          await writeFile(options.logPath, log, "utf8");
+        if (logStream) {
+          logStream.end();
+          await finished(logStream);
+        }
+        if (logStreamError) {
+          throw logStreamError;
         }
         if (timedOut) {
           resolve(124);

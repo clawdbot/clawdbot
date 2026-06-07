@@ -12,6 +12,7 @@ DOCKER_TARGET="${OPENCLAW_LIVE_PLUGIN_TOOL_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}"
+AGENT_OUTPUT_MAX_BYTES="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES:-1048576}"
 PROFILE_FILE="${OPENCLAW_LIVE_PLUGIN_TOOL_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
 run_log=""
 
@@ -67,6 +68,7 @@ if ! docker_e2e_run_with_harness \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e OPENCLAW_LIVE_PLUGIN_TOOL_MODEL="${OPENCLAW_LIVE_PLUGIN_TOOL_MODEL:-openai/gpt-5.5}" \
+  -e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES=$AGENT_OUTPUT_MAX_BYTES" \
   -e "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
@@ -112,14 +114,19 @@ export MODEL_REF PLUGIN_ID PLUGIN_NAME PLUGIN_VERSION TOOL_NAME SEED EXPECTED_SL
 
 dump_debug_logs() {
   local status="$1"
+  local agent_output_dump_bytes="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES:-16384}"
   echo "Live plugin tool scenario failed with exit code $status" >&2
+  if [ -f /tmp/openclaw-agent.json ]; then
+    echo "--- /tmp/openclaw-agent.json (last ${agent_output_dump_bytes} bytes) ---" >&2
+    tail -c "$agent_output_dump_bytes" /tmp/openclaw-agent.json >&2 || true
+    echo >&2
+  fi
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-plugin-install.log \
     /tmp/openclaw-plugin-enable.log \
     /tmp/openclaw-plugins-list.json \
     /tmp/openclaw-plugin-inspect.json \
-    /tmp/openclaw-agent.json \
     /tmp/openclaw-agent.err
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR

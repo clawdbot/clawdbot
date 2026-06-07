@@ -205,10 +205,15 @@ describe("bundled plugin install/uninstall probe", () => {
   it("bounds bundled plugin package lifecycle commands", () => {
     const sweep = fs.readFileSync(sweepPath, "utf8");
 
+    expect(sweep).toContain("source scripts/lib/docker-e2e-logs.sh");
     expect(sweep).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT:-300s");
     expect(sweep.match(/openclaw_e2e_maybe_timeout/g)).toHaveLength(1);
     expect(sweep).toContain('run_logged_sweep_command "install $plugin_id"');
     expect(sweep).toContain('run_logged_sweep_command "uninstall $plugin_id"');
+    expect(sweep.match(/docker_e2e_print_log/g)).toHaveLength(3);
+    expect(sweep).not.toContain('cat "$log_file"');
+    expect(sweep).not.toContain('cat "$install_log"');
+    expect(sweep).not.toContain('cat "$uninstall_log"');
   });
 
   it("keeps runtime command output capture bounded", async () => {
@@ -227,6 +232,29 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
     expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
     expect(runtimeSmoke.unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
+  });
+
+  it("rejects incomplete runtime health RPC payloads", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+
+    expect(() =>
+      runtimeSmoke.assertGatewayHealthPayload({
+        agents: [],
+        channelOrder: [],
+        channels: {},
+        defaultAgentId: "codex",
+        durationMs: 3,
+        ok: true,
+        sessions: { count: 0, path: "/state/sessions", recent: [] },
+        ts: Date.now(),
+      }),
+    ).not.toThrow();
+    expect(() => runtimeSmoke.assertGatewayHealthPayload({ ok: true })).toThrow(
+      "health returned invalid payload: expected numeric ts.",
+    );
+    expect(() => runtimeSmoke.assertGatewayHealthPayload({}, "watchdog health")).toThrow(
+      "watchdog health returned invalid payload: expected ok=true.",
+    );
   });
 
   it("caps noisy runtime gateway logs", async () => {
@@ -341,14 +369,11 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
-    const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
-    });
-
-    expect(runtimeSmoke.appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef")).toEqual({
-      text: "abcdef",
-      truncatedChars: 0,
-    });
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: 5chars");
   });
 
   it("keeps runtime log tail reads bounded", async () => {
@@ -366,18 +391,11 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it("rejects loose runtime log scan byte env values instead of parsing prefixes", async () => {
-    const runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: "64bytes",
-    });
-    const root = makePackageRoot();
-    const logPath = path.join(root, "gateway.log");
-    fs.writeFileSync(logPath, `${"old log line\n".repeat(20)}[gateway] ready\n`, "utf8");
-
-    const tail = runtimeSmoke.readFileTail(logPath);
-
-    expect(Buffer.byteLength(tail)).toBeGreaterThan(64);
-    expect(tail).toContain("old log line");
-    expect(tail).toContain("[gateway] ready");
+    await expect(
+      importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: "64bytes",
+      }),
+    ).rejects.toThrow("invalid OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: 64bytes");
   });
 
   it("remembers runtime ready logs after they fall outside the tail", async () => {
@@ -915,6 +933,106 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+  it("allows degraded runtime readiness only for expected channel failures", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["qa-channel"] }));
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects degraded runtime readiness for unexpected channel failures", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["unexpected"] }));
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow('/readyz returned HTTP 503: {"ready":false,"failing":["unexpected"]}');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects generic readyz server errors in degraded runtime mode", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: true }));
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow('/readyz returned HTTP 500: {"ready":true}');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("keeps readyz HTTP status diagnostics when the body is malformed", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
+    });
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end("not json");
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(
+        runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        }),
+      ).rejects.toThrow('/readyz returned HTTP 503: "not json"');
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("bounds stalled runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const sockets = new Set<Socket>();
@@ -1202,6 +1320,85 @@ describe("bundled plugin install/uninstall probe", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("requires bundled install source paths to match the selected plugin root", () => {
+    const root = makePackageRoot();
+    const stateDir = path.join(root, "state");
+    const selectedRoot = path.join(root, "dist-runtime", "extensions", "nostr");
+    const staleRoot = path.join(root, "dist-runtime", "extensions", "nostr-copy");
+    fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+    fs.mkdirSync(selectedRoot, { recursive: true });
+    fs.mkdirSync(staleRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ plugins: { entries: { nostr: { enabled: true } } } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "plugins", "installs.json"),
+      JSON.stringify({
+        installRecords: {
+          nostr: {
+            source: "path",
+            sourcePath: staleRoot,
+            installPath: staleRoot,
+          },
+        },
+      }),
+      "utf8",
+    );
+    writePluginsList(root, []);
+
+    const result = runProbeCommand(
+      root,
+      ["assert-installed", "nostr", "nostr", "0", selectedRoot],
+      {
+        HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("did not match selected root");
+  });
+
+  it("requires bundled install source paths to exist", () => {
+    const root = makePackageRoot();
+    const stateDir = path.join(root, "state");
+    const selectedRoot = path.join(root, "dist-runtime", "extensions", "nostr");
+    fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ plugins: { entries: { nostr: { enabled: true } } } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "plugins", "installs.json"),
+      JSON.stringify({
+        installRecords: {
+          nostr: {
+            source: "path",
+            sourcePath: selectedRoot,
+            installPath: selectedRoot,
+          },
+        },
+      }),
+      "utf8",
+    );
+    writePluginsList(root, []);
+
+    const result = runProbeCommand(
+      root,
+      ["assert-installed", "nostr", "nostr", "0", selectedRoot],
+      {
+        HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not exist");
   });
 
   it("detects native Windows bundled load paths after uninstall", () => {

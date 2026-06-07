@@ -285,7 +285,7 @@ extension AgentProTab {
                         Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
                     }
             }
-            .accessibilityLabel(isActive ? "Active agent" : "Make active agent")
+            .accessibilityLabel(isActive ? "Default agent" : "Set default agent")
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 13)
@@ -514,10 +514,8 @@ extension AgentProTab {
                 true
             case .online:
                 self.agentRosterState(for: agent) == .online
-            case .busy:
-                self.agentRosterState(for: agent) == .busy
-            case .idle:
-                self.agentRosterState(for: agent) == .idle
+            case .ready:
+                self.agentRosterState(for: agent) == .ready
             }
 
             guard matchesFilter else { return false }
@@ -542,6 +540,12 @@ extension AgentProTab {
 
     var gatewayConnected: Bool {
         GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    var liveGatewayConnected: Bool {
+        !self.appModel.isAppleReviewDemoModeEnabled &&
+            self.gatewayConnected &&
+            self.appModel.isOperatorGatewayConnected
     }
 
     private var searchFieldFill: Color {

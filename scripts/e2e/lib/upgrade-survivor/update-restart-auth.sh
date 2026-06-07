@@ -252,7 +252,7 @@ prepare_update_restart_probe_current_install() {
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
   gateway_pid="$!"
   printf '%s\n' "$gateway_pid" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   write_update_restart_service_auth_env

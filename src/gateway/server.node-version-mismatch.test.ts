@@ -76,7 +76,7 @@ describe("node host version mismatch guard", () => {
   });
 
   test("local node with dev/test version is allowed (not a released version)", async () => {
-    // "dev" does not match YYYY.M.D, so the guard skips
+    // "dev" does not match YYYY.M.PATCH, so the guard skips
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: "secret",

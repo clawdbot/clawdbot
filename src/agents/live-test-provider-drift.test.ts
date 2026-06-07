@@ -18,6 +18,7 @@ describe("live test provider drift", () => {
     expect(
       isLiveAuthDrift('401 {"error":{"message":"The API key you provided is invalid."}}'),
     ).toBe(true);
+    expect(isLiveAuthDrift("invalid x-api-key")).toBe(true);
   });
 
   it("classifies API-key rate-limit drift", () => {

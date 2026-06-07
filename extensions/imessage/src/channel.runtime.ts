@@ -17,6 +17,7 @@ export async function sendIMessageOutbound(params: {
   text: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  audioAsVoice?: boolean;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
@@ -36,6 +37,7 @@ export async function sendIMessageOutbound(params: {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,

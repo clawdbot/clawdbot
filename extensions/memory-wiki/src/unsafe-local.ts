@@ -15,6 +15,7 @@ import {
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
+  assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
@@ -215,6 +216,11 @@ export async function syncMemoryWikiUnsafeLocalSources(
 
   const artifacts = await collectUnsafeLocalArtifacts(config.unsafeLocal.paths);
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
+  assertMemoryWikiSourceSyncStateCapacity({
+    state,
+    group: "unsafe-local",
+    incomingCount: artifacts.length,
+  });
   const activeKeys = new Set<string>();
   const results = await Promise.all(
     artifacts.map(async (artifact) => {

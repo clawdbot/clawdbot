@@ -214,6 +214,52 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("emits explicit aborted terminal metadata on lifecycle end events", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "end_turn";
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: true,
+      },
+    });
+  });
+
+  it("keeps normal lifecycle end events explicitly non-aborted", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "end_turn";
+    ctx.state.terminalAborted = false;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: false,
+      },
+    });
+  });
+
   it("attaches raw provider error metadata and includes model/provider in console output", async () => {
     const ctx = createContext({
       role: "assistant",
@@ -413,6 +459,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "end",
+        stopReason: "toolUse",
         livenessState: "abandoned",
         replayInvalid: true,
       },
@@ -441,6 +488,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "end",
+        stopReason: "toolUse",
         livenessState: "abandoned",
         replayInvalid: true,
       },

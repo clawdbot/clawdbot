@@ -55,6 +55,11 @@ function assertSampleValue(value, raw, name, labelLocal) {
       `docker stats sample for ${labelLocal} had invalid ${name}: ${JSON.stringify(raw)}`,
     );
   }
+  if (name === "MemUsage" && value <= 0) {
+    throw new Error(
+      `docker stats sample for ${labelLocal} had non-positive ${name}: ${JSON.stringify(raw)}`,
+    );
+  }
 }
 
 async function scanStatsFileLines(file, onLine) {

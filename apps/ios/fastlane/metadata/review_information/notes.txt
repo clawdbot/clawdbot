@@ -1,1 +1,3 @@
-OpenClaw iOS client for gateway-connected workflows. Reviewers can follow the standard onboarding and pairing flow in-app.
+OpenClaw normally pairs with a private Gateway. For App Review, tap Set Up Manually on the Connect Gateway screen, paste APPLE-REVIEW-DEMO in Setup Code, then tap Apply Setup Code. This enables local offline demo mode; no Gateway is required. Reviewers can also scan a QR code containing APPLE-REVIEW-DEMO.
+
+Demo mode marks the app as connected to an Apple Review Demo Gateway and exposes the Chat, Command, Agent, Talk, and Settings surfaces without requiring a running Gateway. Live automation, realtime Talk execution, and external tool calls require pairing with a real OpenClaw Gateway.

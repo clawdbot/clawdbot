@@ -8,7 +8,6 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -897,18 +896,14 @@ private fun GatewaySettingsScreen(
                 .orEmpty()
                 .ifEmpty { passwordInput.trim() }
             validationText = null
-            viewModel.setManualEnabled(true)
-            viewModel.setManualHost(endpointConfig.host)
-            viewModel.setManualPort(endpointConfig.port)
-            viewModel.setManualTls(endpointConfig.tls)
-            viewModel.setGatewayBootstrapToken(bootstrapToken)
-            viewModel.setGatewayToken(token)
-            viewModel.setGatewayPassword(password)
-            viewModel.connect(
-              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
-              token = token.ifEmpty { null },
-              bootstrapToken = bootstrapToken.ifEmpty { null },
-              password = password.ifEmpty { null },
+            viewModel.saveGatewayConfigAndConnect(
+              host = endpointConfig.host,
+              port = endpointConfig.port,
+              tls = endpointConfig.tls,
+              token = token,
+              bootstrapToken = bootstrapToken,
+              password = password,
+              resetSetupAuth = setup != null,
             )
           },
           modifier = Modifier.fillMaxWidth(),
@@ -971,7 +966,7 @@ private fun AboutSettingsScreen(
         listOf(
           SettingsMetric("Android App", BuildConfig.VERSION_NAME),
           SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
-          SettingsMetric("Channel", "Play"),
+          SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
@@ -993,6 +988,14 @@ private fun AboutSettingsScreen(
     }
   }
 }
+
+internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
+  when (flavor.trim()) {
+    "play" -> "Play"
+    "thirdParty" -> "Third-party"
+    "" -> "Unknown"
+    else -> flavor.trim()
+  }
 
 @Composable
 private fun AboutStatusRow(

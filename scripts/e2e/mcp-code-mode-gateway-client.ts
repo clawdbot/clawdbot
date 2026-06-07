@@ -4,6 +4,10 @@ import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "
 import { pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import {
+  type McpCodeModeMentions,
+  validateMcpCodeModeResult,
+} from "./lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./lib/session-log-mentions.ts";
 
 type FetchJsonOptions = {
@@ -93,27 +97,6 @@ export async function fetchJson(
   return text ? JSON.parse(text) : {};
 }
 
-function outputText(response: unknown): string {
-  const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
-  if (!Array.isArray(output)) {
-    return "";
-  }
-  return output
-    .flatMap((item) => {
-      if (item.type !== "message" || !Array.isArray(item.content)) {
-        return [];
-      }
-      return item.content.flatMap((piece) => {
-        if (!piece || typeof piece !== "object") {
-          return [];
-        }
-        const record = piece as { text?: unknown };
-        return typeof record.text === "string" ? [record.text] : [];
-      });
-    })
-    .join("\n");
-}
-
 async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
   return await countSessionLogMentions({
@@ -176,26 +159,8 @@ async function main() {
       stream: false,
     }),
   });
-  const finalText = outputText(response);
   const mentions = await readSessionLogMentions(stateDir);
-
-  assert(
-    finalText.includes("MCP_CODE_MODE_FILE_OK"),
-    `agent did not complete MCP API file check: ${finalText}`,
-  );
-  assert(
-    finalText.includes("fixture-note-alpha"),
-    `agent did not return fixture note from MCP call: ${finalText}`,
-  );
-  assert(
-    !/MCP\s+(?:was\s+)?not\s+defined|failed|error/i.test(finalText),
-    `agent reported MCP failure instead of a successful call: ${finalText}`,
-  );
-  assert(mentions.apiFileRead > 0, "session log lacks API.read usage");
-  assert(mentions.mcpNamespace > 0, "session log lacks MCP.fixture usage");
-  assert(mentions.mcpTool > 0, "session log lacks fixture__lookup_note call");
-  assert(mentions.apiCall === 0, "agent should not call MCP.$api when API files are available");
-  assert(mentions.toolSearchPollution === 0, "agent should not use tools.search for MCP lookup");
+  const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions);
 
   process.stdout.write(
     `${JSON.stringify(

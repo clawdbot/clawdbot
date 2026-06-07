@@ -34,6 +34,7 @@ public struct OpenClawChatView: View {
     private let assistantAvatarTint: Color?
     private let showsAssistantAvatars: Bool
     private let composerChrome: ComposerChrome
+    private let isComposerEnabled: Bool
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
     private let talkControl: OpenClawChatTalkControl?
@@ -73,6 +74,7 @@ public struct OpenClawChatView: View {
         assistantAvatarTint: Color? = nil,
         showsAssistantAvatars: Bool = true,
         composerChrome: ComposerChrome = .full,
+        isComposerEnabled: Bool = true,
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
         talkControl: OpenClawChatTalkControl? = nil)
@@ -89,6 +91,7 @@ public struct OpenClawChatView: View {
         self.assistantAvatarTint = assistantAvatarTint
         self.showsAssistantAvatars = showsAssistantAvatars
         self.composerChrome = composerChrome
+        self.isComposerEnabled = isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
         self.emptyAssistantIntro = emptyAssistantIntro
         self.talkControl = talkControl
@@ -128,16 +131,14 @@ public struct OpenClawChatView: View {
         VStack(spacing: 0) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
-        }
-        .padding(.top, Layout.outerPaddingVertical)
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
                 .padding(.bottom, Layout.outerPaddingVertical)
         }
+        .padding(.top, Layout.outerPaddingVertical)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: .infinity, alignment: .top)
         #endif
     }
 
@@ -151,6 +152,7 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
+            isComposerEnabled: self.isComposerEnabled,
             messagePlaceholder: self.messagePlaceholder,
             talkControl: self.talkControl)
     }
@@ -177,12 +179,15 @@ public struct OpenClawChatView: View {
             #if !os(macOS)
             .scrollDismissesKeyboard(.interactively)
             #endif
+            .safeAreaInset(edge: .top, spacing: 0) {
+                self.messageListNoticeBanner
+            }
             // Keep the scroll pinned to the bottom for new messages.
-                .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
-                .onChange(of: self.scrollPosition) { _, position in
-                    guard let position else { return }
-                    self.isPinnedToBottom = position == self.scrollerBottomID
-                }
+            .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
+            .onChange(of: self.scrollPosition) { _, position in
+                guard let position else { return }
+                self.isPinnedToBottom = position == self.scrollerBottomID
+            }
 
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()
@@ -266,7 +271,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if self.composerChrome == .clean, let error = self.activeErrorText, !self.hasVisibleMessageListContent {
+        if let error = self.inlineCleanErrorText {
             let presentation = self.errorPresentation(for: error)
             ChatNoticeCard(
                 systemImage: presentation.systemImage,
@@ -345,23 +350,13 @@ public struct OpenClawChatView: View {
             EmptyView()
         } else if self.showsCleanLoadingPlaceholder {
             EmptyView()
+        } else if self.inlineCleanErrorText != nil {
+            EmptyView()
         } else if let error = self.activeErrorText {
-            let presentation = self.errorPresentation(for: error)
             if self.hasVisibleMessageListContent {
-                VStack(spacing: 0) {
-                    ChatNoticeBanner(
-                        systemImage: presentation.systemImage,
-                        title: presentation.title,
-                        message: error,
-                        tint: presentation.tint,
-                        dismiss: { self.viewModel.errorText = nil },
-                        refresh: { self.viewModel.refresh() })
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                EmptyView()
             } else {
+                let presentation = self.errorPresentation(for: error)
                 ChatNoticeCard(
                     systemImage: presentation.systemImage,
                     title: presentation.title,
@@ -395,6 +390,13 @@ public struct OpenClawChatView: View {
         return text
     }
 
+    private var inlineCleanErrorText: String? {
+        guard self.composerChrome == .clean, !self.hasVisibleMessageListContent else {
+            return nil
+        }
+        return self.activeErrorText
+    }
+
     private var hasVisibleMessageListContent: Bool {
         if !self.visibleMessages.isEmpty {
             return true
@@ -411,6 +413,28 @@ public struct OpenClawChatView: View {
             return true
         }
         return false
+    }
+
+    @ViewBuilder
+    private var messageListNoticeBanner: some View {
+        if let error = self.activeErrorText,
+           self.hasVisibleMessageListContent,
+           !self.viewModel.isLoading,
+           self.visibleEmptyAssistantIntro == nil,
+           !self.showsCleanLoadingPlaceholder
+        {
+            let presentation = self.errorPresentation(for: error)
+            ChatNoticeBanner(
+                systemImage: presentation.systemImage,
+                title: presentation.title,
+                message: error,
+                tint: presentation.tint,
+                dismiss: { self.viewModel.errorText = nil },
+                refresh: { self.viewModel.refresh() })
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+        }
     }
 
     private var showsCleanLoadingPlaceholder: Bool {

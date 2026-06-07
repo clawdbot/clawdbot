@@ -67,7 +67,7 @@ mock_pid="$!"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
-openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360
+openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"
 node "$entry" gateway health \
   --url "ws://127.0.0.1:$PORT" \
   --token "$TOKEN" \

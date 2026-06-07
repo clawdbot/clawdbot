@@ -8,11 +8,14 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 
 function readClawHubPreflightLimits() {
   return {
@@ -114,9 +117,43 @@ function pathsEqual(left, right) {
   return comparablePath(left) === comparablePath(right);
 }
 
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(0, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function getInstallRecords() {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  const config = readOpenClawConfig();
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
   const index = readPluginInstallIndex({
     configPath,
@@ -128,9 +165,23 @@ function getInstallRecords() {
   return index.installRecords ?? {};
 }
 
+function openClawConfigPath() {
+  return path.join(process.env.HOME, ".openclaw", "openclaw.json");
+}
+
 function readOpenClawConfig() {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  return fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  return fs.existsSync(configPath) ? readRequiredOpenClawConfig() : {};
+}
+
+function readRequiredOpenClawConfig() {
+  const configPath = openClawConfigPath();
+  try {
+    return readJson(configPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to read OpenClaw config ${configPath}: ${message}`, { cause: error });
+  }
 }
 
 function assertPluginRemoved(params) {
@@ -273,13 +324,18 @@ function assertSimplePlugin(jsonFile, inspectFile, pluginId, method) {
   }
 }
 
-function assertUpdateOutput(logFile, expectedSnippet) {
-  const output = fs.readFileSync(logFile, "utf8");
-  if (!output.includes(expectedSnippet)) {
-    throw new Error(
-      `expected update output to include ${JSON.stringify(expectedSnippet)}:\n${output}`,
-    );
+function assertTextFileIncludes(file, expectedSnippet, label) {
+  if (fileContainsText(file, expectedSnippet)) {
+    return;
   }
+  const outputTail = readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES);
+  throw new Error(
+    `expected ${label} to include ${JSON.stringify(expectedSnippet)}. Output tail:\n${outputTail}`,
+  );
+}
+
+function assertUpdateOutput(logFile, expectedSnippet) {
+  assertTextFileIncludes(logFile, expectedSnippet, "update output");
 }
 
 function assertClaudeBundleDisabled() {
@@ -453,10 +509,11 @@ function assertGitPlugin() {
     throw new Error(`expected demo-git cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync(scratchFile("plugins-git-cli.txt"), "utf8");
-  if (!cliOutput.includes("demo-plugin-git:pong")) {
-    throw new Error(`unexpected git plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-git-cli.txt"),
+    "demo-plugin-git:pong",
+    "git plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-git"];
   if (!record) {
@@ -639,10 +696,11 @@ function assertNpmPlugin() {
     throw new Error(`expected demo-npm cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync(scratchFile("plugins-npm-cli.txt"), "utf8");
-  if (!cliOutput.includes("demo-plugin-npm:pong")) {
-    throw new Error(`unexpected npm plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-npm-cli.txt"),
+    "demo-plugin-npm:pong",
+    "npm plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-npm"];
   if (!record) {
@@ -730,13 +788,12 @@ function assertNpmPluginRemoved() {
 
 function assertInvalidOpenClawExtensionsRejected() {
   const pluginId = "demo-plugin-invalid-metadata";
-  const output = fs.readFileSync(scratchFile("plugins-invalid-openclaw-extensions.log"), "utf8");
   for (const expected of ["openclaw.extensions[1]", "non-empty string"]) {
-    if (!output.includes(expected)) {
-      throw new Error(
-        `expected malformed metadata install output to include ${JSON.stringify(expected)}:\n${output}`,
-      );
-    }
+    assertTextFileIncludes(
+      scratchFile("plugins-invalid-openclaw-extensions.log"),
+      expected,
+      "malformed metadata install output",
+    );
   }
 
   const list = readJson(scratchFile("plugins-invalid-openclaw-extensions-list.json"));
@@ -784,10 +841,11 @@ function assertGitPluginUpdated() {
     throw new Error(`expected demo-git-update cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync(scratchFile("plugins-git-update-cli.txt"), "utf8");
-  if (!cliOutput.includes("demo-plugin-git-update:pong-v2")) {
-    throw new Error(`unexpected updated git plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-git-update-cli.txt"),
+    "demo-plugin-git-update:pong-v2",
+    "updated git plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-git-update"];
   if (!record) {
@@ -986,10 +1044,11 @@ function assertClawHubRemoved() {
 }
 
 function assertClawHubUpdated() {
-  const output = fs.readFileSync(scratchFile("plugins-clawhub-update.log"), "utf8");
-  if (!output.includes(`${process.env.CLAWHUB_PLUGIN_ID} already at `)) {
-    throw new Error(`expected ClawHub update to report already-at version:\n${output}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-clawhub-update.log"),
+    `${process.env.CLAWHUB_PLUGIN_ID} already at `,
+    "ClawHub update output",
+  );
   assertClawHubInstalled();
 }
 

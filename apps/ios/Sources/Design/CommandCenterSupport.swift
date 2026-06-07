@@ -126,7 +126,7 @@ struct CommandSessionRow: View {
     }
 
     private var progressLabel: String {
-        guard let progress = self.item.progress else {
+        guard let progress = item.progress else {
             return self.item.state
         }
         if self.item.state == "offline" || self.item.state == "off" || self.item.state == "idle" {
@@ -144,41 +144,31 @@ struct CommandSessionRow: View {
     }
 }
 
-struct CommandApprovalRow: View {
-    let item: CommandCenterTab.ApprovalItem
+struct CommandViewMoreRow: View {
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: self.item.icon)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.item.color)
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(self.item.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text(self.item.detail)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        Text("View More")
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(OpenClawBrand.accent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(self.rowFill)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(self.rowBorder, lineWidth: 1)
+                    }
             }
-            Spacer(minLength: 8)
-            Text(self.item.priority)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(self.item.color)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background {
-                    Capsule()
-                        .fill(self.item.color.opacity(0.10))
-                }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+    }
+
+    private var rowFill: Color {
+        self.colorScheme == .dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025)
+    }
+
+    private var rowBorder: Color {
+        self.colorScheme == .dark ? Color.white.opacity(0.065) : Color.black.opacity(0.045)
     }
 }
 
@@ -248,34 +238,5 @@ struct CommandTaskRow: View {
                 .frame(width: self.item.progress == nil ? 58 : 34, alignment: .trailing)
         }
         .padding(.vertical, 8)
-    }
-}
-
-struct CommandLiveActivityRow: View {
-    let title: String
-    let value: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProStatusDot(color: self.color)
-            Text(self.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(self.value)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.08))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-                }
-        }
     }
 }

@@ -10,6 +10,7 @@ type WorkflowStep = {
   if?: string;
   run?: string;
   env?: Record<string, string>;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
@@ -57,5 +58,40 @@ describe("OpenClaw performance workflow", () => {
     expect(prepare.run).toContain('echo "ready=true" >> "$GITHUB_OUTPUT"');
     expect(publish.if).toContain("steps.clawgrit_reports.outputs.ready == 'true'");
     expect(publish.run).toContain("timeout 120s git");
+  });
+
+  it("requires the shared Kova report gate before tolerating partial verdicts", () => {
+    const runKova = findStep("Run Kova");
+
+    expect(runKova.run).toContain(
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
+    );
+    expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+  });
+
+  it("fails selected live Kova lanes when live auth is missing", () => {
+    const configureAuth = findStep("Configure live OpenAI auth");
+    const runKova = findStep("Run Kova");
+
+    expect(configureAuth.if).toContain("matrix.live == 'true'");
+    expect(configureAuth.env?.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(configureAuth.run).toContain('if [[ -z "${OPENAI_API_KEY:-}" ]]; then');
+    expect(configureAuth.run).toContain("cannot run without live evidence");
+    expect(configureAuth.run).toContain("exit 1");
+    expect(configureAuth.run).not.toContain("will be skipped");
+    expect(runKova.run).not.toContain('echo "skipped=true" >> "$GITHUB_OUTPUT"');
+  });
+
+  it("requires Kova evidence before uploading selected lane artifacts", () => {
+    const validateEvidence = findStep("Validate Kova evidence");
+    const upload = findStep("Upload Kova artifacts");
+
+    expect(validateEvidence.if).toContain("always()");
+    expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
+    expect(validateEvidence.run).toContain('"$REPORT_DIR" -maxdepth 1 -type f -name');
+    expect(validateEvidence.run).toContain('"$BUNDLE_DIR/bundle.json"');
+    expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
+    expect(validateEvidence.run).toContain("exit 1");
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 });

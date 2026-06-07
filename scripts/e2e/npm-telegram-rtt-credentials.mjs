@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Issues and writes npm Telegram RTT credential fixtures.
 import fs from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 
 const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
@@ -9,6 +11,8 @@ const DEFAULT_HTTP_BODY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000];
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
@@ -75,6 +79,17 @@ function parsePositiveInteger(value, fallback, label) {
   }
   return parsed;
 }
+
+const CHUNKED_PAYLOAD_MAX_BYTES = parsePositiveInteger(
+  process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES,
+  DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES,
+  "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES",
+);
+const CHUNKED_PAYLOAD_MAX_CHUNKS = parsePositiveInteger(
+  process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS,
+  DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
+  "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS",
+);
 
 function normalizeCredentialRole() {
   const raw =
@@ -239,8 +254,14 @@ function parseChunkedPayloadMarker(payload) {
   if (!Number.isInteger(payload.chunkCount) || payload.chunkCount < 1) {
     throw new Error("Chunked credential payload has invalid chunkCount.");
   }
+  if (payload.chunkCount > CHUNKED_PAYLOAD_MAX_CHUNKS) {
+    throw new Error(`Chunked credential payload exceeds ${CHUNKED_PAYLOAD_MAX_CHUNKS} chunks.`);
+  }
   if (!Number.isInteger(payload.byteLength) || payload.byteLength < 0) {
     throw new Error("Chunked credential payload has invalid byteLength.");
+  }
+  if (payload.byteLength > CHUNKED_PAYLOAD_MAX_BYTES) {
+    throw new Error(`Chunked credential payload exceeds ${CHUNKED_PAYLOAD_MAX_BYTES} bytes.`);
   }
   return { byteLength: payload.byteLength, chunkCount: payload.chunkCount };
 }
@@ -266,6 +287,7 @@ async function resolveCredentialPayload(config, acquired) {
     return parseTelegramCredentialPayload(acquired.payload);
   }
   const chunks = [];
+  let serializedLength = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const chunk = await postBroker({
       authToken: config.authToken,
@@ -282,10 +304,15 @@ async function resolveCredentialPayload(config, acquired) {
         index,
       },
     });
-    chunks.push(requireString(chunk, "data"));
+    const data = requireString(chunk, "data");
+    serializedLength += data.length;
+    if (serializedLength > marker.byteLength) {
+      throw new Error("Chunked credential payload exceeded declared byteLength.");
+    }
+    chunks.push(data);
   }
   const serialized = chunks.join("");
-  if (serialized.length !== marker.byteLength) {
+  if (serializedLength !== marker.byteLength) {
     throw new Error("Chunked credential payload length mismatch.");
   }
   return parseTelegramCredentialPayload(JSON.parse(serialized));
@@ -460,11 +487,19 @@ async function heartbeat(opts) {
   }
 }
 
-const { command, opts } = parseArgs(process.argv);
-if (command === "acquire") {
-  await acquire(opts);
-} else if (command === "heartbeat") {
-  await heartbeat(opts);
-} else {
-  await release(opts);
+async function main(argv = process.argv) {
+  const { command, opts } = parseArgs(argv);
+  if (command === "acquire") {
+    await acquire(opts);
+  } else if (command === "heartbeat") {
+    await heartbeat(opts);
+  } else {
+    await release(opts);
+  }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main();
+}
+
+export { parseChunkedPayloadMarker };

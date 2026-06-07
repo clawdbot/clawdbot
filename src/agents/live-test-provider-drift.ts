@@ -47,7 +47,13 @@ export function liveProviderErrorText(error: unknown): string {
 
 /** Returns whether an error is expected live auth/account drift. */
 export function isLiveAuthDrift(error: unknown): boolean {
-  return isAuthErrorMessage(liveProviderErrorText(error));
+  const raw = liveProviderErrorText(error);
+  const message = normalizeLowercaseStringOrEmpty(raw);
+  return (
+    isAuthErrorMessage(raw) ||
+    message.includes("invalid x-api-key") ||
+    message.includes("incorrect x-api-key")
+  );
 }
 
 /** Returns whether an error is expected live billing/quota drift. */

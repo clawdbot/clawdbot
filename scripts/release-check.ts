@@ -142,7 +142,7 @@ const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
-const laneFloorAdoptionDateKey = 20260227;
+const laneFloorAdoptionReleaseKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
@@ -987,18 +987,19 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     calverItems.push({ title, sparkleBuild: Number(sparkleVersion), floors });
   }
 
-  const observedLaneAdoptionDateKey = calverItems
+  const observedLaneAdoptionReleaseKey = calverItems
     .filter((item) => item.sparkleBuild >= laneBuildMin)
-    .map((item) => item.floors.dateKey)
+    .map((item) => item.floors.releaseKey)
     .toSorted((a, b) => a - b)[0];
-  const effectiveLaneAdoptionDateKey =
-    typeof observedLaneAdoptionDateKey === "number"
-      ? Math.min(observedLaneAdoptionDateKey, laneFloorAdoptionDateKey)
-      : laneFloorAdoptionDateKey;
+  const effectiveLaneAdoptionReleaseKey =
+    typeof observedLaneAdoptionReleaseKey === "number"
+      ? Math.min(observedLaneAdoptionReleaseKey, laneFloorAdoptionReleaseKey)
+      : laneFloorAdoptionReleaseKey;
 
   for (const item of calverItems) {
     const expectLaneFloor =
-      item.sparkleBuild >= laneBuildMin || item.floors.dateKey >= effectiveLaneAdoptionDateKey;
+      item.sparkleBuild >= laneBuildMin ||
+      item.floors.releaseKey >= effectiveLaneAdoptionReleaseKey;
     const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
     if (item.sparkleBuild < floor) {
       const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";

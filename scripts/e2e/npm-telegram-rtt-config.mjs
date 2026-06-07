@@ -91,6 +91,7 @@ config.channels.telegram = {
     id: "TELEGRAM_BOT_TOKEN",
   },
   streaming: { mode: "off" },
+  replyToMode: "first",
   dmPolicy: "allowlist",
   allowFrom: [driverId],
   defaultTo: driverId,

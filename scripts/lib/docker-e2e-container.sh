@@ -138,11 +138,81 @@ child.on("error", (error) => {
 }
 
 docker_e2e_docker_cmd() {
-  docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-600s}" docker "$@"
+  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-600s}"
+  if [ "${1:-}" = "run" ]; then
+    shift
+    docker_e2e_docker_run_resource_args "$@"
+    docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    return
+  fi
+  docker_e2e_timeout_cmd "$timeout_value" docker "$@"
 }
 
 docker_e2e_docker_run_cmd() {
-  docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
+  local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+  if [ "${1:-}" = "run" ]; then
+    shift
+    docker_e2e_docker_run_resource_args "$@"
+    docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    return
+  fi
+  docker_e2e_timeout_cmd "$timeout_value" docker "$@"
+}
+
+docker_e2e_resource_limits_disabled() {
+  case "${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_e2e_resource_value_disabled() {
+  case "${1:-}" in
+    "" | 0 | none | NONE | off | OFF | false | FALSE)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_e2e_run_arg_present() {
+  local option="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = "$option" ] || [[ "$arg" == "$option="* ]]; then
+      return 0
+    fi
+    case "$option:$arg" in
+      --memory:-m | --memory:-m=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+docker_e2e_docker_run_resource_args() {
+  DOCKER_E2E_RUN_RESOURCE_ARGS=()
+  if docker_e2e_resource_limits_disabled; then
+    return 0
+  fi
+
+  local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
+  local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
+  local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
+
+  if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
+  fi
+  if ! docker_e2e_resource_value_disabled "$cpus" && ! docker_e2e_run_arg_present --cpus "$@"; then
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
+  fi
+  if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+    DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
+  fi
 }
 
 docker_e2e_container_running() {

@@ -165,6 +165,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openModelSelector = async () => {
     try {
+      chatLog.addSystem("loading models...");
+      tui.requestRender();
       const models = await client.listModels();
       if (models.length === 0) {
         chatLog.addSystem("no models available");

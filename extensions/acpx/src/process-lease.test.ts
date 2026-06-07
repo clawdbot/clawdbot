@@ -2,9 +2,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAcpxProcessLeaseStore,
+  openAcpxProcessLeaseStateStore,
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_ACPX_LEASE_ID_ENV,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
@@ -28,19 +33,48 @@ function makeLease(index: number): AcpxProcessLease {
 }
 
 describe("createAcpxProcessLeaseStore", () => {
-  it("serializes concurrent lease saves without dropping records", async () => {
-    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-acpx-leases-"));
-    try {
-      const store = createAcpxProcessLeaseStore({ stateDir });
-      await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
+  let stateDir = "";
+  let env: NodeJS.ProcessEnv;
 
-      const leases = await store.listOpen("gateway-test");
-      expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
-        Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
-      );
-    } finally {
-      await rm(stateDir, { recursive: true, force: true });
-    }
+  beforeEach(async () => {
+    resetPluginStateStoreForTests();
+    stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-acpx-leases-"));
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  });
+
+  afterEach(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  function createStore() {
+    return createAcpxProcessLeaseStore({
+      store: openAcpxProcessLeaseStateStore((options) =>
+        createPluginStateKeyedStoreForTests("acpx", { ...options, env }),
+      ),
+    });
+  }
+
+  it("serializes concurrent lease saves without dropping records", async () => {
+    const store = createStore();
+    await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
+
+    const leases = await store.listOpen("gateway-test");
+    expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
+      Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
+    );
+  });
+
+  it("removes terminal leases from the live lease namespace", async () => {
+    const store = createStore();
+    const openLease = makeLease(1);
+    const closedLease = makeLease(2);
+    await store.save(openLease);
+    await store.save(closedLease);
+
+    await store.markState(closedLease.leaseId, "closed");
+
+    await expect(store.load(closedLease.leaseId)).resolves.toBeUndefined();
+    await expect(store.listOpen("gateway-test")).resolves.toEqual([openLease]);
   });
 });
 

@@ -490,7 +490,10 @@ function brokerAuthConfigured() {
   } catch {
     return false;
   }
-  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+  if (!parsed?.coordinator || parsed?.brokerAuth !== "configured") {
+    return false;
+  }
+  return checkedOutput(binary, ["whoami"]).status === 0;
 }
 
 function enforceBrokeredAws(commandArgs, providerName) {
