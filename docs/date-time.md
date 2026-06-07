@@ -59,10 +59,11 @@ Override under `agents.defaults`:
 [WhatsApp +1555 +30s Sun 2026-01-18T05:19:00Z] follow-up
 ```
 
-## System prompt: current date and time
+## System prompt: time zone
 
-The system prompt includes a **Current Date & Time** section with the **time zone only**
-(no clock or time format) so prompt caching stays stable:
+If the user timezone is known, the system prompt includes a dedicated
+**Time Zone** section with the **time zone only** (no clock/time format)
+to keep prompt caching stable:
 
 ```
 Time zone: America/Chicago

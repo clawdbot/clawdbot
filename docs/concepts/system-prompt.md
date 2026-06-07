@@ -41,7 +41,7 @@ The prompt is compact, with fixed sections:
 - **Documentation**: local docs/source path and when to read them.
 - **Workspace Files (injected)**: notes that bootstrap files are included below.
 - **Sandbox** (when enabled): sandboxed runtime, sandbox paths, elevated-exec availability.
-- **Current Date & Time**: time zone only (cache-stable; the live clock comes from `session_status`).
+- **Time Zone**: time zone only (cache-stable; the live clock comes from `session_status`).
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
 - **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
@@ -72,7 +72,7 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **OpenClaw Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Time Zone (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.
@@ -132,7 +132,9 @@ To inspect how much each injected file contributes (raw vs injected, truncation,
 
 ## Time handling
 
-The **Current Date & Time** section appears only when the user timezone is known, and only includes the **time zone** (no dynamic clock or time format) to keep the prompt cache-stable.
+The system prompt includes a dedicated **Time Zone** section when the
+user timezone is known. To keep the prompt cache-stable, it now only includes
+the **time zone** (no dynamic clock or time format).
 
 Use `session_status` when the agent needs the current time; its status card includes a timestamp line. The same tool can optionally set a per-session model override (`model=default` clears it).
 
