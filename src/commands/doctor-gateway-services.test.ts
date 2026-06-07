@@ -50,6 +50,10 @@ const mocks = vi.hoisted(() => ({
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
   runExec: vi.fn(),
+  findSystemdGatewayInstallation: vi.fn().mockResolvedValue({ kind: "none" }),
+  uninstallUserSystemdGatewayUnit: vi
+    .fn()
+    .mockResolvedValue({ unitName: "openclaw-gateway.service", unitPath: "", removed: true }),
   note: vi.fn(),
 }));
 
@@ -108,6 +112,8 @@ vi.mock("../daemon/schtasks.js", () => ({
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUnitActive: mocks.isSystemdUnitActive,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+  findSystemdGatewayInstallation: mocks.findSystemdGatewayInstallation,
+  uninstallUserSystemdGatewayUnit: mocks.uninstallUserSystemdGatewayUnit,
 }));
 
 vi.mock("../infra/windows-port-pids.js", () => ({
@@ -135,6 +141,7 @@ import {
   extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects,
   maybeRepairGatewayServiceConfig,
+  maybeResolveDuelingSystemdGatewayScopes,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
@@ -2100,6 +2107,106 @@ describe("maybeScanExtraGatewayServices", () => {
         "Legacy gateway services removed. Installing OpenClaw gateway next.",
       );
     });
+  });
+});
+
+describe("maybeResolveDuelingSystemdGatewayScopes", () => {
+  const duelingInstallation = {
+    kind: "dueling" as const,
+    user: {
+      scope: "user" as const,
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    },
+    system: {
+      scope: "system" as const,
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findSystemdGatewayInstallation.mockResolvedValue({ kind: "none" });
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
+  });
+
+  afterEach(() => {
+    mockProcessPlatform(originalPlatform);
+    delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
+  });
+
+  it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
+      unitName: "openclaw-gateway.service",
+      unitPath: duelingInstallation.user.unitPath,
+      removed: true,
+    });
+    const runtime = makeDoctorIo();
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(runtime, prompter);
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+    );
+  });
+
+  it("emits cleanup hints and does not remove anything when declined", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "systemctl --user disable --now openclaw-gateway.service",
+      "rm ~/.config/systemd/user/openclaw-gateway.service",
+    ]);
+    const prompter = makeDoctorPrompts();
+    prompter.confirmRuntimeRepair = vi.fn().mockResolvedValue(false);
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalled();
+  });
+
+  it("skips removal and prompts nothing when service repair is externally managed", async () => {
+    mockProcessPlatform("linux");
+    process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      EXTERNAL_SERVICE_REPAIR_NOTE,
+      "Gateway cleanup skipped",
+    );
+  });
+
+  it("does nothing for a single-scope (user-only) install", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue({
+      kind: "user",
+      user: duelingInstallation.user,
+    });
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on non-Linux platforms", async () => {
+    mockProcessPlatform("darwin");
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.findSystemdGatewayInstallation).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
