@@ -105,6 +105,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
+    expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 

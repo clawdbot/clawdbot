@@ -792,26 +792,44 @@ extension SettingsProTab {
     }
 
     var talkVoiceSettingsCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Provider", selection: self.talkProviderSelectionBinding) {
-                    ForEach(TalkModeProviderSelection.allCases) { option in
-                        Text(option.label).tag(option.rawValue)
-                    }
-                }
-                if self.shouldShowRealtimeVoicePicker {
-                    Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
-                        Text("Gateway Default").tag("")
-                        ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
-                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+        VStack(alignment: .leading, spacing: 10) {
+            if self.gatewayConnected,
+               let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
+            {
+                TalkRuntimeIssueBanner(
+                    issue: issue,
+                    onOpenSettings: nil,
+                    onShowDetails: {
+                        self.showTalkIssueDetails = true
+                    })
+            }
+            ProCard(radius: SettingsLayout.cardRadius) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Provider", selection: self.talkProviderSelectionBinding) {
+                        ForEach(TalkModeProviderSelection.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
                         }
                     }
+                    if self.shouldShowRealtimeVoicePicker {
+                        Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
+                            Text("Gateway Default").tag("")
+                            ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                                Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                            }
+                        }
+                    }
+                    self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                    Divider()
+                    self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
+                    if let issue = self.gatewayTalkLastIssueDetail {
+                        Divider()
+                        self.detailRow("Last Voice Issue", value: issue)
+                    }
+                    Divider()
+                    self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                    Divider()
+                    self.detailRow("API Key", value: self.talkApiKeyStatus)
                 }
-                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                Divider()
-                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
-                Divider()
-                self.detailRow("API Key", value: self.talkApiKeyStatus)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)

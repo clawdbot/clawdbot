@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -181,6 +182,132 @@ import Testing
         #expect(manager._test_realtimeProvider() == "openai")
         #expect(manager._test_realtimeModelId() == "gpt-realtime-2")
         #expect(manager._test_gatewayTalkUsesRealtimeRelay())
+    }
+
+    @Test func buildsGenericRealtimeFallbackIssueForDisplay() {
+        let issue = TalkRuntimeIssue.realtimeUnavailable(
+            message: "OpenAI API key rejected with 401",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            transport: "gateway-relay",
+            phase: "start")
+
+        #expect(issue.code == .realtimeUnavailable)
+        #expect(issue.displayMessage == "OpenAI API key rejected with 401")
+        #expect(issue.diagnosticSummary.contains("provider: openai"))
+        #expect(issue.diagnosticSummary.contains("model: gpt-realtime-2"))
+        #expect(issue.fallbackStatusText == "Listening (iOS Speech fallback)")
+        #expect(issue.fallbackBannerTitle == "Using iOS Speech fallback")
+        #expect(issue.fallbackBannerOwnerLabel == "Fallback active")
+        #expect(issue
+            .fallbackBannerMessage ==
+            "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
+        #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
+    }
+
+    @Test func nativeFallbackKeepsRealtimeIssueVisible() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let issue = TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: "Realtime closed before it became ready.",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            transport: "gateway-relay",
+            phase: "connect")
+
+        manager._test_markNativeFallbackActive(after: issue)
+
+        #expect(manager.statusText == "Listening (iOS Speech fallback)")
+        #expect(manager._test_gatewayTalkActiveModeTitle() == "iOS Speech fallback")
+        #expect(manager._test_gatewayTalkActiveModeSubtitle() == "Realtime closed before it became ready.")
+        #expect(manager._test_gatewayTalkLastIssueText()?.contains("phase: connect") == true)
+        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
+    }
+
+    @Test func gatewayTalkIssueDetailsDriveRealtimeFailureDisplay() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let error = GatewayResponseError(
+            method: "talk.session.create",
+            code: "UNAVAILABLE",
+            message: "Error: OpenAI API key rejected with 401",
+            details: [
+                "talkIssue": AnyCodable([
+                    "code": "realtime_unavailable",
+                    "message": "OpenAI API key rejected with 401",
+                    "provider": "openai",
+                    "model": "gpt-realtime-2",
+                    "transport": "gateway-relay",
+                    "phase": "request",
+                ]),
+            ])
+
+        let issue = manager._test_realtimeIssue(from: error, phase: "start")
+
+        #expect(issue.code == .realtimeUnavailable)
+        #expect(issue.displayMessage == "OpenAI API key rejected with 401")
+        #expect(issue.provider == "openai")
+        #expect(issue.model == "gpt-realtime-2")
+        #expect(issue.transport == "gateway-relay")
+        #expect(issue.phase == "request")
+    }
+
+    @Test func relayStartupIssueSurvivesUntilReadyStatus() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let issue = TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: "OpenAI API key rejected with 401",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            transport: "gateway-relay",
+            phase: "connect")
+
+        manager._test_recordRealtimeIssue(issue)
+        manager._test_handleRealtimeRelayStatus("Connecting realtime…")
+
+        #expect(manager._test_gatewayTalkActiveModeTitle() == "Realtime unavailable")
+        #expect(manager._test_gatewayTalkLastIssueText()?.contains("OpenAI API key rejected") == true)
+
+        manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
+
+        #expect(manager.statusText == "Listening (Realtime)")
+        #expect(manager._test_gatewayTalkLastIssueText() == nil)
+        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
+    }
+
+    @Test func relayCloseClearsActiveRealtimeMode() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
+        #expect(manager.statusText == "Listening (Realtime)")
+        #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
+
+        manager._test_handleRealtimeRelayStatus("Ready")
+
+        #expect(manager.statusText == "Ready")
+        #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
+        #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
+    }
+
+    @Test func relayRetryClearsStaleFallbackTriggerButKeepsLastIssueVisible() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let issue = TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: "Realtime closed before it became ready.",
+            provider: "openai",
+            model: "gpt-realtime-2",
+            transport: "gateway-relay",
+            phase: "connect")
+
+        manager._test_recordRealtimeIssue(issue)
+        manager._test_markNativeFallbackActive(after: issue)
+        #expect(manager._test_hasPendingRealtimeIssue())
+        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == issue)
+
+        manager._test_prepareRealtimeRelayStart()
+
+        #expect(!manager._test_hasPendingRealtimeIssue())
+        #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
+        #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
     }
 
     @Test func mapsWebRTCRealtimeTransportToGatewayRelayOnIOS() {

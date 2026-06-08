@@ -1213,6 +1213,10 @@
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
+    "./plugin-sdk/provider-catalog-live-runtime": {
+      "types": "./dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
+    },
     "./plugin-sdk/provider-catalog-runtime": {
       "types": "./dist/plugin-sdk/provider-catalog-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-runtime.js"

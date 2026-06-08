@@ -38,6 +38,7 @@ export type SandboxBackendCommandResult = {
 export type SandboxFsBridgeContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;

@@ -18,7 +18,8 @@ const { runBootOnce } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
-const { loadSessionStore, saveSessionStore } = await import("../config/sessions/store.js");
+const { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+  await import("../config/sessions/store.js");
 const { stripInternalRuntimeContext } = await import("../agents/internal-runtime-context.js");
 const { getBootEchoContextForSession, resetBootEchoContextForTests } =
   await import("./boot-echo-guard.js");
@@ -44,8 +45,7 @@ describe("runBootOnce", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { storePath } = resolveMainStore();
-    await fs.rm(storePath, { force: true });
+    clearSessionStoreCacheForTest();
   });
 
   const makeDeps = () => ({
@@ -62,6 +62,9 @@ describe("runBootOnce", () => {
     run: (workspaceDir: string) => Promise<void>,
   ) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(workspaceDir, "state");
+    clearSessionStoreCacheForTest();
     try {
       const bootPath = path.join(workspaceDir, "BOOT.md");
       if (options.bootAsDirectory) {
@@ -71,6 +74,12 @@ describe("runBootOnce", () => {
       }
       await run(workspaceDir);
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      clearSessionStoreCacheForTest();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   };

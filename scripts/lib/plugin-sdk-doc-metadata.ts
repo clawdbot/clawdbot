@@ -105,6 +105,9 @@ export const pluginSdkDocMetadata = {
   "provider-selection-runtime": {
     category: "provider",
   },
+  "provider-catalog-live-runtime": {
+    category: "provider",
+  },
   "runtime-store": {
     category: "runtime",
   },

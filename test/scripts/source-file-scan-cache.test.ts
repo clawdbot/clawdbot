@@ -59,4 +59,46 @@ describe("source file scan cache", () => {
       Array.from({ length: 9 }, (_, index) => `content:file-${index}.ts`),
     );
   });
+
+  it("rejects oversized source files before reading them", async () => {
+    const repoRoot = await makeTempRepo();
+    const srcRoot = path.join(repoRoot, "src");
+    const oversizedPath = path.join(srcRoot, "oversized.ts");
+    await mkdir(srcRoot, { recursive: true });
+    await writeFile(oversizedPath, "x".repeat(32), "utf8");
+    let readCalls = 0;
+
+    await expect(
+      collectSourceFileContents({
+        repoRoot,
+        scanRoots: ["src"],
+        scanExtensions: new Set([".ts"]),
+        ignoredDirNames: new Set(),
+        maxFileBytes: 8,
+        readFile: async () => {
+          readCalls += 1;
+          return "should not read";
+        },
+      }),
+    ).rejects.toThrow("source scan file exceeds 8 byte limit: src/oversized.ts (32 bytes)");
+    expect(readCalls).toBe(0);
+  });
+
+  it("rejects oversized source content returned after a bounded stat", async () => {
+    const repoRoot = await makeTempRepo();
+    const srcRoot = path.join(repoRoot, "src");
+    await mkdir(srcRoot, { recursive: true });
+    await writeFile(path.join(srcRoot, "generated.ts"), "small", "utf8");
+
+    await expect(
+      collectSourceFileContents({
+        repoRoot,
+        scanRoots: ["src"],
+        scanExtensions: new Set([".ts"]),
+        ignoredDirNames: new Set(),
+        maxFileBytes: 8,
+        readFile: async () => "x".repeat(16),
+      }),
+    ).rejects.toThrow("source scan file exceeds 8 byte limit: src/generated.ts (16 bytes)");
+  });
 });

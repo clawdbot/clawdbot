@@ -208,14 +208,15 @@ setInterval(() => {}, 1000);
 
       const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
         timeoutKillGraceMs: 25,
-        timeoutMs: 100,
+        timeoutMs: 500,
       });
+      const runError = runPromise.catch((error: unknown) => error);
       await waitForFile(childPidPath, 2_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
-      await expect(runPromise).rejects.toMatchObject({
+      await expect(runError).resolves.toMatchObject({
         code: "ETIMEDOUT",
-        message: expect.stringContaining("timed out after 100ms"),
+        message: expect.stringContaining("timed out after 500ms"),
       });
       await waitForDead(childPid, 2_000);
     } finally {

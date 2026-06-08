@@ -114,6 +114,29 @@ const catalogOnlyProvider = {
   },
 };
 
+const hybridCatalogProvider = {
+  id: "hybrid",
+  pluginId: "hybrid",
+  label: "Hybrid",
+  auth: [],
+  catalog: {
+    run: vi.fn(async () => ({
+      provider: {
+        baseUrl: "https://hybrid.example/v1",
+        models: [{ id: "live-model", name: "Live Model" }],
+      },
+    })),
+  },
+  staticCatalog: {
+    run: vi.fn(async () => ({
+      provider: {
+        baseUrl: "https://hybrid.example/v1",
+        models: [{ id: "static-model", name: "Static Model" }],
+      },
+    })),
+  },
+};
+
 const vllmProvider = {
   id: "vllm",
   pluginId: "vllm",
@@ -193,10 +216,13 @@ describe("loadProviderCatalogModelsForList", () => {
       "moonshot",
       "openai",
       "ollama",
+      "hybrid",
     ]);
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockImplementation(
       ({ provider }: { provider: string }) =>
-        [...defaultProviders, catalogOnlyProvider].some((entry) => entry.id === provider)
+        [...defaultProviders, catalogOnlyProvider, hybridCatalogProvider].some(
+          (entry) => entry.id === provider,
+        )
           ? [provider]
           : undefined,
     );
@@ -314,6 +340,62 @@ describe("loadProviderCatalogModelsForList", () => {
     const discoveryRequest = firstDiscoveryRequest();
     expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["vllm"]);
     expect(discoveryRequest?.discoveryEntriesOnly).toBe(false);
+  });
+
+  it("uses live catalogs before static catalogs for normal list output", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/live-model"]);
+    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
+    expect(hybridCatalogProvider.staticCatalog.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit static-only list output on static catalogs", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+      staticOnly: true,
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
+    expect(hybridCatalogProvider.catalog.run).not.toHaveBeenCalled();
+    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to static rows when a live catalog fails", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+    hybridCatalogProvider.catalog.run.mockRejectedValueOnce(new Error("live catalog offline"));
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
+    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
+    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
   });
 
   it("resolves provider owners from the installed plugin index before manifest fallback", async () => {

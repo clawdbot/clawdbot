@@ -4,17 +4,20 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 const REDACTED_QA_LIVE_LANE_ISSUE_DETAILS =
   "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)";
 
+export function redactQaLiveLaneDetails() {
+  return REDACTED_QA_LIVE_LANE_ISSUE_DETAILS;
+}
+
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
   issues.push(`${label}: ${formatErrorMessage(error)}`);
 }
 
 export function redactQaLiveLaneIssues(issues: readonly string[]) {
   return issues.map((issue) => {
-    const separatorIndex = issue.indexOf(":");
-    const label = separatorIndex < 0 ? "" : issue.slice(0, separatorIndex).trim();
-    return label
-      ? `${label}: ${REDACTED_QA_LIVE_LANE_ISSUE_DETAILS}`
-      : REDACTED_QA_LIVE_LANE_ISSUE_DETAILS;
+    const firstLine = issue.split(/\r?\n/u, 1)[0] ?? "";
+    const separatorIndex = firstLine.indexOf(":");
+    const label = separatorIndex < 0 ? "" : firstLine.slice(0, separatorIndex).trim();
+    return label ? `${label}: ${redactQaLiveLaneDetails()}` : redactQaLiveLaneDetails();
   });
 }
 

@@ -70,6 +70,9 @@ async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/sessions/store.js", () => ({
     loadSessionStore: () => testStore,
   }));
+  vi.doMock("./session-state-migration.js", () => ({
+    ensureSessionStateMigratedForCommand: vi.fn(async () => undefined),
+  }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
     getWebAuthAgeMs: vi.fn(() => 1234),

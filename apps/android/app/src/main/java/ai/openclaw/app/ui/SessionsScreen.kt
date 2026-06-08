@@ -217,7 +217,7 @@ private fun SessionRow(
   compact: Boolean,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Column {
       Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(vertical = 5.dp),

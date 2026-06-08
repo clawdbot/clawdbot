@@ -1,5 +1,5 @@
 // Exercises core model selection, aliases, thinking defaults, and visibility policy.
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -113,6 +113,11 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 vi.mock("./model-selection-cli.js", () => ({
   isCliProvider: () => false,
 }));
+
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {

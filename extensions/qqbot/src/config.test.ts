@@ -132,6 +132,41 @@ describe("qqbot config", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("accepts canonical group tools config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          requireMention: true,
+          tools: { deny: ["*"] },
+          toolsBySender: {
+            "id:alice": { allow: ["read"] },
+          },
+        },
+      },
+      accounts: {
+        bot2: {
+          groups: {
+            G1: { tools: { allow: [] } },
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects retired group toolPolicy config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          toolPolicy: "none",
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
   it("preserves top-level media and upgrade config on the default account", () => {
     const cfg = {
       channels: {

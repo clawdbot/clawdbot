@@ -11,20 +11,29 @@ import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
+const pluginMetadataMocks = vi.hoisted(() => {
+  const snapshot = {
     plugins: [
       {
         id: "fixture-provider",
+        origin: "bundled",
         providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
       },
     ],
     diagnostics: [],
-  })),
-);
+  };
+  return {
+    getCurrentPluginMetadataSnapshot: vi.fn(() => snapshot),
+    loadPluginMetadataSnapshot: vi.fn(() => snapshot),
+  };
+});
 
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("./external-auth.js", () => ({
@@ -39,7 +48,8 @@ import { markAuthProfileSuccess } from "./profiles.js";
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
     resetProviderAuthAliasMapCacheForTest();
-    loadPluginManifestRegistry.mockClear();
+    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
+    pluginMetadataMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
   it("accepts aliased provider credentials from manifest metadata", async () => {

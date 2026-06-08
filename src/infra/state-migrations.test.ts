@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
@@ -207,6 +208,7 @@ describe("state migrations", () => {
     expect(detectionCase.preview).toEqual([
       `- Sessions: ${path.join(detectionCase.stateDir, "sessions")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
+      `- Sessions: ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions", "sessions.json")} → agent SQLite state`,
       `- Agent dir: ${path.join(detectionCase.stateDir, "agent")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "agent")}`,
       `- MobileAuth auth creds.json: ${path.join(detectionCase.stateDir, "credentials", "creds.json")} → ${path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", detectionCase.env)} → ${resolveChannelAllowFromPath("chatapp", detectionCase.env, "alpha")}`,
@@ -229,7 +231,7 @@ describe("state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
-      `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
+      "Imported 4 session metadata row(s) → agent SQLite state",
       "Canonicalized 2 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
@@ -238,12 +240,11 @@ describe("state migrations", () => {
       `Copied ChatApp pairing allowFrom → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
     ]);
 
-    const mergedStore = JSON.parse(
-      await fs.readFile(
-        path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-        "utf8",
-      ),
-    ) as Record<string, { sessionId: string }>;
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const mergedStore = loadSessionStore(targetStorePath, { skipCache: true }) as Record<
+      string,
+      { sessionId: string }
+    >;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["agent:worker-1:mobileauth:group:mobile-room"]?.sessionId).toBe(
       "group-session",
@@ -256,6 +257,7 @@ describe("state migrations", () => {
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
     ).resolves.toBe("{}\n");
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
+    await expectMissingPath(targetStorePath);
     await expectMissingPath(path.join(stateDir, "sessions", "trace.jsonl"));
 
     await expect(
@@ -281,6 +283,88 @@ describe("state migrations", () => {
     ).resolves.toBe('["123","456"]\n');
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
+  });
+
+  it("preserves metadata-only session rows during legacy JSON import", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    targetStore["agent:worker-1:metadata"] = {
+      updatedAt: 8,
+      groupActivation: "always",
+    };
+    await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Imported 5 session metadata row(s) → agent SQLite state");
+    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    expect(store["agent:worker-1:metadata"]).toMatchObject({
+      groupActivation: "always",
+    });
+    expect(store["agent:worker-1:metadata"]?.sessionId).toBeUndefined();
+    await expectMissingPath(targetStorePath);
+  });
+
+  it("runs plugin doctor session inspections after importing legacy JSON stores", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const detectedWithPluginPlan = {
+      ...detected,
+      pluginPlans: {
+        hasLegacy: true,
+        plans: [
+          {
+            pluginId: "test-plugin",
+            preview: ["- Test plugin session inspection"],
+            migration: {
+              id: "test-plugin-session-inspection",
+              label: "Test plugin session inspection",
+              detectLegacyState: () => ({ preview: ["- Test plugin session inspection"] }),
+              migrateLegacyState: () => {
+                const store = loadSessionStore(targetStorePath, { skipCache: true }) as Record<
+                  string,
+                  { sessionId?: string }
+                >;
+                return {
+                  changes: [`Plugin saw ${store["agent:worker-1:desk"]?.sessionId ?? "missing"}`],
+                  warnings: [],
+                };
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const result = await runLegacyStateMigrations({
+      detected: detectedWithPluginPlan,
+      config: cfg,
+      now: () => 1234,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Plugin saw legacy-direct");
+    expect(
+      result.changes.indexOf("Imported 4 session metadata row(s) → agent SQLite state"),
+    ).toBeLessThan(result.changes.indexOf("Plugin saw legacy-direct"));
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
@@ -532,8 +616,8 @@ describe("state migrations", () => {
     expect(afterRaw).toContain("corrupt trailing garbage");
     expect(afterRaw).toBe(corruptBytes);
 
-    // No "Merged sessions store" change was committed against the corrupt target.
-    expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(false);
+    // No SQLite import was committed against the corrupt target.
+    expect(result.changes.some((c) => c.startsWith("Imported "))).toBe(false);
 
     // And no direct-chat migration is reported either: the legacy direct entry was
     // not saved (the target was left untouched), so doctor/startup logs must not
@@ -578,15 +662,18 @@ describe("state migrations", () => {
     const archivedPath = `${targetStorePath}.corrupt-1234`;
     await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(corruptBytes);
 
-    const recoveredStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+    const recoveredStore = loadSessionStore(targetStorePath, { skipCache: true }) as Record<
       string,
       { sessionId?: string }
     >;
     expect(recoveredStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(recoveredStore["agent:worker-1:desk:target-only"]).toBeUndefined();
     expect(result.changes).toContain(`Archived corrupt target sessions store → ${archivedPath}`);
-    expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+    expect(
+      result.changes.some((change) => /^Imported \d+ session metadata row\(s\)/u.test(change)),
+    ).toBe(true);
     expect(result.warnings).toStrictEqual([]);
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
+    await expectMissingPath(targetStorePath);
   });
 });

@@ -72,8 +72,12 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
     commandName: "whatsapp",
     members: [
       { standardId: "canary", scenarioId: "whatsapp-canary" },
-      { standardId: "allowlist-block", scenarioId: "whatsapp-pairing-block" },
       { standardId: "mention-gating", scenarioId: "whatsapp-mention-gating" },
+      { standardId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
+      { standardId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
+      { standardId: "help-command", scenarioId: "whatsapp-help-command" },
+      { standardId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
+      { standardId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
     ],
   },
 ] as const;

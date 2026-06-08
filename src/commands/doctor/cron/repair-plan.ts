@@ -5,13 +5,28 @@ import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
 export type CronLegacyIssueCounts = Partial<Record<string, number>>;
+export type CronLegacyIssueDetails = {
+  unresolvedAgentTurnShellToolPrompt?: string[];
+};
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function formatJobNameList(names: string[] | undefined): string {
+  if (!names || names.length === 0) {
+    return "";
+  }
+  const preview = names.slice(0, 5).map((name) => `\`${name}\``);
+  const remaining = names.length - preview.length;
+  return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
+}
+
 /** Convert legacy cron issue counts into doctor preview lines. */
-export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
+export function formatLegacyIssuePreview(
+  issues: CronLegacyIssueCounts,
+  details: CronLegacyIssueDetails = {},
+): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
@@ -36,6 +51,16 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyPayloadCodexModel) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
+  if (issues.legacyAgentTurnCommandPayload) {
+    lines.push(
+      `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
+    );
+  }
+  if (issues.unresolvedAgentTurnShellToolPrompt) {
+    lines.push(
+      `- ${pluralize(issues.unresolvedAgentTurnShellToolPrompt, "job")} asks an isolated agent for shell/process tools and needs manual command conversion${formatJobNameList(details.unresolvedAgentTurnShellToolPrompt)}`,
     );
   }
   if (issues.legacyPayloadProvider) {

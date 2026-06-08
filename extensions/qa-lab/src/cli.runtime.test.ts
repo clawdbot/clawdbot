@@ -450,6 +450,14 @@ describe("qa cli runtime", () => {
   it("keeps telegram exit code clear when --allow-failures is set", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
+    await fs.writeFile(
+      telegramSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 1 },
+        scenarios: [{ status: "fail" }],
+      }),
+      "utf8",
+    );
     runTelegramQaLive.mockResolvedValueOnce({
       outputDir: telegramArtifactsDir,
       reportPath: path.join(telegramArtifactsDir, "report.md"),
@@ -514,6 +522,39 @@ describe("qa cli runtime", () => {
           failed: 1,
         },
         scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("sets a failing exit code when host suite scenarios are skipped", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 0,
+          skipped: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "skip" }],
       }),
       "utf8",
     );
@@ -720,7 +761,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         preflight: true,
       }),
-    ).rejects.toThrow("QA parity preflight failed with 1 failing scenario.");
+    ).rejects.toThrow("QA parity preflight failed with 1 failing or skipped scenario.");
   });
 
   it("keeps parity preflight exit code clear when --allow-failures is set", async () => {
@@ -1503,6 +1544,46 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("sets a failing exit code when multipass summary reports skipped scenarios", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({
+        counts: {
+          total: 2,
+          passed: 1,
+          failed: 0,
+          skipped: 1,
+        },
+      }),
+      "utf8",
+    );
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects malformed multipass summary JSON", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
     const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
@@ -1577,7 +1658,7 @@ describe("qa cli runtime", () => {
           repoRoot: "/tmp/openclaw-repo",
           runner: "multipass",
         }),
-      ).rejects.toThrow("did not include counts.failed or scenarios[].status");
+      ).rejects.toThrow("did not include counts.failed, counts.skipped, or scenarios[].status");
     } finally {
       await fs.rm(repoRoot, { recursive: true, force: true });
     }

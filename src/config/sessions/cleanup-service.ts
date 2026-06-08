@@ -330,6 +330,7 @@ function addEntryArtifactPathsToSet(params: {
 async function previewStoreCleanup(params: {
   cfg: OpenClawConfig;
   target: SessionStoreTarget;
+  beforeStore?: Record<string, SessionEntry>;
   maintenance: ResolvedSessionMaintenanceConfig;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
@@ -337,7 +338,9 @@ async function previewStoreCleanup(params: {
   fixMissing?: boolean;
   fixDmScope?: boolean;
 }) {
-  const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
+  const beforeStore = params.beforeStore
+    ? cloneSessionStoreRecord(params.beforeStore)
+    : loadSessionStore(params.target.storePath, { skipCache: true });
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = cloneSessionStoreRecord(beforeStore);
   const staleKeys = new Set<string>();
@@ -470,6 +473,7 @@ export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
   targets?: SessionStoreTarget[];
+  previewStores?: ReadonlyMap<string, Record<string, SessionEntry>>;
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   const maintenance = resolveMaintenanceConfig();
@@ -487,6 +491,7 @@ export async function runSessionsCleanup(params: {
     const result = await previewStoreCleanup({
       cfg,
       target,
+      beforeStore: params.previewStores?.get(target.storePath),
       maintenance,
       mode,
       dryRun: Boolean(opts.dryRun),

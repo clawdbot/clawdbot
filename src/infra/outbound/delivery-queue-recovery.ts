@@ -326,17 +326,6 @@ async function moveEntryToFailedWithLogging(
   }
 }
 
-async function deferRemainingEntriesForBudget(
-  entries: readonly QueuedDelivery[],
-  stateDir: string | undefined,
-): Promise<void> {
-  // Increment retryCount so entries that are repeatedly deferred by the
-  // recovery budget eventually hit MAX_RETRIES and get pruned.
-  await Promise.allSettled(
-    entries.map((entry) => failDelivery(entry.id, "recovery time budget exceeded", stateDir)),
-  );
-}
-
 /** Compute the backoff delay in ms for a given retry count. */
 export function computeBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
@@ -624,12 +613,12 @@ export async function recoverPendingDeliveries(opts: {
   const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
 
-  for (let i = 0; i < pending.length; i++) {
-    const entry = pending[i];
+  for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
       opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
-      await deferRemainingEntriesForBudget(pending.slice(i), opts.stateDir);
+      // Budget deferral is not a delivery attempt. Keep entries pending without
+      // consuming retry budget; attempted failures still flow through failDelivery.
       break;
     }
 

@@ -122,6 +122,33 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   </Accordion>
 </AccordionGroup>
 
+### Command payloads
+
+Use command payloads for deterministic scripts that should run inside the Gateway scheduler without starting a model-backed isolated agent turn. Command jobs execute on the Gateway host, capture stdout/stderr, record the run in cron history, and reuse the same `announce`, `webhook`, and `none` delivery modes as isolated jobs.
+
+<Note>
+Command cron is an operator-admin Gateway automation surface, not an agent
+`tools.exec` call. Creating, updating, removing, or manually running cron jobs
+requires `operator.admin`; scheduled command runs later execute inside the
+Gateway process as that admin-authored automation. Agent exec policy such as
+`tools.exec.mode`, approval prompts, and per-agent tool allowlists governs
+model-visible exec tools, not command cron payloads.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` when you want exact argv execution without shell parsing. Optional `--command-env KEY=VALUE`, `--command-input`, `--timeout-seconds`, `--no-output-timeout-seconds`, and `--output-max-bytes` fields control the process environment, stdin, and output bounds.
+
+If stdout is non-empty, that text is the delivered result. If stdout is empty and stderr is non-empty, stderr is delivered. If both streams are present, cron delivers a small `stdout:` / `stderr:` block. A zero exit code records the run as `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+
 ### Payload options for isolated jobs
 
 <ParamField path="--message" type="string" required>
@@ -244,6 +271,17 @@ Failure notifications follow a separate destination path:
       "Summarize today's deploys as JSON." \
       --name "Deploy digest" \
       --webhook "https://example.invalid/openclaw/cron"
+    ```
+  </Tab>
+  <Tab title="Command output">
+    ```bash
+    openclaw cron create "*/15 * * * *" \
+      --name "Queue depth probe" \
+      --command "scripts/check-queue.sh" \
+      --command-cwd "/srv/app" \
+      --announce \
+      --channel telegram \
+      --to "-1001234567890"
     ```
   </Tab>
 </Tabs>

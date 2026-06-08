@@ -339,6 +339,18 @@ function stripExistingContext(text: string) {
   return text.slice(0, index).trim();
 }
 
+function assertNoCronCommandPayload(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+  if (payload?.kind === "command") {
+    throw new Error(
+      "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+}
+
 function truncateText(input: string, maxLen: number) {
   if (input.length <= maxLen) {
     return input;
@@ -657,6 +669,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("job required");
           }
           const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+          assertNoCronCommandPayload(canonicalJob);
           assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
           const job =
             normalizeCronJobCreate(canonicalJob, {
@@ -774,6 +787,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const canonicalPatch = canonicalizeCronToolObject(
             params.patch as Record<string, unknown>,
           );
+          assertNoCronCommandPayload(canonicalPatch);
           assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {

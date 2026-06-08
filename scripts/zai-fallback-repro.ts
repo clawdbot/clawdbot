@@ -1,6 +1,7 @@
 // Zai Fallback Repro script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +37,7 @@ type ResolvePnpmCommandOptions = {
 };
 
 const COMMAND_OUTPUT_MAX_CHARS = 512 * 1024;
+const SESSION_TRANSCRIPT_SCAN_BYTES = 16 * 1024 * 1024;
 type ReproLog = (message: string) => void;
 type RunCommand = typeof runCommand;
 
@@ -46,10 +48,8 @@ type RunZaiFallbackReproDeps = {
   mkdtemp?: typeof fs.mkdtemp;
   mkdir?: typeof fs.mkdir;
   randomUUID?: typeof randomUUID;
-  readFile?: typeof fs.readFile;
   rm?: typeof fs.rm;
   runCommand?: RunCommand;
-  warn?: ReproLog;
   writeFile?: typeof fs.writeFile;
 };
 
@@ -76,6 +76,46 @@ function formatBoundedReproOutput(capture: OutputCapture): string {
     return capture.text;
   }
   return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+export async function sessionTranscriptHasToolResult(
+  sessionFile: string,
+  maxBytes = SESSION_TRANSCRIPT_SCAN_BYTES,
+): Promise<boolean> {
+  let scannedBytes = 0;
+  let carry = "";
+  try {
+    for await (const rawChunk of createReadStream(sessionFile, { highWaterMark: 64 * 1024 })) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(String(rawChunk));
+      const remaining = maxBytes - scannedBytes;
+      if (remaining <= 0) {
+        break;
+      }
+      const readableChunk = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      scannedBytes += readableChunk.length;
+      const text = `${carry}${readableChunk.toString("utf8")}`;
+      if (text.includes('"toolResult"') || text.includes('"tool_result"')) {
+        return true;
+      }
+      carry = text.slice(-64);
+      if (readableChunk.length < chunk.length) {
+        break;
+      }
+    }
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  return false;
+}
+
+export function outputContainsStandaloneToolOk(output: string): boolean {
+  return output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .some((line) => line === "tool-ok");
 }
 
 export function resolveZaiFallbackPnpmCommand(
@@ -163,11 +203,9 @@ async function runCommand(
 export async function runZaiFallbackRepro(deps: RunZaiFallbackReproDeps = {}): Promise<number> {
   const env = deps.env ?? process.env;
   const log = deps.log ?? console.log;
-  const warn = deps.warn ?? console.warn;
   const error = deps.error ?? console.error;
   const mkdtemp = deps.mkdtemp ?? fs.mkdtemp;
   const mkdir = deps.mkdir ?? fs.mkdir;
-  const readFile = deps.readFile ?? fs.readFile;
   const rm = deps.rm ?? fs.rm;
   const writeFile = deps.writeFile ?? fs.writeFile;
   const run = deps.runCommand ?? runCommand;
@@ -242,9 +280,9 @@ export async function runZaiFallbackRepro(deps: RunZaiFallbackReproDeps = {}): P
     }
 
     const sessionFile = path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
-    const transcript = await readFile(sessionFile, "utf8").catch(() => "");
-    if (!transcript.includes('"toolResult"')) {
-      warn("Warning: no toolResult entries detected in session history.");
+    if (!(await sessionTranscriptHasToolResult(sessionFile))) {
+      error("FAIL: no toolResult entries detected in session history.");
+      return 1;
     }
 
     log("== Run 2: force auth failover to Z.AI");
@@ -257,8 +295,12 @@ export async function runZaiFallbackRepro(deps: RunZaiFallbackReproDeps = {}): P
     );
 
     if (run2.code === 0) {
-      log("PASS: fallback succeeded.");
-      return 0;
+      if (outputContainsStandaloneToolOk(`${run2.stdout}\n${run2.stderr}`)) {
+        log("PASS: fallback succeeded.");
+        return 0;
+      }
+      error("FAIL: fallback run did not return standalone tool-ok.");
+      return 1;
     }
 
     error("FAIL: fallback failed.");

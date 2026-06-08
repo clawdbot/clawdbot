@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createPluginStateKeyedStore,
@@ -259,6 +260,51 @@ function writeJson5(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
+function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+    name?: unknown;
+    pk?: unknown;
+  }>;
+  return rows
+    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
+    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
+    .map((row) => row.name as string);
+}
+
+function createLegacyAgentDatabaseRegistry(stateDir: string): string {
+  const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(stateDatabasePath);
+  try {
+    db.exec(`
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases (
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      ) VALUES (
+        'worker-1',
+        '/legacy/worker-1/openclaw-agent.sqlite',
+        1,
+        10,
+        20
+      );
+    `);
+  } finally {
+    db.close();
+  }
+  return stateDatabasePath;
+}
+
 function writeLegacySessionsFixture(params: {
   root: string;
   sessions: Record<string, Record<string, unknown> & { sessionId: string; updatedAt: number }>;
@@ -486,7 +532,7 @@ async function withStateDir<T>(root: string, run: () => Promise<T>): Promise<T> 
 }
 
 function readSessionsStore(targetDir: string) {
-  return JSON.parse(fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8")) as Record<
+  return loadSessionStore(path.join(targetDir, "sessions.json"), { skipCache: true }) as Record<
     string,
     { sessionId: string }
   >;
@@ -613,9 +659,7 @@ describe("doctor legacy state migrations", () => {
       now: () => 123,
     });
     const targetDir = path.join(root, "agents", "main", "sessions");
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    const store = readSessionsStore(targetDir);
 
     migratedLegacySessionsCase = { result, targetDir, legacySessionsDir, store };
   });
@@ -635,6 +679,140 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
+  });
+
+  it("imports detected non-default configured session stores into SQLite", async () => {
+    const root = await makeTempRoot();
+    const storeTemplate = path.join(root, "stores", "sessions-{agentId}.json");
+    const workStorePath = path.join(root, "stores", "sessions-work.json");
+    const cfg: OpenClawConfig = {
+      session: { store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    };
+    writeJson5(workStorePath, {
+      main: { sessionId: "work-session", updatedAt: 20 },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(detected.preview).toContain(`- Sessions: ${workStorePath} → agent SQLite state`);
+    expect(result.changes.some((change) => change.includes(workStorePath))).toBe(true);
+    const store = loadSessionStore(workStorePath, { skipCache: true });
+    expect(store["agent:work:main"]?.sessionId).toBe("work-session");
+    expect(store.main).toBeUndefined();
+    expect(fs.existsSync(workStorePath)).toBe(false);
+  });
+
+  it("imports shared configured session stores without remapping main agent rows", async () => {
+    const root = await makeTempRoot();
+    const sharedStorePath = path.join(root, "stores", "shared-sessions.json");
+    const cfg: OpenClawConfig = {
+      session: { store: sharedStorePath },
+      agents: { list: [{ id: "work", default: true }, { id: "main" }] },
+    };
+    writeJson5(sharedStorePath, {
+      "agent:main:main": { sessionId: "main-session", updatedAt: 20 },
+      "agent:work:main": { sessionId: "work-session", updatedAt: 10 },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    const store = loadSessionStore(sharedStorePath, { skipCache: true });
+    expect(store["agent:main:main"]?.sessionId).toBe("main-session");
+    expect(store["agent:work:main"]?.sessionId).toBe("work-session");
+    expect(fs.existsSync(sharedStorePath)).toBe(false);
+  });
+
+  it("migrates the legacy shared state agent registry primary key", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, ".openclaw");
+    const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(detected.preview).toContain(
+      "- Shared SQLite schema: agent database registry primary key → agent_id,path",
+    );
+
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Migrated shared state agent database registry primary key → agent_id,path",
+    ]);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(stateDatabasePath);
+    try {
+      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id", "path"]);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_databases (
+            agent_id,
+            path,
+            schema_version,
+            last_seen_at,
+            size_bytes
+          ) VALUES (
+            'worker-1',
+            '/relocated/worker-1/openclaw-agent.sqlite',
+            1,
+            20,
+            30
+          )
+          ON CONFLICT(agent_id, path) DO UPDATE SET
+            last_seen_at = excluded.last_seen_at,
+            size_bytes = excluded.size_bytes;
+        `),
+      ).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not repair newer shared state schemas", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, ".openclaw");
+    const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const seededDb = new DatabaseSync(stateDatabasePath);
+    seededDb.exec("PRAGMA user_version = 2;");
+    seededDb.close();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("uses newer schema version 2");
+
+    const db = new DatabaseSync(stateDatabasePath);
+    try {
+      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id"]);
+    } finally {
+      db.close();
+    }
   });
 
   it("migrates legacy ACP metadata from sessions.json into shared SQLite", async () => {
@@ -673,7 +851,7 @@ describe("doctor legacy state migrations", () => {
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(true);
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[legacySessionKey]?.acp).toBeUndefined();
 
     const sqlite = requireNodeSqlite();
@@ -788,7 +966,33 @@ describe("doctor legacy state migrations", () => {
     const targetDir = path.join(root, "agents", "main", "sessions");
     expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(true);
+    expect(readSessionsStore(targetDir)["agent:main:main"]?.sessionId).toBe("a");
+  });
+
+  it("auto-migrates custom configured session stores on startup", async () => {
+    const root = await makeTempRoot();
+    const storeTemplate = path.join(root, "stores", "sessions-{agentId}.json");
+    const workStorePath = path.join(root, "stores", "sessions-work.json");
+    const cfg: OpenClawConfig = {
+      session: { store: storeTemplate },
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    };
+    writeJson5(workStorePath, {
+      main: { sessionId: "work-session", updatedAt: 20 },
+    });
+
+    const { result, log } = await runAutoMigrateLegacyStateWithLog({
+      root,
+      cfg,
+      now: () => 123,
+    });
+
+    expect(result.migrated).toBe(true);
+    expect(log.info).toHaveBeenCalled();
+    const store = loadSessionStore(workStorePath, { skipCache: true });
+    expect(store["agent:work:main"]?.sessionId).toBe("work-session");
+    expect(store.main).toBeUndefined();
+    expect(fs.existsSync(workStorePath)).toBe(false);
   });
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
@@ -2154,9 +2358,7 @@ describe("doctor legacy state migrations", () => {
 
     const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
 
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    const store = readSessionsStore(targetDir);
     expect(result.migrated).toBe(true);
     expect(log.info).toHaveBeenCalled();
     expect(store["main"]).toBeUndefined();

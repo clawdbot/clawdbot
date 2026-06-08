@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
+  linuxUpdateScript,
   macosUpdateScript,
   windowsUpdateScript,
 } from "../../scripts/e2e/parallels/npm-update-scripts.ts";
@@ -158,6 +159,29 @@ describe("parallels npm update smoke", () => {
     expect(updateBlock).toContain("appendFileSync(logPath, text");
     expect(updateBlock).toContain("run: ({ signal }) => fn({ append, logPath, signal })");
     expect(updateBlock).not.toContain("log += text");
+  });
+
+  it("bounds POSIX guest failure logs", () => {
+    const scripts = [
+      macosUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+      linuxUpdateScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.5.3-beta.2",
+        updateTarget: "2026.5.3-beta.2",
+      }),
+    ].join("\n");
+
+    expect(scripts).toContain("print_log_tail()");
+    expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
+    expect(scripts).toContain('print_log_tail "$output_file"');
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2");
+    expect(scripts).toContain("print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2");
+    expect(scripts).not.toContain('cat "$output_file"');
+    expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {

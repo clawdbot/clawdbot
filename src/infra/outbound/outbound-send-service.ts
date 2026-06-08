@@ -75,6 +75,9 @@ async function sendCoreMessage(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -98,6 +101,9 @@ async function sendCoreMessage(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
@@ -240,6 +246,9 @@ export async function executeSendAction(params: {
   payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;

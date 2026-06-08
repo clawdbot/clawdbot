@@ -347,4 +347,127 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
   }, 15_000);
+
+  it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "rw",
+            workspaceRoot: path.join(workspaceDir, ".openclaw", "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    expect(syncOptions?.targetWorkspaceDir?.startsWith(path.join(workspaceDir, ".openclaw"))).toBe(
+      false,
+    );
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
+  }, 15_000);
+
+  it("materializes skills for shared writable sandboxes even when roots match", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("shared-workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "shared",
+            workspaceAccess: "rw",
+            workspaceRoot: workspaceDir,
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]shared-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
+  }, 15_000);
 });

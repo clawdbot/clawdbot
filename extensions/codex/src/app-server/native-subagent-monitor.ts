@@ -60,6 +60,7 @@ type ChildState = {
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletionKey?: string;
+  noFinalCompletionFallbackTimer?: ReturnType<typeof setTimeout>;
 };
 
 type TranscriptCompletion = CodexNativeSubagentCompletion & {
@@ -302,6 +303,17 @@ export class CodexNativeSubagentMonitor {
         continue;
       }
       const completion = toThreadCompletion(nativeCompletion, childState.childThreadId);
+      if (shouldWaitForTranscriptCompletion(completion, this.codexHome)) {
+        // Codex can notify `completed: null` before the child transcript exposes
+        // its final assistant message; poll briefly before delivering the no-final fallback.
+        const eventAt = Date.now();
+        const reconciled = await this.reconcileChildTranscript(childState.childThreadId);
+        if (!reconciled) {
+          this.scheduleTranscriptPoll(childState);
+          this.scheduleNoFinalCompletionFallback(state, childState, completion, eventAt);
+        }
+        continue;
+      }
       await this.processCompletion(state, completion);
     }
   }
@@ -350,6 +362,10 @@ export class CodexNativeSubagentMonitor {
       if (childState.transcriptPollTimer) {
         clearTimeout(childState.transcriptPollTimer);
         childState.transcriptPollTimer = undefined;
+      }
+      if (childState.noFinalCompletionFallbackTimer) {
+        clearTimeout(childState.noFinalCompletionFallbackTimer);
+        childState.noFinalCompletionFallbackTimer = undefined;
       }
     }
     if (!state.requesterSessionKey) {
@@ -578,6 +594,35 @@ export class CodexNativeSubagentMonitor {
     unrefTimer(childState.transcriptPollTimer);
   }
 
+  private scheduleNoFinalCompletionFallback(
+    state: ParentState,
+    childState: ChildState,
+    completion: CodexNativeSubagentCompletion,
+    eventAt: number,
+  ): void {
+    if (childState.transcriptTerminal || childState.noFinalCompletionFallbackTimer) {
+      return;
+    }
+    const delayMs = noFinalCompletionFallbackDelayMs(this.transcriptPollDelaysMs);
+    childState.noFinalCompletionFallbackTimer = setTimeout(() => {
+      childState.noFinalCompletionFallbackTimer = undefined;
+      void this.reconcileChildTranscript(childState.childThreadId)
+        .catch((error: unknown) => {
+          embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
+            childThreadId: childState.childThreadId,
+            error: formatErrorMessage(error),
+          });
+          return false;
+        })
+        .then((reconciled) => {
+          if (!reconciled && !childState.transcriptTerminal) {
+            void this.processCompletion(state, completion, eventAt);
+          }
+        });
+    }, delayMs);
+    unrefTimer(childState.noFinalCompletionFallbackTimer);
+  }
+
   private clearTimers(): void {
     if (this.taskRowReconcileTimer) {
       clearInterval(this.taskRowReconcileTimer);
@@ -591,6 +636,10 @@ export class CodexNativeSubagentMonitor {
       if (childState.completionDeliveryTimer) {
         clearTimeout(childState.completionDeliveryTimer);
         childState.completionDeliveryTimer = undefined;
+      }
+      if (childState.noFinalCompletionFallbackTimer) {
+        clearTimeout(childState.noFinalCompletionFallbackTimer);
+        childState.noFinalCompletionFallbackTimer = undefined;
       }
     }
   }
@@ -830,6 +879,23 @@ function toThreadCompletion(
   };
 }
 
+function shouldWaitForTranscriptCompletion(
+  completion: CodexNativeSubagentCompletion,
+  codexHome: string | undefined,
+): boolean {
+  return Boolean(
+    codexHome &&
+    completion.status === "succeeded" &&
+    completion.statusLabel === "completed_without_final_message",
+  );
+}
+
+function noFinalCompletionFallbackDelayMs(delays: readonly number[]): number {
+  const first = delays[0] ?? 0;
+  const second = delays[1] ?? 0;
+  return Math.max(1, first + second);
+}
+
 function readSpawnParentThreadId(thread: JsonObject | undefined): string | undefined {
   const source = isJsonObject(thread?.source) ? thread.source : undefined;
   const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
@@ -999,15 +1065,14 @@ async function readTranscriptCompletion(
     }
     const payloadType = readString(payload, "type");
     if (payloadType === "task_complete") {
+      const result =
+        readString(payload, "last_agent_message")?.trim() || readString(payload, "message")?.trim();
       completion = {
         childThreadId,
         parentThreadId,
         status: "succeeded",
-        statusLabel: "task_complete",
-        result:
-          readString(payload, "last_agent_message")?.trim() ||
-          readString(payload, "message")?.trim() ||
-          "(no output)",
+        statusLabel: result ? "task_complete" : "completed_without_final_message",
+        result: result ?? "Codex native subagent completed without a final assistant message.",
         completedAt: secondsToMillis(readNumber(payload, "completed_at")) ?? readTimestamp(entry),
       };
     } else if (payloadType === "task_failed") {

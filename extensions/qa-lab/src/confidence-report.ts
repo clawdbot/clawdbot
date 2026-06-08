@@ -383,6 +383,15 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       (scenario) =>
         isRecord(scenario) && (scenario.status === "skip" || scenario.status === "skipped"),
     ).length ?? 0;
+  const unknownBlockingScenarioCount =
+    scenarios?.filter(
+      (scenario) =>
+        !isRecord(scenario) ||
+        (scenario.status !== "pass" &&
+          scenario.status !== "fail" &&
+          scenario.status !== "skip" &&
+          scenario.status !== "skipped"),
+    ).length ?? 0;
   const hasScenarioRows = scenarios !== undefined && scenarios.length > 0;
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
@@ -430,6 +439,13 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
         )}, failed scenarios=${failedScenarios.length}`,
       };
     }
+    if (unknownBlockingScenarioCount > 0) {
+      return {
+        passed: false,
+        status: "unknown",
+        details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
+      };
+    }
     const explicitSkippedCount = readNumber(counts?.skipped);
     const inferredSkippedCount =
       totalCount === undefined || passedCount === undefined
@@ -470,6 +486,21 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const fallbackFailedScenarios = payload.scenarios.filter(
     (scenario) => isRecord(scenario) && scenario.status === "fail",
   );
+  const fallbackUnknownBlockingScenarios = payload.scenarios.filter(
+    (scenario) =>
+      !isRecord(scenario) ||
+      (scenario.status !== "pass" &&
+        scenario.status !== "fail" &&
+        scenario.status !== "skip" &&
+        scenario.status !== "skipped"),
+  );
+  if (fallbackUnknownBlockingScenarios.length > 0) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary has ${fallbackUnknownBlockingScenarios.length} scenario row(s) with unsupported non-pass status`,
+    };
+  }
   return {
     passed: fallbackFailedScenarios.length === 0,
     details: `qa-suite-summary failed scenarios=${fallbackFailedScenarios.length}`,

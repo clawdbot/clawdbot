@@ -21,6 +21,10 @@ const fsSafeMocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
 }));
 
+const sqliteStoreMocks = vi.hoisted(() => ({
+  closeSqliteSessionStoreDatabase: vi.fn(),
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   isGatewayCredentialsRequiredError: vi.fn(),
@@ -43,11 +47,25 @@ vi.mock("../infra/fs-safe.js", () => ({
   movePathToTrash: fsSafeMocks.movePathToTrash,
 }));
 
+vi.mock("../config/sessions/store-sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/sessions/store-sqlite.js")>(
+    "../config/sessions/store-sqlite.js",
+  );
+  return {
+    ...actual,
+    closeSqliteSessionStoreDatabase: (storePath: string) => {
+      sqliteStoreMocks.closeSqliteSessionStoreDatabase(storePath);
+      return actual.closeSqliteSessionStoreDatabase(storePath);
+    },
+  };
+});
+
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
+import { resetSessionStateMigratedForCommandForTest } from "./session-state-migration.js";
 
 const runtime = createTestRuntime();
 
@@ -97,6 +115,7 @@ describe("agents delete command", () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     fsSafeMocks.movePathToTrash.mockClear();
+    sqliteStoreMocks.closeSqliteSessionStoreDatabase.mockClear();
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(
@@ -111,6 +130,7 @@ describe("agents delete command", () => {
     gatewayMocks.isGatewayTransportError.mockImplementation(
       (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
     );
+    resetSessionStateMigratedForCommandForTest();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -234,6 +254,70 @@ describe("agents delete command", () => {
       expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
         agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
       });
+      expectSessionStore(storePath, {
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
+      });
+      expect(sqliteStoreMocks.closeSqliteSessionStoreDatabase).toHaveBeenCalledWith(storePath);
+      const agentDir = path.join(stateDir, "agents", "ops", "agent");
+      const resolvedAgentDir = path.join(
+        await fs.realpath(path.dirname(agentDir)),
+        path.basename(agentDir),
+      );
+      const agentTrashCallIndex = fsSafeMocks.movePathToTrash.mock.calls.findIndex(
+        ([targetPath]) => targetPath === resolvedAgentDir,
+      );
+      expect(agentTrashCallIndex).toBeGreaterThanOrEqual(0);
+      expect(
+        sqliteStoreMocks.closeSqliteSessionStoreDatabase.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        fsSafeMocks.movePathToTrash.mock.invocationCallOrder[agentTrashCallIndex] ?? 0,
+      );
+    });
+  });
+
+  it("imports legacy JSON stores before local deletion purges agent rows", async () => {
+    await withStateDirEnv("openclaw-agents-delete-legacy-store-", async ({ stateDir }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        session: { store: path.join(stateDir, "sessions.json") },
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:ops:quietchat:direct:u1": {
+            sessionId: "sess-ops-direct",
+            updatedAt: now + 2,
+          },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
+        }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(stateDir, "workspace-ops"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "agents", "ops", "agent"), {
+        recursive: true,
+      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: cfg,
+        runtimeConfig: cfg,
+        sourceConfig: cfg,
+        resolved: cfg,
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      await expect(fs.access(storePath)).rejects.toThrow();
       expectSessionStore(storePath, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });

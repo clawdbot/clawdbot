@@ -58,6 +58,37 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
   });
 
+  it("can constrain live loading to materialized workspace skills", () => {
+    const eligibility = {
+      remote: {
+        platforms: ["linux"],
+        hasBin: () => false,
+        hasAnyBin: () => true,
+        note: "sandbox",
+      },
+    };
+
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace/.openclaw/sandbox-skills",
+      config: {},
+      eligibility,
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+      workspaceOnly: true,
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith(
+      "/tmp/workspace/.openclaw/sandbox-skills",
+      {
+        config: {},
+        eligibility,
+        workspaceOnly: true,
+      },
+    );
+  });
+
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
     const sourceConfig: OpenClawConfig = {
       skills: {

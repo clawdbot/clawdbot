@@ -30,6 +30,23 @@ describe("qa suite summary helpers", () => {
     ).toBe(3);
   });
 
+  it("counts unknown scenario statuses as blocking for strict gates", () => {
+    expect(
+      countQaSuiteFailedOrSkippedScenarios([
+        { status: "pass" },
+        { status: "timeout" as never },
+        { status: "error" as never },
+      ]),
+    ).toBe(2);
+
+    expect(
+      readQaSuiteFailedOrSkippedScenarioCountFromSummary({
+        counts: { failed: 0, skipped: 0 },
+        scenarios: [{ status: "timeout" }, { status: "error" }],
+      }),
+    ).toBe(2);
+  });
+
   it("uses the larger failure signal when counts and scenarios disagree", () => {
     expect(
       readQaSuiteFailedScenarioCountFromSummary({

@@ -1,16 +1,16 @@
 // Session reset cleanup tests protect ACP metadata resets, active run shutdown,
 // hook emission, thread bindings, and browser/MCP cleanup side effects.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, readSessionStore, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -256,10 +256,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { acp?: ResetAcpState }
-  >;
+  const store = readSessionStore(storePath) as Record<string, { acp?: ResetAcpState }>;
   expect(store["agent:main:main"]).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
 });
@@ -340,29 +337,19 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
   };
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(codexStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify({
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    }),
-    "utf-8",
-  );
-  await fs.writeFile(
-    codexStorePath,
-    JSON.stringify({
-      "agent:codex:acp:cross-store-child": {
-        sessionId: "sess-codex-child",
-        updatedAt: Date.now(),
-        spawnedBy: "agent:main:main",
-      },
-    }),
-    "utf-8",
-  );
+  await writeSessionStoreForTestAsync(mainStorePath, {
+    "agent:main:main": {
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+    },
+  });
+  await writeSessionStoreForTestAsync(codexStorePath, {
+    "agent:codex:acp:cross-store-child": {
+      sessionId: "sess-codex-child",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:main",
+    },
+  });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
     meta: {

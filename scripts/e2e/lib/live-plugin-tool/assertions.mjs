@@ -80,7 +80,10 @@ function stringifyToolResult(value) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => stringifyToolResult(entry)).filter(Boolean).join("\n");
+    return value
+      .map((entry) => stringifyToolResult(entry))
+      .filter(Boolean)
+      .join("\n");
   }
   if (!isRecord(value)) {
     return value == null ? "" : String(value);
@@ -94,7 +97,10 @@ function extractTranscriptText(value) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => extractTranscriptText(entry)).filter(Boolean).join("\n");
+    return value
+      .map((entry) => extractTranscriptText(entry))
+      .filter(Boolean)
+      .join("\n");
   }
   if (!isRecord(value)) {
     return value == null ? "" : String(value);
@@ -179,7 +185,11 @@ function extractTranscriptToolResults(message) {
         normalizeToolCallId(message.id),
       ...(tool ? { tool } : {}),
       text,
-      failure: isFailureLikeToolResult({ text, isError: message.isError, is_error: message.is_error }),
+      failure: isFailureLikeToolResult({
+        text,
+        isError: message.isError,
+        is_error: message.is_error,
+      }),
     });
   }
 

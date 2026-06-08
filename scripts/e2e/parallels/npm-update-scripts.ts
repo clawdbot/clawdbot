@@ -46,6 +46,27 @@ rm -f "$provider_config_batch"
 if [ "$provider_config_exit" -ne 0 ]; then exit "$provider_config_exit"; fi`;
 }
 
+function posixPrintLogTailFunction(): string {
+  return `print_log_tail() {
+  log_file="$1"
+  max_bytes="\${OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES:-262144}"
+  case "$max_bytes" in
+    ''|*[!0-9]*) max_bytes=262144 ;;
+    *) [ "$max_bytes" -gt 0 ] || max_bytes=262144 ;;
+  esac
+  [ -f "$log_file" ] || return 0
+  log_bytes="$(wc -c <"$log_file" 2>/dev/null || echo 0)"
+  log_bytes="\${log_bytes//[[:space:]]/}"
+  case "$log_bytes" in
+    ''|*[!0-9]*) log_bytes=0 ;;
+  esac
+  if [ "$log_bytes" -gt "$max_bytes" ]; then
+    echo "--- $log_file truncated: showing last $max_bytes of $log_bytes bytes ---"
+  fi
+  tail -c "$max_bytes" "$log_file" 2>/dev/null || true
+}`;
+}
+
 function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
   return `${posixProviderOnlyPluginIsolationScript({
     fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
@@ -61,7 +82,7 @@ for attempt in 1 2; do
   OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --json >"$output_file" 2>&1
   rc=$?
   set -e
-  cat "$output_file"
+  print_log_tail "$output_file"
   if [ "$rc" -ne 0 ]; then
     rm -f "$output_file"
     exit "$rc"
@@ -145,6 +166,7 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=${macosGuestPath}
+${posixPrintLogTailFunction()}
 resolve_required_command() {
   command -v "$1" || {
     echo "required command not found on PATH: $1" >&2
@@ -206,7 +228,7 @@ wait_for_gateway() {
     fi
     sleep 2
   done
-  cat /tmp/openclaw-parallels-macos-gateway.log >&2 || true
+  print_log_tail /tmp/openclaw-parallels-macos-gateway.log >&2
   echo "gateway did not become ready after update" >&2
   exit 1
 }
@@ -307,6 +329,7 @@ export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
 export OPENCLAW_ALLOW_ROOT=1
+${posixPrintLogTailFunction()}
 scrub_future_plugin_entries() {
   node - <<'JS'
 const fs = require("node:fs");
@@ -349,7 +372,7 @@ wait_for_gateway() {
     fi
     sleep 2
   done
-  cat /tmp/openclaw-parallels-linux-gateway.log >&2 || true
+  print_log_tail /tmp/openclaw-parallels-linux-gateway.log >&2
   echo "gateway did not become ready after update" >&2
   exit 1
 }

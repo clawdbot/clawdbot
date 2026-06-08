@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
@@ -146,7 +147,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
@@ -914,21 +915,39 @@ private fun GatewaySettingsScreen(
 }
 
 @Composable
-private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+private fun AppearanceSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val themeMode by viewModel.appearanceThemeMode.collectAsState()
+
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Theme", "Dark"),
+          SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
     )
     ClawPanel {
-      Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Theme", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawSegmentedControl(
+          options = appearanceThemeOptions(),
+          selected = appearanceThemeSummary(themeMode),
+          onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
+        )
+      }
     }
   }
 }
+
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
+
+internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map { it.displayLabel }
+
+internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
 /** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(

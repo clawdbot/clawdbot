@@ -1,7 +1,6 @@
 /**
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
-import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
@@ -17,6 +16,7 @@ import {
   agentCommand,
   installGatewayTestHooks,
   agentDiscoveryMock,
+  readSessionStore,
   rpcReq,
   testState,
   writeSessionStore,
@@ -301,11 +301,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await waitForAgentCommandCall("idem-agent-subdepth");
 
-    const raw = await fs.readFile(gatewaySuite.sessionStorePath, "utf-8");
-    const persisted = JSON.parse(raw) as Record<
-      string,
-      { spawnDepth?: number; spawnedBy?: string }
-    >;
+    const persisted = readSessionStore(gatewaySuite.sessionStorePath);
     expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
     expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
   });

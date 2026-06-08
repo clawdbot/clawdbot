@@ -10,6 +10,7 @@ type AgentToolsSandboxContextParams = {
   workspaceDir: string;
   agentWorkspaceDir?: string;
   workspaceAccess?: SandboxWorkspaceAccess;
+  skillsWorkspaceDir?: string;
   fsBridge?: SandboxFsBridge;
   tools?: SandboxToolPolicy;
   browserAllowHostControl?: boolean;
@@ -30,6 +31,7 @@ export function createAgentToolsSandboxContext(
     sessionKey: params.sessionKey ?? "sandbox:test",
     workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir ?? workspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workspaceAccess: params.workspaceAccess ?? "rw",
     runtimeId: params.containerName ?? "openclaw-sbx-test",
     runtimeLabel: params.containerName ?? "openclaw-sbx-test",

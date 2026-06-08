@@ -1,5 +1,6 @@
 // Vision skip tests cover auto image-model selection and text-only model
 // rejection across bundled provider metadata.
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -31,6 +32,7 @@ const baseCatalog: TestCatalogEntry[] = [
   },
 ];
 let catalog: TestCatalogEntry[] = [...baseCatalog];
+const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
 
@@ -63,6 +65,7 @@ vi.mock("../agents/model-catalog.js", async () => {
 });
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
 
@@ -126,6 +129,7 @@ describe("runCapability image skip", () => {
       };
     });
     ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
+    ({ applyMediaUnderstanding } = await import("./apply.js"));
   });
 
   beforeEach(() => {
@@ -166,6 +170,165 @@ describe("runCapability image skip", () => {
     } finally {
       await cache.cleanup();
     }
+  });
+
+  it("skips agents.defaults.imageModel fallback when the active model supports vision", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-default-model-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this image";
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "minimax/MiniMax-M3" },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(ctx.MediaPath),
+          providers: {
+            minimax: {
+              id: "minimax",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const attempt = imageDecision?.attachments[0]?.attempts[0];
+        expect(result.appliedImage).toBe(false);
+        expect(imageDecision?.outcome).toBe("skipped");
+        expect(attempt?.outcome).toBe("skipped");
+        expect(attempt?.reason).toBe("primary model supports vision natively");
+        expect(describeCalls).toBe(0);
+        expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+      },
+    );
+  });
+
+  it("skips agents.defaults.imageModel fallback when MiniMax M3 supports vision", async () => {
+    catalog = [
+      ...baseCatalog,
+      {
+        id: "MiniMax-M3",
+        name: "MiniMax M3",
+        provider: "minimax",
+        input: ["text", "image"] as const,
+      },
+    ];
+
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-default-model-minimax-m3-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this minimax image";
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "minimax/MiniMax-M3" },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(ctx.MediaPath),
+          providers: {
+            minimax: {
+              id: "minimax",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "minimax", model: "MiniMax-M3" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const attempt = imageDecision?.attachments[0]?.attempts[0];
+        expect(result.appliedImage).toBe(false);
+        expect(imageDecision?.outcome).toBe("skipped");
+        expect(attempt?.outcome).toBe("skipped");
+        expect(attempt?.reason).toBe("primary model supports vision natively");
+        expect(describeCalls).toBe(0);
+        expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+      },
+    );
+  });
+
+  it("uses explicit media image models even when the active model supports vision", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-model-no-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this explicit image";
+        const cfg = {
+          tools: {
+            media: {
+              image: {
+                models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(ctx.MediaPath),
+          providers: {
+            openrouter: {
+              id: "openrouter",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        expect(result.appliedImage).toBe(true);
+        expect(imageDecision?.outcome).toBe("success");
+        expect(describeCalls).toBe(1);
+        expect(msgCtx.Body).toContain(plantedVisionSentinel);
+      },
+    );
   });
 
   it("uses explicit media image models instead of native vision skip", async () => {
@@ -265,7 +428,7 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("prefers agents.defaults.imageModel over the active model for auto image resolution", async () => {
+  it("keeps agents.defaults.imageModel available to exported auto image resolution", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -343,7 +506,6 @@ describe("runCapability image skip", () => {
               } satisfies MediaUnderstandingProvider,
             ],
           ]),
-          activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
         expect(result.decision.outcome).toBe("success");
@@ -433,7 +595,7 @@ describe("runCapability image skip", () => {
     }
   });
 
-  it("does not native-skip MiniMax chat models that claim image input", async () => {
+  it("routes legacy MiniMax chat models through the VLM fallback even when cataloged with image input", async () => {
     catalog = [
       {
         id: "MiniMax-M2.7",

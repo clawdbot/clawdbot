@@ -526,6 +526,7 @@ export type ChannelDoctorAdapter = {
   repairConfig?: (params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;
+    env?: NodeJS.ProcessEnv;
   }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
   runConfigSequence?: (params: {
     cfg: OpenClawConfig;

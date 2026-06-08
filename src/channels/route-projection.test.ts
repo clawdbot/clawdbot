@@ -4,7 +4,9 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   deliveryContextFromRoute,
+  formatConversationTarget,
   normalizeRoutableChannelRoute,
+  resolveConversationDeliveryTarget,
   routeFromBindingRecord,
   routeFromConversationRef,
   routeFromDeliveryContext,
@@ -17,6 +19,30 @@ describe("channel route projection", () => {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
+        {
+          pluginId: "room-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "room-chat", label: "Room chat" }),
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) =>
+                conversationId.startsWith("$")
+                  ? {
+                      to: parentConversationId ? `room:${parentConversationId}` : undefined,
+                      threadId: conversationId,
+                    }
+                  : {
+                      to: `room:${conversationId}`,
+                    },
+            },
+          },
+        },
         {
           pluginId: "thread-chat",
           source: "test",
@@ -75,6 +101,35 @@ describe("channel route projection", () => {
       to: "channel:C123",
       accountId: "work",
       threadId: "177000.123",
+    });
+  });
+
+  it("formats plugin-defined conversation targets via channel messaging hooks", () => {
+    expect(
+      formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" }),
+    ).toBe("room:!room:example");
+    expect(
+      formatConversationTarget({
+        channel: "room-chat",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toBe("room:!room:example");
+    expect(
+      formatConversationTarget({ channel: "room-chat", conversationId: "  " }),
+    ).toBeUndefined();
+  });
+
+  it("resolves delivery targets for plugin-defined child threads", () => {
+    expect(
+      resolveConversationDeliveryTarget({
+        channel: "room-chat",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toEqual({
+      to: "room:!room:example",
+      threadId: "$thread",
     });
   });
 

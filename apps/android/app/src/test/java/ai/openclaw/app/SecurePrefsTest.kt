@@ -78,6 +78,31 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun appearanceThemeMode_defaultsDarkForExistingInstalls() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
+    assertFalse(plainPrefs.contains("appearance.themeMode"))
+  }
+
+  @Test
+  fun setAppearanceThemeMode_persistsSelectedMode() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    prefs.setAppearanceThemeMode(AppearanceThemeMode.Light)
+
+    assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+    assertEquals("light", plainPrefs.getString("appearance.themeMode", null))
+    assertEquals(AppearanceThemeMode.Light, SecurePrefs(context).appearanceThemeMode.value)
+  }
+
+  @Test
   fun saveGatewayBootstrapToken_persistsSeparatelyFromSharedToken() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)

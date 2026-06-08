@@ -1,5 +1,6 @@
 // Status scan fast-json tests cover scan defaults, memory config, and JSON-safe status payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -20,6 +21,26 @@ const mocks = {
 let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
+
+const STATUS_JSON_TEST_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+).map((entry) => `${entry.channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`);
+const STATUS_JSON_TEST_CHANNEL_ENV_VARS = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+).flatMap((entry) => entry.channelEnvVars ?? []);
+
+function clearStatusJsonChannelEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const key of STATUS_JSON_TEST_CHANNEL_ENV_VARS) {
+    env[key] = undefined;
+  }
+  for (const key of Object.keys(process.env)) {
+    if (STATUS_JSON_TEST_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      env[key] = undefined;
+    }
+  }
+  return env;
+}
 
 function configureFastJsonStatus() {
   applyStatusScanDefaults(mocks, {
@@ -237,6 +258,7 @@ describe("scanStatusJsonFast", () => {
   it("skips gateway and update probes on cold-start status --json", async () => {
     await withTemporaryEnv(
       {
+        ...clearStatusJsonChannelEnv(),
         OPENCLAW_TWITCH_ACCESS_TOKEN: undefined,
         TELEGRAM_BOT_TOKEN: undefined,
         VITEST: undefined,
@@ -255,6 +277,7 @@ describe("scanStatusJsonFast", () => {
   it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {
     await withTemporaryEnv(
       {
+        ...clearStatusJsonChannelEnv(),
         OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
         VITEST: undefined,
         VITEST_POOL_ID: undefined,

@@ -144,7 +144,20 @@ function respondInvalidRequest(respond: RespondFn, message: string) {
 }
 
 function respondUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  const message = formatForLog(err);
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: {
+        talkIssue: {
+          code: "realtime_unavailable",
+          message,
+          phase: "request",
+        },
+      },
+    }),
+  );
 }
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {

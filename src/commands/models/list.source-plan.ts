@@ -23,6 +23,18 @@ export type ModelListSourcePlan = {
 };
 
 type ProviderIndexCatalogModule = typeof import("./list.provider-index-catalog.js");
+type ManifestCatalogModule = typeof import("./list.manifest-catalog.js");
+type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
+
+type ModelListSourcePlanDependencies = Pick<
+  ManifestCatalogModule,
+  "loadStaticManifestCatalogRowsForList" | "loadSupplementalManifestCatalogRowsForList"
+> &
+  Pick<ProviderIndexCatalogModule, "loadProviderIndexCatalogRowsForList"> &
+  Pick<
+    ProviderCatalogModule,
+    "hasProviderRuntimeCatalogForFilter" | "hasProviderStaticCatalogForFilter"
+  >;
 
 const providerIndexCatalogLoader = createLazyImportLoader<ProviderIndexCatalogModule>(
   () => import("./list.provider-index-catalog.js"),
@@ -61,16 +73,25 @@ export async function planAllModelListSources(params: {
   providerFilter?: string;
   cfg: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
+  dependencies?: Partial<ModelListSourcePlanDependencies>;
 }): Promise<ModelListSourcePlan> {
   const enableCascade = params.enableCascade ?? params.all;
   if (!enableCascade) {
     return createRegistryModelListSourcePlan();
   }
 
-  const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
-    await import("./list.manifest-catalog.js");
+  const manifestCatalog = await import("./list.manifest-catalog.js");
+  const loadStaticManifestCatalogRowsForList =
+    params.dependencies?.loadStaticManifestCatalogRowsForList ??
+    manifestCatalog.loadStaticManifestCatalogRowsForList;
+  const loadSupplementalManifestCatalogRowsForList =
+    params.dependencies?.loadSupplementalManifestCatalogRowsForList ??
+    manifestCatalog.loadSupplementalManifestCatalogRowsForList;
   if (!params.providerFilter) {
-    const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
+    const providerIndexCatalog = await providerIndexCatalogLoader.load();
+    const loadProviderIndexCatalogRowsForList =
+      params.dependencies?.loadProviderIndexCatalogRowsForList ??
+      providerIndexCatalog.loadProviderIndexCatalogRowsForList;
     return createSourcePlan({
       kind: "registry",
       manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
@@ -84,38 +105,59 @@ export async function planAllModelListSources(params: {
     });
   }
 
+  const providerCatalog = await import("./list.provider-catalog.js");
+  const hasProviderRuntimeCatalogForFilter =
+    params.dependencies?.hasProviderRuntimeCatalogForFilter ??
+    providerCatalog.hasProviderRuntimeCatalogForFilter;
+  const hasProviderStaticCatalogForFilter =
+    params.dependencies?.hasProviderStaticCatalogForFilter ??
+    providerCatalog.hasProviderStaticCatalogForFilter;
+
   const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const manifestCatalogRows =
-    staticManifestCatalogRows.length === 0
-      ? loadSupplementalManifestCatalogRowsForList({
-          cfg: params.cfg,
-          providerFilter: params.providerFilter,
-          metadataSnapshot: params.metadataSnapshot,
-        })
-      : staticManifestCatalogRows;
-
-  if (manifestCatalogRows.length > 0) {
-    if (staticManifestCatalogRows.length === 0) {
-      // Supplemental manifest rows still need the registry for runtime-backed
-      // availability and suppression decisions.
-      return createSourcePlan({
-        kind: "registry",
-        manifestCatalogRows,
-        requiresInitialRegistry: true,
-      });
-    }
+  if (staticManifestCatalogRows.length > 0) {
     return createSourcePlan({
       kind: "manifest",
-      manifestCatalogRows,
+      manifestCatalogRows: staticManifestCatalogRows,
       skipRuntimeModelSuppression: true,
     });
   }
 
-  const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
+  const hasProviderRuntimeCatalog = await hasProviderRuntimeCatalogForFilter({
+    cfg: params.cfg,
+    providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  if (hasProviderRuntimeCatalog) {
+    return createSourcePlan({
+      kind: "provider-runtime-scoped",
+      fallbackToRegistryWhenEmpty: true,
+    });
+  }
+
+  const manifestCatalogRows = loadSupplementalManifestCatalogRowsForList({
+    cfg: params.cfg,
+    providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+
+  if (manifestCatalogRows.length > 0) {
+    // Supplemental manifest rows still need the registry for runtime-backed
+    // availability and suppression decisions.
+    return createSourcePlan({
+      kind: "registry",
+      manifestCatalogRows,
+      requiresInitialRegistry: true,
+    });
+  }
+
+  const providerIndexCatalog = await providerIndexCatalogLoader.load();
+  const loadProviderIndexCatalogRowsForList =
+    params.dependencies?.loadProviderIndexCatalogRowsForList ??
+    providerIndexCatalog.loadProviderIndexCatalogRowsForList;
   const providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
@@ -128,7 +170,6 @@ export async function planAllModelListSources(params: {
     });
   }
 
-  const { hasProviderStaticCatalogForFilter } = await import("./list.provider-catalog.js");
   const hasProviderStaticCatalog = await hasProviderStaticCatalogForFilter({
     cfg: params.cfg,
     providerFilter: params.providerFilter,

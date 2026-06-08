@@ -6,7 +6,6 @@ import {
   resolveGroupName,
   resolveGroupPrompt,
   resolveGroupSettings,
-  resolveGroupToolPolicy,
   resolveHistoryLimit,
   resolveIgnoreOtherMentions,
   resolveMentionPatterns,
@@ -20,7 +19,6 @@ describe("engine/config/group", () => {
       expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
-        toolPolicy: "restricted",
         name: "",
         prompt: undefined,
         historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
@@ -35,7 +33,6 @@ describe("engine/config/group", () => {
             groups: {
               "*": {
                 requireMention: false,
-                toolPolicy: "full",
                 historyLimit: 20,
                 name: "wild",
               },
@@ -45,7 +42,6 @@ describe("engine/config/group", () => {
       };
       const resolved = resolveGroupConfig(cfg, "G1");
       expect(resolved.requireMention).toBe(false);
-      expect(resolved.toolPolicy).toBe("full");
       expect(resolved.historyLimit).toBe(20);
       expect(resolved.name).toBe("wild");
     });
@@ -56,15 +52,14 @@ describe("engine/config/group", () => {
           qqbot: {
             appId: "1",
             groups: {
-              "*": { requireMention: true, toolPolicy: "restricted", historyLimit: 20 },
-              GROUPA: { requireMention: false, toolPolicy: "none", historyLimit: 5, name: "A" },
+              "*": { requireMention: true, historyLimit: 20 },
+              GROUPA: { requireMention: false, historyLimit: 5, name: "A" },
             },
           },
         },
       };
       const resolved = resolveGroupConfig(cfg, "GROUPA");
       expect(resolved.requireMention).toBe(false);
-      expect(resolved.toolPolicy).toBe("none");
       expect(resolved.historyLimit).toBe(5);
       expect(resolved.name).toBe("A");
     });
@@ -85,15 +80,6 @@ describe("engine/config/group", () => {
         },
       };
       expect(resolveHistoryLimit(cfg, "G")).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
-    });
-
-    it("invalid toolPolicy values are ignored", () => {
-      const cfg = {
-        channels: {
-          qqbot: { appId: "1", groups: { "*": { toolPolicy: "invalid" } } },
-        },
-      };
-      expect(resolveGroupToolPolicy(cfg, "G")).toBe("restricted");
     });
   });
 

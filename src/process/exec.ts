@@ -13,6 +13,7 @@ import {
 } from "../infra/windows-encoding.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 
@@ -256,10 +257,12 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
   maxOutputBytes?: number;
+  killProcessTree?: boolean;
 };
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 
 type CapturedOutputBuffers = {
@@ -368,7 +371,8 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal } = options;
+  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
+    options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -393,6 +397,9 @@ export async function runCommandWithTimeout(
     stdio,
     cwd,
     env: resolvedEnv,
+    // Cron shell wrappers need their own process group so timeout/abort kills
+    // reach foreground children instead of leaving duplicate scheduled work.
+    ...(killProcessTree && process.platform !== "win32" ? { detached: true } : {}),
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     ...(shouldSpawnWithShell({ resolvedCommand: invocation.command, platform: process.platform })
@@ -412,6 +419,7 @@ export async function runCommandWithTimeout(
     let killIssuedByAbort = false;
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
+    let processTreeForceKillTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
@@ -435,6 +443,14 @@ export async function runCommandWithTimeout(
       closeFallbackTimer = null;
     };
 
+    const clearProcessTreeForceKillTimer = () => {
+      if (!processTreeForceKillTimer) {
+        return;
+      }
+      clearTimeout(processTreeForceKillTimer);
+      processTreeForceKillTimer = null;
+    };
+
     const killChild = (byTimeout = true) => {
       if (settled || typeof child?.kill !== "function") {
         return;
@@ -443,6 +459,47 @@ export async function runCommandWithTimeout(
         killIssuedByTimeout = true;
       } else {
         killIssuedByAbort = true;
+      }
+      if (
+        killProcessTree &&
+        typeof child.pid === "number" &&
+        child.pid > 0
+      ) {
+        if (process.platform === "win32") {
+          try {
+            spawn("taskkill", ["/PID", String(child.pid), "/T"], {
+              stdio: "ignore",
+              windowsHide: true,
+            });
+            if (!processTreeForceKillTimer) {
+              processTreeForceKillTimer = setTimeout(() => {
+                processTreeForceKillTimer = null;
+                if (
+                  settled ||
+                  childExitState != null ||
+                  child.exitCode != null ||
+                  child.signalCode != null
+                ) {
+                  return;
+                }
+                try {
+                  spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+                    stdio: "ignore",
+                    windowsHide: true,
+                  });
+                } catch {
+                  child.kill("SIGKILL");
+                }
+              }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+              processTreeForceKillTimer.unref();
+            }
+            return;
+          } catch {
+            // Fall through to Node's direct child kill as a last resort.
+          }
+        }
+        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
@@ -507,12 +564,14 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      clearProcessTreeForceKillTimer();
       removeAbortListener?.();
       removeAbortListener = null;
       reject(err);
     });
     child.on("exit", (code, signalResult) => {
       childExitState = { code, signal: signalResult };
+      clearProcessTreeForceKillTimer();
       if (settled || closeFallbackTimer) {
         return;
       }
@@ -532,6 +591,7 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      clearProcessTreeForceKillTimer();
       removeAbortListener?.();
       removeAbortListener = null;
       const resolvedSignal = childExitState?.signal ?? signalValue ?? child.signalCode ?? null;

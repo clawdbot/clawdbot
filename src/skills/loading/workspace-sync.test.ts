@@ -145,6 +145,25 @@ describe("buildWorkspaceSkillsPrompt", () => {
     ).toBe(false);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves the target skills directory while refreshing children",
+    async () => {
+      const sourceWorkspace = await cloneSourceTemplate();
+      const targetWorkspace = await createCaseDir("target");
+      const targetSkillsDir = path.join(targetWorkspace, "skills");
+      await fs.mkdir(path.join(targetSkillsDir, "stale"), { recursive: true });
+      await fs.writeFile(path.join(targetSkillsDir, "stale", "SKILL.md"), "# Stale\n", "utf8");
+      const before = await fs.stat(targetSkillsDir);
+
+      await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
+
+      const after = await fs.stat(targetSkillsDir);
+      expect(after.ino).toBe(before.ino);
+      expect(await pathExists(path.join(targetSkillsDir, "stale", "SKILL.md"))).toBe(false);
+      expect(await pathExists(path.join(targetSkillsDir, "demo-skill", "SKILL.md"))).toBe(true);
+    },
+  );
+
   it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");

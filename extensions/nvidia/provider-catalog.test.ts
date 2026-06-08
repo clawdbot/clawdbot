@@ -95,12 +95,14 @@ describe("nvidia provider catalog", () => {
       compat: { requiresStringContent: true },
     });
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      url: NVIDIA_FEATURED_MODELS_URL,
-      timeoutMs: 10_000,
-      requireHttps: true,
-      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      lookupFn: expect.any(Function),
       auditContext: "nvidia-featured-model-catalog",
+      init: { headers: expect.any(Headers) },
+      lookupFn: expect.any(Function),
+      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
+      signal: undefined,
+      timeoutMs: 10_000,
+      url: NVIDIA_FEATURED_MODELS_URL,
+      requireHttps: true,
     });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -237,6 +239,44 @@ describe("nvidia provider catalog", () => {
     const second = await buildLiveNvidiaProvider();
 
     expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
+    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache successful featured catalog responses with no usable rows", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "bad model id",
+          "model-name": "Bad",
+          context: 1000,
+          "max-output": 1000,
+        },
+      ],
+    });
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "z-ai/glm-5.1",
+          "model-name": "GLM 5.1",
+          context: 202752,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const first = await buildLiveNvidiaProvider();
+    const second = await buildLiveNvidiaProvider();
+
+    expect(first.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
+    ]);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });

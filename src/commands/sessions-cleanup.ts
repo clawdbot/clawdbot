@@ -18,6 +18,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  ensureExplicitSessionStoreMigratedForCommand,
+  ensureSessionStateMigratedForCommand,
+  loadExplicitSessionStorePreviewForCommand,
+} from "./session-state-migration.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";
 import {
@@ -203,19 +208,6 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const gatewayResult = await maybeRunGatewayCleanup(opts);
-  if (gatewayResult) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, gatewayResult);
-      return;
-    }
-    renderAppliedSummaries({
-      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
-      runtime,
-    });
-    return;
-  }
-
   const cfg = getRuntimeConfig();
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -229,10 +221,43 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (!targets) {
     return;
   }
+
+  const gatewayResult = await maybeRunGatewayCleanup(opts);
+  if (gatewayResult) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, gatewayResult);
+      return;
+    }
+    renderAppliedSummaries({
+      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
+      runtime,
+    });
+    return;
+  }
+
+  if (!opts.dryRun) {
+    await ensureSessionStateMigratedForCommand(cfg);
+  }
+  if (!opts.dryRun) {
+    for (const target of targets) {
+      await ensureExplicitSessionStoreMigratedForCommand(target.storePath, {
+        onWarning: (warning) => runtime.error?.(warning),
+      });
+    }
+  }
+  const previewStores = opts.dryRun
+    ? new Map(
+        targets.map((target) => [
+          target.storePath,
+          loadExplicitSessionStorePreviewForCommand(target.storePath),
+        ]),
+      )
+    : undefined;
   const { mode, previewResults, appliedSummaries } = await runSessionsCleanup({
     cfg,
     opts,
     targets,
+    previewStores,
   });
 
   if (opts.dryRun) {

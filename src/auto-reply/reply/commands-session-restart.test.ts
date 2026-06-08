@@ -180,6 +180,18 @@ describe("handleRestartCommand", () => {
     }
   });
 
+  it("threads sessionKey into scheduleGatewaySigusr1Restart so cross-session coalescing is rejected (#86742)", async () => {
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      await handleRestartCommand(restartCommandParams(), true);
+      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
+  });
+
   it("rejects authorized non-owner restart commands", async () => {
     const result = await handleRestartCommand(
       restartCommandParams({

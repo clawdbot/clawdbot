@@ -41,7 +41,9 @@ import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
+  resolveStorePath,
 } from "../../config/sessions.js";
+import { closeSqliteSessionStoreDatabase } from "../../config/sessions/store-sqlite.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
@@ -735,7 +737,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
+    const sessionStorePath = resolveStorePath(cfg.session?.store, { agentId });
     await purgeAgentSessionStoreEntries(cfg, agentId);
+    closeSqliteSessionStoreDatabase(sessionStorePath);
 
     if (deleteFiles) {
       const workspaceSharedWith = findOverlappingWorkspaceAgentIds(

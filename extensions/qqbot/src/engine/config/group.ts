@@ -3,12 +3,9 @@ import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
 
-type GroupToolPolicy = "full" | "restricted" | "none";
-
 interface GroupConfig {
   requireMention: boolean;
   ignoreOtherMentions: boolean;
-  toolPolicy: GroupToolPolicy;
   name: string;
   prompt?: string;
   historyLimit: number;
@@ -22,7 +19,6 @@ export const DEFAULT_GROUP_PROMPT =
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
-  toolPolicy: "restricted",
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
@@ -55,11 +51,6 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-function readToolPolicy(obj: Record<string, unknown>, key: string): GroupToolPolicy | undefined {
-  const v = obj[key];
-  return v === "full" || v === "restricted" || v === "none" ? v : undefined;
-}
-
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
   const v = obj[key];
   if (typeof v !== "number" || !Number.isFinite(v)) {
@@ -86,10 +77,6 @@ export function resolveGroupConfig(
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
-    toolPolicy:
-      readToolPolicy(specific, "toolPolicy") ??
-      readToolPolicy(wildcard, "toolPolicy") ??
-      DEFAULT_GROUP_CONFIG.toolPolicy,
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -121,15 +108,6 @@ export function resolveIgnoreOtherMentions(
   accountId?: string | null,
 ): boolean {
   return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/** Resolve tool policy for a given group. */
-export function resolveGroupToolPolicy(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): GroupToolPolicy {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).toolPolicy;
 }
 
 /**

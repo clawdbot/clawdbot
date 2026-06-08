@@ -1653,7 +1653,7 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("fails closed when a native tool call finishes without a matching result", async () => {
+  it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
@@ -1690,8 +1690,17 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(String(result.promptError)).toContain("without a matching tool.result");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+      mutatingAction: true,
+    });
+    expect(result.lastToolError?.actionFingerprint).toContain("node scripts/report.js --publish");
+    expect(result.assistantTexts).toEqual([
+      "The requested publish command was denied before execution.",
+    ]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -1704,6 +1713,13 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultMessage.isError).toBe(true);
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     expect(JSON.stringify(toolResultContent)).toContain("matching tool.result");
+    const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");
+    expect(finalAssistant.content).toEqual([
+      {
+        type: "text",
+        text: "The requested publish command was denied before execution.",
+      },
+    ]);
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
       threadId: THREAD_ID,
       turnId: TURN_ID,
@@ -1726,6 +1742,44 @@ describe("CodexAppServerEventProjector", () => {
       result: { status: "failed", reason: "missing_tool_result" },
       output: expect.stringContaining("without a matching tool.result"),
     });
+  });
+
+  it("records promptError when a completed turn has only whitespace assistant text and an orphan tool call", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-whitespace",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "msg-whitespace",
+          text: "   \n\t  ",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastToolError).toBeUndefined();
+    expect(result.assistantTexts).toEqual([]);
   });
 
   it("uses streamed command output when final command snapshots omit aggregated output", async () => {

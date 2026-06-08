@@ -50,6 +50,11 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   ] as TaskAuditFinding[],
   getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => undefined),
+}));
+
+vi.mock("./session-state-migration.js", () => ({
+  ensureSessionStateMigratedForCommand: statusSummaryMocks.ensureSessionStateMigratedForCommand,
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({

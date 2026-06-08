@@ -22,6 +22,7 @@ import {
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const RECENT_SESSION_LIMIT = 10;
@@ -185,6 +186,7 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
+  await ensureSessionStateMigratedForCommand(cfg);
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }

@@ -11,12 +11,12 @@ type PersistedEchoEntry = {
   timestamp: number;
 };
 
-// 12h covers the maximum `channels.imessage.catchup.maxAgeMinutes` clamp (720
-// minutes). Without this, the live path's previous 2-minute window was
-// shorter than any realistic catchup window — own outbound rows from before
-// a gateway gap would fall out of the dedupe set before catchup could replay
-// the inbound rows around them, and the agent's own messages would land back
-// in the inbound pipeline as if they were external sends.
+// 12h comfortably outlives the inbound replay guard window
+// (IMESSAGE_INBOUND_DEDUPE_TTL_MS) so an own-outbound row that imsg re-emits
+// after a bridge reconnect is still recognized as the agent's own echo rather
+// than re-ingested as an external send. A shorter window would let own rows
+// fall out of the dedupe set before a reconnect burst replays the messages
+// around them.
 export const IMESSAGE_SENT_ECHOES_TTL_MS = 12 * 60 * 60 * 1000;
 export const IMESSAGE_SENT_ECHOES_NAMESPACE = "imessage.sent-echoes";
 export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;

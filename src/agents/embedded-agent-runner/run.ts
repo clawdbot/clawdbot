@@ -2969,6 +2969,7 @@ export async function runEmbeddedAgent(
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
+            isHeartbeatTrigger: params.trigger === "heartbeat",
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,

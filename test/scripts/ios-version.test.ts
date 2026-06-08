@@ -38,7 +38,9 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned release version like 2026.6.5");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 
   it("rejects prerelease suffixes in the pinned iOS version file", () => {
@@ -47,7 +49,9 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned release version like 2026.6.5");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 });
 

@@ -1,6 +1,6 @@
 // Qqbot plugin module implements activation behavior.
-import fs from "node:fs";
 import path from "node:path";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 
 export type GroupActivationMode = "mention" | "always";
 
@@ -76,11 +76,10 @@ export function createNodeSessionStoreReader(): SessionStoreReader {
     read: ({ cfg, agentId }) => {
       try {
         const storePath = resolveSessionStorePath(cfg, agentId);
-        if (!fs.existsSync(storePath)) {
-          return null;
-        }
-        const raw = fs.readFileSync(storePath, "utf-8");
-        return JSON.parse(raw) as Record<string, { groupActivation?: string }>;
+        return loadSessionStore(storePath, { skipCache: true }) as Record<
+          string,
+          { groupActivation?: string }
+        >;
       } catch {
         return null;
       }

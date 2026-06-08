@@ -122,6 +122,165 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"]);
   });
 
+  it("converts legacy agent command prompts into command cron payloads", () => {
+    const command =
+      "cd /home/openclaw/.razor/quant && ./scripts/system/run_position_control.sh --write-card --silent-token NO_REPLY";
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "quant-position-card",
+        schedule: { kind: "cron", expr: "*/30 * * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: [
+            "Run this deterministic shell job once and report only the final JSON/status.",
+            "",
+            "Command to run:",
+            `- command: ${command}`,
+            "- workdir: /home/openclaw/.razor/quant",
+            "- background: false",
+            "- timeout: 840",
+            "",
+            "Final response contract:",
+            "- If the command prints exactly NO_REPLY, respond exactly NO_REPLY.",
+            "- Otherwise return the concise command output.",
+          ].join("\n"),
+          toolsAllow: ["bash", "process"],
+          lightContext: true,
+          timeoutSeconds: 900,
+          model: "openai/gpt-5.5",
+          deliver: true,
+          channel: "telegram",
+          to: "123",
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyAgentTurnCommandPayload).toBe(1);
+    expect(job.delivery).toEqual({ mode: "announce", channel: "telegram", to: "123" });
+    const payload = job.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "command",
+      argv: ["sh", "-lc", command],
+      cwd: "/home/openclaw/.razor/quant",
+      timeoutSeconds: 900,
+    });
+  });
+
+  it("does not convert command-shaped prompts without shell tool access", () => {
+    const command = "python3 scripts/check_mail.py";
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "restricted-command-prompt",
+        schedule: { kind: "cron", expr: "*/30 * * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: [
+            "Command to run:",
+            `- command: ${command}`,
+            "- workdir: /home/openclaw/.razor/clawd",
+          ].join("\n"),
+          toolsAllow: ["read", "message"],
+        },
+      }),
+    );
+
+    expect(result.issues.legacyAgentTurnCommandPayload).toBeUndefined();
+    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+    const payload = job.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain(command);
+    expect(payload.toolsAllow).toEqual(["read", "message"]);
+  });
+
+  it("warns without converting mixed agent prompts that request shell tools", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "mixed-agent-job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Run deterministic health first: python3 scripts/check_mail.py and then decide whether to send a summary.",
+          toolsAllow: ["bash", "read", "message"],
+          lightContext: true,
+        },
+      }),
+    );
+
+    expect(result.issues.legacyAgentTurnCommandPayload).toBeUndefined();
+    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
+    const payload = job.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("Run deterministic health first");
+    expect(payload.toolsAllow).toEqual(["bash", "read", "message"]);
+  });
+
+  it("warns on shell-style prompts with unrestricted tool access", () => {
+    const { result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "implicit-tools-shell-job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
+          lightContext: true,
+        },
+      }),
+    );
+
+    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
+  });
+
+  it("warns on shell-style prompts with wildcard tool access", () => {
+    const { result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "wildcard-tools-shell-job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Execute ./scripts/check_mail.sh and send a compact summary if anything changed.",
+          toolsAllow: ["*"],
+          lightContext: true,
+        },
+      }),
+    );
+
+    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBe(1);
+    expect(result.unresolvedAgentTurnShellToolPromptJobs).toEqual(["Legacy job"]);
+  });
+
+  it("does not warn on ordinary agent prompts that mention commands without shell tools", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "ordinary-agent-job",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Europe/Madrid" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Explain whether the user should run python3 scripts/check_mail.py.",
+          toolsAllow: ["read", "message"],
+          lightContext: true,
+        },
+        delivery: { mode: "announce" },
+      }),
+    );
+
+    expect(result.issues.unresolvedAgentTurnShellToolPrompt).toBeUndefined();
+    const payload = job.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("python3 scripts/check_mail.py");
+  });
+
   it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
     const jobs = [
       {

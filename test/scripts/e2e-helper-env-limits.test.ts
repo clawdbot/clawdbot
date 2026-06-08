@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
@@ -28,20 +29,20 @@ function runScriptAsync(
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
     child.on("exit", (status) => {
       clearTimeout(timer);
-      resolve({ stderr, stdout, status });
+      resolve({ stderr: stderr.text(), stdout: stdout.text(), status });
     });
   });
 }
@@ -129,20 +130,20 @@ describe("e2e helper numeric env limits", () => {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
+    const output = createBoundedChildOutput();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      output += chunk;
+      output.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      output += chunk;
+      output.append(chunk);
     });
     try {
       await waitForOutput(
         child,
         (text) => text.includes(`clickclack fixture listening on ${port}`),
-        () => output,
+        () => output.text(),
       );
 
       const response = await fetch(`http://127.0.0.1:${port}/fixture/inbound`, {

@@ -1,7 +1,6 @@
 // Human-facing background task commands.
 // Handles task listing/show/cancel/notify/audit plus registry maintenance for tasks, flows, and sessions.
 
-import fs from "node:fs";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -45,6 +44,10 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  ensureSessionStateMigratedForCommand,
+  loadExplicitSessionStorePreviewForCommand,
+} from "./session-state-migration.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
@@ -148,21 +151,15 @@ async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
+  if (params.apply) {
+    await ensureSessionStateMigratedForCommand(cfg);
+  }
   const runningCronJobIds = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    if (!fs.existsSync(target.storePath)) {
-      stores.push({
-        agentId: target.agentId,
-        storePath: target.storePath,
-        beforeCount: 0,
-        afterCount: 0,
-        pruned: 0,
-        preservedRunning: 0,
-      });
-      continue;
-    }
-    const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
+    const beforeStore = params.apply
+      ? loadSessionStore(target.storePath, { skipCache: true })
+      : loadExplicitSessionStorePreviewForCommand(target.storePath);
     const beforeCount = Object.keys(beforeStore).length;
     if (params.apply) {
       // Apply mode mutates each store atomically through updateSessionStore.

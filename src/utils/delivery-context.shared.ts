@@ -13,8 +13,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-core.js";
-import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 /**
@@ -119,7 +118,12 @@ function isInternalRouteContext(context?: DeliveryContext): boolean {
 
 function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
   const channel = normalizeMessageChannel(context?.channel);
-  return Boolean(channel && isDeliverableMessageChannel(channel) && context?.to);
+  return Boolean(
+    channel &&
+    !isInternalNonDeliveryChannel(channel) &&
+    isDeliverableMessageChannel(channel) &&
+    context?.to,
+  );
 }
 
 function mergeExternalDeliveryContextOverInternalRoute(

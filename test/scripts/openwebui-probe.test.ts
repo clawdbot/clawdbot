@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from "n
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
 
@@ -48,16 +49,16 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     let timedOut = false;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -65,7 +66,7 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr, stdout });
+      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
     child.on("exit", (status, signal) => {
       clearTimeout(timer);
@@ -73,8 +74,8 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
         signal,
         status,
-        stderr,
-        stdout,
+        stderr: stderr.text(),
+        stdout: stdout.text(),
       });
     });
   });

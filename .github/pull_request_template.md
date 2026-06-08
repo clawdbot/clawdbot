@@ -2,18 +2,13 @@
 
 What problem does this PR solve?
 
-
 Why does this matter now?
-
 
 What is the intended outcome?
 
-
 What is intentionally out of scope?
 
-
 What does success look like?
-
 
 What should reviewers focus on?
 
@@ -75,12 +70,9 @@ Be mindful of private information like IP addresses, API keys, phone numbers, no
 
 Which commands did you run?
 
-
 What regression coverage was added or updated?
 
-
 What failed before this fix, if known?
-
 
 If no test was added, why not?
 
@@ -95,15 +87,11 @@ List focused commands, not every incidental check. CI is useful support, but ext
 
 Did user-visible behavior change? (`Yes/No`)
 
-
 Did config, environment, or migration behavior change? (`Yes/No`)
-
 
 Did security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)
 
-
 What is the highest-risk area?
-
 
 How is that risk mitigated?
 
@@ -118,9 +106,7 @@ Use this for author judgment that is not obvious from the diff. ClawSweeper can 
 
 What is the next action?
 
-
 What is still waiting on author, maintainer, CI, or external proof?
-
 
 Which bot or reviewer comments were addressed?
 

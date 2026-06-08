@@ -90,7 +90,16 @@ type TalkRealtimeRelayEventPayload =
     }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
-  | { relaySessionId: string; type: "error"; message: string }
+  | {
+      relaySessionId: string;
+      type: "error";
+      message: string;
+      code?: "realtime_unavailable";
+      provider?: string;
+      model?: string;
+      transport?: "gateway-relay";
+      phase?: string;
+    }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventPayload & { talkEvent?: TalkEvent };
@@ -109,6 +118,15 @@ type RelaySession = {
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
   transcript: RealtimeVoiceTranscriptEntry[];
+};
+
+type TalkRealtimeRelayIssue = {
+  code: "realtime_unavailable";
+  message: string;
+  provider: string;
+  model?: string;
+  transport: "gateway-relay";
+  phase: string;
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -139,6 +157,38 @@ const relaySessions = new Map<string, RelaySession>();
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function realtimeRelayIssue(params: {
+  message: string;
+  provider: string;
+  model?: string;
+  phase: string;
+}): TalkRealtimeRelayIssue {
+  return {
+    code: "realtime_unavailable",
+    message: params.message,
+    provider: params.provider,
+    ...(params.model ? { model: params.model } : {}),
+    transport: "gateway-relay",
+    phase: params.phase,
+  };
+}
+
+function relayIssuePayload(
+  relaySessionId: string,
+  issue: TalkRealtimeRelayIssue,
+): Extract<TalkRealtimeRelayEventPayload, { type: "error" }> {
+  return {
+    relaySessionId,
+    type: "error",
+    message: issue.message,
+    code: issue.code,
+    provider: issue.provider,
+    ...(issue.model ? { model: issue.model } : {}),
+    transport: issue.transport,
+    phase: issue.phase,
+  };
 }
 
 function isWorkingToolResult(result: unknown): boolean {
@@ -193,8 +243,20 @@ function broadcastToOwner(
   context: GatewayRequestContext,
   connId: string,
   event: TalkRealtimeRelayEvent,
+  options: { dropIfSlow?: boolean } = { dropIfSlow: true },
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), { dropIfSlow: true });
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), options);
+}
+
+function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): { dropIfSlow?: boolean } {
+  switch (event.type) {
+    case "ready":
+    case "error":
+    case "close":
+      return { dropIfSlow: false };
+    default:
+      return { dropIfSlow: true };
+  }
 }
 
 function abortRelayAgentRuns(session: RelaySession, reason: string): void {
@@ -353,12 +415,19 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
-    broadcastToOwner(params.context, params.connId, {
-      ...event,
-      ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
-    });
+    broadcastToOwner(
+      params.context,
+      params.connId,
+      {
+        ...event,
+        ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
+      },
+      relayEventDeliveryOptions(event),
+    );
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
+  let ready = false;
+  let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
@@ -547,13 +616,24 @@ export function createTalkRealtimeRelaySession(
         },
       );
     },
-    onReady: () =>
-      emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null }),
-    onError: (error) =>
-      emit(
-        { relaySessionId, type: "error", message: error.message },
-        { type: "session.error", payload: { message: error.message }, final: true },
-      ),
+    onReady: () => {
+      ready = true;
+      emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null });
+    },
+    onError: (error) => {
+      const issue = realtimeRelayIssue({
+        message: formatError(error),
+        provider: params.provider.id,
+        model: params.model,
+        phase: ready ? "stream" : "connect",
+      });
+      failureEmitted = true;
+      emit(relayIssuePayload(relaySessionId, issue), {
+        type: "session.error",
+        payload: issue,
+        final: true,
+      });
+    },
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
       if (!active) {
@@ -564,6 +644,19 @@ export function createTalkRealtimeRelaySession(
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
+      if (!ready && !failureEmitted) {
+        const issue = realtimeRelayIssue({
+          message: "Realtime provider closed before the session became ready.",
+          provider: params.provider.id,
+          model: params.model,
+          phase: "connect",
+        });
+        emit(relayIssuePayload(relaySessionId, issue), {
+          type: "session.error",
+          payload: issue,
+          final: true,
+        });
+      }
       emit(
         { relaySessionId, type: "close", reason },
         { type: "session.closed", payload: { reason }, final: true },
@@ -594,7 +687,18 @@ export function createTalkRealtimeRelaySession(
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
-    emit({ relaySessionId, type: "error", message: formatError(error) });
+    const issue = realtimeRelayIssue({
+      message: formatError(error),
+      provider: params.provider.id,
+      model: params.model,
+      phase: "connect",
+    });
+    failureEmitted = true;
+    emit(relayIssuePayload(relaySessionId, issue), {
+      type: "session.error",
+      payload: issue,
+      final: true,
+    });
     const active = relaySessions.get(relaySessionId);
     if (active) {
       closeRelaySession(active, "error");

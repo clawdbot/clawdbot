@@ -420,6 +420,39 @@ describe("probeIMessage", () => {
     expect(runCommand).toHaveBeenCalledTimes(4);
   });
 
+  it("propagates imsg's status message when advanced features are unavailable", async () => {
+    const note =
+      "System Integrity Protection (SIP) is enabled.\nAdvanced IMCore features are intentionally disabled.";
+    vi.spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: false,
+          v2_ready: false,
+          selectors: {},
+          rpc_methods: ["chats.list"],
+          message: note,
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+    await expect(probeIMessagePrivateApi("imsg-status-message-test", 1000)).resolves.toMatchObject({
+      available: false,
+      statusMessage: note,
+    });
+  });
+
   it("fails fast for default local imsg probes on non-mac hosts", async () => {
     const createIMessageRpcClientMock = vi
       .spyOn(clientModule, "createIMessageRpcClient")

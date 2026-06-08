@@ -103,6 +103,12 @@ final class RealtimeTalkRelaySession {
         let failed: Bool
     }
 
+    private enum StartupWaitResult {
+        case ready
+        case failed(TalkRuntimeIssue)
+        case cancelled
+    }
+
     private nonisolated static let expectedInputEncoding = "pcm16"
     private nonisolated static let expectedOutputEncoding = "pcm16"
     private nonisolated static let defaultSampleRateHz = 24000
@@ -110,16 +116,23 @@ final class RealtimeTalkRelaySession {
     private nonisolated static let bargeInRmsThreshold: Float = 0.08
     private nonisolated static let bargeInCooldownMs: Double = 900
     private nonisolated static let minOutputBeforeBargeInMs: Double = 250
+    private nonisolated static let startupReadyTimeoutSeconds = 12
 
     private let gateway: GatewayNodeSession
     private let options: Options
     private let pcmPlayer: PCMStreamingAudioPlaying
     private let logger = Logger(subsystem: "ai.openclaw", category: "RealtimeTalkRelay")
     private let onStatus: (String) -> Void
+    private let onIssue: (TalkRuntimeIssue) -> Void
     private let onSpeakingChanged: (Bool) -> Void
 
     private let audioEngine = AVAudioEngine()
     private var relaySessionId: String?
+    private var hasReceivedReady = false
+    private var hasReceivedFailure = false
+    private var startupIssue: TalkRuntimeIssue?
+    private var startupWaiter: CheckedContinuation<StartupWaitResult, Never>?
+    private var pendingPreRelayEvents: [EventFrame] = []
     private var inputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
     private var outputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
     private var eventTask: Task<Void, Never>?
@@ -151,34 +164,53 @@ final class RealtimeTalkRelaySession {
         options: Options,
         pcmPlayer: PCMStreamingAudioPlaying,
         onStatus: @escaping (String) -> Void,
+        onIssue: @escaping (TalkRuntimeIssue) -> Void = { _ in },
         onSpeakingChanged: @escaping (Bool) -> Void)
     {
         self.gateway = gateway
         self.options = options
         self.pcmPlayer = pcmPlayer
         self.onStatus = onStatus
+        self.onIssue = onIssue
         self.onSpeakingChanged = onSpeakingChanged
     }
 
     func start() async throws {
         self.isClosed = false
+        self.hasReceivedReady = false
+        self.hasReceivedFailure = false
+        self.startupIssue = nil
+        self.startupWaiter = nil
+        self.pendingPreRelayEvents.removeAll()
         self.onStatus("Connecting realtime…")
-        let result = try await self.createRelaySession()
-        guard let relaySessionId = result.relaysessionid?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !relaySessionId.isEmpty
-        else {
-            throw NSError(domain: "RealtimeTalkRelay", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Gateway did not return a realtime relay session",
-            ])
-        }
-        self.relaySessionId = relaySessionId
+        let eventStream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
+        self.startEventPump(stream: eventStream)
         do {
+            let result = try await self.createRelaySession()
+            guard let relaySessionId = result.relaysessionid?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !relaySessionId.isEmpty
+            else {
+                throw NSError(domain: "RealtimeTalkRelay", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Gateway did not return a realtime relay session",
+                ])
+            }
+            self.relaySessionId = relaySessionId
             self.audioSender = RealtimeAudioSender(gateway: self.gateway, relaySessionId: relaySessionId)
-            let eventStream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
-            self.startEventPump(stream: eventStream)
             self.configureAudioContract(result.audio)
             try self.startMicrophonePump()
-            self.onStatus("Listening (Realtime)")
+            self.onStatus("Waiting for realtime…")
+            await self.drainPendingPreRelayEvents()
+            switch await self.waitForStartupResult(timeoutSeconds: Self.startupReadyTimeoutSeconds) {
+            case .ready:
+                return
+            case let .failed(issue):
+                self.close(sendClose: true)
+                throw NSError(domain: "RealtimeTalkRelay", code: 6, userInfo: [
+                    NSLocalizedDescriptionKey: issue.displayMessage,
+                ])
+            case .cancelled:
+                return
+            }
         } catch {
             let createdRelaySessionId = self.relaySessionId
             self.close(sendClose: false)
@@ -196,6 +228,7 @@ final class RealtimeTalkRelaySession {
     private func close(sendClose: Bool) {
         guard !self.isClosed else { return }
         self.isClosed = true
+        self.finishStartupWait(.cancelled)
         self.stopMicrophonePump()
         self.eventTask?.cancel()
         self.eventTask = nil
@@ -299,14 +332,21 @@ final class RealtimeTalkRelaySession {
         guard event.event == "talk.event",
               let payload = event.payload?.dictionaryValue
         else { return }
-        if let relaySessionId,
-           payload["relaySessionId"]?.stringValue != relaySessionId
-        {
+        guard let relaySessionId else {
+            self.pendingPreRelayEvents.append(event)
+            if self.pendingPreRelayEvents.count > 200 {
+                self.pendingPreRelayEvents.removeFirst(self.pendingPreRelayEvents.count - 200)
+            }
+            return
+        }
+        if payload["relaySessionId"]?.stringValue != relaySessionId {
             return
         }
         guard let type = payload["type"]?.stringValue else { return }
         switch type {
         case "ready":
+            self.hasReceivedReady = true
+            self.finishStartupWait(.ready)
             self.onStatus("Listening (Realtime)")
         case "audio":
             guard let base64 = payload["audioBase64"]?.stringValue,
@@ -331,15 +371,105 @@ final class RealtimeTalkRelaySession {
             await self.handleToolCall(payload)
         case "error":
             let message = payload["message"]?.stringValue ?? "Realtime failed"
+            let issue = Self.issue(
+                payload: payload,
+                fallbackMessage: message,
+                fallbackProvider: self.options.provider,
+                fallbackModel: self.options.model)
             GatewayDiagnostics.log("talk realtime: error=\(Self.safeLogMessage(message))")
+            self.hasReceivedFailure = true
+            self.startupIssue = issue
+            self.onIssue(issue)
+            self.finishStartupWait(.failed(issue))
             self.onStatus(message)
         case "close":
             GatewayDiagnostics.log("talk realtime: close")
-            self.onStatus("Ready")
+            if self.hasReceivedReady {
+                self.onStatus("Ready")
+            } else if !self.hasReceivedFailure {
+                let issue = TalkRuntimeIssue(
+                    code: .realtimeUnavailable,
+                    message: "Realtime closed before it became ready.",
+                    provider: self.options.provider,
+                    model: self.options.model,
+                    transport: "gateway-relay",
+                    phase: "connect")
+                self.onIssue(issue)
+                self.startupIssue = issue
+                self.finishStartupWait(.failed(issue))
+                self.onStatus("Realtime failed before connecting")
+            }
             self.close(sendClose: false)
         default:
             return
         }
+    }
+
+    private func waitForStartupResult(timeoutSeconds: Int) async -> StartupWaitResult {
+        if self.isClosed { return .cancelled }
+        if self.hasReceivedReady { return .ready }
+        if let startupIssue { return .failed(startupIssue) }
+        return await withCheckedContinuation { continuation in
+            if self.isClosed {
+                continuation.resume(returning: .cancelled)
+                return
+            }
+            self.startupWaiter = continuation
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutSeconds)) * 1_000_000_000)
+                await self?.timeoutStartupWaiterIfNeeded()
+            }
+        }
+    }
+
+    private func drainPendingPreRelayEvents() async {
+        let pendingEvents = self.pendingPreRelayEvents
+        self.pendingPreRelayEvents.removeAll()
+        for event in pendingEvents {
+            await self.handleGatewayEvent(event)
+        }
+    }
+
+    private func finishStartupWait(_ result: StartupWaitResult) {
+        guard let waiter = self.startupWaiter else { return }
+        self.startupWaiter = nil
+        waiter.resume(returning: result)
+    }
+
+    private func timeoutStartupWaiterIfNeeded() {
+        guard !self.isClosed, self.startupWaiter != nil, !self.hasReceivedReady, self.startupIssue == nil else {
+            return
+        }
+        let issue = TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: "Realtime did not become ready in time.",
+            provider: self.options.provider,
+            model: self.options.model,
+            transport: "gateway-relay",
+            phase: "connect")
+        self.hasReceivedFailure = true
+        self.startupIssue = issue
+        self.onIssue(issue)
+        self.onStatus(issue.displayMessage)
+        self.finishStartupWait(.failed(issue))
+    }
+
+    private static func issue(
+        payload: [String: AnyCodable],
+        fallbackMessage: String,
+        fallbackProvider: String?,
+        fallbackModel: String?) -> TalkRuntimeIssue
+    {
+        let provider = payload["provider"]?.stringValue ?? fallbackProvider
+        let model = payload["model"]?.stringValue ?? fallbackModel
+        let transport = payload["transport"]?.stringValue ?? "gateway-relay"
+        let phase = payload["phase"]?.stringValue
+        return TalkRuntimeIssue.realtimeUnavailable(
+            message: fallbackMessage,
+            provider: provider,
+            model: model,
+            transport: transport,
+            phase: phase)
     }
 
     private func recordOutputAudioChunk(byteCount: Int) {
@@ -804,6 +934,25 @@ final class RealtimeTalkRelaySession {
 }
 
 extension RealtimeTalkRelaySession {
+    func _test_setRelaySessionId(_ relaySessionId: String) {
+        self.relaySessionId = relaySessionId
+    }
+
+    func _test_handleGatewayEvent(_ event: EventFrame) async {
+        await self.handleGatewayEvent(event)
+    }
+
+    func _test_waitForStartupCancelled(timeoutSeconds: Int) async -> Bool {
+        if case .cancelled = await self.waitForStartupResult(timeoutSeconds: timeoutSeconds) {
+            return true
+        }
+        return false
+    }
+
+    func _test_startupReadyTimeoutSeconds() -> Int {
+        Self.startupReadyTimeoutSeconds
+    }
+
     func _test_markOutputAudioStarted(nowMs: Double) {
         self.markOutputAudioStarted(byteCount: 4800, nowMs: nowMs)
     }

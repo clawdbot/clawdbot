@@ -33,9 +33,9 @@ async function archiveLegacyCronFile(filePath: string): Promise<void> {
   if (!(await legacyCronFileExists(filePath))) {
     return;
   }
-  const archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}`;
-  if (await legacyCronFileExists(archivePath)) {
-    return;
+  let archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}`;
+  for (let index = 2; await legacyCronFileExists(archivePath); index += 1) {
+    archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}.${index}`;
   }
   await fs.rename(filePath, archivePath).catch(() => undefined);
 }

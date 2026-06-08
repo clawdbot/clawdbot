@@ -32,3 +32,10 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   // Node command relay can reach system.run on paired hosts
   "nodes",
 ] as const;
+
+/**
+ * Core tools that require sender owner identity on Gateway HTTP `POST /tools/invoke`.
+ * `gateway.tools.allow` can remove the default HTTP deny only for owner/trusted-operator
+ * callers; non-owner identity-bearing callers must not receive server-credential wrappers.
+ */
+export const GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS = ["cron", "gateway", "nodes"] as const;

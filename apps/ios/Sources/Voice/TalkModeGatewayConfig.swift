@@ -7,6 +7,96 @@ enum TalkModeExecutionMode {
     case realtimeRelay
 }
 
+struct TalkRuntimeIssue: Equatable {
+    enum Code: String {
+        case realtimeUnavailable = "realtime_unavailable"
+    }
+
+    let code: Code
+    let message: String
+    let provider: String?
+    let model: String?
+    let transport: String?
+    let phase: String?
+    let occurredAt: Date
+
+    init(
+        code: Code,
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil,
+        occurredAt: Date = Date())
+    {
+        self.code = code
+        self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.occurredAt = occurredAt
+    }
+
+    var displayMessage: String {
+        if !self.message.isEmpty { return self.message }
+        return "Realtime voice did not start."
+    }
+
+    var fallbackStatusText: String {
+        "Listening (iOS Speech fallback)"
+    }
+
+    var fallbackBannerTitle: String {
+        "Using iOS Speech fallback"
+    }
+
+    var fallbackBannerOwnerLabel: String {
+        "Fallback active"
+    }
+
+    var fallbackBannerMessage: String {
+        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
+    }
+
+    var technicalDetails: String {
+        var lines = [
+            "code: \(self.code.rawValue)",
+            "message: \(self.displayMessage)",
+        ]
+        if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
+        if let model, !model.isEmpty { lines.append("model: \(model)") }
+        if let transport, !transport.isEmpty { lines.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { lines.append("phase: \(phase)") }
+        return lines.joined(separator: "\n")
+    }
+
+    var diagnosticSummary: String {
+        var parts = [self.displayMessage]
+        if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
+        if let model, !model.isEmpty { parts.append("model: \(model)") }
+        if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { parts.append("phase: \(phase)") }
+        return parts.joined(separator: " • ")
+    }
+
+    static func realtimeUnavailable(
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil) -> TalkRuntimeIssue
+    {
+        TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: message,
+            provider: provider,
+            model: model,
+            transport: transport,
+            phase: phase)
+    }
+}
+
 struct TalkVoiceModeDescriptor: Equatable {
     let title: String
     let subtitle: String?

@@ -135,6 +135,13 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;

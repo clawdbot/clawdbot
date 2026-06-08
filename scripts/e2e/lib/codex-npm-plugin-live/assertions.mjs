@@ -1,6 +1,7 @@
 // Assertions for Codex npm plugin live E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -37,6 +38,7 @@ const MAX_TRANSCRIPT_SCAN_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
   2 * 1024 * 1024,
 );
+const SESSION_STORE_SCOPE = "session_entries";
 
 function readPositiveIntEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
@@ -73,6 +75,30 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
     return `[${label} truncated to last ${maxBytes} bytes]\n${buffer.toString("utf8")}`;
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+function readSqliteSessionStore(agentId = "main") {
+  const dbPath = path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`session SQLite store was not persisted: ${dbPath}`);
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db
+      .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key ASC")
+      .all(SESSION_STORE_SCOPE);
+    const store = {};
+    for (const row of rows) {
+      if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
+        continue;
+      }
+      store[row.key] = JSON.parse(row.value_json);
+    }
+    return store;
+  } finally {
+    db?.close();
   }
 }
 
@@ -398,9 +424,7 @@ function assertAgentTurn() {
     );
   }
 
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readJson(storePath);
+  const store = readSqliteSessionStore("main");
   const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
   if (!entry) {
     throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);

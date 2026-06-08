@@ -62,10 +62,17 @@ type CronUpdatePatch = {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
     payload?: {
       kind?: string;
+      argv?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      input?: string;
       message?: string;
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      timeoutSeconds?: number;
+      noOutputTimeoutSeconds?: number;
+      outputMaxBytes?: number;
       toolsAllow?: string[];
     };
     delivery?: {
@@ -84,10 +91,17 @@ type CronAddParams = {
   schedule?: { kind?: string; at?: string; expr?: string; everyMs?: number; staggerMs?: number };
   payload?: {
     kind?: string;
+    argv?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+    input?: string;
     message?: string;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
+    timeoutSeconds?: number;
+    noOutputTimeoutSeconds?: number;
+    outputMaxBytes?: number;
     toolsAllow?: string[];
   };
   delivery?: {
@@ -583,6 +597,57 @@ describe("cron cli", () => {
     expect(params?.payload?.kind).toBe("agentTurn");
   });
 
+  it("creates command cron payloads without an agent-turn message", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Shell probe",
+      "--every",
+      "10m",
+      "--command",
+      "echo ok",
+      "--command-cwd",
+      "/srv/app",
+      "--command-env",
+      "FOO=bar",
+      "--timeout-seconds",
+      "30",
+      "--no-output-timeout-seconds",
+      "5",
+      "--output-max-bytes",
+      "4096",
+      "--no-deliver",
+    ]);
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload).toMatchObject({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      cwd: "/srv/app",
+      env: { FOO: "bar" },
+      timeoutSeconds: 30,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 4096,
+    });
+    expect(params?.delivery?.mode).toBe("none");
+  });
+
+  it("rejects cron add with both message and command payloads", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Ambiguous",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--command",
+      "echo ok",
+    ]);
+
+    expectRuntimeErrorContaining("Choose exactly one payload");
+  });
+
   it("supports --keep-after-run on cron add", async () => {
     await runCronCommand([
       "cron",
@@ -1007,6 +1072,56 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.thinking).toBe("low");
   });
 
+  it("converts cron edit payloads to command argv", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command-argv",
+      '["node","scripts/report.mjs","  "]',
+      "--command-cwd",
+      "/srv/app",
+    ]);
+
+    expect(patch?.patch?.payload).toEqual({
+      kind: "command",
+      argv: ["node", "scripts/report.mjs", "  "],
+      cwd: "/srv/app",
+    });
+  });
+
+  it("updates command cron timeout without requiring argv to be repeated", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              {
+                ...createCronJob("job-1", "Command"),
+                payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+              },
+            ],
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--timeout-seconds", "120"], {
+      from: "user",
+    });
+
+    const patch = getGatewayCallParams<{
+      patch?: { payload?: { kind?: string; timeoutSeconds?: number } };
+    }>("cron.update");
+    expect(patch?.patch?.payload).toEqual({
+      kind: "command",
+      timeoutSeconds: 120,
+    });
+  });
+
   it("sets and clears lightContext on cron edit", async () => {
     const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
     expect(setPatch?.patch?.payload?.lightContext).toBe(true);
@@ -1034,7 +1149,7 @@ describe("cron cli", () => {
       };
     }>("cron.update");
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
@@ -1052,7 +1167,7 @@ describe("cron cli", () => {
       "42",
     ]);
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("-100123");
@@ -1062,7 +1177,7 @@ describe("cron cli", () => {
   it("preserves existing delivery mode on thread-only cron edit patches", async () => {
     const patch = await runCronEditAndGetPatch(["--thread-id", "42"]);
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
     expect(patch?.patch?.delivery?.threadId).toBe(42);
   });
@@ -1133,7 +1248,7 @@ describe("cron cli", () => {
 
   it("updates delivery account without requiring --message on cron edit", async () => {
     const patch = await runCronEditAndGetPatch(["--account", "  coordinator  "]);
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
   });

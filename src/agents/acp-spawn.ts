@@ -24,7 +24,11 @@ import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
-import { routeFromBindingRecord, routeToDeliveryFields } from "../channels/route-projection.js";
+import {
+  formatConversationTarget,
+  routeFromBindingRecord,
+  routeToDeliveryFields,
+} from "../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -65,11 +69,7 @@ import {
 } from "../routing/session-key.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
-import {
-  deliveryContextFromSession,
-  formatConversationTarget,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.js";
+import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
   resolveAcpSpawnStreamLogPath,

@@ -404,6 +404,79 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("suppresses command cron NO_REPLY output before announce delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-no-reply");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(state.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("suppresses command cron NO_REPLY output before webhook delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-webhook-no-reply");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-command-webhook",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+        },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("routes global-scope main cron jobs through the global queue for queued wakes", async () => {
     const cfg = {
       ...createCronConfig("server-cron-global-queued"),

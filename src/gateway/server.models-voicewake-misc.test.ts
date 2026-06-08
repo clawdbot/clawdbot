@@ -212,10 +212,18 @@ const expectedConfiguredProviderModel = (params: ConfiguredProviderModelFixture)
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
-      params
-        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    withEnvAsync(
+      {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        CODEX_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        OPENAI_OAUTH_TOKEN: undefined,
+        CHATGPT_OAUTH_TOKEN: undefined,
+      },
+      async () =>
+        params
+          ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+          : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {

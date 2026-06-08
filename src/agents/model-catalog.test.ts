@@ -1305,6 +1305,61 @@ describe("loadModelCatalog", () => {
     expect(entry.reasoning).toBe(true);
   });
 
+  it("passes configured provider rows to provider catalog augment hooks", async () => {
+    mockAgentDiscoveryModels([]);
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "Minimax M3 Live",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        compat: { supportsTools: true },
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [
+                {
+                  id: "minimax-m3:cloud",
+                  name: "Minimax M3 Configured",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  compat: { supportsTools: false },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "ollama", "minimax-m3:cloud");
+    expect(entry.name).toBe("Minimax M3 Live");
+    expect(entry.contextWindow).toBe(128_000);
+    expect(entry.input).toEqual(["text"]);
+    expect(entry.reasoning).toBe(false);
+    expect(entry.compat).toEqual({ supportsTools: false });
+    expect(augmentCatalogMock.mock.calls[0]?.[0]?.context.entries).toContainEqual(
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "Minimax M3 Configured",
+        contextWindow: 128_000,
+      }),
+    );
+  });
+
   it("includes configured provider models missing from discovery", async () => {
     mockSingleOpenAiCatalogModel();
 

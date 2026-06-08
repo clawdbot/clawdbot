@@ -9,6 +9,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -34,15 +35,6 @@ const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   tb: 1024 * 1024 * 1024 * 1024,
   tib: 1024 * 1024 * 1024 * 1024,
 };
-type CodexSessionRecordCacheEntry = {
-  sessionsFile: string;
-  mtimeMs: number;
-  size: number;
-  record: (Record<string, unknown> & { sessionKey: string }) | undefined;
-};
-
-const codexSessionRecordCache = new Map<string, CodexSessionRecordCacheEntry>();
-
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
@@ -123,35 +115,14 @@ async function listCodexAppServerRolloutFilesForThread(
 async function readCodexSessionRecordForSessionFile(
   sessionFile: string,
 ): Promise<(Record<string, unknown> & { sessionKey: string }) | undefined> {
-  const sessionsFile = path.join(path.dirname(sessionFile), "sessions.json");
+  const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   const resolvedSessionFile = path.resolve(sessionFile);
-  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  let store: Record<string, unknown>;
   try {
-    stat = await fs.stat(sessionsFile);
+    store = loadSessionStore(storePath, { skipCache: true }) as Record<string, unknown>;
   } catch {
-    codexSessionRecordCache.delete(resolvedSessionFile);
     return undefined;
   }
-  const cached = codexSessionRecordCache.get(resolvedSessionFile);
-  if (
-    cached?.sessionsFile === sessionsFile &&
-    cached.mtimeMs === stat.mtimeMs &&
-    cached.size === stat.size
-  ) {
-    return cached.record;
-  }
-  let store: JsonValue | undefined;
-  try {
-    store = JSON.parse(await fs.readFile(sessionsFile, "utf8")) as JsonValue;
-  } catch {
-    codexSessionRecordCache.delete(resolvedSessionFile);
-    return undefined;
-  }
-  if (!isJsonObject(store)) {
-    codexSessionRecordCache.delete(resolvedSessionFile);
-    return undefined;
-  }
-  let found: (Record<string, unknown> & { sessionKey: string }) | undefined;
   for (const [sessionKey, record] of Object.entries(store)) {
     if (!isJsonObject(record) || typeof record.sessionFile !== "string") {
       continue;
@@ -159,16 +130,9 @@ async function readCodexSessionRecordForSessionFile(
     if (path.resolve(record.sessionFile) !== resolvedSessionFile) {
       continue;
     }
-    found = { sessionKey, ...record };
-    break;
+    return { sessionKey, ...record };
   }
-  codexSessionRecordCache.set(resolvedSessionFile, {
-    sessionsFile,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    record: found,
-  });
-  return found;
+  return undefined;
 }
 
 type CodexAppServerRolloutTokenSnapshot = {

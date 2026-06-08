@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
@@ -15,6 +16,28 @@ class ShellScreenLogicTest {
     assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
+  }
+
+  @Test
+  fun appearanceThemeModeDefaultsToDarkForExistingInstalls() {
+    assertEquals(AppearanceThemeMode.Dark, AppearanceThemeMode.fromRawValue(null))
+    assertEquals(AppearanceThemeMode.Dark, AppearanceThemeMode.fromRawValue("unknown"))
+  }
+
+  @Test
+  fun appearanceThemeLabelsRoundTripFromSettingsOptions() {
+    assertEquals(listOf("System", "Dark", "Light"), appearanceThemeOptions())
+    assertEquals(AppearanceThemeMode.System, appearanceThemeModeForLabel("System"))
+    assertEquals(AppearanceThemeMode.Dark, appearanceThemeModeForLabel("Dark"))
+    assertEquals(AppearanceThemeMode.Light, appearanceThemeModeForLabel("Light"))
+  }
+
+  @Test
+  fun appearanceThemeModeResolvesAgainstSystemPreference() {
+    assertFalse(AppearanceThemeMode.System.isDark(systemDark = false))
+    assertTrue(AppearanceThemeMode.System.isDark(systemDark = true))
+    assertTrue(AppearanceThemeMode.Dark.isDark(systemDark = false))
+    assertFalse(AppearanceThemeMode.Light.isDark(systemDark = true))
   }
 
   @Test

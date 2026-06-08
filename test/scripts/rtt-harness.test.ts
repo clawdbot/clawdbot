@@ -227,7 +227,9 @@ describe("RTT harness", () => {
     expect(script).toContain('if [ "$mock_ready" != "1" ]; then');
     expect(script).toContain("Mock OpenAI server did not become ready");
     expect(script).toContain('openclaw_e2e_print_log "$mock_log"');
+    expect(script).toContain('openclaw_e2e_print_log "$file"');
     expect(script).not.toContain('cat "$mock_log"');
+    expect(script).not.toContain("sed -n '1,260p'");
     expect(script).not.toContain("fetch('http://127.0.0.1:${mock_port}/health')");
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
   });

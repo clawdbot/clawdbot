@@ -7,11 +7,11 @@ import type {
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   loadSessionStore,
+  resolveAllAgentSessionStoreTargetsSync,
   resolveSessionFilePath,
-  resolveStorePath,
+  type SessionStoreTarget,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -46,10 +46,7 @@ type FeishuDoctorFinding =
       count: number;
     };
 
-type FeishuSessionTarget = {
-  agentId: string;
-  storePath: string;
-};
+type FeishuSessionTarget = SessionStoreTarget;
 
 type FeishuSessionEntry = {
   sessionId?: unknown;
@@ -216,57 +213,12 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
   );
 }
 
-function collectConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  ids.add(resolveConfiguredDefaultAgentId(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
-      ids.add(normalizeAgentId(agent.id));
-    }
-  }
-  return [...ids].toSorted();
-}
-
-function resolveConfiguredDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = cfg.agents?.list ?? [];
-  const chosen = agents.find((agent) => agent?.default) ?? agents[0];
-  return normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main");
-}
-
 function collectFeishuSessionTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  stateDir: string;
 }): FeishuSessionTarget[] {
-  const byStorePath = new Map<string, FeishuSessionTarget>();
-  const addTarget = (target: FeishuSessionTarget) => {
-    byStorePath.set(path.resolve(target.storePath), {
-      ...target,
-      storePath: path.resolve(target.storePath),
-    });
-  };
-
-  for (const agentId of collectConfiguredAgentIds(params.cfg)) {
-    addTarget({
-      agentId,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),
-    });
-  }
-
-  const agentsDir = path.join(params.stateDir, "agents");
-  for (const agentDir of safeReadDir(agentsDir)) {
-    if (!agentDir.isDirectory()) {
-      continue;
-    }
-    const agentId = normalizeAgentId(agentDir.name);
-    const storePath = path.join(agentsDir, agentDir.name, "sessions", "sessions.json");
-    if (existsFile(storePath)) {
-      addTarget({ agentId, storePath });
-    }
-  }
-
-  return [...byStorePath.values()].toSorted((left, right) =>
-    left.storePath.localeCompare(right.storePath),
+  return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }).toSorted(
+    (left, right) => left.storePath.localeCompare(right.storePath),
   );
 }
 
@@ -557,7 +509,7 @@ export function inspectFeishuDoctorState(params: {
   const findings: FeishuDoctorFinding[] = collectCorruptFeishuStateJsonFindings(feishuStateDir);
   const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
 
-  for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
+  for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env })) {
     const store = loadSessionStore(target.storePath, { skipCache: true });
     for (const [key, entry] of Object.entries(store).toSorted(([left], [right]) =>
       left.localeCompare(right),
@@ -625,9 +577,6 @@ function movePathToBackup(params: {
 }
 
 function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
-  if (!existsFile(params.storePath)) {
-    return;
-  }
   const targetPath = path.join(
     params.backupDir,
     "session-stores",
@@ -635,7 +584,14 @@ function copyStoreBackup(params: { storePath: string; backupDir: string; agentId
     path.basename(params.storePath),
   );
   fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.storePath, resolveUniquePath(targetPath));
+  if (existsFile(params.storePath)) {
+    fs.copyFileSync(params.storePath, resolveUniquePath(targetPath));
+    return;
+  }
+  const store = loadSessionStore(params.storePath, { skipCache: true });
+  if (Object.keys(store).length > 0) {
+    fs.writeFileSync(resolveUniquePath(targetPath), JSON.stringify(store, null, 2));
+  }
 }
 
 function collectSessionArtifactPaths(params: {

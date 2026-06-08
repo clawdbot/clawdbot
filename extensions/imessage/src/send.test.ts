@@ -121,6 +121,19 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
+    const client = createClient({ guid: "p:0/imsg-1" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
+      timeoutMs: 150_000,
+    });
+  });
+
   it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi

@@ -407,6 +407,7 @@ export async function collectChannelDoctorRepairMutations(params: {
     const mutation = await entry.doctor.repairConfig?.({
       cfg: nextCfg,
       doctorFixCommand: params.doctorFixCommand,
+      ...(params.env ? { env: params.env } : {}),
     });
     if (!mutation || mutation.changes.length === 0) {
       if (mutation?.warnings?.length) {

@@ -116,10 +116,13 @@ function readCompletionStatus(status: JsonObject):
     if (!mappedStatus) {
       continue;
     }
+    const result = stringifyResult(value, mappedStatus);
+    const noFinalAssistantMessage =
+      mappedStatus === "succeeded" && result.kind === "no_final_assistant_message";
     return {
       status: mappedStatus,
-      label: rawKey,
-      result: stringifyResult(value),
+      label: noFinalAssistantMessage ? "completed_without_final_message" : rawKey,
+      result: result.text,
     };
   }
   return undefined;
@@ -149,18 +152,42 @@ function mapCompletionStatus(value: string): CodexNativeSubagentCompletionStatus
   return undefined;
 }
 
-function stringifyResult(value: JsonValue | undefined): string {
+function stringifyResult(
+  value: JsonValue | undefined,
+  status: CodexNativeSubagentCompletionStatus,
+): {
+  text: string;
+  kind?: "no_final_assistant_message";
+} {
   if (typeof value === "string") {
-    return value.trim() || "(no output)";
+    const text = value.trim();
+    if (text) {
+      return { text };
+    }
+    return status === "succeeded"
+      ? completedWithoutFinalAssistantMessage()
+      : { text: "(no output)" };
   }
   if (value === null || value === undefined) {
-    return "(no output)";
+    return status === "succeeded"
+      ? completedWithoutFinalAssistantMessage()
+      : { text: "(no output)" };
   }
   try {
-    return JSON.stringify(value);
+    return { text: JSON.stringify(value) };
   } catch {
-    return "(unserializable output)";
+    return { text: "(unserializable output)" };
   }
+}
+
+function completedWithoutFinalAssistantMessage(): {
+  text: string;
+  kind: "no_final_assistant_message";
+} {
+  return {
+    text: "Codex native subagent completed without a final assistant message.",
+    kind: "no_final_assistant_message",
+  };
 }
 
 function readTrustedInterAgentCommunicationContent(item: JsonObject): string | undefined {

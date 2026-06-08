@@ -4,7 +4,10 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -32,8 +35,45 @@ export type OAuthCallbackResult = {
 };
 
 /**
- * Builds the CORS origin resolver for loopback OAuth callbacks.
+ * Non-secret auth profile metadata used by provider discovery helpers.
  */
+export type ProviderAuthProfileMetadata = {
+  profileId?: string;
+  accountId?: string;
+};
+
+export function resolveProviderAuthProfileMetadata(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  profileId?: string;
+  agentDir?: string;
+}): ProviderAuthProfileMetadata {
+  const store = ensureAuthProfileStore(params.agentDir, {
+    config: params.cfg,
+    readOnly: true,
+  });
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const entry = params.profileId
+    ? ([params.profileId, store.profiles[params.profileId]] as const)
+    : Object.entries(store.profiles).find(
+        ([, profile]) => normalizeProviderId(profile.provider) === normalizedProvider,
+      );
+  const [profileId, profile] = entry ?? [];
+  if (!profile) {
+    return {};
+  }
+  return {
+    profileId,
+    ...(profile.type === "oauth" && profile.accountId ? { accountId: profile.accountId } : {}),
+  };
+}
+
+// IdP-host allowlist for CORS echo on the loopback OAuth callback. Plugins
+// pass the hosts that may legitimately issue preflights against the redirect
+// URI; everything else gets a 204 with no `Access-Control-Allow-*` headers,
+// which is safe for normal browser navigation but blocks cross-origin script
+// reads. The empty allowlist (default) leaves the legacy permissive SDK
+// behavior in place for existing callers.
 export function buildOAuthCallbackOriginResolver(
   /** HTTPS IdP hosts allowed to receive a CORS echo from the loopback callback. */
   allowedHosts: readonly string[] | undefined,

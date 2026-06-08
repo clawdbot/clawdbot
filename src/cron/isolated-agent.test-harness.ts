@@ -1,7 +1,7 @@
 // Isolated agent test harness builds filesystem and config fixtures for cron agent tests.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "./types.js";
 
@@ -28,9 +28,8 @@ export async function writeSessionStoreEntries(
   entries: Record<string, Record<string, unknown>>,
 ): Promise<string> {
   const dir = path.join(home, ".openclaw", "sessions");
-  await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  await writeSessionStoreForTestAsync(storePath, entries);
   return storePath;
 }
 

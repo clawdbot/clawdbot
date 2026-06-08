@@ -67,6 +67,7 @@
     }
   ],
   "modelCatalog": {
+    "runtimeAugment": true,
     "providers": {
       "ollama-cloud": {
         "baseUrl": "https://ollama.com",

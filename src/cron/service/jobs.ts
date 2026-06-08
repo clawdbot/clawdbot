@@ -286,8 +286,10 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "command"',
+    );
   }
 }
 
@@ -882,6 +884,35 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "command") {
+    if (existing.kind !== "command") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "command" }> = { ...existing };
+    if (Array.isArray(patch.argv)) {
+      next.argv = patch.argv;
+    }
+    if (typeof patch.cwd === "string") {
+      next.cwd = patch.cwd;
+    }
+    if (patch.env && typeof patch.env === "object" && !Array.isArray(patch.env)) {
+      next.env = patch.env;
+    }
+    if (typeof patch.input === "string") {
+      next.input = patch.input;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    if (typeof patch.noOutputTimeoutSeconds === "number") {
+      next.noOutputTimeoutSeconds = patch.noOutputTimeoutSeconds;
+    }
+    if (typeof patch.outputMaxBytes === "number") {
+      next.outputMaxBytes = patch.outputMaxBytes;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -922,6 +953,22 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "command") {
+    if (!Array.isArray(patch.argv) || patch.argv.length === 0) {
+      throw new Error('cron.update payload.kind="command" requires argv');
+    }
+    return {
+      kind: "command",
+      argv: patch.argv,
+      cwd: patch.cwd,
+      env: patch.env,
+      input: patch.input,
+      timeoutSeconds: patch.timeoutSeconds,
+      noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
+      outputMaxBytes: patch.outputMaxBytes,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

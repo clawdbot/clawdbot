@@ -853,6 +853,23 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["runtime-bundled"]);
   });
 
+  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "ollama",
+        providerIds: ["ollama", "ollama-cloud"],
+        enabledByDefault: true,
+        modelCatalog: {
+          runtimeAugment: true,
+        },
+      }),
+    ]);
+
+    expect(
+      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
+    ).toEqual(["ollama"]);
+  });
+
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
     setManifestPlugins([
       createManifestProviderPlugin({

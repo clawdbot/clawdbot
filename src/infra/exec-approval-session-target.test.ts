@@ -1,9 +1,9 @@
 // Covers approval session target resolution.
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -66,8 +66,7 @@ function writeStoreFile(
   storePath: string,
   entries: Record<string, Partial<SessionEntry>>,
 ): OpenClawConfig {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(entries), "utf-8");
+  writeSessionStoreForTest(storePath, entries);
   return {
     session: { store: storePath },
   } as OpenClawConfig;

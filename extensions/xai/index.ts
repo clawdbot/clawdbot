@@ -14,7 +14,11 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildXaiProvider } from "./provider-catalog.js";
+import {
+  buildLiveXaiOAuthProvider,
+  buildLiveXaiProvider,
+  buildXaiProvider,
+} from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -176,7 +180,60 @@ export default defineSingleProviderPluginEntry({
     ],
     extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
-      buildProvider: buildXaiProvider,
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        try {
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
+          if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
+            return {
+              provider: await buildLiveXaiOAuthProvider({
+                discoveryApiKey: runtimeAuth.apiKey,
+              }),
+            };
+          }
+        } catch {
+          if (auth.mode === "oauth") {
+            // OAuth discovery is advisory; fall through so configured API-key
+            // auth can still publish the standard xAI catalog.
+          }
+        }
+        if (auth.apiKey) {
+          return {
+            provider: await buildLiveXaiProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        }
+
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey.apiKey) {
+          return null;
+        }
+        return {
+          provider: await buildLiveXaiProvider({
+            apiKey: apiKey.apiKey,
+            discoveryApiKey: apiKey.discoveryApiKey,
+          }),
+        };
+      },
+      staticRun: async () => ({
+        provider: buildXaiProvider(),
+      }),
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

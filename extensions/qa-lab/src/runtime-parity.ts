@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -905,16 +906,14 @@ async function readRuntimeParitySessionEntries(params: {
     "sessions",
     "sessions.json",
   );
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, RuntimeParitySessionEntry>;
-    const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
-    const rootEntries = entries.filter(isRuntimeParityRootSession);
-    const candidates = rootEntries.length > 0 ? rootEntries : entries;
-    return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-  } catch {
-    return [];
-  }
+  const parsed = loadSessionStore(storePath, { skipCache: true }) as Record<
+    string,
+    RuntimeParitySessionEntry
+  >;
+  const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
+  const rootEntries = entries.filter(isRuntimeParityRootSession);
+  const candidates = rootEntries.length > 0 ? rootEntries : entries;
+  return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 async function loadRuntimeParityTranscripts(params: {

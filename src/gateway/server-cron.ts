@@ -3,6 +3,7 @@
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -14,11 +15,16 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runCronCommandJob } from "../cron/command-runner.js";
+import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
-import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSessionTargetSessionKey,
+} from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -380,6 +386,105 @@ export function buildGatewayCronService(params: {
           sessionKeys: [sessionKey],
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
+      }
+    },
+    runCommandJob: async ({ job, abortSignal }) => {
+      const result = await runCronCommandJob({
+        job,
+        abortSignal,
+        nowMs: Date.now,
+      });
+      const plan = resolveCronDeliveryPlan(job);
+      const deliveryTrace = {
+        intended: pickDefined(
+          {
+            channel: plan.channel,
+            to: plan.to,
+            accountId: plan.accountId,
+            threadId: plan.threadId,
+            source: "explicit" as const,
+          },
+          ["channel", "to", "accountId", "threadId", "source"],
+        ),
+      };
+      const summaryIsSilent =
+        typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
+      if (summaryIsSilent) {
+        const { summary: _summary, ...silentResult } = result;
+        return {
+          ...silentResult,
+          deliveryAttempted: false,
+          delivered: false,
+          delivery: deliveryTrace,
+        };
+      }
+      const shouldAnnounce =
+        plan.mode === "announce" && typeof result.summary === "string" && result.summary.trim();
+      if (!shouldAnnounce) {
+        return {
+          ...result,
+          deliveryAttempted: false,
+          delivered: false,
+          delivery: deliveryTrace,
+        };
+      }
+      const message = result.summary;
+      if (typeof message !== "string") {
+        return {
+          ...result,
+          deliveryAttempted: false,
+          delivered: false,
+          delivery: deliveryTrace,
+        };
+      }
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      try {
+        await sendCronAnnouncePayloadStrict({
+          deps: params.deps,
+          cfg: runtimeConfig,
+          agentId,
+          jobId: job.id,
+          target: {
+            channel: plan.channel,
+            to: plan.to,
+            accountId: plan.accountId,
+            sessionKey: resolveCronDeliverySessionKey(job),
+          },
+          message,
+          abortSignal: abortSignal ?? new AbortController().signal,
+        });
+        return {
+          ...result,
+          deliveryAttempted: true,
+          delivered: true,
+          delivery: {
+            ...deliveryTrace,
+            delivered: true,
+          },
+        };
+      } catch (err) {
+        const error = formatErrorMessage(err);
+        cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
+        return {
+          ...result,
+          status: job.delivery?.bestEffort ? result.status : "error",
+          error: job.delivery?.bestEffort ? result.error : error,
+          deliveryAttempted: true,
+          delivered: false,
+          delivery: {
+            ...deliveryTrace,
+            delivered: false,
+            resolved: {
+              channel: plan.channel,
+              to: plan.to,
+              accountId: plan.accountId,
+              threadId: plan.threadId,
+              source: "explicit" as const,
+              ok: false,
+              error,
+            },
+          },
+        };
       }
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {

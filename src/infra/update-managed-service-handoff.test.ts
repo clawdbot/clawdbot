@@ -20,9 +20,8 @@ const { spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessModule } = await import(
-    "../gateway/server-methods/node-child-process.test-support.js"
-  );
+  const { mockNodeChildProcessModule } =
+    await import("../gateway/server-methods/node-child-process.test-support.js");
   return mockNodeChildProcessModule({
     spawn: spawnMock as unknown as typeof import("node:child_process").spawn,
   });

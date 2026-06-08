@@ -29,13 +29,14 @@ const mocks = vi.hoisted(() => ({
   resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
+  closeSqliteSessionStoreDatabase: vi.fn(),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
     scope: "global",
     agents: [],
   })),
-  movePathToTrash: vi.fn(async () => "/trashed"),
+  movePathToTrash: vi.fn(async (_pathname: string) => "/trashed"),
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
@@ -128,13 +129,29 @@ vi.mock("../../agents/workspace.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions/paths.js", () => ({
+vi.mock("../../config/sessions/paths.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/paths.js")>(
+    "../../config/sessions/paths.js",
+  )),
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
+
+vi.mock("../../config/sessions/store-sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/store-sqlite.js")>(
+    "../../config/sessions/store-sqlite.js",
+  );
+  return {
+    ...actual,
+    closeSqliteSessionStoreDatabase: (storePath: string) => {
+      mocks.closeSqliteSessionStoreDatabase(storePath);
+      return actual.closeSqliteSessionStoreDatabase(storePath);
+    },
+  };
+});
 
 vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
@@ -1125,6 +1142,23 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     // moveToTrashBestEffort calls fs.access then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("closes the session SQLite handle before trashing the agent directory", async () => {
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true });
+    expect(mocks.closeSqliteSessionStoreDatabase).toHaveBeenCalledOnce();
+    const agentTrashCallIndex = mocks.movePathToTrash.mock.calls.findIndex(
+      ([pathname]) => pathname === "/agents/test-agent",
+    );
+    expect(agentTrashCallIndex).toBeGreaterThanOrEqual(0);
+    expect(mocks.closeSqliteSessionStoreDatabase.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.movePathToTrash.mock.invocationCallOrder[agentTrashCallIndex] ?? 0,
+    );
   });
 
   it("trashes workspace attestations when deleting the last workspace owner", async () => {

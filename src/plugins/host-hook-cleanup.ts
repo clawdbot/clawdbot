@@ -1,5 +1,4 @@
 /** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
-import fs from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
@@ -209,11 +208,7 @@ function matchesCleanupSession(
 
 function resolveExistingSessionStorePaths(cfg: OpenClawConfig): string[] {
   return [
-    ...new Set(
-      resolveAllAgentSessionStoreTargetsSync(cfg)
-        .map((target) => target.storePath)
-        .filter((storePath) => fs.existsSync(storePath)),
-    ),
+    ...new Set(resolveAllAgentSessionStoreTargetsSync(cfg).map((target) => target.storePath)),
   ];
 }
 

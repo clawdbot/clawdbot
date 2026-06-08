@@ -1,5 +1,8 @@
 // Send method tests cover outbound message routing, transcript mirroring, poll
 // dispatch, plugin channel selection, and durable delivery dependencies.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -207,6 +210,22 @@ async function runMessageActionRequest(
     isWebchatConnect: () => false,
   });
   return { respond };
+}
+
+async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await test(stateDir);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 }
 
 function deliveryCall(index = 0): Record<string, any> | undefined {
@@ -790,6 +809,34 @@ describe("gateway send mirroring", () => {
     ]);
     expect(deliveryCall()?.session?.agentId).toBe("work");
     expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
+  });
+
+  it("materializes buffer-only gateway sends before outbound delivery", async () => {
+    mockDeliverySuccess("m-buffer-media");
+
+    await withTempOpenClawStateDir(async () => {
+      const { respond } = await runSend({
+        to: "+15551234567",
+        mediaUrl: "buffer://message-send/attachment",
+        mediaUrls: ["buffer://message-send/attachment"],
+        buffer: Buffer.from("gateway send bytes").toString("base64"),
+        filename: "gateway-send.txt",
+        contentType: "text/plain",
+        channel: "whatsapp",
+        agentId: "work",
+        idempotencyKey: "idem-whatsapp-buffer",
+      });
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      const payload = deliveryCall()?.payloads?.[0];
+      expect(typeof payload?.mediaUrl).toBe("string");
+      expect(payload?.mediaUrls).toEqual([payload?.mediaUrl]);
+      expect(payload?.mediaUrl).not.toBe("buffer://message-send/attachment");
+      await expect(fs.readFile(String(payload?.mediaUrl), "utf8")).resolves.toBe(
+        "gateway send bytes",
+      );
+      expect(deliveryCall()?.session?.agentId).toBe("work");
+    });
   });
 
   it("maps gateway asVoice sends onto outbound audioAsVoice payloads", async () => {
@@ -2242,5 +2289,66 @@ describe("gateway send mirroring", () => {
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
+  });
+
+  it("materializes buffer-only message.action sends on the gateway before plugin dispatch", async () => {
+    const mediaActionPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram media action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(mediaActionPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: mediaActionPlugin }]),
+      "send-test-message-action-buffer-materialize",
+    );
+
+    await withTempOpenClawStateDir(async () => {
+      const { respond } = await runMessageActionRequest(
+        {
+          channel: "telegram",
+          action: "send",
+          params: {
+            to: "123",
+            media: "buffer://message-send/attachment",
+            mediaUrl: "buffer://message-send/attachment",
+            mediaUrls: ["buffer://message-send/attachment"],
+            buffer: Buffer.from("gateway bytes").toString("base64"),
+            filename: "gateway.txt",
+            contentType: "text/plain",
+          },
+          agentId: "work",
+          idempotencyKey: "idem-message-action-buffer-materialize",
+        },
+        { connect: { scopes: ["operator.write"] } },
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      const actionCall = lastDispatchChannelMessageActionCall();
+      const actionParams = actionCall?.params;
+      expect(actionParams?.buffer).toBeUndefined();
+      expect(typeof actionParams?.mediaUrl).toBe("string");
+      expect(actionParams?.media).toBe(actionParams?.mediaUrl);
+      expect(actionParams?.mediaUrls).toEqual([actionParams?.mediaUrl]);
+      await expect(fs.readFile(String(actionParams?.mediaUrl), "utf8")).resolves.toBe(
+        "gateway bytes",
+      );
+    });
   });
 });

@@ -97,8 +97,10 @@ export type CronModelSuggestionsState = {
   cronModelSuggestions: string[];
 };
 
-function supportsAnnounceDelivery(form: Pick<CronFormState, "sessionTarget" | "payloadKind">) {
-  return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
+function supportsAnnounceDelivery(
+  form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,
+) {
+  return form.sessionTarget !== "main" && (form.payloadKind === "agentTurn" || form.payloadLocked);
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {
@@ -143,13 +145,13 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       }
     }
   }
-  if (!form.payloadText.trim()) {
+  if (!form.payloadLocked && !form.payloadText.trim()) {
     errors.payloadText =
       form.payloadKind === "systemEvent"
         ? "cron.errors.systemTextRequired"
         : "cron.errors.agentMessageRequired";
   }
-  if (form.payloadKind === "agentTurn") {
+  if (!form.payloadLocked && form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
@@ -485,6 +487,7 @@ function parseStaggerSchedule(
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
+  const payloadLocked = payload?.kind === "command";
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -505,8 +508,19 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
-    payloadText: payload?.kind === "systemEvent" ? payload.text : (payload?.message ?? ""),
+    payloadKind:
+      payload?.kind === "systemEvent" || payload?.kind === "agentTurn"
+        ? payload.kind
+        : DEFAULT_CRON_FORM.payloadKind,
+    payloadLocked,
+    payloadText:
+      payload?.kind === "systemEvent"
+        ? payload.text
+        : payload?.kind === "agentTurn"
+          ? payload.message
+          : payload?.kind === "command"
+            ? payload.argv.join(" ")
+            : "",
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
@@ -699,12 +713,15 @@ export async function addCronJob(state: CronState): Promise<boolean> {
     }
 
     const schedule = buildCronSchedule(form);
-    const payload = buildCronPayload(form);
     const editingJob = state.cronEditingJobId
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    if (payload.kind === "agentTurn") {
+    const preserveLockedPayload = Boolean(
+      state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
+    );
+    const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
+    if (payload?.kind === "agentTurn") {
       const existingLightContext =
         editingPayload?.kind === "agentTurn" ? editingPayload.lightContext : undefined;
       if (
@@ -743,7 +760,7 @@ export async function addCronJob(state: CronState): Promise<boolean> {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
-    const job = {
+    const job: Record<string, unknown> = {
       name: form.name.trim(),
       description: form.description.trim(),
       agentId: agentId === null ? null : agentId || undefined,
@@ -753,10 +770,12 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       schedule,
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
-      payload,
       delivery,
       failureAlert,
     };
+    if (payload) {
+      job.payload = payload;
+    }
     if (!job.name) {
       throw new Error(t("cron.errors.nameRequiredShort"));
     }
@@ -944,6 +963,11 @@ export function startCronClone(state: CronState, job: CronJob) {
   );
   const cloned = jobToForm(job, state.cronForm);
   cloned.name = buildCloneName(job.name, existingNames);
+  if (cloned.payloadLocked) {
+    cloned.payloadLocked = false;
+    cloned.payloadKind = DEFAULT_CRON_FORM.payloadKind;
+    cloned.payloadText = "";
+  }
   state.cronForm = cloned;
   state.cronFieldErrors = validateCronForm(state.cronForm);
 }

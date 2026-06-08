@@ -3,11 +3,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDeferred } from "../test-helpers.deferred.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
+  await withEnvAsync(
+    {
+      CODEX_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+      OPENAI_OAUTH_TOKEN: undefined,
+      CHATGPT_OAUTH_TOKEN: undefined,
+    },
+    run,
+  );
 
 function requestModelsList(params: {
   view: "configured" | "all";
@@ -41,50 +53,52 @@ function requestModelsList(params: {
 
 describe("models.list", () => {
   it("does not block the configured view on slow model catalog discovery", async () => {
-    const catalog = createDeferred<never>();
-    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
-    const runtimeConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://openai.example.com",
-            models: [{ id: "gpt-test", name: "GPT Test" }],
+    await withoutOpenAIEnvAuth(async () => {
+      const catalog = createDeferred<never>();
+      const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { request, respond } = requestModelsList({
-        view: "configured",
-        runtimeConfig,
-        loadGatewayModelCatalog,
-        reqId: "req-models-list-slow-catalog",
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { request, respond } = requestModelsList({
+          view: "configured",
+          runtimeConfig,
+          loadGatewayModelCatalog,
+          reqId: "req-models-list-slow-catalog",
+        });
 
-      await vi.advanceTimersByTimeAsync(800);
-      await vi.runOnlyPendingTimersAsync();
-      await request;
+        await vi.advanceTimersByTimeAsync(800);
+        await vi.runOnlyPendingTimersAsync();
+        await request;
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
-            {
-              id: "gpt-test",
-              name: "GPT Test",
-              provider: "openai",
-              available: false,
-            },
-          ],
-        },
-        undefined,
-      );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
-    } finally {
-      vi.useRealTimers();
-    }
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                available: false,
+              },
+            ],
+          },
+          undefined,
+        );
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("keeps SecretRef configured fallback rows unknown when catalog discovery times out", async () => {
@@ -138,33 +152,35 @@ describe("models.list", () => {
   });
 
   it("keeps the all view exact instead of timing out to a partial catalog", async () => {
-    const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
-    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    await withoutOpenAIEnvAuth(async () => {
+      const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
+      const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { request, respond } = requestModelsList({
-        view: "all",
-        loadGatewayModelCatalog,
-        reqId: "req-models-list-all-slow-catalog",
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { request, respond } = requestModelsList({
+          view: "all",
+          loadGatewayModelCatalog,
+          reqId: "req-models-list-all-slow-catalog",
+        });
 
-      await vi.advanceTimersByTimeAsync(800);
-      expect(respond).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(800);
+        expect(respond).not.toHaveBeenCalled();
 
-      catalog.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]);
-      await vi.runAllTimersAsync();
-      await request;
+        catalog.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]);
+        await vi.runAllTimersAsync();
+        await request;
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
-        undefined,
-      );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
-    } finally {
-      vi.useRealTimers();
-    }
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
+          undefined,
+        );
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("does not expose runtime params from catalog rows", async () => {

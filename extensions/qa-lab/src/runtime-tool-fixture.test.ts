@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { loadSessionStore, saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -39,16 +40,9 @@ async function writeQaSessionTranscript(
   await fs.mkdir(sessionsDir, { recursive: true });
   const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
   const storePath = path.join(sessionsDir, "sessions.json");
-  let store: Record<string, unknown> = {};
-  try {
-    store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl` };
-  await fs.writeFile(storePath, JSON.stringify(store), "utf8");
+  const store = loadSessionStore(storePath, { skipCache: true });
+  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl`, updatedAt: Date.now() };
+  await saveSessionStore(storePath, store, { skipMaintenance: true });
   await fs.writeFile(
     path.join(sessionsDir, `${sessionId}.jsonl`),
     messages.map((message) => JSON.stringify({ message })).join("\n"),

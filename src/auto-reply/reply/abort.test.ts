@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../../config/sessions/test-helpers.js";
+import {
   testing as abortTesting,
   getAbortMemory,
   getAbortMemorySizeForTest,
@@ -95,7 +99,7 @@ describe("abort detection", () => {
         { sessionId, updatedAt: nowMs },
       ]),
     );
-    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
+    await writeSessionStoreForTestAsync(storePath, storeEntries);
   }
 
   async function createAbortConfig(params?: {
@@ -805,7 +809,7 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+    const store = readSessionStoreForTest(storePath) as Record<
       string,
       {
         abortCutoffMessageSid?: string;
@@ -835,7 +839,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -863,7 +867,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -893,7 +897,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
     const entry = store[targetSessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;

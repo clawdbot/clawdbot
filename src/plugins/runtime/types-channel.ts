@@ -5,12 +5,14 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * keyed by plugin id.
  */
-import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
-import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
-import type {
-  ReadChannelAllowFromStoreForAccount,
-  UpsertChannelPairingRequestForAccount,
-} from "../../pairing/pairing-store.types.js";
+type DispatchReplyWithBufferedBlockDispatcher =
+  import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
+type CreateReplyDispatcherWithTyping =
+  import("../../auto-reply/reply/reply-dispatcher.runtime-types.js").CreateReplyDispatcherWithTyping;
+type ReadChannelAllowFromStoreForAccount =
+  import("../../pairing/pairing-store.types.js").ReadChannelAllowFromStoreForAccount;
+type UpsertChannelPairingRequestForAccount =
+  import("../../pairing/pairing-store.types.js").UpsertChannelPairingRequestForAccount;
 type ShouldHandleTextCommands =
   import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
 type IsControlCommandMessage =

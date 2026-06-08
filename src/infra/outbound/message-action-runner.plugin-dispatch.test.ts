@@ -708,6 +708,151 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-send-buffer",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          buffer: Buffer.from("gateway bytes").toString("base64"),
+          filename: "gateway.txt",
+          contentType: "text/plain",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        readRecordField(gatewayParams, "params", "gateway message params"),
+        {
+          to: "user-123",
+          media: "buffer://message-send/attachment",
+          mediaUrl: "buffer://message-send/attachment",
+          mediaUrls: ["buffer://message-send/attachment"],
+          buffer: Buffer.from("gateway bytes").toString("base64"),
+          filename: "gateway.txt",
+          contentType: "text/plain",
+        },
+        "gateway message params",
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+      const gatewayDeliveryPlugin: ChannelPlugin = {
+        id: "gatewaydeliver",
+        meta: {
+          id: "gatewaydeliver",
+          label: "Gateway Deliver",
+          selectionLabel: "Gateway Deliver",
+          docsPath: "/channels/gatewaydeliver",
+          blurb: "Gateway delivery-mode send test plugin.",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        outbound: { deliveryMode: "gateway" },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaydeliver",
+            source: "test",
+            plugin: gatewayDeliveryPlugin,
+          },
+        ]),
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({
+        handledBy: "core",
+        payload: { ok: true },
+        sendResult: {
+          channel: "gatewaydeliver",
+          to: "user-123",
+          via: "gateway",
+          mediaUrl: "buffer://message-send/attachment",
+        },
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaydeliver: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaydeliver",
+          target: "user-123",
+          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          filename: "delivery.txt",
+          contentType: "text/plain",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      expectRecordFields(
+        executeCall,
+        {
+          mediaUrl: "buffer://message-send/attachment",
+          mediaUrls: ["buffer://message-send/attachment"],
+          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          filename: "delivery.txt",
+          contentType: "text/plain",
+        },
+        "execute send call",
+      );
+    });
+
     it("applies TTS before gateway-executed plugin sends", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",

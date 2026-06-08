@@ -104,7 +104,8 @@ const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn((_params: unknown)
 const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
-const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
+const ensureSessionStateMigrated = vi.hoisted(() => vi.fn(async (_cfg: unknown) => undefined));
+const callOrder = vi.hoisted(() => [] as string[]);
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -115,8 +116,10 @@ vi.mock("../agents/subagent-registry.js", () => ({
 }));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance: (params: unknown) =>
-    runChannelPluginStartupMaintenance(params),
+  runChannelPluginStartupMaintenance: async (params: unknown) => {
+    callOrder.push("channel-maintenance");
+    return await runChannelPluginStartupMaintenance(params);
+  },
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -129,6 +132,13 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
+}));
+
+vi.mock("../infra/session-state-migration.js", () => ({
+  ensureSessionStateMigrated: async (cfg: unknown) => {
+    callOrder.push("session-state-migration");
+    return await ensureSessionStateMigrated(cfg);
+  },
 }));
 
 vi.mock("../plugins/registry.js", () => ({
@@ -154,10 +164,6 @@ vi.mock("./server-methods.js", () => ({
 
 vi.mock("./server-plugin-bootstrap.js", () => ({
   loadGatewayStartupPlugins: (params: unknown) => loadGatewayStartupPlugins(params),
-}));
-
-vi.mock("./server-startup-session-migration.js", () => ({
-  runStartupSessionMigration: (params: unknown) => runStartupSessionMigration(params),
 }));
 
 function createLog() {
@@ -251,7 +257,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     });
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
-    runStartupSessionMigration.mockClear();
+    ensureSessionStateMigrated.mockClear();
+    callOrder.length = 0;
   });
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
@@ -367,6 +374,44 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(startupInput.cfg?.plugins?.entries?.["memory-core"]?.config).toEqual({
       dreaming: { enabled: false },
     });
+    expect(ensureSessionStateMigrated).toHaveBeenCalledWith(runtimeConfig);
+    expect(callOrder.slice(0, 2)).toEqual(["session-state-migration", "channel-maintenance"]);
+  });
+
+  it("skips state migration for minimal gateway channel maintenance", async () => {
+    const cfg = slackConfig();
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: true,
+      log,
+    });
+
+    expect(ensureSessionStateMigrated).not.toHaveBeenCalled();
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledOnce();
+  });
+
+  it("stops before channel startup maintenance when session state migration fails", async () => {
+    const cfg = slackConfig();
+    const log = createLog();
+    ensureSessionStateMigrated.mockRejectedValueOnce(new Error("disk full"));
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await expect(
+      prepareGatewayPluginBootstrap({
+        cfgAtStart: cfg,
+        startupRuntimeConfig: cfg,
+        minimalTestGateway: false,
+        log,
+      }),
+    ).rejects.toThrow("disk full");
+
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["session-state-migration"]);
   });
 
   it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {

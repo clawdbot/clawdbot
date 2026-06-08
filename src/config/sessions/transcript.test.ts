@@ -7,6 +7,7 @@ import { repairToolUseResultPairing } from "../../agents/session-transcript-repa
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { loadSessionStore, saveSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
@@ -27,10 +28,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
-      fs.writeFileSync(
+      await saveSessionStore(
         storePath,
-        JSON.stringify({ warm: { sessionId: "warm-session", chatType: "direct" } }),
-        "utf-8",
+        {
+          warm: {
+            sessionId: "warm-session",
+            chatType: "direct",
+            updatedAt: Date.now(),
+          },
+        },
+        { skipMaintenance: true },
       );
       await appendAssistantMessageToSessionTranscript({
         sessionKey: "warm",
@@ -55,18 +62,28 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   };
 
-  function writeTranscriptStore() {
-    fs.writeFileSync(
+  async function writeStore(entries: Record<string, Record<string, unknown>>) {
+    await saveSessionStore(
       fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          chatType: "direct",
-          channel: "discord",
-        },
-      }),
-      "utf-8",
+      Object.fromEntries(
+        Object.entries(entries).map(([key, entry]) => [key, { updatedAt: Date.now(), ...entry }]),
+      ) as never,
+      { skipMaintenance: true },
     );
+  }
+
+  async function writeTranscriptStore() {
+    await writeStore({
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    });
+  }
+
+  function readStore(): Record<string, unknown> {
+    return loadSessionStore(fixture.storePath(), { skipCache: true }) as Record<string, unknown>;
   }
 
   function createExactAssistantMessage(params: {
@@ -107,7 +124,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
 
   it("creates transcript file and appends message for valid session", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -142,18 +159,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
     const sessionFile = "managed-marker.jsonl";
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          sessionFile,
-          updatedAt,
-          status: "done",
-        },
-      }),
-      "utf-8",
-    );
+    await writeStore({
+      [sessionKey]: {
+        sessionId,
+        sessionFile,
+        updatedAt,
+        status: "done",
+      },
+    });
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(appendedAt);
     try {
@@ -164,10 +177,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
 
       expect(result.ok).toBe(true);
-      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
-        string,
-        { updatedAt?: number; status?: string }
-      >;
+      const store = readStore() as Record<string, { updatedAt?: number; status?: string }>;
       expect(store[sessionKey]?.updatedAt).toBe(appendedAt);
       expect(store[sessionKey]?.status).toBe("done");
     } finally {
@@ -180,18 +190,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const firstAppendAt = Date.parse("2026-05-18T10:05:00.000Z");
     const duplicateReplayAt = Date.parse("2026-05-18T10:10:00.000Z");
     const sessionFile = "duplicate-marker.jsonl";
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          sessionFile,
-          updatedAt,
-          status: "done",
-        },
-      }),
-      "utf-8",
-    );
+    await writeStore({
+      [sessionKey]: {
+        sessionId,
+        sessionFile,
+        updatedAt,
+        status: "done",
+      },
+    });
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(firstAppendAt);
@@ -210,10 +216,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
       expect(duplicate.ok).toBe(true);
 
-      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
-        string,
-        { updatedAt?: number }
-      >;
+      const store = readStore() as Record<string, { updatedAt?: number }>;
       expect(store[sessionKey]?.updatedAt).toBe(firstAppendAt);
       if (first.ok && duplicate.ok) {
         expect(duplicate.messageId).toBe(first.messageId);
@@ -226,18 +229,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("uses spawned cwd when creating a missing transcript header", async () => {
     const taskCwd = path.join(fixture.sessionsDir(), "task-repo");
     fs.mkdirSync(taskCwd, { recursive: true });
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          chatType: "direct",
-          channel: "discord",
-          spawnedCwd: taskCwd,
-        },
-      }),
-      "utf-8",
-    );
+    await writeStore({
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+        spawnedCwd: taskCwd,
+      },
+    });
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -254,7 +253,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("runs matching owned transcript appends through the active session write lock", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     const events: string[] = [];
 
@@ -313,17 +312,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
     const signalSessionKey = `agent:main:signal:group:${mixedGroupId}`;
     const legacySignalSessionKey = signalSessionKey.toLowerCase();
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [legacySignalSessionKey]: {
-          sessionId,
-          chatType: "group",
-          channel: "signal",
-        },
-      }),
-      "utf-8",
-    );
+    await writeStore({
+      [legacySignalSessionKey]: {
+        sessionId,
+        chatType: "group",
+        channel: "signal",
+      },
+    });
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: signalSessionKey,
@@ -341,17 +336,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("falls back to the canonical transcript path for malformed persisted sessionFile metadata", async () => {
-    fs.writeFileSync(
-      fixture.storePath(),
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          sessionFile: { path: "../../escaped.jsonl" },
-          updatedAt: Date.now(),
-        },
-      }),
-      "utf-8",
-    );
+    await writeStore({
+      [sessionKey]: {
+        sessionId,
+        sessionFile: { path: "../../escaped.jsonl" },
+      },
+    });
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -369,14 +359,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("emits transcript update events for delivery mirrors", async () => {
-    const store = {
+    await writeStore({
       [sessionKey]: {
         sessionId,
         chatType: "direct",
         channel: "discord",
       },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    });
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
     await appendAssistantMessageToSessionTranscript({
@@ -407,7 +396,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -432,7 +421,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("does not append a duplicate delivery mirror when the latest assistant message already matches", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -462,7 +451,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("dedupes against the latest assistant even when a large user entry follows it", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -507,7 +496,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const finalResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -542,7 +531,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("does not report transcript-only OpenClaw assistant entries as latest assistant text", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -561,7 +550,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -586,7 +575,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     // undefined on the first non-assistant line, so the gap-fill check in
     // persistTextTurnTranscript wrote a duplicate `api: "cli"` assistant
     // message — poisoning the model's own context with verbatim duplicates.
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const assistantResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -621,7 +610,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const olderResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -659,7 +648,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     const toolCallId = "call_maniple_list";
 
@@ -732,14 +721,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("finds session entry using normalized (lowercased) key", async () => {
     const storeKey = "agent:main:imessage:direct:+15551234567";
-    const store = {
+    await writeStore({
       [storeKey]: {
         sessionId: "test-session-normalized",
         chatType: "direct",
         channel: "imessage",
       },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    });
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:iMessage:direct:+15551234567",
@@ -752,14 +740,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("finds Slack session entry using normalized (lowercased) key", async () => {
     const storeKey = "agent:main:slack:direct:u12345abc";
-    const store = {
+    await writeStore({
       [storeKey]: {
         sessionId: "test-slack-session",
         chatType: "direct",
         channel: "slack",
       },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    });
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:slack:direct:U12345ABC",
@@ -771,7 +758,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("ignores malformed transcript lines when checking mirror idempotency", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     fs.writeFileSync(
@@ -810,7 +797,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("appends exact assistant transcript messages without rewriting phased content", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -853,7 +840,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
     const idempotencyKey = "mirror:concurrent-assistant";
 
     const results = await Promise.all(
@@ -893,7 +880,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("can emit file-only transcript refresh events for exact assistant appends", async () => {
-    writeTranscriptStore();
+    await writeTranscriptStore();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
     const result = await appendExactAssistantMessageToSessionTranscript({

@@ -15,6 +15,7 @@ import {
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import {
   expectReadWriteEditTools,
   expectReadWriteTools,
@@ -75,12 +76,26 @@ function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspace
   return tools.map((tool) =>
     wrapToolWorkspaceRootGuardWithOptions(tool, params.sandbox.workspaceDir, {
       additionalContainerMounts:
-        tool.name === "read" && params.sandbox.workspaceAccess === "ro"
+        tool.name === "read"
           ? [
-              {
-                containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
-                hostRoot: params.sandbox.agentWorkspaceDir,
-              },
+              ...(params.sandbox.workspaceAccess === "ro"
+                ? [
+                    {
+                      containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
+                      hostRoot: params.sandbox.agentWorkspaceDir,
+                    },
+                  ]
+                : []),
+              ...resolveReadOnlyWorkspaceSkillMounts({
+                workspaceDir: params.sandbox.workspaceDir,
+                agentWorkspaceDir: params.sandbox.agentWorkspaceDir,
+                skillsWorkspaceDir: params.sandbox.skillsWorkspaceDir,
+                workdir: params.sandbox.containerWorkdir,
+                workspaceAccess: params.sandbox.workspaceAccess,
+              }).map((mount) => ({
+                containerRoot: mount.containerPath,
+                hostRoot: mount.hostPath,
+              })),
             ]
           : undefined,
       containerWorkdir: params.sandbox.containerWorkdir,
@@ -155,6 +170,55 @@ describe("tools.fs.workspaceOnly", () => {
         expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
       },
       { workspaceAccess: "ro" },
+    );
+  });
+
+  it("allows read-only materialized sandbox skills for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ sandbox, skillsWorkspaceDir }) => {
+        expect(skillsWorkspaceDir).toBeTruthy();
+        const skillDir = path.join(skillsWorkspaceDir!, "skills", "demo");
+        const userOwnedShadowDir = path.join(
+          sandbox.workspaceDir,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+          "demo",
+        );
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.mkdir(userOwnedShadowDir, { recursive: true });
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Demo\nmaterialized\n", "utf8");
+        await fs.writeFile(
+          path.join(userOwnedShadowDir, "SKILL.md"),
+          "# Demo\nuser-owned shadow\n",
+          "utf8",
+        );
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool } = expectReadWriteEditTools(tools);
+        const containerSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+
+        const readResult = await readTool?.execute("t1", { path: containerSkillPath });
+        expect(getTextContent(readResult)).toContain("materialized");
+        expect(getTextContent(readResult)).not.toContain("user-owned shadow");
+        const relativeReadResult = await readTool?.execute("t2", {
+          path: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(relativeReadResult)).toContain("materialized");
+        expect(getTextContent(relativeReadResult)).not.toContain("user-owned shadow");
+        const fileUrlReadResult = await readTool?.execute("t3", {
+          path: "file:///workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(fileUrlReadResult)).toContain("materialized");
+        expect(getTextContent(fileUrlReadResult)).not.toContain("user-owned shadow");
+        expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toContain(
+          "materialized",
+        );
+        expect(await fs.readFile(path.join(userOwnedShadowDir, "SKILL.md"), "utf8")).toContain(
+          "user-owned shadow",
+        );
+      },
+      { includeSkillsWorkspace: true, workspaceAccess: "rw" },
     );
   });
 

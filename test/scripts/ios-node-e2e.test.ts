@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 type ScriptResult = {
   status: number | null;
@@ -179,8 +180,8 @@ function runScript(url: string): Promise<ScriptResult> {
       ],
       { stdio: "pipe" },
     );
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) {
@@ -188,14 +189,20 @@ function runScript(url: string): Promise<ScriptResult> {
       }
       settled = true;
       child.kill("SIGKILL");
-      resolve({ status: null, signal: "SIGKILL", stdout, stderr, timedOut: true });
+      resolve({
+        status: null,
+        signal: "SIGKILL",
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+        timedOut: true,
+      });
     }, 5000);
     timeout.unref?.();
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr.append(chunk);
     });
     child.on("close", (status, signal) => {
       if (settled) {
@@ -203,7 +210,7 @@ function runScript(url: string): Promise<ScriptResult> {
       }
       settled = true;
       clearTimeout(timeout);
-      resolve({ status, signal, stdout, stderr, timedOut: false });
+      resolve({ status, signal, stdout: stdout.text(), stderr: stderr.text(), timedOut: false });
     });
   });
 }

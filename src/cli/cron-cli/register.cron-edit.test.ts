@@ -36,7 +36,7 @@ describe("cron edit command", () => {
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
-  it("keeps the documented --best-effort-deliver-only patch behavior (#83908)", async () => {
+  it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--best-effort-deliver"], { from: "user" });
@@ -47,7 +47,6 @@ describe("cron edit command", () => {
       {
         id: "job-1",
         patch: {
-          payload: { kind: "agentTurn" },
           delivery: {
             mode: "announce",
             bestEffort: true,
@@ -57,7 +56,7 @@ describe("cron edit command", () => {
     );
   });
 
-  it("does not imply announce mode for --no-best-effort-deliver alone", async () => {
+  it("keeps --no-best-effort-deliver-only edits delivery-only", async () => {
     const program = createCronProgram();
 
     await program.parseAsync(["edit", "job-1", "--no-best-effort-deliver"], { from: "user" });
@@ -68,9 +67,41 @@ describe("cron edit command", () => {
       {
         id: "job-1",
         patch: {
-          payload: { kind: "agentTurn" },
           delivery: {
             bestEffort: false,
+          },
+        },
+      },
+    );
+  });
+
+  it("preserves command payload kind for timeout-only edits", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "job-1",
+              payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--timeout-seconds", "12"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ timeoutSeconds: "12" }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "command",
+            timeoutSeconds: 12,
           },
         },
       },

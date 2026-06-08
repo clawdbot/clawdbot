@@ -5,6 +5,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -23,6 +24,7 @@ type HeartbeatSessionSeed = {
   pendingFinalDeliveryCreatedAt?: number;
   pendingFinalDeliveryAttemptCount?: number;
   pendingFinalDeliveryLastError?: string | null;
+  heartbeatTaskState?: Record<string, number>;
   agentHarnessId?: string;
   agentRuntimeOverride?: string;
   model?: string;
@@ -38,28 +40,24 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   return replySpy;
 }
 
-/** Write a single heartbeat session entry into a JSON session store. */
+/** Write a single heartbeat session entry into the SQLite-backed session store. */
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
-  let existingStore: Record<string, unknown>;
-  try {
-    existingStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
-  } catch {
-    existingStore = {};
-  }
-  await fs.writeFile(
+  const existingStore = loadSessionStore(storePath, { skipCache: true });
+  await saveSessionStore(
     storePath,
-    JSON.stringify({
+    {
       ...existingStore,
       [sessionKey]: {
         sessionId: session.sessionId ?? "sid",
         updatedAt: session.updatedAt ?? Date.now(),
         ...session,
       },
-    }),
+    },
+    { skipMaintenance: true },
   );
 }
 

@@ -13,7 +13,7 @@ import type {
   BundledChannelLegacySessionSurface,
   BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
-} from "../../plugin-sdk/channel-entry-contract.js";
+} from "../../plugin-sdk/channel-entry-contract.types.js";
 import {
   listBundledChannelPluginMetadata,
   resolveBundledChannelGeneratedPath,

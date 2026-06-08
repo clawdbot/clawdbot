@@ -293,6 +293,26 @@ describe("qa mock openai server", () => {
     expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-END");
     expect(telegramLongBody.length).toBeGreaterThan(4_500);
 
+    const whatsappLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput("WhatsApp long final QA check. Use the scripted long final response."),
+        ],
+      }),
+    });
+    expect(whatsappLongResponse.status).toBe(200);
+    const whatsappLongBody = await whatsappLongResponse.text();
+    expect(whatsappLongBody).toContain('"type":"response.output_text.delta"');
+    expect(whatsappLongBody).toContain('"phase":"final_answer"');
+    expect(whatsappLongBody).toContain("WHATSAPP-LONG-FINAL-BEGIN");
+    expect(whatsappLongBody).toContain("WHATSAPP-LONG-FINAL-END");
+    expect(whatsappLongBody.length).toBeGreaterThan(6_000);
+
     const telegramThreeChunkLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -2856,6 +2876,172 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("QA_CANARY_TEST");
   });
 
+  it("uses WhatsApp location markers only for the matching coordinate body", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "Reply with only this exact marker: QA_INITIAL_OK",
+    );
+
+    const setupResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput],
+    });
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [setupInput, makeUserInput("📍 37.774900, -122.419400")],
+    });
+
+    expect(setupResponse.status).toBe(200);
+    expect(outputText(await setupResponse.json())).toBe("QA_INITIAL_OK");
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("QA_WHATSAPP_LOCATION_OK");
+  });
+
+  it("uses WhatsApp contact and sticker markers only for matching structured bodies", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+
+    const setupResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput],
+    });
+    const contactResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput, makeUserInput("<contact>")],
+    });
+    const stickerResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput, makeUserInput("<media:sticker>")],
+    });
+
+    expect(setupResponse.status).toBe(200);
+    expect(outputText(await setupResponse.json())).toBe("QA_STRUCTURED_INITIAL_OK");
+    expect(contactResponse.status).toBe(200);
+    expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
+    expect(stickerResponse.status).toBe(200);
+    expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+  });
+
+  it("uses WhatsApp structured markers for channel-prefixed message bodies", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+    const previousExactMarkerInput = makeUserInput(
+      "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_OK",
+    );
+
+    const locationResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        setupInput,
+        previousExactMarkerInput,
+        makeUserInput(
+          [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"inbound_event_kind":"user_request"}',
+            "```",
+            "",
+            "📍 37.774900, -122.419400",
+          ].join("\n"),
+        ),
+      ],
+    });
+    const contactResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        setupInput,
+        previousExactMarkerInput,
+        makeUserInput(
+          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
+            "\n",
+          ),
+        ),
+      ],
+    });
+    const stickerResponse = await postResponses(server, {
+      stream: false,
+      input: [
+        setupInput,
+        previousExactMarkerInput,
+        makeUserInput(
+          [
+            "Conversation info (untrusted metadata):",
+            "```json",
+            '{"inbound_event_kind":"user_request"}',
+            "```",
+            "",
+            "<media:sticker>",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(locationResponse.status).toBe(200);
+    expect(outputText(await locationResponse.json())).toBe("QA_WHATSAPP_LOCATION_OK");
+    expect(contactResponse.status).toBe(200);
+    expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
+    expect(stickerResponse.status).toBe(200);
+    expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+  });
+
+  it("streams WhatsApp location markers for the matching coordinate body", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+            "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_STREAM_OK. " +
+            "Reply with only this exact marker: QA_INITIAL_STREAM_OK",
+        ),
+        makeUserInput("📍 37.774900, -122.419400"),
+      ],
+    });
+
+    expect(body).toContain("QA_WHATSAPP_LOCATION_STREAM_OK");
+    expect(body).not.toContain("QA_INITIAL_STREAM_OK");
+  });
+
+  it("streams WhatsApp structured markers ahead of previous exact markers", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+            "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_STREAM_OK. " +
+            "Reply with only this exact marker: QA_INITIAL_STREAM_OK",
+        ),
+        makeUserInput(
+          "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_STREAM_OK",
+        ),
+        makeUserInput("📍 37.774900, -122.419400"),
+      ],
+    });
+
+    expect(body).toContain("QA_WHATSAPP_LOCATION_STREAM_OK");
+    expect(body).not.toContain("QA_WHATSAPP_PREVIOUS_STREAM_OK");
+  });
+
   it("uses image generation directives from request context when the latest user text is generic", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -3482,6 +3668,66 @@ describe("qa mock openai server", () => {
     const ids = body.data.map((entry) => entry.id);
     expect(ids).toContain("claude-opus-4-8");
     expect(ids).toContain("gpt-5.5");
+    expect(ids).toContain("gpt-4o-transcribe");
+  });
+
+  it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: "--qa\r\n--qa--\r\n",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
+  });
+
+  it("serves deterministic WhatsApp group audio transcription for large audio uploads", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const triggered = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: `--qa\r\ncontent-disposition: form-data; name="file"; filename="upload.wav"\r\n\r\n${"x".repeat(
+        64_000,
+      )}\r\n--qa--\r\n`,
+    });
+    const quiet = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: '--qa\r\ncontent-disposition: form-data; name="file"; filename="upload.wav"\r\n\r\nx\r\n--qa--\r\n',
+    });
+
+    expect(triggered.status).toBe(200);
+    await expect(triggered.json()).resolves.toEqual({
+      text: "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK",
+    });
+    expect(quiet.status).toBe(200);
+    await expect(quiet.json()).resolves.toEqual({
+      text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
   });
 
   it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {

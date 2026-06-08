@@ -520,16 +520,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
 
   const startupTrace = createGatewayCliStartupTrace();
 
-  // The heaviest part of gateway startup is loading the server module tree
-  // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
-  // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
-  const { startGatewayServer } = await startupTrace.measure("cli.server-import", () =>
-    withProgress(
-      { label: "Loading gateway modules…", indeterminate: true },
-      async () => import("../../gateway/server.js"),
-    ),
-  );
-
   setConsoleTimestampPrefix(true);
 
   if (devMode) {
@@ -811,6 +801,16 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
           ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
         }
       : undefined;
+
+  // The heaviest part of gateway startup is loading the server module tree
+  // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
+  // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
+  const { startGatewayServer } = await startupTrace.measure("cli.server-import", () =>
+    withProgress(
+      { label: "Loading gateway modules…", indeterminate: true },
+      async () => import("../../gateway/server.js"),
+    ),
+  );
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");

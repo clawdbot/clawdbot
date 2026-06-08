@@ -461,6 +461,34 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
   });
 
+  it("filters remote-ineligible skills when no agent skill filter is active", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "local-only"),
+      name: "local-only",
+      description: "Always available",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Needs a remote bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: "sandbox",
+        },
+      },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["local-only"]);
+  });
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill paths that resolve outside the workspace root",
     async () => {

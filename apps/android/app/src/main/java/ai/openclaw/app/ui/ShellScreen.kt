@@ -22,6 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -114,7 +115,10 @@ fun ShellScreen(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
 ) {
-  ClawDesignTheme {
+  val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
+  OpenClawSystemBarAppearance(lightAppearance = !shellDark)
+  ClawDesignTheme(dark = shellDark) {
     var activeTab by rememberSaveable { mutableStateOf(Tab.Overview) }
     var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
     var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
@@ -751,7 +755,7 @@ private fun RecentSessionRowContent(
   metadata: String,
   onClick: () -> Unit,
 ) {
-  Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+  Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
       modifier =
         Modifier
@@ -849,6 +853,7 @@ private fun SettingsShellScreen(
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -910,7 +915,7 @@ private fun SettingsShellScreen(
               SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
               SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
               SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
-              SettingsRow("Appearance", "Dark", Icons.Default.Palette, route = SettingsRoute.Appearance),
+              SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
               SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
               SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
             ),

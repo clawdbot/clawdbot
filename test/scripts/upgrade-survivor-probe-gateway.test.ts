@@ -6,6 +6,7 @@ import { createServer as createTcpServer, type Server, type Socket } from "node:
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const probePath = path.resolve("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs");
 const dockerSurvivorPath = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
@@ -35,16 +36,16 @@ function runProbe(
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     let timedOut = false;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -52,7 +53,7 @@ function runProbe(
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr, stdout });
+      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
     child.on("exit", (status, signal) => {
       clearTimeout(timer);
@@ -60,8 +61,8 @@ function runProbe(
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
         signal,
         status,
-        stderr,
-        stdout,
+        stderr: stderr.text(),
+        stdout: stdout.text(),
       });
     });
   });

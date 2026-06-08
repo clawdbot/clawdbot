@@ -164,6 +164,7 @@ export function requestSafeGatewayRestart(
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true } : {}),
     ...(skipDeferral ? { skipDeferral: true } : {}),
   });
   const status = restart.coalesced

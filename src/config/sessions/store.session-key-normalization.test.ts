@@ -8,8 +8,10 @@ import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   recordSessionMetaFromInbound,
+  saveSessionStore,
   updateLastRoute,
 } from "../sessions.js";
+import { replaceSqliteSessionStore } from "./store-sqlite.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
@@ -55,7 +57,7 @@ describe("session store key normalization", () => {
   beforeEach(async () => {
     tempDir = await suiteRootTracker.make("case");
     storePath = path.join(tempDir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
+    await fs.mkdir(tempDir, { recursive: true });
   });
 
   afterEach(async () => {
@@ -103,21 +105,17 @@ describe("session store key normalization", () => {
   });
 
   it("migrates legacy mixed-case entries to the canonical key on update", async () => {
-    await fs.writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          [MIXED_CASE_KEY]: {
-            sessionId: "legacy-session",
-            updatedAt: 1,
-            chatType: "direct",
-            channel: "webchat",
-          },
+      {
+        [MIXED_CASE_KEY]: {
+          sessionId: "legacy-session",
+          updatedAt: 1,
+          chatType: "direct",
+          channel: "webchat",
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     clearSessionStoreCacheForTest();
 
@@ -134,31 +132,27 @@ describe("session store key normalization", () => {
   });
 
   it("preserves ACP metadata when inbound metadata normalizes a legacy key", async () => {
-    await fs.writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          [CANONICAL_KEY]: {
-            sessionId: "canonical-session",
-            updatedAt: 2,
-          },
-          [MIXED_CASE_KEY]: {
-            sessionId: "legacy-session",
-            updatedAt: 1,
-            acp: {
-              backend: "codex",
-              agent: "main",
-              runtimeSessionName: "runtime-1",
-              mode: "persistent",
-              state: "idle",
-              lastActivityAt: 1,
-            },
+      {
+        [CANONICAL_KEY]: {
+          sessionId: "canonical-session",
+          updatedAt: 2,
+        },
+        [MIXED_CASE_KEY]: {
+          sessionId: "legacy-session",
+          updatedAt: 1,
+          acp: {
+            backend: "codex",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     clearSessionStoreCacheForTest();
 
@@ -176,27 +170,23 @@ describe("session store key normalization", () => {
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
     const existingUpdatedAt = Date.now();
-    await fs.writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          [CANONICAL_KEY]: {
-            sessionId: "existing-session",
-            updatedAt: existingUpdatedAt,
+      {
+        [CANONICAL_KEY]: {
+          sessionId: "existing-session",
+          updatedAt: existingUpdatedAt,
+          chatType: "direct",
+          channel: "webchat",
+          origin: {
+            provider: "webchat",
             chatType: "direct",
-            channel: "webchat",
-            origin: {
-              provider: "webchat",
-              chatType: "direct",
-              from: "WebChat:User-1",
-              to: "webchat:user-1",
-            },
+            from: "WebChat:User-1",
+            to: "webchat:user-1",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     clearSessionStoreCacheForTest();
 
@@ -226,26 +216,22 @@ describe("session store key normalization", () => {
   });
 
   it("migrates legacy lowercase Signal group keys to the mixed-case canonical key", async () => {
-    await fs.writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          [LEGACY_SIGNAL_GROUP_KEY]: {
-            sessionId: "legacy-signal-session",
-            updatedAt: 1,
-            chatType: "group",
+      {
+        [LEGACY_SIGNAL_GROUP_KEY]: {
+          sessionId: "legacy-signal-session",
+          updatedAt: 1,
+          chatType: "group",
+          channel: "signal",
+          groupId: SIGNAL_GROUP_ID.toLowerCase(),
+          deliveryContext: {
             channel: "signal",
-            groupId: SIGNAL_GROUP_ID.toLowerCase(),
-            deliveryContext: {
-              channel: "signal",
-              to: `signal:group:${SIGNAL_GROUP_ID}`,
-            },
+            to: `signal:group:${SIGNAL_GROUP_ID}`,
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     clearSessionStoreCacheForTest();
 
@@ -299,27 +285,19 @@ describe("session store key normalization", () => {
   });
 
   it("normalizes malformed persisted route metadata on load", async () => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [CANONICAL_KEY]: {
-            sessionId: "legacy-route-session",
-            updatedAt: 1,
-            route: "stale-custom-slot",
-            deliveryContext: {
-              channel: "slack",
-              to: "channel:C123",
-              accountId: "work",
-              threadId: "177000.123",
-            },
-          },
+    replaceSqliteSessionStore(storePath, {
+      [CANONICAL_KEY]: {
+        sessionId: "legacy-route-session",
+        updatedAt: 1,
+        route: "stale-custom-slot",
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "work",
+          threadId: "177000.123",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      } as never,
+    });
     clearSessionStoreCacheForTest();
 
     const store = loadSessionStore(storePath, { skipCache: true });

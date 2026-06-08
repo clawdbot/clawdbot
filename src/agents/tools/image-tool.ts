@@ -390,6 +390,7 @@ function resolveBundledStaticCompressionModelPolicy(params: {
     modelId: params.model,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
+    includeRuntimeDiscovery: true,
   });
   return model?.mediaInput?.image ?? {};
 }

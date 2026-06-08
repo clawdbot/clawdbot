@@ -1,8 +1,8 @@
 // Coverage for final bundled-tool policy filtering in embedded runs.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import { setPluginToolMeta } from "../../plugins/tools.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -36,24 +36,16 @@ describe("applyFinalEffectiveToolPolicy", () => {
     const agentId = `bundled-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:subagent:limited`;
     const storePath = path.join(os.tmpdir(), `openclaw-bundled-inherited-allow-${agentId}.json`);
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "limited-session",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "orchestrator",
-            subagentControlScope: "children",
-            inheritedToolAllow: ["mcp__bundle__fs_read"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      [sessionKey]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["mcp__bundle__fs_read"],
+      },
+    });
 
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
@@ -73,24 +65,16 @@ describe("applyFinalEffectiveToolPolicy", () => {
     const agentId = `bundled-plugin-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:subagent:limited`;
     const storePath = path.join(os.tmpdir(), `openclaw-bundled-plugin-allow-${agentId}.json`);
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "limited-session",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "orchestrator",
-            subagentControlScope: "children",
-            inheritedToolAllow: ["mcp__bundle__fs_read"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      [sessionKey]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["mcp__bundle__fs_read"],
+      },
+    });
     const deniedTool = makeTool("mcp__bundle__fs_delete");
     const allowedTool = makeTool("mcp__bundle__fs_read");
     setPluginToolMeta(deniedTool, { pluginId: "bundle-mcp", optional: false });

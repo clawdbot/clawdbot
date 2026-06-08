@@ -33,6 +33,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  dashboardHtmlMarkerStatus,
   CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
@@ -61,6 +62,7 @@ import {
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
+  resolveDashboardAssetUrls,
   resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
@@ -85,6 +87,7 @@ import {
   shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
+  verifyDashboardAssetUrls,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
@@ -157,6 +160,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(text).toContain("[truncated]");
     expect(text).not.toContain(tail);
     expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
+  });
+
+  it("requires dashboard root markers and same-origin asset URLs", () => {
+    const html = [
+      "<title>OpenClaw Control</title>",
+      "<openclaw-app></openclaw-app>",
+      '<link rel="stylesheet" href="/assets/index.css">',
+      '<script type="module" src="assets/index.js"></script>',
+      '<script type="module" src="https://example.com/assets/ignored.js"></script>',
+    ].join("\n");
+
+    expect(dashboardHtmlMarkerStatus(html)).toEqual({ app: true, ready: true, title: true });
+    expect(resolveDashboardAssetUrls("http://127.0.0.1:18789/", html)).toEqual([
+      "http://127.0.0.1:18789/assets/index.css",
+      "http://127.0.0.1:18789/assets/index.js",
+    ]);
+  });
+
+  it("fails dashboard readiness when assets are missing or unreachable", async () => {
+    await expect(verifyDashboardAssetUrls([])).resolves.toEqual({
+      failures: ["no dashboard asset URLs found"],
+      ok: false,
+    });
+
+    const result = await verifyDashboardAssetUrls(
+      ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
+      async (url) =>
+        new Response("", {
+          status: String(url).endsWith(".js") ? 404 : 200,
+        }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(["http://127.0.0.1:18789/assets/index.js status=404"]);
   });
 
   it("keeps gateway RPC status probes patient enough for live release startup", () => {

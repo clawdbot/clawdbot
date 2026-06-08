@@ -48,6 +48,25 @@ describe("gateway-smoke", () => {
     };
   }
 
+  function connectHelloResponse(scopes: string[] = []) {
+    return {
+      ok: true,
+      payload: {
+        auth: { role: "operator", scopes },
+        features: { events: [], methods: ["health"] },
+        policy: {
+          maxBufferedBytes: 1024 * 1024,
+          maxPayload: 256 * 1024,
+          tickIntervalMs: 1000,
+        },
+        protocol: 1,
+        server: { connId: "test-conn", version: "dev" },
+        snapshot: {},
+        type: "hello-ok",
+      },
+    };
+  }
+
   async function listenGatewaySmokeServer() {
     const requests: Array<{ method: string; params?: unknown; timeout?: number }> = [];
     server = createServer();
@@ -62,7 +81,7 @@ describe("gateway-smoke", () => {
         };
         requests.push({ method: frame.method, params: frame.params });
         if (frame.method === "connect") {
-          ws.send(JSON.stringify({ id: frame.id, ok: true, payload: {}, type: "res" }));
+          ws.send(JSON.stringify({ id: frame.id, type: "res", ...connectHelloResponse() }));
           return;
         }
         if (frame.method === "health") {
@@ -72,9 +91,9 @@ describe("gateway-smoke", () => {
         if (frame.method === "chat.history") {
           ws.send(
             JSON.stringify({
+              error: "missing scope: operator.read",
               id: frame.id,
-              ok: true,
-              payload: { messages: [] },
+              ok: false,
               type: "res",
             }),
           );
@@ -162,19 +181,14 @@ describe("gateway-smoke", () => {
     );
 
     expect(code).toBe(0);
-    expect(loopback.requests.map((request) => request.method)).toEqual([
-      "connect",
-      "health",
-      "chat.history",
-    ]);
+    expect(loopback.requests.map((request) => request.method)).toEqual(["connect", "health"]);
     expect(loopback.requests[0]?.params).toMatchObject({
       auth: { token: "secret-token" },
       client: { id: "openclaw-ios" },
       role: "operator",
       scopes: ["operator.read", "operator.write", "operator.admin"],
     });
-    expect(loopback.requests[2]?.params).toEqual({ sessionKey: "main" });
-    expect(stdout).toEqual(["ok: connected + health + chat.history"]);
+    expect(stdout).toEqual(["ok: connected + health"]);
     expect(stderr).toEqual([]);
   });
 
@@ -210,11 +224,10 @@ describe("gateway-smoke", () => {
     expect(stderr).toEqual(["connect failed: bad token"]);
   });
 
-  it("requires connect, health, and chat history in order", async () => {
+  it("requires connect and health in order", async () => {
     const fake = createSmokeDeps({
-      connect: { ok: true },
+      connect: connectHelloResponse(),
       health: healthResponse(),
-      "chat.history": { ok: true, payload: { messages: [] } },
     });
 
     const code = await runGatewaySmoke(
@@ -227,17 +240,14 @@ describe("gateway-smoke", () => {
     expect(fake.calls).toEqual([
       { method: "connect", timeout: undefined },
       { method: "health", timeout: undefined },
-      { method: "chat.history", timeout: 15000 },
     ]);
-    expect(fake.stdout).toEqual(["ok: connected + health + chat.history"]);
+    expect(fake.stdout).toEqual(["ok: connected + health"]);
     expect(fake.stderr).toEqual([]);
   });
 
-  it("fails when chat history success is missing message evidence", async () => {
+  it("fails when connect success is missing hello evidence", async () => {
     const fake = createSmokeDeps({
       connect: { ok: true },
-      health: healthResponse(),
-      "chat.history": { ok: true },
     });
 
     const code = await runGatewaySmoke(
@@ -245,22 +255,16 @@ describe("gateway-smoke", () => {
       fake.deps,
     );
 
-    expect(code).toBe(4);
+    expect(code).toBe(2);
     expect(fake.closed).toBe(1);
-    expect(fake.calls).toEqual([
-      { method: "connect", timeout: undefined },
-      { method: "health", timeout: undefined },
-      { method: "chat.history", timeout: 15000 },
-    ]);
+    expect(fake.calls).toEqual([{ method: "connect", timeout: undefined }]);
     expect(fake.stdout).toEqual([]);
-    expect(fake.stderr).toEqual(["chat.history failed: missing messages array"]);
+    expect(fake.stderr).toEqual(["connect failed: missing hello-ok payload"]);
   });
 
-  it("fails when chat history messages are not an array", async () => {
+  it("fails when the unpaired iOS-shaped connect keeps operator scopes", async () => {
     const fake = createSmokeDeps({
-      connect: { ok: true },
-      health: healthResponse(),
-      "chat.history": { ok: true, payload: { messages: {} } },
+      connect: connectHelloResponse(["operator.read"]),
     });
 
     const code = await runGatewaySmoke(
@@ -268,14 +272,17 @@ describe("gateway-smoke", () => {
       fake.deps,
     );
 
-    expect(code).toBe(4);
+    expect(code).toBe(2);
     expect(fake.closed).toBe(1);
-    expect(fake.stderr).toEqual(["chat.history failed: missing messages array"]);
+    expect(fake.calls).toEqual([{ method: "connect", timeout: undefined }]);
+    expect(fake.stderr).toEqual([
+      "connect failed: unpaired iOS smoke unexpectedly received operator scopes",
+    ]);
   });
 
   it("fails after connect when health is unavailable", async () => {
     const fake = createSmokeDeps({
-      connect: { ok: true },
+      connect: connectHelloResponse(),
       health: { ok: false, error: "not healthy" },
     });
 
@@ -292,7 +299,7 @@ describe("gateway-smoke", () => {
 
   it("fails when health success is missing summary evidence", async () => {
     const fake = createSmokeDeps({
-      connect: { ok: true },
+      connect: connectHelloResponse(),
       health: { ok: true },
     });
 
@@ -307,9 +314,9 @@ describe("gateway-smoke", () => {
     expect(fake.stderr).toEqual(["health failed: missing health summary payload"]);
   });
 
-  it("fails after health when chat history is unavailable", async () => {
+  it("does not call scoped chat history for an unpaired iOS-shaped client", async () => {
     const fake = createSmokeDeps({
-      connect: { ok: true },
+      connect: connectHelloResponse(),
       health: healthResponse(),
       "chat.history": { ok: false, error: "session store unavailable" },
     });
@@ -319,13 +326,12 @@ describe("gateway-smoke", () => {
       fake.deps,
     );
 
-    expect(code).toBe(4);
+    expect(code).toBe(0);
     expect(fake.closed).toBe(1);
     expect(fake.calls).toEqual([
       { method: "connect", timeout: undefined },
       { method: "health", timeout: undefined },
-      { method: "chat.history", timeout: 15000 },
     ]);
-    expect(fake.stderr).toEqual(["chat.history failed: session store unavailable"]);
+    expect(fake.stderr).toEqual([]);
   });
 });

@@ -82,5 +82,5 @@ node "$entry" gateway health \
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" MODEL_REF="$MODEL_REF" \
   node scripts/e2e/lib/openai-chat-tools/client.mjs >"$CLIENT_LOG" 2>&1
 
-cat "$CLIENT_LOG"
+openclaw_e2e_print_log "$CLIENT_LOG"
 echo "OpenAI Chat Completions tools Docker E2E passed"

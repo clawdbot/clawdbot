@@ -13,7 +13,12 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { hasLegacyOpenAICodexCronModelRef, migrateLegacyCronPayload } from "./payload-migration.js";
+import {
+  hasUnresolvedAgentTurnShellToolPrompt,
+  hasLegacyOpenAICodexCronModelRef,
+  migrateLegacyAgentTurnCommandPayload,
+  migrateLegacyCronPayload,
+} from "./payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -23,6 +28,8 @@ type CronStoreIssueKey =
   | "legacyScheduleCron"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
+  | "legacyAgentTurnCommandPayload"
+  | "unresolvedAgentTurnShellToolPrompt"
   | "legacyPayloadProvider"
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
@@ -34,6 +41,7 @@ type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 
 type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
+  unresolvedAgentTurnShellToolPromptJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -238,6 +246,7 @@ export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
+  const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
   let mutated = false;
   const keptJobs: Array<Record<string, unknown>> = [];
   const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
@@ -409,6 +418,16 @@ export function normalizeStoredCronJobs(
           trackIssue("legacyPayloadProvider");
         }
       }
+      if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
+        mutated = true;
+        trackIssue("legacyAgentTurnCommandPayload");
+      } else if (hasUnresolvedAgentTurnShellToolPrompt(payloadRecord)) {
+        trackIssue("unresolvedAgentTurnShellToolPrompt");
+        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+        if (name) {
+          unresolvedAgentTurnShellToolPromptJobs.push(name);
+        }
+      }
     }
 
     const schedule = raw.schedule;
@@ -545,7 +564,8 @@ export function normalizeStoredCronJobs(
         mutated = true;
       }
     } else {
-      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      const inferredSessionTarget =
+        payloadKind === "agentTurn" || payloadKind === "command" ? "isolated" : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
@@ -553,18 +573,18 @@ export function normalizeStoredCronJobs(
     }
 
     const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
-    const isIsolatedAgentTurn =
+    const isIsolatedRunnablePayload =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && payloadKind === "agentTurn");
+      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
       payload: payloadRecord,
     });
 
-    if (isIsolatedAgentTurn && payloadKind === "agentTurn") {
+    if (isIsolatedRunnablePayload && (payloadKind === "agentTurn" || payloadKind === "command")) {
       if (!hasDelivery && normalizedLegacy.delivery) {
         raw.delivery = normalizedLegacy.delivery;
         mutated = true;
@@ -606,5 +626,5 @@ export function normalizeStoredCronJobs(
     jobs.splice(0, jobs.length, ...keptJobs);
   }
 
-  return { issues, jobs, mutated, removedJobs };
+  return { issues, unresolvedAgentTurnShellToolPromptJobs, jobs, mutated, removedJobs };
 }

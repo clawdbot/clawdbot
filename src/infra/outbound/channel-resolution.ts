@@ -21,7 +21,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -111,18 +111,95 @@ function maybeBootstrapChannelPlugin(params: {
   bootstrapOutboundChannelPlugin(params);
 }
 
-function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
+function resolveDirectFromRegistry(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  channel: string,
+): ChannelPlugin | undefined {
+  if (!registry) {
     return undefined;
   }
-  for (const entry of activeRegistry.channels) {
+  for (const entry of registry.channels) {
     const plugin = entry?.plugin;
     if (plugin?.id === channel) {
       return plugin;
     }
   }
   return undefined;
+}
+
+function messageAdapterCanSendText(
+  message: ChannelMessageAdapterShape | undefined,
+): message is ChannelMessageAdapterShape {
+  return typeof message?.send?.text === "function";
+}
+
+function resolveSendCapableMessageAdapter(
+  plugin: ChannelPlugin | undefined,
+): ChannelMessageAdapterShape | undefined {
+  const message = plugin?.message;
+  return messageAdapterCanSendText(message) ? message : undefined;
+}
+
+function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
+}
+
+function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
+  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
+}
+
+function resolveRuntimeOutboundPluginCandidate(params: {
+  loaded?: ChannelPlugin;
+  runtime?: ChannelPlugin;
+  setupFallback?: ChannelPlugin;
+  bundled?: ChannelPlugin;
+  allowSetupShell?: boolean;
+}): ChannelPlugin | undefined {
+  if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
+    return params.loaded;
+  }
+  if (params.runtime) {
+    return params.runtime;
+  }
+  if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
+    return params.bundled;
+  }
+  if (params.allowSetupShell) {
+    return params.loaded ?? params.setupFallback ?? params.bundled;
+  }
+  return undefined;
+}
+
+function resolveValueFromRuntimeRegistries<TValue>(
+  channel: string,
+  resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
+): TValue | undefined {
+  const channelRegistry = getActivePluginChannelRegistry();
+  const channelPlugin = resolveDirectFromRegistry(channelRegistry, channel);
+  if (channelPlugin) {
+    const value = resolveValue(channelPlugin);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  const activeRegistry = getActivePluginRegistry();
+  if (activeRegistry && activeRegistry !== channelRegistry) {
+    const activePlugin = resolveDirectFromRegistry(activeRegistry, channel);
+    if (activePlugin) {
+      return resolveValue(activePlugin);
+    }
+  }
+  return undefined;
+}
+
+function resolveDirectFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, (plugin) => plugin);
+}
+
+function resolveRuntimeOutboundPluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -191,17 +268,18 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  if (current) {
-    return current;
-  }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
-  if (directCurrent) {
-    return directCurrent;
-  }
-
+  const runtimeCurrent = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
   const bundledCurrent = resolve();
-  if (bundledCurrent) {
-    return bundledCurrent;
+  const candidate = resolveRuntimeOutboundPluginCandidate({
+    loaded: current,
+    runtime: runtimeCurrent,
+    setupFallback,
+    bundled: bundledCurrent,
+    allowSetupShell: params.allowBootstrap !== true,
+  });
+  if (candidate) {
+    return candidate;
   }
 
   if (params.allowBootstrap !== true) {
@@ -209,7 +287,12 @@ export function resolveOutboundChannelPlugin(params: {
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+  return resolveRuntimeOutboundPluginCandidate({
+    loaded: resolveLoaded(),
+    runtime: resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized),
+    setupFallback: resolveDirectFromRuntimeRegistries(normalized),
+    bundled: resolve(),
+  });
 }
 
 /** Resolves the message adapter for a deliverable outbound channel. */
@@ -218,7 +301,23 @@ export function resolveOutboundChannelMessageAdapter(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  return resolveOutboundChannelPlugin(params)?.message;
+  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+  const current =
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
+  if (current || params.allowBootstrap !== true) {
+    return current;
+  }
+  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  return (
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
+  );
 }
 
 /** Resolves a channel plugin for read-only metadata paths. */
@@ -235,7 +334,7 @@ export function resolveOutboundChannelPluginForRead(params: {
   if (current) {
     return current;
   }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  const directCurrent = resolveDirectFromRuntimeRegistries(normalized);
   if (directCurrent) {
     return directCurrent;
   }
@@ -244,7 +343,7 @@ export function resolveOutboundChannelPluginForRead(params: {
     maybeBootstrapChannelPlugin({ channel: deliverable, cfg: params.cfg });
     return (
       getLoadedChannelPlugin(deliverable) ??
-      resolveDirectFromActiveRegistry(deliverable) ??
+      resolveDirectFromRuntimeRegistries(deliverable) ??
       getChannelPlugin(deliverable)
     );
   }
@@ -270,6 +369,6 @@ export function resolveLoadedOutboundChannelPluginForRead(params: {
   }
   return (
     getLoadedChannelPlugin(normalized as Parameters<typeof getLoadedChannelPlugin>[0]) ??
-    resolveDirectFromActiveRegistry(normalized)
+    resolveDirectFromRuntimeRegistries(normalized)
   );
 }

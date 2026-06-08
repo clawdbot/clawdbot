@@ -294,6 +294,25 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("fails allowed-failure probes when the command exits nonzero", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=allowed-failure-${Date.now()}`
+    );
+
+    expect(() =>
+      proof.assertAllowedFailureCommandSucceeded(
+        {
+          code: 1,
+          signal: null,
+          stderr: "resolver invoked openai-profile",
+          stdout: "openai-profile",
+        },
+        "auth-profile SecretRef model status probe",
+        "openai-profile\nresolver invoked",
+      ),
+    ).toThrow("auth-profile SecretRef model status probe failed (1)");
+  });
+
   it.runIf(process.platform !== "win32")("bounds captured PTY configure output", async () => {
     const root = makeTempDir();
     const fakeOpenClaw = writeNoisySecretsConfigureOpenClaw(root);

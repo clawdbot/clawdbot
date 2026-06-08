@@ -447,6 +447,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "show last 20 lines of ~/.openclaw/workspace/memory/2026-06-04.md",
+        error:
+          "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
+      },
+      isHeartbeatTrigger: true,
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "show last 20 lines",
+      detail: "No such file or directory",
+    });
+  });
+
   it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "Command not found" },

@@ -123,8 +123,11 @@ describe("local media roots", () => {
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
   });
 
-  it("does not widen local roots for pass-through remote media schemes", () => {
-    const roots = appendLocalMediaParentRoots(["/tmp/base"], ["mxc://matrix.org/abc123def456"]);
+  it("does not widen local roots for pass-through media schemes", () => {
+    const roots = appendLocalMediaParentRoots(
+      ["/tmp/base"],
+      ["mxc://matrix.org/abc123def456", "buffer://message-send/attachment"],
+    );
 
     expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/tmp/base")]);
   });

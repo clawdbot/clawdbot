@@ -53,6 +53,32 @@ function normalizeTrimmedStringArray(
   return undefined;
 }
 
+function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries: Array<[string, string]> = [];
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeOptionalString(rawKey);
+    const val = typeof rawValue === "string" ? rawValue : undefined;
+    if (!key || val === undefined) {
+      return undefined;
+    }
+    entries.push([key, val]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function normalizeCommandArgv(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  if (value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+    return undefined;
+  }
+  return [...value];
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
@@ -122,6 +148,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "command") {
+    next.kind = "command";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -181,6 +209,52 @@ function coercePayload(payload: UnknownRecord) {
       delete next.toolsAllow;
     }
   }
+  if ("argv" in next) {
+    const argv = normalizeCommandArgv(next.argv);
+    if (Array.isArray(argv) && argv.length > 0) {
+      next.argv = argv;
+    } else {
+      delete next.argv;
+    }
+  }
+  if ("cwd" in next) {
+    const cwd = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.cwd);
+    if (cwd !== undefined) {
+      next.cwd = cwd;
+    } else {
+      delete next.cwd;
+    }
+  }
+  if ("env" in next) {
+    const env = normalizeTrimmedStringRecord(next.env);
+    if (env !== undefined) {
+      next.env = env;
+    } else {
+      delete next.env;
+    }
+  }
+  if ("input" in next && typeof next.input !== "string") {
+    delete next.input;
+  }
+  if ("noOutputTimeoutSeconds" in next) {
+    const noOutputTimeoutSeconds = parseOptionalField(
+      TimeoutSecondsFieldSchema,
+      next.noOutputTimeoutSeconds,
+    );
+    if (noOutputTimeoutSeconds !== undefined) {
+      next.noOutputTimeoutSeconds = noOutputTimeoutSeconds;
+    } else {
+      delete next.noOutputTimeoutSeconds;
+    }
+  }
+  if ("outputMaxBytes" in next) {
+    const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
+    if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
+      next.outputMaxBytes = Math.floor(outputMaxBytes);
+    } else {
+      delete next.outputMaxBytes;
+    }
+  }
   if (
     "allowUnsafeExternalContent" in next &&
     typeof next.allowUnsafeExternalContent !== "boolean"
@@ -196,8 +270,29 @@ function coercePayload(payload: UnknownRecord) {
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
+    delete next.argv;
+    delete next.cwd;
+    delete next.env;
+    delete next.input;
+    delete next.noOutputTimeoutSeconds;
+    delete next.outputMaxBytes;
   } else if (next.kind === "agentTurn") {
     delete next.text;
+    delete next.argv;
+    delete next.cwd;
+    delete next.env;
+    delete next.input;
+    delete next.noOutputTimeoutSeconds;
+    delete next.outputMaxBytes;
+  } else if (next.kind === "command") {
+    delete next.text;
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
   }
   return next;
 }
@@ -468,7 +563,12 @@ export function normalizeCronJobInput(
     ) {
       next.name = inferCronJobName({
         schedule: next.schedule as { kind?: unknown; everyMs?: unknown; expr?: unknown },
-        payload: next.payload as { kind?: unknown; text?: unknown; message?: unknown },
+        payload: next.payload as {
+          kind?: unknown;
+          text?: unknown;
+          message?: unknown;
+          argv?: unknown;
+        },
       });
     } else if (typeof next.name === "string") {
       const trimmed = next.name.trim();
@@ -482,7 +582,7 @@ export function normalizeCronJobInput(
       // turns isolate by default to avoid unbounded token accumulation.
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
+      } else if (kind === "agentTurn" || kind === "command") {
         next.sessionTarget = "isolated";
       }
     }
@@ -522,13 +622,17 @@ export function normalizeCronJobInput(
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
     // Resolved "current" and custom session ids still use isolated-agent
     // delivery semantics, so they get the same default announce behavior.
-    const isIsolatedAgentTurn =
+    const isDetachedDeliveryJob =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && payloadKind === "agentTurn");
+      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
-    if (!hasDelivery && isIsolatedAgentTurn && payloadKind === "agentTurn") {
+    if (
+      !hasDelivery &&
+      isDetachedDeliveryJob &&
+      (payloadKind === "agentTurn" || payloadKind === "command")
+    ) {
       next.delivery = { mode: "announce" };
     }
   }

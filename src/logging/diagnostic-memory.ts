@@ -17,6 +17,7 @@ const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
 const log = createSubsystemLogger("gateway").child("diagnostics/memory");
 
@@ -168,6 +169,77 @@ function formatOptionalPressureMetric(label: string, value: number | undefined):
   return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
 }
 
+function formatScaledNumber(value: number): string {
+  const fixed = value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return fixed.replace(/\.0+$/u, "").replace(/(\.\d*[1-9])0$/u, "$1");
+}
+
+function formatReadableBytes(value: number | undefined): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  let scaled = value;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    scaled /= 1024;
+    unitIndex++;
+  }
+  return unitIndex === 0
+    ? `${Math.round(scaled)} ${BYTE_UNITS[unitIndex]}`
+    : `${formatScaledNumber(scaled)} ${BYTE_UNITS[unitIndex]}`;
+}
+
+function formatPressureRatio(params: {
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+  thresholdBytes: number;
+}): string | undefined {
+  const { pressure, thresholdBytes } = params;
+  if (!Number.isFinite(thresholdBytes) || thresholdBytes <= 0) {
+    return undefined;
+  }
+  const value =
+    pressure.reason === "heap_threshold"
+      ? pressure.memory.heapUsedBytes
+      : pressure.reason === "rss_growth"
+        ? pressure.rssGrowthBytes
+        : pressure.memory.rssBytes;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const ratio = (value / thresholdBytes) * 100;
+  return `${formatScaledNumber(ratio)}%`;
+}
+
+function formatPressureSummary(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): string {
+  const parts = [
+    `rss=${formatReadableBytes(pressure.memory.rssBytes)}`,
+    `heap=${formatReadableBytes(pressure.memory.heapUsedBytes)}`,
+    pressure.thresholdBytes !== undefined
+      ? `threshold=${formatReadableBytes(pressure.thresholdBytes)}`
+      : "",
+    pressure.thresholdBytes !== undefined
+      ? `thresholdRatio=${formatPressureRatio({
+          pressure,
+          thresholdBytes: pressure.thresholdBytes,
+        })}`
+      : "",
+    pressure.rssGrowthBytes !== undefined
+      ? `rssGrowth=${formatReadableBytes(pressure.rssGrowthBytes)}`
+      : "",
+  ];
+  return parts.filter((part): part is string => Boolean(part)).join(" ");
+}
+
+function formatPressureNextStep(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): string {
+  return pressure.level === "critical"
+    ? "nextStep=inspect latest stability bundle or run openclaw gateway diagnostics export; restart gateway if process is unstable"
+    : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
+}
+
 function logMemoryPressure(params: {
   pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
   writeCriticalBundle: boolean;
@@ -175,6 +247,7 @@ function logMemoryPressure(params: {
   const { pressure } = params;
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
+    ` ${formatPressureSummary(pressure)}` +
     ` rssBytes=${pressure.memory.rssBytes}` +
     ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
@@ -182,12 +255,9 @@ function logMemoryPressure(params: {
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
     (pressure.level === "critical"
       ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
-      : "");
-  if (pressure.level === "critical") {
-    log.warn(message);
-  } else {
-    log.info(message);
-  }
+      : "") +
+    ` ${formatPressureNextStep(pressure)}`;
+  log.warn(message);
 }
 
 export function emitDiagnosticMemorySample(options?: {

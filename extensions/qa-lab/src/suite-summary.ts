@@ -65,6 +65,10 @@ function readNonNegativeCount(value: unknown): number | null {
     : null;
 }
 
+function isQaSuiteBlockingStatus(status: unknown): boolean {
+  return status !== "pass";
+}
+
 export function countQaSuiteFailedScenarios(
   scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
 ): number {
@@ -82,7 +86,7 @@ export function countQaSuiteFailedOrSkippedScenarios(
 ): number {
   let blocking = 0;
   for (const scenario of scenarios) {
-    if (scenario.status === "fail" || scenario.status === "skip" || scenario.status === "skipped") {
+    if (isQaSuiteBlockingStatus(scenario.status)) {
       blocking += 1;
     }
   }

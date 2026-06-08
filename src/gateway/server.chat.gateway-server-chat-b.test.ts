@@ -18,6 +18,7 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
+  readSessionStore,
   rpcReq,
   testState,
   writeSessionStore,
@@ -1815,10 +1816,7 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
+      const stored = readSessionStore(sessionStorePath);
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
     });

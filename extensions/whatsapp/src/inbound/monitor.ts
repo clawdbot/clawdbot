@@ -1289,8 +1289,10 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
-    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
-    ...sendApi,
+    sendComposingTo: sendApi.sendComposingTo,
+    sendMessage: sendApi.sendMessage,
+    sendPoll: sendApi.sendPoll,
+    sendReaction: sendApi.sendReaction,
   } as const;
 }
 

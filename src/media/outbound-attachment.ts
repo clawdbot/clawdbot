@@ -32,3 +32,22 @@ export async function resolveOutboundAttachmentFromUrl(
   );
   return { path: saved.path, contentType: saved.contentType };
 }
+
+/** Stages an in-memory attachment buffer into the outbound media store. */
+export async function resolveOutboundAttachmentFromBuffer(
+  buffer: Buffer,
+  maxBytes: number,
+  options?: {
+    contentType?: string;
+    filename?: string;
+  },
+): Promise<{ path: string; contentType?: string }> {
+  const saved = await saveMediaBuffer(
+    buffer,
+    options?.contentType,
+    "outbound",
+    maxBytes,
+    options?.filename,
+  );
+  return { path: saved.path, contentType: saved.contentType };
+}

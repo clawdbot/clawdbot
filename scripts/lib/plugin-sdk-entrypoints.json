@@ -282,6 +282,7 @@
   "provider-auth-login",
   "provider-selection-runtime",
   "plugin-entry",
+  "provider-catalog-live-runtime",
   "provider-catalog-runtime",
   "provider-catalog-shared",
   "provider-entry",

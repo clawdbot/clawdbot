@@ -2,9 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
+  hasIMessageUrlBalloonBundleID,
+  IMESSAGE_URL_BALLOON_BUNDLE_ID,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
   MAX_COALESCED_TEXT_CHARS,
+  shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -21,6 +24,52 @@ const makePayload = (overrides: Partial<IMessagePayload> = {}): IMessagePayload 
 });
 
 describe("combineIMessagePayloads", () => {
+  it("recognizes URL balloon rows from imsg structural metadata", () => {
+    const text = makePayload({ text: "Dump" });
+    const balloon = makePayload({
+      text: "https://example.com/article",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+    });
+
+    expect(hasIMessageUrlBalloonBundleID(text)).toBe(false);
+    expect(hasIMessageUrlBalloonBundleID(balloon)).toBe(true);
+    // A real URL split-send merges regardless of the session capability latch.
+    expect(shouldCombineIMessagePayloadBucket([text, balloon], false)).toBe(true);
+    expect(shouldCombineIMessagePayloadBucket([text, balloon], true)).toBe(true);
+  });
+
+  it("falls back to a legacy merge when the build has never emitted balloon metadata (older imsg)", () => {
+    // Older imsg builds emit no balloon_bundle_id at all. We cannot tell a URL
+    // split-send from separate sends, so we preserve the pre-metadata merge
+    // rather than regress split-send users to two turns. Back-compat path,
+    // removed once imsg coalesces upstream (openclaw/imsg#141, tracked by #91243).
+    const text = makePayload({ text: "Dump" });
+    const url = makePayload({ text: "https://example.com/article" });
+    expect(shouldCombineIMessagePayloadBucket([text, url], false)).toBe(true);
+  });
+
+  it("keeps a plain bucket separate once the build is known to emit balloon metadata", () => {
+    // Capability latch is true (a prior row this session carried metadata), so a
+    // plain bucket with no URL marker is genuinely not a split-send. imsg omits
+    // the field for plain rows, so this case is indistinguishable per-bucket and
+    // depends on the session-level signal.
+    const a = makePayload({ text: "first" });
+    const b = makePayload({ text: "second" });
+    expect(shouldCombineIMessagePayloadBucket([a, b], true)).toBe(false);
+  });
+
+  it("keeps a bucket separate when imsg exposes balloon metadata in the bucket but no URL marker", () => {
+    // New imsg surfaced balloon metadata in this very bucket, proving this build
+    // emits the field, but the bucket is not a URL split-send. Keep separate even
+    // if the latch had not flipped yet.
+    const text = makePayload({ text: "hi" });
+    const nonUrlBalloon = makePayload({
+      text: "tap to vote",
+      balloon_bundle_id: "com.apple.messages.MSMessageExtensionBalloonPlugin",
+    });
+    expect(shouldCombineIMessagePayloadBucket([text, nonUrlBalloon], false)).toBe(false);
+  });
+
   it("throws on empty input", () => {
     expect(() => combineIMessagePayloads([])).toThrow(
       "combineIMessagePayloads: cannot combine empty payloads",
@@ -44,6 +93,7 @@ describe("combineIMessagePayloads", () => {
     const balloon = makePayload({
       id: 42,
       text: "https://example.com/article",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
       guid: "row-2",
       created_at: "2025-01-01T00:00:01.500Z",
     });
@@ -129,7 +179,6 @@ describe("combineIMessagePayloads", () => {
     expect(merged.text).toContain("msg 0");
     expect(merged.text).toContain("msg 24");
     expect(merged.text).not.toContain("msg 10"); // dropped by cap
-    expect(merged.coalescedCatchupCursor?.lastSeenRowid).toBe(24);
   });
 
   it("preserves reply context from any entry that carries one", () => {

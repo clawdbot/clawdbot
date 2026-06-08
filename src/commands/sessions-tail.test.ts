@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSqliteSessionStoreDatabasePath } from "../config/sessions/store-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryPointerFilePath } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
+import { resetSessionStateMigratedForCommandForTest } from "./session-state-migration.js";
 import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
 
 const mocks = vi.hoisted(() => ({
@@ -79,6 +81,7 @@ describe("sessionsTailCommand", () => {
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
+    resetSessionStateMigratedForCommandForTest();
     setSessionsTailFollowIntervalMsForTests(10);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
@@ -104,6 +107,7 @@ describe("sessionsTailCommand", () => {
   });
 
   afterEach(() => {
+    resetSessionStateMigratedForCommandForTest();
     setSessionsTailFollowIntervalMsForTests();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -316,5 +320,24 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).not.toContain("No sessions found");
+  });
+
+  it("validates target options before migrating configured stores", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: {
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+      session: { store: storePath },
+    });
+
+    const runtime = makeRuntime();
+    await sessionsTailCommand({ store: storePath, allAgents: true }, runtime);
+
+    expect(vi.mocked(runtime.error).mock.calls).toEqual([
+      ["--store cannot be combined with --agent or --all-agents"],
+    ]);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual([[1]]);
+    expect(fs.existsSync(storePath)).toBe(true);
+    expect(fs.existsSync(resolveSqliteSessionStoreDatabasePath(storePath))).toBe(false);
   });
 });

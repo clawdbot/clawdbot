@@ -51,18 +51,21 @@ type MockCompactionResult =
     };
 
 type MockResolvedModel = {
-  model: {
-    id: string;
-    provider: string;
-    contextWindow: number;
-    api: string;
-    reasoning?: boolean;
-  };
-  error: null;
-  authStorage: Record<string, unknown>;
-  modelRegistry: Record<string, unknown>;
+  id: string;
+  provider: string;
+  contextWindow: number;
+  api: string;
+  reasoning?: boolean;
 };
-type MockResolveModelAsync = (..._args: unknown[]) => Promise<MockResolvedModel>;
+
+type MockResolveModelResult = {
+  model: MockResolvedModel;
+  error: null;
+  authStorage: {
+    setRuntimeApiKey: ReturnType<typeof vi.fn>;
+  };
+  modelRegistry: Record<string, never>;
+};
 
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
@@ -116,19 +119,21 @@ export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
-export const mockedResolveModelAsync = vi.fn<MockResolveModelAsync>(async () => ({
-  model: {
-    id: "test-model",
-    provider: "anthropic",
-    contextWindow: 200000,
-    api: "messages",
-  },
-  error: null,
-  authStorage: {
-    setRuntimeApiKey: vi.fn(),
-  },
-  modelRegistry: {},
-}));
+export const mockedResolveModelAsync = vi.fn(
+  async (): Promise<MockResolveModelResult> => ({
+    model: {
+      id: "test-model",
+      provider: "anthropic",
+      contextWindow: 200000,
+      api: "messages",
+    },
+    error: null,
+    authStorage: {
+      setRuntimeApiKey: vi.fn(),
+    },
+    modelRegistry: {},
+  }),
+);
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();

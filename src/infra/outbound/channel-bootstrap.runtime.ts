@@ -8,6 +8,8 @@ import type { PluginChannelRegistration } from "../../plugins/registry-types.js"
 import {
   getActivePluginChannelRegistry,
   getActivePluginChannelRegistryVersion,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
 } from "../../plugins/runtime.js";
 import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 
@@ -22,6 +24,27 @@ function channelEntryCanSend(entry: PluginChannelRegistration | undefined): bool
   return Boolean(entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text);
 }
 
+function findChannelEntry(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  channel: DeliverableMessageChannel,
+): PluginChannelRegistration | undefined {
+  return registry?.channels?.find((entry) => entry?.plugin?.id === channel);
+}
+
+function canResolveSendCapableChannel(channel: DeliverableMessageChannel): boolean {
+  const activeChannelRegistry = getActivePluginChannelRegistry();
+  const channelEntry = findChannelEntry(activeChannelRegistry, channel);
+  if (channelEntryCanSend(channelEntry)) {
+    return true;
+  }
+
+  const activeRegistry = getActivePluginRegistry();
+  if (activeRegistry && activeRegistry !== activeChannelRegistry) {
+    return channelEntryCanSend(findChannelEntry(activeRegistry, channel));
+  }
+  return false;
+}
+
 /** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
 export function bootstrapOutboundChannelPlugin(params: {
   channel: DeliverableMessageChannel;
@@ -32,15 +55,11 @@ export function bootstrapOutboundChannelPlugin(params: {
     return;
   }
 
-  const activeChannelRegistry = getActivePluginChannelRegistry();
-  const activeChannelEntry = activeChannelRegistry?.channels?.find(
-    (entry) => entry?.plugin?.id === params.channel,
-  );
-  if (channelEntryCanSend(activeChannelEntry)) {
+  if (canResolveSendCapableChannel(params.channel)) {
     return;
   }
 
-  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${params.channel}`;
+  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${getActivePluginRegistryVersion()}:${params.channel}`;
   if (bootstrapAttempts.has(attemptKey)) {
     return;
   }
@@ -61,6 +80,9 @@ export function bootstrapOutboundChannelPlugin(params: {
         allowGatewaySubagentBinding: true,
       },
     });
+    if (!canResolveSendCapableChannel(params.channel)) {
+      bootstrapAttempts.delete(attemptKey);
+    }
   } catch {
     bootstrapAttempts.delete(attemptKey);
   }

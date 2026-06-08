@@ -806,6 +806,14 @@ if (isPrlctl) {
     expect(windows).toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
   });
 
+  it("requires macOS dashboard smoke to load built assets", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain("asset_paths=");
+    expect(macos).toContain("grep -E '(^|/)assets/'");
+    expect(macos).toContain('curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url"');
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 

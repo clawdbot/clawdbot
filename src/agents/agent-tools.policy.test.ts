@@ -3,11 +3,11 @@
  * Covers wildcard matching, sub-agent inheritance, provider overrides, and
  * trusted group context checks.
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   filterToolsByPolicy,
@@ -343,24 +343,15 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       os.tmpdir(),
       `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:subagent:flat-leaf": {
-            sessionId: "flat-leaf",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "leaf",
-            subagentControlScope: "none",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      "agent:main:subagent:flat-leaf": {
+        sessionId: "flat-leaf",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
     const cfg = {
       ...baseCfg,
       session: {
@@ -380,25 +371,16 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       os.tmpdir(),
       `openclaw-subagent-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:subagent:limited": {
-            sessionId: "limited-session",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "orchestrator",
-            subagentControlScope: "children",
-            inheritedToolDeny: ["bash", "memory_get"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      "agent:main:subagent:limited": {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolDeny: ["bash", "memory_get"],
+      },
+    });
     const cfg = {
       ...baseCfg,
       session: {
@@ -417,25 +399,16 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       os.tmpdir(),
       `openclaw-subagent-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:subagent:limited": {
-            sessionId: "limited-session",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "orchestrator",
-            subagentControlScope: "children",
-            inheritedToolAllow: ["sessions_spawn", "memory_search"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      "agent:main:subagent:limited": {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["sessions_spawn", "memory_search"],
+      },
+    });
     const cfg = {
       ...baseCfg,
       session: {
@@ -457,25 +430,16 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
         .toString(16)
         .slice(2)}.json`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:subagent:limited": {
-            sessionId: "limited-session",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "orchestrator",
-            subagentControlScope: "children",
-            inheritedToolAllow: ["plugin_tool"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      "agent:main:subagent:limited": {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["plugin_tool"],
+      },
+    });
     const cfg = {
       ...baseCfg,
       tools: {
@@ -504,23 +468,14 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       os.tmpdir(),
       `openclaw-acp-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:acp:limited": {
-            sessionId: "limited-acp-session",
-            updatedAt: Date.now(),
-            inheritedToolAllow: ["custom_plugin_tool"],
-            inheritedToolDeny: ["custom_denied_tool"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeSessionStoreForTest(storePath, {
+      "agent:main:acp:limited": {
+        sessionId: "limited-acp-session",
+        updatedAt: Date.now(),
+        inheritedToolAllow: ["custom_plugin_tool"],
+        inheritedToolDeny: ["custom_denied_tool"],
+      },
+    });
     const cfg = {
       ...baseCfg,
       session: {

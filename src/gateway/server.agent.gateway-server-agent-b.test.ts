@@ -21,6 +21,7 @@ import {
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
+  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   startServerWithClient,
@@ -267,14 +268,7 @@ describe("gateway server agent", () => {
     if (!sessionStorePath) {
       throw new Error("expected session store path");
     }
-    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        cliSessionBindings?: Record<string, unknown>;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
-      }
-    >;
+    const stored = readSessionStore(sessionStorePath);
     expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
       "claude-cli": {
         sessionId: "cli-session-123",
@@ -496,10 +490,7 @@ describe("gateway server agent", () => {
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
+      const store = readSessionStore(storePath);
       expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 

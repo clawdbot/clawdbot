@@ -33,6 +33,7 @@ let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime
   null;
 let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
   null;
+const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 function loadMessageConfigRuntime() {
   // Keep config/runtime loading lazy so importing message helpers does not
@@ -68,6 +69,9 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -299,14 +303,22 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
+  const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
+    (source): source is string => Boolean(source),
+  );
+  const hasRealMediaSource = mediaSources.some((source) => source !== SEND_BUFFER_MEDIA_URL);
+  const shouldForwardBuffer =
+    deliveryMode === "gateway" && Boolean(params.buffer) && !hasRealMediaSource;
+  const mediaUrl = params.mediaUrl ?? (shouldForwardBuffer ? SEND_BUFFER_MEDIA_URL : undefined);
+  const mediaUrls = params.mediaUrls ?? (shouldForwardBuffer ? [SEND_BUFFER_MEDIA_URL] : undefined);
   const outboundPayloads =
     params.payloads && params.payloads.length > 0
       ? params.payloads
       : [
           {
             text: params.content,
-            mediaUrl: params.mediaUrl,
-            mediaUrls: params.mediaUrls,
+            mediaUrl,
+            mediaUrls,
             audioAsVoice: params.asVoice === true,
           },
         ];
@@ -315,7 +327,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
   const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
-  const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
+  const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
 
   if (params.dryRun) {
     return {
@@ -410,8 +422,11 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     params: {
       to: params.to,
       message: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      mediaUrl,
+      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : mediaUrls,
+      buffer: shouldForwardBuffer ? params.buffer : undefined,
+      filename: shouldForwardBuffer ? params.filename : undefined,
+      contentType: shouldForwardBuffer ? params.contentType : undefined,
       asVoice: params.asVoice,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,

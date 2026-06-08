@@ -72,6 +72,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],
@@ -265,6 +268,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
   ],
   "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
+  "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+    "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+  ],
   "openclaw/plugin-sdk/provider-catalog-shared": [
     "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
   ],

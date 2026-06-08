@@ -668,6 +668,32 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
+  it("keeps no-log child output bounded to a tail", async () => {
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          "const chunk = Buffer.alloc(1024 * 1024, 120);",
+          "for (let index = 0; index < 3; index += 1) process.stdout.write(chunk);",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        maxBufferBytes: 1024 * 1024,
+        outputTailBytes: 4096,
+        timeoutMs: 10_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.output.length).toBeLessThan(8 * 1024);
+    expect(result.output).toContain("output exceeded 1048576 bytes");
+  });
+
   it("stops streamed child output after the configured log cap", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
     const logPath = path.join(tempDir, "child.log");

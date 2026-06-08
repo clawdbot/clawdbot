@@ -2566,6 +2566,57 @@ export async function readBoundedCrossOsResponseText(
   return truncated ? `${text}\n[truncated]` : text;
 }
 
+export function dashboardHtmlMarkerStatus(html: string): {
+  app: boolean;
+  ready: boolean;
+  title: boolean;
+} {
+  const title = html.includes("<title>OpenClaw Control</title>");
+  const app = html.includes("<openclaw-app></openclaw-app>");
+  return { app, ready: title && app, title };
+}
+
+export function resolveDashboardAssetUrls(dashboardUrl: string, html: string): string[] {
+  const baseUrl = new URL(dashboardUrl);
+  const assetUrls = new Set<string>();
+  const assetAttributePattern = /<(?:script|link)\b[^>]*(?:src|href)\s*=\s*(["'])([^"']+)\1/giu;
+  for (const match of html.matchAll(assetAttributePattern)) {
+    const rawUrl = match[2]?.trim();
+    if (!rawUrl) {
+      continue;
+    }
+    const assetUrl = new URL(rawUrl, baseUrl);
+    if (assetUrl.origin === baseUrl.origin && assetUrl.pathname.includes("/assets/")) {
+      assetUrls.add(assetUrl.href);
+    }
+  }
+  return [...assetUrls].toSorted();
+}
+
+export async function verifyDashboardAssetUrls(
+  assetUrls: string[],
+  fetchAsset: typeof fetch = fetch,
+): Promise<{ failures: string[]; ok: boolean }> {
+  if (assetUrls.length === 0) {
+    return { failures: ["no dashboard asset URLs found"], ok: false };
+  }
+  const failures: string[] = [];
+  for (const assetUrl of assetUrls) {
+    try {
+      const response = await fetchAsset(assetUrl, {
+        signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      if (!response.ok) {
+        failures.push(`${assetUrl} status=${response.status}`);
+      }
+    } catch (error) {
+      failures.push(`${assetUrl} ${formatError(error)}`);
+    }
+  }
+  return { failures, ok: failures.length === 0 };
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
@@ -3437,18 +3488,22 @@ async function runDashboardSmoke(params) {
           signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
         const html = await readBoundedCrossOsResponseText(response);
-        if (
-          response.ok &&
-          html.includes("<title>OpenClaw Control</title>") &&
-          html.includes("<openclaw-app></openclaw-app>")
-        ) {
+        const markers = dashboardHtmlMarkerStatus(html);
+        const assetUrls = resolveDashboardAssetUrls(dashboardUrl, html);
+        if (response.ok && markers.ready) {
+          const assets = await verifyDashboardAssetUrls(assetUrls);
+          if (assets.ok) {
+            logStream.write(
+              `${new Date().toISOString()} dashboard-ready status=${response.status} assets=${assetUrls.length}\n`,
+            );
+            return;
+          }
           logStream.write(
-            `${new Date().toISOString()} dashboard-ready status=${response.status}\n`,
+            `${new Date().toISOString()} dashboard-assets-not-ready status=${response.status} assets=${assetUrls.length} failures=${assets.failures.join(" | ")}\n`,
           );
-          return;
         }
         logStream.write(
-          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${html.includes("<title>OpenClaw Control</title>")} app=${html.includes("<openclaw-app></openclaw-app>")}\n`,
+          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${markers.title} app=${markers.app} assets=${assetUrls.length}\n`,
         );
       } catch (error) {
         logStream.write(

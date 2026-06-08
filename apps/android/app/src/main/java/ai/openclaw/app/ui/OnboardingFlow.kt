@@ -34,6 +34,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -130,7 +131,9 @@ fun OnboardingFlow(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
 ) {
-  ClawDesignTheme {
+  val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
+  ClawDesignTheme(dark = onboardingDark) {
     val context = LocalContext.current
     val statusText by viewModel.statusText.collectAsState()
     val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
@@ -158,6 +161,8 @@ fun OnboardingFlow(
     var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
     var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
     var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+
+    OpenClawSystemBarAppearance(lightAppearance = !onboardingDark && step != OnboardingStep.Welcome)
 
     val qrScannerOptions =
       remember {
@@ -223,10 +228,12 @@ fun OnboardingFlow(
 
     when (step) {
       OnboardingStep.Welcome ->
-        WelcomeScreen(
-          modifier = modifier,
-          onConnect = { step = OnboardingStep.Gateway },
-        )
+        ClawDesignTheme(dark = true) {
+          WelcomeScreen(
+            modifier = modifier,
+            onConnect = { step = OnboardingStep.Gateway },
+          )
+        }
       OnboardingStep.Gateway ->
         GatewaySetupScreen(
           modifier = modifier,

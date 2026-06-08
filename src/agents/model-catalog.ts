@@ -597,6 +597,18 @@ export async function loadModelCatalog(params?: {
         }),
       );
       logStage("manifest-models-merged", `entries=${models.length}`);
+      const configuredModels = buildConfiguredModelCatalog({
+        cfg,
+        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+      });
+      let augmentEntries: ModelCatalogEntry[] | undefined;
+      if (configuredModels.length > 0) {
+        const entriesForAugment = [...models];
+        mergeCatalogEntries(entriesForAugment, configuredModels);
+        augmentEntries = entriesForAugment;
+      }
+      logStage("configured-models-prepared", `entries=${models.length}`);
+
       if (!readOnly) {
         const { createProviderApiKeyResolver } = await loadProviderApiKeyResolver();
         let authStore: ReturnType<typeof ensureAuthProfileStoreWithoutExternalProfiles> | undefined;
@@ -620,7 +632,7 @@ export async function loadModelCatalog(params?: {
             agentDir,
             env: process.env,
             resolveProviderApiKey,
-            entries: [...models],
+            entries: augmentEntries ?? [...models],
           },
         });
         if (supplemental.length > 0) {
@@ -638,14 +650,10 @@ export async function loadModelCatalog(params?: {
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
-      const configuredModels = buildConfiguredModelCatalog({
-        cfg,
-        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
-      });
       if (configuredModels.length > 0) {
         mergeCatalogEntries(models, configuredModels);
       }
-      logStage("configured-models-merged", `entries=${models.length}`);
+      logStage("configured-models-finalized", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

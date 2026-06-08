@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readEnvInt, resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import { deriveSessionName, readEnvInt, resolveSandboxWorkdir } from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -116,5 +116,31 @@ describe("resolveSandboxWorkdir", () => {
       expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
       expect(warnings).toStrictEqual([]);
     });
+  });
+});
+
+describe("deriveSessionName", () => {
+  it("labels well-formed quoted commands", () => {
+    expect(deriveSessionName('node "my server.js" --port 8080')).toBe("node my server.js");
+    expect(deriveSessionName("git commit -m 'fix bug'")).toBe("git commit");
+  });
+
+  it("keeps grouping backslash-bearing quoted spans into one token", () => {
+    expect(deriveSessionName('tar "a\\b c"')).toBe("tar a\\b c");
+  });
+
+  it("treats backslash as literal inside single-quoted spans", () => {
+    expect(deriveSessionName("cmd 'a b\\' next")).toBe("cmd a b\\");
+  });
+
+  it("returns a label without catastrophic backtracking on unterminated quoted backslash runs", () => {
+    for (const quote of [`"`, `'`]) {
+      const malicious = `node ${quote}${"\\".repeat(50000)}`;
+      const start = process.hrtime.bigint();
+      const label = deriveSessionName(malicious);
+      const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      expect(typeof label).toBe("string");
+      expect(elapsedMs).toBeLessThan(100);
+    }
   });
 });

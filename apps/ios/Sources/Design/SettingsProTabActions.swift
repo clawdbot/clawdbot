@@ -610,6 +610,21 @@ extension SettingsProTab {
         return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
     }
 
+    var gatewayTalkActiveVoiceDetail: String {
+        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
+        return "\(title) • \(subtitle)"
+    }
+
+    var gatewayTalkLastIssueDetail: String? {
+        let detail = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return detail.isEmpty ? nil : detail
+    }
+
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
         if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }

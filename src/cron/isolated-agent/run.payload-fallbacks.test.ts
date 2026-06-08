@@ -39,6 +39,31 @@ function requireModelFallbackRequest(): {
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
+  it("uses the persisted agentTurn payload message when the dispatch message is malformed", async () => {
+    mockRunCronFallbackPassthrough();
+    const dispatchMessage = "SERIALIZATION_PROBE should not be wrapped";
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          payload: {
+            kind: "agentTurn",
+            message:
+              "SERIALIZATION_PROBE: reply exactly with the marker token you received and nothing else.",
+          },
+        }),
+        message: { message: dispatchMessage } as unknown as string,
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const request = runEmbeddedAgentMock.mock.calls[0]?.[0] as { prompt?: unknown } | undefined;
+    expect(request?.prompt).toContain("SERIALIZATION_PROBE: reply exactly");
+    expect(request?.prompt).not.toContain(dispatchMessage);
+    expect(request?.prompt).not.toContain("[object Object]");
+  });
+
   it.each([
     {
       name: "passes payload.fallbacks as fallbacksOverride when defined",

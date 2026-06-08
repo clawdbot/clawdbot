@@ -163,6 +163,8 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain(
       "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
     );
+    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
+    expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {

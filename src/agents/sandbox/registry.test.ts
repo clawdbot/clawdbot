@@ -12,20 +12,20 @@ const {
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_BROWSERS_DIR,
 } = vi.hoisted(() => {
-  const path = require("node:path");
+  const nodePath = require("node:path");
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
-  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+  const baseDir = mkdtempSync(nodePath.join(tmpdir(), "openclaw-sandbox-registry-"));
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = baseDir;
 
   return {
     TEST_STATE_DIR: baseDir,
     PREVIOUS_OPENCLAW_STATE_DIR: previousStateDir,
-    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
-    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
-    SANDBOX_CONTAINERS_DIR: path.join(baseDir, "containers"),
-    SANDBOX_BROWSERS_DIR: path.join(baseDir, "browsers"),
+    SANDBOX_REGISTRY_PATH: nodePath.join(baseDir, "containers.json"),
+    SANDBOX_BROWSER_REGISTRY_PATH: nodePath.join(baseDir, "browsers.json"),
+    SANDBOX_CONTAINERS_DIR: nodePath.join(baseDir, "containers"),
+    SANDBOX_BROWSERS_DIR: nodePath.join(baseDir, "browsers"),
   };
 });
 

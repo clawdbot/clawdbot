@@ -8,6 +8,7 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "attachments",
   "base64",
   "bestEffort",
+  "buffer",
   "caption",
   "channel",
   "channelId",

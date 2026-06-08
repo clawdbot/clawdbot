@@ -6,7 +6,7 @@ import { getLoadedChannelPluginById } from "../../channels/plugins/registry-load
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -65,6 +65,34 @@ function truncateUntrustedJsonString(value: string): string {
   return `${truncateUtf16Safe(value, Math.max(0, MAX_UNTRUSTED_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
 }
 
+const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
+const HEAD_TAIL_MARKER_LENGTH = HEAD_TAIL_OMISSION_MARKER.length;
+const MIN_HEAD_TAIL_CHARS = 20;
+
+/**
+ * Applies head+tail truncation so the result is ≤ maxChars and the downstream
+ * {@link truncateUntrustedJsonString} (prefix-only 2000-char cap) is a no-op.
+ * Head and tail portions are sized to keep the body within
+ * {@link MAX_UNTRUSTED_JSON_STRING_CHARS}, preserving actionable tail content
+ * that prefix-only truncation would drop.
+ */
+function truncateBodyHeadTail(body: string, maxChars = MAX_UNTRUSTED_JSON_STRING_CHARS): string {
+  if (body.length <= maxChars) {
+    return body;
+  }
+  const available = maxChars - HEAD_TAIL_MARKER_LENGTH;
+  if (available < MIN_HEAD_TAIL_CHARS * 2) {
+    return `${truncateUtf16Safe(body, Math.max(0, maxChars - 14)).trimEnd()}…[truncated]`;
+  }
+  // Budget in UTF-16 code units because truncateUntrustedJsonString enforces
+  // that same cap after JSON serialization.
+  const headChars = Math.floor(available * 0.6);
+  const tailChars = available - headChars;
+  const head = truncateUtf16Safe(body, headChars);
+  const tail = sliceUtf16Safe(body, -tailChars);
+  return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
+}
+
 function sanitizeUntrustedJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
     return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
@@ -98,6 +126,17 @@ function sanitizeTranscriptField(value: unknown): string | undefined {
   return neutralizeMarkdownFences(truncateUntrustedTranscriptField(body))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function sanitizeTranscriptBody(value: unknown): string | undefined {
+  const body = sanitizePromptBody(value);
+  if (!body) {
+    return undefined;
+  }
+  const sanitized = neutralizeMarkdownFences(truncateBodyHeadTail(body))
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized || undefined;
 }
 
 function formatUntrustedStructuredContextLabel(label: unknown): string {
@@ -156,7 +195,7 @@ function formatChatWindowMessage(
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
   const mediaRef = sanitizeTranscriptField(value["media_ref"]);
-  const body = sanitizeTranscriptField(value["body"]);
+  const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
     timestamp,
@@ -274,7 +313,8 @@ function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unkn
     return [];
   }
   return ctx.ReplyChain.flatMap((entry) => {
-    const body = sanitizePromptBody(entry.body);
+    const rawBody = sanitizePromptBody(entry.body);
+    const body = rawBody ? truncateBodyHeadTail(rawBody) : rawBody;
     const mediaType = normalizePromptMetadataString(entry.mediaType);
     const mediaPath = normalizePromptMetadataString(entry.mediaPath);
     const mediaRef = normalizePromptMetadataString(entry.mediaRef);
@@ -312,7 +352,7 @@ function isTelegramInboundContext(ctx: TemplateContext): boolean {
 }
 
 function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
-  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
+  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
 }
 
 function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
@@ -552,7 +592,8 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
+  const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
+  const replyToBody = rawReplyToBody ? truncateBodyHeadTail(rawReplyToBody) : rawReplyToBody;
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock(

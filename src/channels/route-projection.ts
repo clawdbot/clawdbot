@@ -12,14 +12,64 @@ import {
   type ChannelRouteRef,
 } from "../plugin-sdk/channel-route.js";
 import {
+  normalizeConversationTargetParams,
+  type ConversationTargetParams,
+} from "../utils/conversation-target.js";
+import {
   channelRouteFromDeliveryContext,
   deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
   type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import { getChannelPlugin, normalizeChannelId } from "./plugins/registry.js";
+
+/** Formats a conversation id into a deliverable target, using channel hooks before generic fallback. */
+export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
+  const { channel, conversationId, parentConversationId } =
+    normalizeConversationTargetParams(params);
+  if (!channel || !conversationId) {
+    return undefined;
+  }
+  const normalizedChannel = normalizeChannelId(channel);
+  const pluginTarget = normalizedChannel
+    ? getChannelPlugin(normalizedChannel)?.messaging?.resolveDeliveryTarget?.({
+        conversationId,
+        parentConversationId,
+      })
+    : null;
+  if (pluginTarget?.to?.trim()) {
+    return pluginTarget.to.trim();
+  }
+  return `channel:${conversationId}`;
+}
+
+/** Resolves a channel conversation into target/thread fields for delivery routing. */
+export function resolveConversationDeliveryTarget(params: ConversationTargetParams): {
+  to?: string;
+  threadId?: string;
+} {
+  const { channel, conversationId, parentConversationId } =
+    normalizeConversationTargetParams(params);
+  const pluginTarget =
+    channel && conversationId
+      ? getChannelPlugin(
+          normalizeChannelId(channel) ?? channel,
+        )?.messaging?.resolveDeliveryTarget?.({
+          conversationId,
+          parentConversationId,
+        })
+      : null;
+  if (pluginTarget) {
+    return {
+      ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
+      ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
+    };
+  }
+  const to = formatConversationTarget(params);
+  return { to };
+}
 
 /** Channel route normalized enough to address an outbound delivery target. */
 export type RoutableChannelRouteRef = ChannelRouteRef & {

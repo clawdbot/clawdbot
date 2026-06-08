@@ -12,6 +12,10 @@ export type IMessagePrivateApiStatus = {
   cliCapabilities?: {
     sendRichSupportsAttachment?: boolean;
   };
+  // imsg's own `status --json` `message` field. When advanced features are off
+  // it explains why (SIP enabled, library validation, macOS 26 AMFI gate), so
+  // callers can surface a real reason instead of a generic "run imsg launch".
+  statusMessage?: string;
   error?: string;
 };
 

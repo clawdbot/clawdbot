@@ -81,6 +81,9 @@
       "openclaw/plugin-sdk/error-runtime": [
         "../../dist/plugin-sdk/error-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/provider-catalog-live-runtime": [
+        "../../dist/plugin-sdk/provider-catalog-live-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
         "../../dist/plugin-sdk/provider-catalog-shared.d.ts"
       ],

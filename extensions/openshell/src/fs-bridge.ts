@@ -15,8 +15,10 @@ import { movePathWithCopyFallback } from "./mirror.js";
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
-  source: "workspace" | "agent";
+  source: "workspace" | "agent" | "protectedSkill";
 };
+
+const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
@@ -230,7 +232,29 @@ class OpenShellFsBridge implements SandboxFsBridge {
       "/",
     );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    const skillsRoot = this.sandbox.skillsWorkspaceDir
+      ? path.resolve(this.sandbox.skillsWorkspaceDir, "skills")
+      : undefined;
+    const skillsContainerRoot = path.posix.join(
+      workspaceContainerRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
+    const workspaceSkillsShadowRoot = path.resolve(
+      workspaceRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
     const input = params.filePath.trim();
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillTarget = resolveProtectedSkillTarget({
+        input,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillTarget) {
+        return protectedSkillTarget;
+      }
+    }
 
     if (input.startsWith(`${workspaceContainerRoot}/`) || input === workspaceContainerRoot) {
       const relative = path.posix.relative(workspaceContainerRoot, input) || "";
@@ -270,6 +294,18 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillShadowTarget = resolveProtectedSkillShadowTarget({
+        hostPath,
+        workspaceSkillsShadowRoot,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillShadowTarget) {
+        return protectedSkillShadowTarget;
+      }
+    }
+
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
       return {
@@ -281,6 +317,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
         mountHostRoot: workspaceRoot,
         writable: this.sandbox.workspaceAccess === "rw",
         source: "workspace",
+      };
+    }
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw" && isPathInside(skillsRoot, hostPath)) {
+      const relative = path.relative(skillsRoot, hostPath).split(path.sep).join(path.posix.sep);
+      return {
+        hostPath,
+        relativePath: relative
+          ? path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS, relative)
+          : path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS),
+        containerPath: relative
+          ? path.posix.join(skillsContainerRoot, relative)
+          : skillsContainerRoot,
+        mountHostRoot: skillsRoot,
+        writable: false,
+        source: "protectedSkill",
       };
     }
 
@@ -300,6 +352,72 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
+}
+
+function resolveProtectedSkillTarget(params: {
+  input: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  const normalizedInput = path.posix.normalize(params.input.replace(/\\/g, "/"));
+  const isAbsoluteContainer =
+    normalizedInput === params.skillsContainerRoot ||
+    normalizedInput.startsWith(`${params.skillsContainerRoot}/`);
+  const isRelativeContainer =
+    normalizedInput === relativeRoot || normalizedInput.startsWith(`${relativeRoot}/`);
+  if (!isAbsoluteContainer && !isRelativeContainer) {
+    return null;
+  }
+
+  const relative = isAbsoluteContainer
+    ? path.posix.relative(params.skillsContainerRoot, normalizedInput)
+    : path.posix.relative(relativeRoot, normalizedInput);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
+}
+
+function resolveProtectedSkillShadowTarget(params: {
+  hostPath: string;
+  workspaceSkillsShadowRoot: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  if (!isPathInside(params.workspaceSkillsShadowRoot, params.hostPath)) {
+    return null;
+  }
+
+  const relative = path
+    .relative(params.workspaceSkillsShadowRoot, params.hostPath)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
 }
 
 async function assertLocalPathSafety(params: {

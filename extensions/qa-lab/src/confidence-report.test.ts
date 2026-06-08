@@ -281,6 +281,54 @@ describe("qa confidence report", () => {
     }
   });
 
+  it("does not pass suite summaries with unsupported non-pass statuses", async () => {
+    for (const [artifact, expectedDetail] of [
+      [
+        {
+          counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+          scenarios: [{ name: "errored", status: "error" }],
+        },
+        "unsupported non-pass status",
+      ],
+      [
+        {
+          scenarios: [{ name: "timed out", status: "timeout" }],
+        },
+        "unsupported non-pass status",
+      ],
+    ] as const) {
+      await writeJson("report-only/qa-suite-summary.json", artifact);
+
+      const report = await buildQaConfidenceReport({
+        manifest: {
+          version: 1,
+          profile: "codex-100",
+          lanes: [
+            {
+              id: "report-only",
+              title: "Report-only",
+              kind: "qa-suite-summary",
+              artifact: "report-only/qa-suite-summary.json",
+              required: true,
+            },
+          ],
+        },
+        artifactRoot: tempRoot,
+        strictZeroUnknowns: true,
+        strictGlobalPass: true,
+        generatedAt: "2026-05-12T00:00:00.000Z",
+      });
+
+      expect(report.pass).toBe(false);
+      expect(report.globalPass).toBe(false);
+      expect(report.zeroUnknowns).toBe(false);
+      expect(report.lanes[0]).toMatchObject({
+        status: "unknown",
+      });
+      expect(report.lanes[0]?.details).toContain(expectedDetail);
+    }
+  });
+
   it("rejects skipped token reports when a live usage source is required", async () => {
     await writeJson("live-token/qa-runtime-token-efficiency-summary.json", {
       status: "skipped",

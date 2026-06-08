@@ -6,9 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-co
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
 import {
@@ -18,17 +16,27 @@ import {
 } from "../plugins/plugin-load-profile.js";
 import {
   getCachedPluginSourceModuleLoader,
-  type PluginModuleLoaderFactory,
   type PluginModuleLoaderCache,
 } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import type {
+  BundledChannelLegacySessionSurface,
+  BundledChannelLegacyStateMigrationDetector,
+  BundledEntryModuleLoadOptions,
+} from "./channel-entry-contract.types.js";
 
 export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
 export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
 export type OpenClawPluginCommandDefinition =
   import("../plugins/types.js").OpenClawPluginCommandDefinition;
 export type PluginCommandContext = import("../plugins/types.js").PluginCommandContext;
+
+export type {
+  BundledChannelLegacySessionSurface,
+  BundledChannelLegacyStateMigrationDetector,
+  BundledEntryModuleLoadOptions,
+} from "./channel-entry-contract.types.js";
 
 type BundledChannelRuntime = unknown;
 
@@ -80,27 +88,6 @@ export type BundledChannelEntryFeatures = {
   accountInspect?: boolean;
 };
 
-/** Legacy session helpers used while bundled channels migrate old session key formats. */
-export type BundledChannelLegacySessionSurface = {
-  isLegacyGroupSessionKey?: (key: string) => boolean;
-  canonicalizeLegacySessionKey?: (params: {
-    key: string;
-    agentId: string;
-  }) => string | null | undefined;
-};
-
-/** Detects channel-owned state migrations needed before a bundled channel starts. */
-export type BundledChannelLegacyStateMigrationDetector = (params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-}) =>
-  | ChannelLegacyStateMigrationPlan[]
-  | Promise<ChannelLegacyStateMigrationPlan[] | null | undefined>
-  | null
-  | undefined;
-
 /** Runtime contract returned by a bundled channel's main entrypoint definition. */
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
@@ -139,11 +126,6 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   setChannelRuntime?: (runtime: BundledChannelRuntime) => void;
   registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
-};
-
-/** Test hook for swapping the source-module loader used by bundled entry imports. */
-export type BundledEntryModuleLoadOptions = {
-  createLoaderForTest?: PluginModuleLoaderFactory;
 };
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();

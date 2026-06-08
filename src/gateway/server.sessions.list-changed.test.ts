@@ -4,7 +4,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  embeddedRunMock,
+  readSessionStore,
+  rpcReq,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -544,12 +550,8 @@ test("sessions.patch scopes selected global mutations and events to the requeste
     reason: "patch",
     label: "Work global",
   });
-  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
-    global?: { label?: string };
-  };
-  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
-    global?: { label?: string };
-  };
+  const mainStore = readSessionStore(globalStores.mainStorePath);
+  const workStore = readSessionStore(globalStores.workStorePath);
   expect(mainStore.global?.label).toBeUndefined();
   expect(workStore.global?.label).toBe("Work global");
   await resetConfiguredGlobalAgentSessionStore(globalStores);

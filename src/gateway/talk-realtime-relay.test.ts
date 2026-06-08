@@ -235,10 +235,20 @@ describe("talk realtime gateway relay", () => {
         return bridge;
       },
     };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const events: Array<{
+      event: string;
+      payload: unknown;
+      connIds: string[];
+      opts?: { dropIfSlow?: boolean };
+    }> = [];
     const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
+      broadcastToConnIds: (
+        event: string,
+        payload: unknown,
+        connIds: ReadonlySet<string>,
+        opts?: { dropIfSlow?: boolean },
+      ) => {
+        events.push({ event, payload, connIds: [...connIds], opts });
       },
     } as never;
 
@@ -290,6 +300,7 @@ describe("talk realtime gateway relay", () => {
     });
     const readyEvent = events.find((entry) => entry.payload === readyPayload);
     expectRecordFields(readyEvent, { event: "talk.event", connIds: ["conn-1"] });
+    expectRecordFields(readyEvent?.opts, { dropIfSlow: false });
 
     const audioPayload = findEventPayload(events, (payload) => payload.type === "audio");
     expectRecordFields(audioPayload, {
@@ -298,6 +309,8 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
     expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    const audioEvent = events.find((entry) => entry.payload === audioPayload);
+    expectRecordFields(audioEvent?.opts, { dropIfSlow: true });
 
     const userTranscript = findEventPayload(
       events,
@@ -477,6 +490,180 @@ describe("talk realtime gateway relay", () => {
       reason: "completed",
     });
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
+  });
+
+  it("emits generic issue details when relay connect fails", async () => {
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: () => ({
+        connect: vi.fn(async () => {
+          throw new Error("OpenAI API key rejected with 401");
+        }),
+        sendAudio: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => false),
+      }),
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+    await Promise.resolve();
+
+    const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
+    expectRecordFields(errorPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "error",
+      message: "OpenAI API key rejected with 401",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+    expectRecordFields(errorPayload.talkEvent, {
+      type: "session.error",
+      final: true,
+    });
+    expectRecordFields((errorPayload.talkEvent as Record<string, unknown>).payload, {
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+  });
+
+  it("emits an issue when the provider closes before ready", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+
+    bridgeRequest?.onClose?.("error");
+
+    const errorPayload = findEventPayload(events, (payload) => payload.type === "error");
+    expectRecordFields(errorPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "error",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
+    const closePayload = findEventPayload(events, (payload) => payload.type === "close");
+    expectRecordFields(closePayload, {
+      relaySessionId: session.relaySessionId,
+      type: "close",
+      reason: "error",
+    });
+  });
+
+  it("does not replace provider errors with pre-ready close issues", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      model: "gpt-realtime-2",
+    });
+
+    bridgeRequest?.onError?.(new Error("OpenAI API key rejected with 401"));
+    bridgeRequest?.onClose?.("error");
+
+    const errorPayloads = events
+      .map((entry) => entry.payload)
+      .filter(
+        (payload): payload is Record<string, unknown> =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "error",
+      );
+    expect(errorPayloads).toHaveLength(1);
+    expectRecordFields(errorPayloads[0], {
+      type: "error",
+      code: "realtime_unavailable",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      transport: "gateway-relay",
+      phase: "connect",
+    });
   });
 
   it("does not route assistant echo transcripts back into the realtime model", async () => {

@@ -17,11 +17,17 @@ import {
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
+  saveSessionStore,
+  type SessionEntry,
   updateLastRoute,
   updateSessionStore,
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./sessions.js";
+import {
+  closeSqliteSessionStoreDatabase,
+  replaceSqliteSessionStore,
+} from "./sessions/store-sqlite.js";
 
 describe("sessions", () => {
   let fixtureRoot = "";
@@ -50,8 +56,18 @@ describe("sessions", () => {
   }): Promise<{ storePath: string }> {
     const dir = await createCaseDir(params.prefix);
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, JSON.stringify(params.entries), "utf-8");
+    await saveSessionStore(storePath, params.entries as Record<string, SessionEntry>, {
+      skipMaintenance: true,
+    });
     return { storePath };
+  }
+
+  function replaceSqliteSessionStoreBehindCache(
+    storePath: string,
+    store: Record<string, SessionEntry>,
+  ): void {
+    replaceSqliteSessionStore(storePath, store);
+    closeSqliteSessionStoreDatabase(storePath);
   }
 
   function expectedBot1FallbackSessionPath() {
@@ -468,8 +484,6 @@ describe("sessions", () => {
         [mainSessionKey]: entry,
       },
     });
-    const before = await fs.readFile(storePath, "utf-8");
-
     const result = await updateLastRoute({
       storePath,
       sessionKey: mainSessionKey,
@@ -484,7 +498,6 @@ describe("sessions", () => {
       result.lastTo = "mutated";
     }
     expect(loadSessionStore(storePath, { clone: false })[mainSessionKey]?.lastTo).toBe("99999");
-    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(before);
   });
 
   it("recordSessionMetaFromInbound skips persistence when there is no metadata patch", async () => {
@@ -496,8 +509,6 @@ describe("sessions", () => {
         [mainSessionKey]: entry,
       },
     });
-    const before = await fs.readFile(storePath, "utf-8");
-
     const result = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: mainSessionKey,
@@ -509,7 +520,6 @@ describe("sessions", () => {
       result.sessionId = "mutated";
     }
     expect(loadSessionStore(storePath, { clone: false })[mainSessionKey]?.sessionId).toBe("sess-1");
-    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(before);
   });
 
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
@@ -727,7 +737,6 @@ describe("sessions", () => {
   it("updateSessionStore preserves concurrent additions", async () => {
     const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
 
     await Promise.all([
       updateSessionStore(storePath, (store) => {
@@ -743,26 +752,9 @@ describe("sessions", () => {
     expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
   });
 
-  it("recovers from array-backed session stores", async () => {
-    const dir = await createCaseDir("updateSessionStore");
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "[]", "utf-8");
-
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: Date.now() };
-    });
-
-    const store = loadSessionStore(storePath);
-    expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
-
-    const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw.trim().startsWith("{")).toBe(true);
-  });
-
   it("normalizes last route fields on write", async () => {
     const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}", "utf-8");
 
     await updateSessionStore(storePath, (store) => {
       store["agent:main:main"] = {
@@ -788,17 +780,13 @@ describe("sessions", () => {
   it("updateSessionStore keeps deletions when concurrent writes happen", async () => {
     const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify(
-        {
-          "agent:main:old": { sessionId: "sess-old", updatedAt: Date.now() },
-          "agent:main:keep": { sessionId: "sess-keep", updatedAt: Date.now() },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
+      {
+        "agent:main:old": { sessionId: "sess-old", updatedAt: Date.now() },
+        "agent:main:keep": { sessionId: "sess-keep", updatedAt: Date.now() },
+      },
+      { skipMaintenance: true },
     );
 
     await Promise.all([
@@ -816,27 +804,19 @@ describe("sessions", () => {
     expect(store["agent:main:new"]?.sessionId).toBe("sess-new");
   });
 
-  it("loadSessionStore auto-migrates legacy provider keys to channel keys", async () => {
+  it("loadSessionStore normalizes legacy provider keys to channel keys", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await createCaseDir("loadSessionStore");
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [mainSessionKey]: {
-            sessionId: "sess-legacy",
-            updatedAt: 123,
-            provider: "slack",
-            lastProvider: "telegram",
-            lastTo: "user:U123",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    replaceSqliteSessionStore(storePath, {
+      [mainSessionKey]: {
+        sessionId: "sess-legacy",
+        updatedAt: 123,
+        provider: "slack",
+        lastProvider: "telegram",
+        lastTo: "user:U123",
+      } as SessionEntry,
+    });
 
     const store = loadSessionStore(storePath) as unknown as Record<string, Record<string, unknown>>;
     const entry = store[mainSessionKey] ?? {};
@@ -1046,20 +1026,16 @@ describe("sessions", () => {
 
     // Prime the in-process cache with the original entry.
     expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
-    const originalStat = await fs.stat(storePath);
 
-    // Simulate an external writer that updates the store but preserves mtime.
-    const externalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      Record<string, unknown>
-    >;
-    externalStore[mainSessionKey] = {
-      ...externalStore[mainSessionKey],
-      providerOverride: "anthropic",
-      updatedAt: 124,
-    };
-    await fs.writeFile(storePath, JSON.stringify(externalStore), "utf-8");
-    await fs.utimes(storePath, originalStat.atime, originalStat.mtime);
+    // Simulate an external SQLite writer updating the store behind this process's cache.
+    replaceSqliteSessionStoreBehindCache(storePath, {
+      [mainSessionKey]: {
+        sessionId: "sess-1",
+        updatedAt: 124,
+        thinkingLevel: "low",
+        providerOverride: "anthropic",
+      },
+    });
 
     await updateSessionStoreEntry({
       storePath,
@@ -1176,13 +1152,7 @@ describe("sessions", () => {
       ),
     ).rejects.toThrow("boom");
 
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
-    try {
-      const store = loadSessionStore(storePath);
-      expect(readSpy).toHaveBeenCalled();
-      expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
-    } finally {
-      readSpy.mockRestore();
-    }
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
   });
 });

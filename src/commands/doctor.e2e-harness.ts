@@ -227,6 +227,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugins/installs.json",
       hasLegacy: false,
     },
+    stateSchema: {
+      hasLegacy: false,
+      preview: [],
+    },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
       flowRunsPath: "/tmp/state/flows/registry.sqlite",

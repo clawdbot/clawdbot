@@ -33,7 +33,9 @@ export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
   }
 
   // Render mode loses comments; walks leaves for caller-injected sentinel.
-  if (ast.root === null) {return "";}
+  if (ast.root === null) {
+    return "";
+  }
   return renderValue(ast.root, guardPath, []);
 }
 

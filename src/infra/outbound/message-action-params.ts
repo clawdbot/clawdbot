@@ -1,5 +1,6 @@
 // Message-action param normalization hydrates media sources, sandbox paths,
 // base64 buffers, JSON params, and plugin-owned media aliases.
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +19,8 @@ import {
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
+import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -44,6 +47,7 @@ const STRUCTURED_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS = [
   "url",
 ] as const;
 const STRUCTURED_ATTACHMENT_FILE_SOURCE_PARAM_KEYS = new Set(["path", "filePath", "fileUrl"]);
+const SEND_BUFFER_DRY_RUN_MEDIA_URL = "buffer://message-send/attachment";
 
 type StructuredAttachmentSource = {
   attachment: Record<string, unknown>;
@@ -93,6 +97,33 @@ function hasExplicitAttachmentPayload(
     const entry = resolveMediaParamEntry(args, key);
     return Boolean(entry && normalizeOptionalString(entry.value));
   });
+}
+
+function hasExplicitSendMediaSource(
+  args: Record<string, unknown>,
+  extraParamKeys?: readonly string[],
+): boolean {
+  if (
+    buildActionMediaSourceParamKeys(extraParamKeys).some((key) => {
+      const entry = resolveMediaParamEntry(args, key);
+      const value = entry ? normalizeOptionalString(entry.value) : undefined;
+      return Boolean(value && value !== SEND_BUFFER_DRY_RUN_MEDIA_URL);
+    })
+  ) {
+    return true;
+  }
+  const mediaUrls = readStringArrayParam(args, "mediaUrls");
+  if (
+    mediaUrls?.some((value) => {
+      const normalized = normalizeOptionalString(value);
+      return Boolean(normalized && normalized !== SEND_BUFFER_DRY_RUN_MEDIA_URL);
+    })
+  ) {
+    return true;
+  }
+  return collectStructuredAttachmentSources(args).some((source) =>
+    Boolean(normalizeOptionalString(source.value)),
+  );
 }
 
 function collectStructuredAttachmentSources(
@@ -257,6 +288,114 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
+}
+
+function resolveSendBufferMaxBytes(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}): number {
+  return (
+    resolveAttachmentMaxBytes({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    }) ?? MEDIA_MAX_BYTES
+  );
+}
+
+function decodeBoundedBase64Attachment(params: { base64: string; maxBytes: number }): Buffer {
+  const estimatedBytes = estimateBase64DecodedBytes(params.base64);
+  if (estimatedBytes > params.maxBytes) {
+    throw new Error(`Media too large: ${estimatedBytes} bytes (limit: ${params.maxBytes} bytes)`);
+  }
+  const canonicalBase64 = canonicalizeBase64(params.base64);
+  if (!canonicalBase64) {
+    throw new Error("message.send buffer has invalid base64 data");
+  }
+  const buffer = Buffer.from(canonicalBase64, "base64");
+  if (buffer.byteLength > params.maxBytes) {
+    throw new Error(
+      `Media too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
+    );
+  }
+  return buffer;
+}
+
+async function hydrateSendBufferMediaParams(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  dryRun?: boolean;
+  preserveBuffer?: boolean;
+  extraParamKeys?: readonly string[];
+}): Promise<void> {
+  if (hasExplicitSendMediaSource(params.args, params.extraParamKeys)) {
+    delete params.args.buffer;
+    return;
+  }
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  if (!rawBuffer) {
+    return;
+  }
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: readStringParam(params.args, "contentType") ?? undefined,
+  });
+  if (!normalized.base64) {
+    return;
+  }
+  const contentType =
+    readStringParam(params.args, "contentType") ??
+    readStringParam(params.args, "mimeType") ??
+    normalized.contentType;
+  const filename =
+    readStringParam(params.args, "filename") ??
+    inferAttachmentFilename({
+      contentType: contentType ?? undefined,
+    });
+  const maxBytes = resolveSendBufferMaxBytes(params);
+  if (params.dryRun || params.preserveBuffer) {
+    decodeBoundedBase64Attachment({
+      base64: normalized.base64,
+      maxBytes,
+    });
+    params.args.media = SEND_BUFFER_DRY_RUN_MEDIA_URL;
+    params.args.mediaUrl = SEND_BUFFER_DRY_RUN_MEDIA_URL;
+    params.args.mediaUrls = [SEND_BUFFER_DRY_RUN_MEDIA_URL];
+    if (!params.preserveBuffer) {
+      delete params.args.buffer;
+    }
+    if (normalized.contentType && !readStringParam(params.args, "contentType")) {
+      params.args.contentType = normalized.contentType;
+    }
+    if (filename && !readStringParam(params.args, "filename")) {
+      params.args.filename = filename;
+    }
+    return;
+  }
+  const staged = await resolveOutboundAttachmentFromBuffer(
+    decodeBoundedBase64Attachment({
+      base64: normalized.base64,
+      maxBytes,
+    }),
+    maxBytes,
+    {
+      contentType: contentType ?? undefined,
+      filename,
+    },
+  );
+  params.args.media = staged.path;
+  params.args.mediaUrl = staged.path;
+  params.args.mediaUrls = [staged.path];
+  delete params.args.buffer;
+  if (staged.contentType && !readStringParam(params.args, "contentType")) {
+    params.args.contentType = staged.contentType;
+  }
+  if (filename && !readStringParam(params.args, "filename")) {
+    params.args.filename = filename;
+  }
 }
 
 /** Media access policy used when hydrating attachment action parameters. */
@@ -534,10 +673,23 @@ export async function hydrateAttachmentParamsForAction(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  preserveSendBuffer?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  if (params.action === "send") {
+    await hydrateSendBufferMediaParams({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      args: params.args,
+      dryRun: params.dryRun,
+      preserveBuffer: params.preserveSendBuffer,
+      extraParamKeys: params.extraParamKeys,
+    });
+    return;
+  }
   // Reply gets the same hydration as sendAttachment so threaded sends with
   // an attachment go through the resolver's localRoots/sandbox/size checks
   // instead of forwarding raw paths to the channel runtime. Reply has its

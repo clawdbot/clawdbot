@@ -12,6 +12,7 @@ export {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  loadSessionStore,
   onSessionTranscriptUpdate,
   parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,

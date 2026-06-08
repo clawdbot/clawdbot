@@ -35,14 +35,16 @@ export function normalizeOptionalAgentId(raw: unknown) {
 /** Infers a compact cron job name from payload text first, then schedule shape. */
 export function inferCronJobName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
-  payload?: { kind?: unknown; text?: unknown; message?: unknown };
+  payload?: { kind?: unknown; text?: unknown; message?: unknown; argv?: unknown };
 }) {
   const text =
     job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
       ? job.payload.text
       : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
         ? job.payload.message
-        : "";
+        : job?.payload?.kind === "command" && Array.isArray(job.payload.argv)
+          ? job.payload.argv.join(" ")
+          : "";
   const firstLine =
     text
       .split("\n")
@@ -72,5 +74,7 @@ export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
     return typeof payload.text === "string" ? payload.text.trim() : "";
   }
-  return typeof payload.message === "string" ? payload.message.trim() : "";
+  return payload.kind === "agentTurn" && typeof payload.message === "string"
+    ? payload.message.trim()
+    : "";
 }

@@ -334,9 +334,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(extraCompose).toContain(`"${homeVolumeDir}:/home/node"`);
     expect(extraCompose).toContain(`"${configDir}:/home/node/.openclaw"`);
     expect(extraCompose).toContain(`"${workspaceDir}:/home/node/.openclaw/workspace"`);
-    expect(extraCompose).toContain(
-      `"${authProfileSecretDir}:/home/node/.config/openclaw"`,
-    );
+    expect(extraCompose).toContain(`"${authProfileSecretDir}:/home/node/.config/openclaw"`);
     expect(extraCompose).toContain(`"${extraMountSource}:/mnt/extra data:ro"`);
   });
 

@@ -210,7 +210,7 @@
       }
     },
     "discovery": {
-      "openai": "static"
+      "openai": "runtime"
     },
     "suppressions": [
       {

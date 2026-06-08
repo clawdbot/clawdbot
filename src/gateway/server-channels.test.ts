@@ -300,6 +300,40 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBeNull();
   });
 
+  it("lets stop hooks update status after aborting the running task", async () => {
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        running: true,
+        connected: true,
+        lastError: "startup warning",
+      });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const stopAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: false,
+        lastError: null,
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await flushMicrotasks();
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.connected).toBe(false);
+    expect(account?.lastError).toBeNull();
+  });
+
   it("does not enumerate configured accounts when stopping a never-started channel", async () => {
     const listAccountIds = vi.fn(() => [DEFAULT_ACCOUNT_ID]);
     const resolveAccount = vi.fn(() => ({ enabled: true, configured: true }));
@@ -431,6 +465,50 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("keeps recovery timeout diagnostics when a stale task reports connected after abort", async () => {
+    let emitLateStatus: (() => void) | undefined;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: true,
+        lastError: null,
+      });
+      await new Promise<void>(() => {
+        ctx.abortSignal.addEventListener(
+          "abort",
+          () => {
+            emitLateStatus = () =>
+              ctx.setStatus({
+                accountId: DEFAULT_ACCOUNT_ID,
+                connected: true,
+                lastError: null,
+              });
+          },
+          { once: true },
+        );
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    emitLateStatus?.();
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.connected).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.reconnectAttempts).toBe(0);
+    expect(account?.lastError).toContain("channel stop timed out");
   });
 
   it("restarts immediately when recovery stop timeout settles with an error", async () => {

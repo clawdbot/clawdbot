@@ -3,6 +3,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../config/sessions/test-helpers.js";
 
 export async function seedSessionStore(params: {
   storePath: string;
@@ -11,28 +15,17 @@ export async function seedSessionStore(params: {
   updatedAt?: number;
 }) {
   await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await fs.writeFile(
-    params.storePath,
-    JSON.stringify(
-      {
-        [params.sessionKey]: {
-          sessionId: "session-1",
-          updatedAt: params.updatedAt ?? 1_000,
-          compactionCount: params.compactionCount,
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await writeSessionStoreForTestAsync(params.storePath, {
+    [params.sessionKey]: {
+      sessionId: "session-1",
+      updatedAt: params.updatedAt ?? 1_000,
+      compactionCount: params.compactionCount,
+    },
+  });
 }
 
 export async function readCompactionCount(storePath: string, sessionKey: string): Promise<number> {
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { compactionCount?: number }
-  >;
+  const store = readSessionStoreForTest<{ compactionCount?: number }>(storePath);
   return store[sessionKey]?.compactionCount ?? 0;
 }
 

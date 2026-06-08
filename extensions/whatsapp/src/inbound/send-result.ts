@@ -9,7 +9,14 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
+export type WhatsAppSendKind =
+  | "contact"
+  | "location"
+  | "media"
+  | "poll"
+  | "reaction"
+  | "sticker"
+  | "text";
 
 type WhatsAppSendKey = Omit<
   Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,

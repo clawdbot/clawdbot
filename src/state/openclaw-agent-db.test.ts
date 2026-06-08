@@ -8,6 +8,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -115,6 +116,65 @@ describe("openclaw agent database", () => {
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
   });
 
+  it("closes one cached agent database handle", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env,
+    });
+
+    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(true);
+    expect(database.db.isOpen).toBe(false);
+    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(false);
+
+    const reopened = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env,
+    });
+    expect(reopened.db.isOpen).toBe(true);
+    expect(reopened).not.toBe(database);
+  });
+
+  it("rejects the legacy agent registry primary key with a doctor repair hint", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(stateDatabasePath);
+    legacyDb.exec(`
+      CREATE TABLE agent_databases (
+        agent_id TEXT NOT NULL PRIMARY KEY,
+        path TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        size_bytes INTEGER
+      );
+      INSERT INTO agent_databases (
+        agent_id,
+        path,
+        schema_version,
+        last_seen_at,
+        size_bytes
+      ) VALUES (
+        'worker-1',
+        '/legacy/worker-1/openclaw-agent.sqlite',
+        1,
+        10,
+        20
+      );
+    `);
+    legacyDb.close();
+
+    expect(() =>
+      openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env,
+      }),
+    ).toThrow(/run openclaw doctor --fix/);
+  });
+
   it("rejects sharing one explicit database path across agent ids", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -174,11 +234,13 @@ describe("openclaw agent database", () => {
 
   it("does not chmod shared parent directories for explicit database paths", () => {
     const parentDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: parentDir };
     fs.chmodSync(parentDir, 0o755);
     const databasePath = path.join(parentDir, "worker-1.sqlite");
 
     openOpenClawAgentDatabase({
       agentId: "worker-1",
+      env,
       path: databasePath,
     });
 

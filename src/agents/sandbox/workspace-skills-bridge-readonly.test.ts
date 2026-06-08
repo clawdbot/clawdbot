@@ -45,10 +45,16 @@ describe("workspace skills bridge mount policy", () => {
   it("resolves workspace skill roots as read-only", async () => {
     await withTempDir("openclaw-skills-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
+      const skillsWorkspaceDir = path.join(stateDir, "sandbox-state");
       await fs.mkdir(path.join(workspaceDir, "skills", "demo"), { recursive: true });
       await fs.mkdir(path.join(workspaceDir, ".agents", "skills", "demo"), { recursive: true });
+      await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
 
-      const sandbox = createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        skillsWorkspaceDir,
+      });
       const mounts = buildSandboxFsMounts(sandbox);
       const resolve = (filePath: string) =>
         resolveSandboxFsPathWithMounts({
@@ -62,7 +68,14 @@ describe("workspace skills bridge mount policy", () => {
       expect(resolve("normal.txt").writable).toBe(true);
       expect(resolve("skills/demo/SKILL.md").writable).toBe(false);
       expect(resolve(".agents/skills/demo/SKILL.md").writable).toBe(false);
+      expect(resolve(".openclaw/sandbox-skills/skills/demo/SKILL.md").writable).toBe(false);
+      expect(resolve(".openclaw/sandbox-skills/skills/demo/SKILL.md").hostPath).toBe(
+        path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md"),
+      );
       expect(resolve("/workspace/skills/demo/SKILL.md").writable).toBe(false);
+      expect(resolve("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md").writable).toBe(
+        false,
+      );
     });
   });
 
@@ -99,16 +112,20 @@ describe("workspace skills bridge mount policy", () => {
     async () => {
       await withTempDir("openclaw-skills-remote-only-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
+        const skillsWorkspaceDir = path.join(stateDir, "sandbox-state");
         const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(path.join(remoteWorkspaceDir, "skills", "demo"), { recursive: true });
+        await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
         const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+        const canonicalSkillsWorkspaceDir = await fs.realpath(skillsWorkspaceDir);
         const canonicalRemoteWorkspaceDir = await fs.realpath(remoteWorkspaceDir);
 
         const bridge = createRemoteShellSandboxFsBridge({
           sandbox: createSandbox({
             workspaceDir: canonicalWorkspaceDir,
             agentWorkspaceDir: canonicalWorkspaceDir,
+            skillsWorkspaceDir: canonicalSkillsWorkspaceDir,
           }),
           runtime: {
             remoteWorkspaceDir: canonicalRemoteWorkspaceDir,
@@ -126,6 +143,26 @@ describe("workspace skills bridge mount policy", () => {
         ).rejects.toThrow(/read-only/);
         await expect(
           fs.stat(path.join(canonicalRemoteWorkspaceDir, "skills", "demo", "SKILL.md")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+
+        await expect(
+          bridge.writeFile({
+            filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+            cwd: canonicalRemoteWorkspaceDir,
+            data: "# Demo\n",
+          }),
+        ).rejects.toThrow(/read-only/);
+        await expect(
+          fs.stat(
+            path.join(
+              canonicalRemoteWorkspaceDir,
+              ".openclaw",
+              "sandbox-skills",
+              "skills",
+              "demo",
+              "SKILL.md",
+            ),
+          ),
         ).rejects.toMatchObject({ code: "ENOENT" });
       });
     },

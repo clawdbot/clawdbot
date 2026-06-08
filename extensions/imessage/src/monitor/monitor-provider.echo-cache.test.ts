@@ -147,13 +147,11 @@ describe("iMessage sent-message echo cache", () => {
     expect(hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(false);
   });
 
-  it("retains entries written hours earlier so catchup replay sees own outbound rows", () => {
-    // Catchup's default maxAgeMinutes is 120 (2h). The persisted-echo TTL must
-    // be >= that window, otherwise the agent's own outbound rows from before
-    // a gateway gap fall out of dedupe before catchup re-feeds the inbound
-    // rows around them — and the agent's replies to itself land back in the
-    // inbound pipeline as if they were external sends. Regression guard for
-    // the echo-cache retention extension that ships with #78649.
+  it("retains entries written hours earlier so a reconnect re-emit still sees own outbound rows", () => {
+    // The persisted-echo TTL must outlive the inbound replay guard window so
+    // an own-outbound row that imsg re-emits after a bridge reconnect is still
+    // recognized as the agent's echo, not re-ingested as an external send.
+    // Regression guard for the echo-cache retention window.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
     rememberPersistedIMessageEcho({

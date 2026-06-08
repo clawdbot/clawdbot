@@ -21,11 +21,15 @@ export type JsoncOcPathMatch =
     };
 
 export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatch | null {
-  if (ast.root === null) {return null;}
+  if (ast.root === null) {
+    return null;
+  }
 
   const segments: string[] = [];
   const collect = (slot: string | undefined): void => {
-    if (slot === undefined) {return;}
+    if (slot === undefined) {
+      return;
+    }
     for (const s of splitRespectingBrackets(slot, ".")) {
       segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
     }
@@ -34,7 +38,9 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
   collect(path.item);
   collect(path.field);
 
-  if (segments.length === 0) {return { kind: "root", node: ast };}
+  if (segments.length === 0) {
+    return { kind: "root", node: ast };
+  }
 
   return resolveJsoncValueOcPath(ast.root, segments);
 }

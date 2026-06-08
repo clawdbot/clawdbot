@@ -8,6 +8,7 @@ import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
@@ -365,36 +366,20 @@ export function setupGatewaySessionsTestHarness() {
       await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
       await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
     }
-    await fs.writeFile(
-      mainStorePath,
-      JSON.stringify(
-        {
-          global: sessionStoreEntry(
-            "sess-main-global",
-            withTranscripts ? { sessionFile: mainTranscript } : undefined,
-          ),
-        },
-        null,
-        2,
+    await writeSessionStoreForTestAsync(mainStorePath, {
+      global: sessionStoreEntry(
+        "sess-main-global",
+        withTranscripts ? { sessionFile: mainTranscript } : undefined,
       ),
-      "utf-8",
-    );
-    await fs.writeFile(
-      workStorePath,
-      JSON.stringify(
-        {
-          global: sessionStoreEntry(
-            "sess-work-global",
-            withTranscripts
-              ? { authProfileOverride: "github-copilot:work", sessionFile: workTranscript }
-              : undefined,
-          ),
-        },
-        null,
-        2,
+    });
+    await writeSessionStoreForTestAsync(workStorePath, {
+      global: sessionStoreEntry(
+        "sess-work-global",
+        withTranscripts
+          ? { authProfileOverride: "github-copilot:work", sessionFile: workTranscript }
+          : undefined,
       ),
-      "utf-8",
-    );
+    });
 
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {

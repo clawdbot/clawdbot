@@ -54,6 +54,7 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
+export { loadSessionStore } from "../../../../src/config/sessions/store-load.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {

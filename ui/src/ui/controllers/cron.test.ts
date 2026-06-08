@@ -600,6 +600,47 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
   });
 
+  it("preserves command payloads when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-command" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-command" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-command",
+      name: "Command",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 600_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "command" as const, argv: ["sh", "-lc", "echo ok"] },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "Command renamed";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    const patch = requestPatch(updateCall);
+    expect(patch.name).toBe("Command renamed");
+    expect(patch).not.toHaveProperty("payload");
+  });
+
   it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {

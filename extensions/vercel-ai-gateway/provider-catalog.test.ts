@@ -1,4 +1,5 @@
 // Vercel Ai Gateway tests cover provider catalog plugin behavior.
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -7,6 +8,9 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
+    allowedHostnames: [new URL(baseUrl).hostname],
+  }),
 }));
 
 import {
@@ -50,6 +54,7 @@ async function withLiveDiscovery<T>(run: () => Promise<T>): Promise<T> {
 }
 
 afterEach(() => {
+  clearLiveCatalogCacheForTests();
   fetchWithSsrFGuardMock.mockReset();
 });
 
@@ -80,6 +85,8 @@ describe("vercel ai gateway provider catalog", () => {
 
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
+      clearLiveCatalogCacheForTests();
+      fetchWithSsrFGuardMock.mockReset();
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
         response: {
           ok: true,

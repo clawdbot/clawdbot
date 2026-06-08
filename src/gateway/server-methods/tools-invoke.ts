@@ -36,7 +36,7 @@ function resolveRpcErrorCode(params: {
 
 /** Handles `tools.invoke` with protocol-shaped success and failure payloads. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
-  "tools.invoke": async ({ params, respond, context }) => {
+  "tools.invoke": async ({ params, respond, context, client }) => {
     if (!validateToolsInvokeParams(params)) {
       respond(
         false,
@@ -61,6 +61,7 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
+      senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
     });

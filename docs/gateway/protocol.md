@@ -580,6 +580,9 @@ terminal summary, and sanitized error text.
     `idempotencyKey` are optional.
   - If both `sessionKey` and `agentId` are present, the resolved session agent must match
     `agentId`.
+  - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require
+    owner/admin identity (`operator.admin`) even though the `tools.invoke`
+    method itself is `operator.write`.
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
     `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
     bypassing the gateway tool policy pipeline.

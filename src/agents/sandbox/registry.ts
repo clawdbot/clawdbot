@@ -122,6 +122,10 @@ function parseRegistryEntryJson(row: SandboxRegistryRow): RegistryEntryPayload |
   }
 }
 
+function optionalPayloadString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function rowToContainerEntry(row: SandboxRegistryRow): SandboxRegistryEntry | null {
   if (row.registry_kind !== "container") {
     return null;
@@ -133,10 +137,10 @@ function rowToContainerEntry(row: SandboxRegistryRow): SandboxRegistryEntry | nu
   return normalizeSandboxRegistryEntry({
     ...payload,
     containerName: row.container_name,
-    sessionKey: row.session_key ?? String(payload.sessionKey ?? ""),
+    sessionKey: row.session_key ?? optionalPayloadString(payload.sessionKey),
     createdAtMs: row.created_at_ms ?? Number(payload.createdAtMs ?? 0),
     lastUsedAtMs: row.last_used_at_ms ?? Number(payload.lastUsedAtMs ?? 0),
-    image: row.image ?? String(payload.image ?? ""),
+    image: row.image ?? optionalPayloadString(payload.image),
     ...(row.backend_id != null ? { backendId: row.backend_id } : {}),
     ...(row.runtime_label != null ? { runtimeLabel: row.runtime_label } : {}),
     ...(row.config_label_kind != null ? { configLabelKind: row.config_label_kind } : {}),
@@ -155,10 +159,10 @@ function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry
   return {
     ...payload,
     containerName: row.container_name,
-    sessionKey: row.session_key ?? String(payload.sessionKey ?? ""),
+    sessionKey: row.session_key ?? optionalPayloadString(payload.sessionKey),
     createdAtMs: row.created_at_ms ?? Number(payload.createdAtMs ?? 0),
     lastUsedAtMs: row.last_used_at_ms ?? Number(payload.lastUsedAtMs ?? 0),
-    image: row.image ?? String(payload.image ?? ""),
+    image: row.image ?? optionalPayloadString(payload.image),
     cdpPort: row.cdp_port ?? Number(payload.cdpPort ?? 0),
     ...(row.no_vnc_port != null ? { noVncPort: row.no_vnc_port } : {}),
     ...(row.config_hash != null ? { configHash: row.config_hash } : {}),

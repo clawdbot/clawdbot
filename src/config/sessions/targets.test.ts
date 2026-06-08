@@ -6,6 +6,8 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
+import { resolveSqliteSessionStoreDatabasePath } from "./store-sqlite.js";
+import { saveSessionStore } from "./store.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargets,
@@ -302,6 +304,47 @@ describe("resolveAllAgentSessionStoreTargets", () => {
   });
 
   for (const resolver of discoveryResolvers) {
+    it(`discovers SQLite-backed configured agent stores (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-state");
+        const cfg = createCustomRootCfg(customRoot);
+        const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+        await saveSessionStore(
+          storePath,
+          { "agent:ops:main": { sessionId: "ops-session", updatedAt: 1 } },
+          { skipMaintenance: true },
+        );
+
+        const targets = await resolver.resolve(cfg, { ...process.env, HOME: home });
+
+        expect(targets).toContainEqual({ agentId: "ops", storePath: path.resolve(storePath) });
+      });
+    });
+
+    it(`rejects SQLite-backed stores with symlinked sessions directories (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        const customRoot = path.join(home, "custom-state");
+        const cfg = createCustomRootCfg(customRoot);
+        const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+        await saveSessionStore(
+          storePath,
+          { "agent:ops:main": { sessionId: "ops-session", updatedAt: 1 } },
+          { skipMaintenance: true },
+        );
+        await fs.rm(path.dirname(storePath), { recursive: true, force: true });
+        const externalSessionsDir = path.join(home, "external-sessions");
+        await fs.mkdir(externalSessionsDir, { recursive: true });
+        await fs.symlink(externalSessionsDir, path.dirname(storePath), "dir");
+
+        const targets = await resolver.resolve(cfg, { ...process.env, HOME: home });
+
+        expect(targets).not.toContainEqual({
+          agentId: "ops",
+          storePath: path.resolve(storePath),
+        });
+      });
+    });
+
     it(`skips unreadable or invalid discovery roots when other roots are still readable (${resolver.label})`, async () => {
       await withTempHome(async (home) => {
         const customRoot = path.join(home, "custom-state");
@@ -344,6 +387,25 @@ describe("resolveAllAgentSessionStoreTargets", () => {
             (target) => target.agentId === "ops" && target.storePath.includes(symlinkStoreSuffix),
           ),
         ).toBe(false);
+      });
+    });
+
+    it(`skips symlinked SQLite-backed discovered stores under templated agents roots (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        if (process.platform === "win32") {
+          return;
+        }
+        const customRoot = path.join(home, "custom-state");
+        const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+        const sqlitePath = resolveSqliteSessionStoreDatabasePath(storePath);
+        const leakedSqlite = path.join(home, "outside.sqlite");
+        await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+        await fs.writeFile(leakedSqlite, "outside", "utf8");
+        await fs.symlink(leakedSqlite, sqlitePath);
+
+        const targets = await resolver.resolve(createCustomRootCfg(customRoot), process.env);
+
+        expect(targets).not.toContainEqual({ agentId: "ops", storePath: path.resolve(storePath) });
       });
     });
   }

@@ -29,7 +29,10 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import {
+  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
+  GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS,
+} from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -113,6 +116,10 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
+  const ownerOnlyGatewayDeny =
+    surface === "http" && params.senderIsOwner !== true
+      ? [...GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS]
+      : [];
   // HTTP callers start with a stricter denylist than loopback callers because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
@@ -129,6 +136,7 @@ export function resolveGatewayScopedTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
@@ -210,6 +218,7 @@ export function resolveGatewayScopedTools(params: {
 
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
+    ...ownerOnlyGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
   ]);

@@ -51,18 +51,40 @@ function hasHealthSummaryPayload(response: unknown): boolean {
   );
 }
 
-function hasChatHistoryMessages(
-  response: unknown,
-): response is { payload: { messages: unknown[] } } {
-  if (response === null || typeof response !== "object") {
+function hasStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function connectHelloScopes(response: unknown): string[] | null {
+  if (!isRecord(response) || !isRecord(response.payload)) {
+    return null;
+  }
+  const { payload } = response;
+  if (
+    payload.type !== "hello-ok" ||
+    typeof payload.protocol !== "number" ||
+    !isRecord(payload.features) ||
+    !hasStringArray(payload.features.methods) ||
+    !payload.features.methods.includes("health") ||
+    !isRecord(payload.auth) ||
+    payload.auth.role !== "operator" ||
+    !hasStringArray(payload.auth.scopes)
+  ) {
+    return null;
+  }
+  return payload.auth.scopes;
+}
+
+function hasConnectHelloPayload(response: unknown): boolean {
+  return connectHelloScopes(response) !== null;
+}
+
+function hasUnpairedOperatorScopes(response: unknown): boolean {
+  const scopes = connectHelloScopes(response);
+  if (!scopes) {
     return false;
   }
-  const payload = (response as { payload?: unknown }).payload;
-  return (
-    payload !== null &&
-    typeof payload === "object" &&
-    Array.isArray((payload as { messages?: unknown }).messages)
-  );
+  return scopes.length > 0;
 }
 
 export async function runGatewaySmoke(
@@ -109,6 +131,14 @@ export async function runGatewaySmoke(
       stderr(`connect failed: ${String(connectRes.error)}`);
       return 2;
     }
+    if (!hasConnectHelloPayload(connectRes)) {
+      stderr("connect failed: missing hello-ok payload");
+      return 2;
+    }
+    if (hasUnpairedOperatorScopes(connectRes)) {
+      stderr("connect failed: unpaired iOS smoke unexpectedly received operator scopes");
+      return 2;
+    }
 
     const healthRes = await request("health");
     if (!healthRes.ok) {
@@ -120,17 +150,7 @@ export async function runGatewaySmoke(
       return 3;
     }
 
-    const historyRes = await request("chat.history", { sessionKey: "main" }, 15000);
-    if (!historyRes.ok) {
-      stderr(`chat.history failed: ${String(historyRes.error)}`);
-      return 4;
-    }
-    if (!hasChatHistoryMessages(historyRes)) {
-      stderr("chat.history failed: missing messages array");
-      return 4;
-    }
-
-    stdout("ok: connected + health + chat.history");
+    stdout("ok: connected + health");
     return 0;
   } finally {
     close();

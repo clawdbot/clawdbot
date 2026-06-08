@@ -27,6 +27,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
+  hydrateAttachmentParamsForAction,
+  resolveAttachmentMediaPolicy,
+} from "../../infra/outbound/message-action-params.js";
+import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
@@ -507,25 +511,39 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
 
       try {
+        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+        const agentId =
+          normalizeOptionalString(request.agentId) ??
+          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+        const accountId = normalizeOptionalString(request.accountId) ?? undefined;
+        if (request.action === "send") {
+          await hydrateAttachmentParamsForAction({
+            cfg,
+            channel,
+            accountId,
+            args: request.params,
+            action: "send",
+            mediaPolicy: resolveAttachmentMediaPolicy({
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+            }),
+          });
+        }
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
-          accountId: normalizeOptionalString(request.accountId) ?? undefined,
+          accountId,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true
             : false,
-          sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
+          sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
-          agentId: normalizeOptionalString(request.agentId) ?? undefined,
-          mediaLocalRoots: getAgentScopedMediaLocalRoots(
-            cfg,
-            normalizeOptionalString(request.agentId) ?? undefined,
-          ),
+          agentId,
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           toolContext: request.toolContext,
           dryRun: false,
           gatewayClientScopes,
@@ -539,10 +557,6 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
-        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-        const agentId =
-          normalizeOptionalString(request.agentId) ??
-          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
@@ -583,6 +597,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       message?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      buffer?: string;
+      filename?: string;
+      contentType?: string;
       asVoice?: boolean;
       gifPlayback?: boolean;
       channel?: string;
@@ -615,7 +632,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           .map((entry) => normalizeOptionalString(entry))
           .filter((entry): entry is string => Boolean(entry))
       : undefined;
-    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
+    const buffer = readStringValue(request.buffer);
+    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
       respond(
         false,
         undefined,
@@ -663,19 +681,6 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const outboundPayloads = [
-          {
-            text: message,
-            mediaUrl,
-            mediaUrls,
-            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
-          },
-        ];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-        const mirrorText = mirrorProjection.text;
-        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
         // explicit session key instead of raw-lowercasing it (openclaw#75670).
         // Non-enrolled channels still canonicalize to lowercase via the registry.
@@ -687,6 +692,42 @@ export const sendHandlers: GatewayRequestHandlers = {
           : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
         const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+        const sendArgs: Record<string, unknown> = {
+          mediaUrl,
+          mediaUrls,
+          buffer,
+          filename: normalizeOptionalString(request.filename) ?? undefined,
+          contentType: normalizeOptionalString(request.contentType) ?? undefined,
+        };
+        await hydrateAttachmentParamsForAction({
+          cfg,
+          channel,
+          accountId,
+          args: sendArgs,
+          action: "send",
+          mediaPolicy: resolveAttachmentMediaPolicy({
+            mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, effectiveAgentId),
+          }),
+        });
+        const hydratedMediaUrl = normalizeOptionalString(sendArgs.mediaUrl);
+        const hydratedMediaUrls = Array.isArray(sendArgs.mediaUrls)
+          ? sendArgs.mediaUrls
+              .map((entry) => normalizeOptionalString(entry))
+              .filter((entry): entry is string => Boolean(entry))
+          : undefined;
+        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const outboundPayloads = [
+          {
+            text: message,
+            mediaUrl: hydratedMediaUrl,
+            mediaUrls: hydratedMediaUrls,
+            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+          },
+        ];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const derivedRoute = await resolveOutboundSessionRoute({
           cfg,
           channel,

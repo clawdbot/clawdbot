@@ -82,6 +82,8 @@ async function listKnownSessionKeys(storePath: string): Promise<string[]> {
   const candidates = [storePath, path.join(storePath, "sessions.json")];
   for (const candidate of candidates) {
     try {
+      // This doctor migration can run before session metadata import; legacy
+      // JSON keys are needed to map old sanitized learning filenames.
       const parsed = JSON.parse(await fs.readFile(candidate, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         continue;

@@ -655,20 +655,63 @@ export async function runSshSandboxCommand(
   });
 }
 
+export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'root="${2:-$1}"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+  'target="${target%/}"',
+  'root="${root%/}"',
+  '[ -n "$target" ] || target="/"',
+  '[ -n "$root" ] || root="/"',
+  'case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+  'old_ifs="$IFS"',
+  'IFS="/"',
+  "set -- ${target#/} ${root#/}",
+  'IFS="$old_ifs"',
+  "for part do",
+  '  [ -n "$part" ] || continue',
+  '  case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "done",
+  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+  'mkdir -p -- "$root"',
+  'canonical_root="$(cd "$root" && pwd -P)"',
+  'relative="${target#"$root"}"',
+  'relative="${relative#/}"',
+  'current="$canonical_root"',
+  'IFS="/"',
+  "set -- $relative",
+  'IFS="$old_ifs"',
+  "for part do",
+  '  [ -n "$part" ] || continue',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ -e "$next" ]; then',
+  '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+  "  else",
+  '    mkdir -- "$next"',
+  "  fi",
+  '  current="$next"',
+  "done",
+].join("\n");
+
 /** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
   session: SshSandboxSession;
   localDir: string;
   remoteDir: string;
+  remoteRootDir?: string;
   signal?: AbortSignal;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
   const remoteCommand = buildRemoteCommand([
     "/bin/sh",
     "-c",
-    'mkdir -p -- "$1" && tar -xf - -C "$1"',
+    `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\ntar -xf - -C "$1"`,
     "openclaw-sandbox-upload",
     params.remoteDir,
+    params.remoteRootDir ?? params.remoteDir,
   ]);
   const sshArgv = buildSshSandboxArgv({
     session: params.session,

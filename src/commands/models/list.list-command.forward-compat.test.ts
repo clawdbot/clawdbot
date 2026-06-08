@@ -94,6 +94,7 @@ const mocks = vi.hoisted(() => {
     loadStaticManifestCatalogRowsForList: vi.fn(),
     loadSupplementalManifestCatalogRowsForList: vi.fn(),
     loadProviderIndexCatalogRowsForList: vi.fn(),
+    hasProviderRuntimeCatalogForFilter: vi.fn(),
     hasProviderStaticCatalogForFilter: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
@@ -236,6 +237,7 @@ function installModelsListCommandForwardCompatMocks() {
   }));
 
   vi.doMock("./list.provider-catalog.js", () => ({
+    hasProviderRuntimeCatalogForFilter: mocks.hasProviderRuntimeCatalogForFilter,
     hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
     loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
   }));

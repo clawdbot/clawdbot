@@ -118,14 +118,19 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
+  opts?: { apiKey?: string },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (opts?.apiKey) {
+      headers.Authorization = `Bearer ${opts.apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },

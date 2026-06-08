@@ -44,7 +44,7 @@ dump_debug_logs() {
     "$OPENCLAW_STATE_DIR/openclaw.json"; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,260p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }

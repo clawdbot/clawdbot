@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const DEFAULT_SOURCE_FILE_READ_CONCURRENCY = 32;
+export const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const scanCache = new Map();
 
 function normalizeRepoPath(repoRoot, filePath) {
@@ -43,6 +44,35 @@ function normalizeConcurrency(value) {
   return value;
 }
 
+function normalizeMaxFileBytes(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    return DEFAULT_SOURCE_FILE_MAX_BYTES;
+  }
+  return value;
+}
+
+function assertSourceFileWithinLimit(relativeFile, bytes, maxFileBytes) {
+  if (bytes <= maxFileBytes) {
+    return;
+  }
+  throw new Error(
+    `source scan file exceeds ${maxFileBytes} byte limit: ${relativeFile} (${bytes} bytes)`,
+  );
+}
+
+async function readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes) {
+  const relativeFile = normalizeRepoPath(params.repoRoot, filePath);
+  const stat = await statFile(filePath);
+  assertSourceFileWithinLimit(relativeFile, stat.size, maxFileBytes);
+  const content = await readFile(filePath, "utf8");
+  assertSourceFileWithinLimit(relativeFile, Buffer.byteLength(content, "utf8"), maxFileBytes);
+  return {
+    filePath,
+    relativeFile,
+    content,
+  };
+}
+
 /**
  * Maps items with bounded worker concurrency while preserving input order.
  */
@@ -78,6 +108,7 @@ export async function collectSourceFileContents(params) {
     ignoredDirNames: [...params.ignoredDirNames].toSorted((left, right) =>
       left.localeCompare(right),
     ),
+    maxFileBytes: normalizeMaxFileBytes(params.maxFileBytes),
   });
   if (useCache) {
     const cached = scanCache.get(cacheKey);
@@ -100,11 +131,11 @@ export async function collectSourceFileContents(params) {
       );
 
     const readFile = params.readFile ?? fs.readFile;
-    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) => ({
-      filePath,
-      relativeFile: normalizeRepoPath(params.repoRoot, filePath),
-      content: await readFile(filePath, "utf8"),
-    }));
+    const statFile = params.statFile ?? fs.stat;
+    const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
+    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) =>
+      readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes),
+    );
   })();
 
   if (useCache) {

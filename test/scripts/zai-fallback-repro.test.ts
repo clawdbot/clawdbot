@@ -5,8 +5,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendBoundedReproOutput,
+  outputContainsStandaloneToolOk,
   runZaiFallbackRepro,
   resolveZaiFallbackPnpmCommand,
+  sessionTranscriptHasToolResult,
 } from "../../scripts/zai-fallback-repro.ts";
 
 describe("zai fallback repro command resolution", () => {
@@ -36,6 +38,32 @@ describe("zai fallback repro command resolution", () => {
 
     expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("scans session transcripts with a byte cap", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-session-test-"));
+    try {
+      const sessionFile = path.join(root, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${"x".repeat(70_000)}\n{"event":"message","toolResult":true}\n`,
+        "utf8",
+      );
+
+      await expect(sessionTranscriptHasToolResult(sessionFile)).resolves.toBe(true);
+      await expect(sessionTranscriptHasToolResult(sessionFile, 1024)).resolves.toBe(false);
+      await expect(sessionTranscriptHasToolResult(path.join(root, "missing.jsonl"))).resolves.toBe(
+        false,
+      );
+    } finally {
+      await fs.rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("requires tool-ok as a standalone output line", () => {
+    expect(outputContainsStandaloneToolOk("before\ntool-ok\nafter\n")).toBe(true);
+    expect(outputContainsStandaloneToolOk("before tool-ok after\n")).toBe(false);
+    expect(outputContainsStandaloneToolOk("tool-okay\n")).toBe(false);
   });
 
   it("cleans temporary repro state after fallback proof", async () => {
@@ -70,14 +98,74 @@ describe("zai fallback repro command resolution", () => {
           await fs.mkdir(path.dirname(sessionFile), { recursive: true });
           await fs.writeFile(sessionFile, '{"toolResult":true}\n', "utf8");
         }
-        return { code: 0, signal: null, stderr: "", stdout: "" };
+        return {
+          code: 0,
+          signal: null,
+          stderr: "",
+          stdout: label === "run2" ? "tool-ok\n" : "",
+        };
       },
-      warn: () => {},
     });
 
     expect(exitCode).toBe(0);
     expect(calls).toEqual(["run1", "run2"]);
     expect(tempRoots).toHaveLength(1);
     await expect(fs.stat(tempRoots[0])).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails when run 1 does not leave tool result evidence", async () => {
+    const calls: string[] = [];
+    const errors: string[] = [];
+
+    const exitCode = await runZaiFallbackRepro({
+      env: {
+        ANTHROPIC_API_KEY: "anthropic-test-key",
+        OPENCLAW_ZAI_FALLBACK_SESSION_ID: "session-test",
+        PATH: process.env.PATH,
+        ZAI_API_KEY: "zai-test-key",
+      },
+      error: (message) => errors.push(message),
+      log: () => {},
+      runCommand: async (label) => {
+        calls.push(label);
+        return { code: 0, signal: null, stderr: "", stdout: "" };
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(calls).toEqual(["run1"]);
+    expect(errors).toContain("FAIL: no toolResult entries detected in session history.");
+  });
+
+  it("fails when fallback exits zero without returning tool-ok", async () => {
+    const errors: string[] = [];
+
+    const exitCode = await runZaiFallbackRepro({
+      env: {
+        ANTHROPIC_API_KEY: "anthropic-test-key",
+        OPENCLAW_ZAI_FALLBACK_SESSION_ID: "session-test",
+        PATH: process.env.PATH,
+        ZAI_API_KEY: "zai-test-key",
+      },
+      error: (message) => errors.push(message),
+      log: () => {},
+      runCommand: async (label, _args, env) => {
+        if (label === "run1") {
+          const sessionFile = path.join(
+            String(env.OPENCLAW_STATE_DIR),
+            "agents",
+            "main",
+            "sessions",
+            "session-test.jsonl",
+          );
+          await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+          await fs.writeFile(sessionFile, '{"toolResult":true}\n', "utf8");
+        }
+        return { code: 0, signal: null, stderr: "", stdout: "not-it\n" };
+      },
+    });
+
+    expect(exitCode).toBe(1);
+    expect(errors).toContain("FAIL: fallback run did not return standalone tool-ok.");
   });
 });

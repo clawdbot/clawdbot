@@ -598,6 +598,29 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("Reply target of current user message");
   });
 
+  it("preserves Telegram inline ReplyToBody tail content", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " TELEGRAM_INLINE_TAIL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      ReplyToId: "34971",
+      ReplyToBody: longBody,
+      SenderName: "obviyus",
+    } as TemplateContext);
+
+    expect(text).toContain("TELEGRAM_INLINE_TAIL");
+    expect(text).toContain("…[omitted]…");
+    expect(text).not.toContain("…[truncated]");
+    expect(text).not.toContain("Reply target of current user message");
+  });
+
   it("keeps Telegram current-message quote even when context already includes the target", () => {
     const text = buildInboundUserContextPrefix({
       Provider: "telegram",
@@ -946,6 +969,91 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain(oversized);
     expect(text).toContain("…[truncated]");
     expect(text).toContain('"body": "');
+  });
+
+  it("preserves tail content in ReplyChain body via head+tail truncation", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " IMPORTANT_TAIL_SENTINEL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyChain: [{ body: longBody, sender: "Alice" }],
+    } as TemplateContext);
+
+    const [reply] = parseReplyChainPayload(text);
+    expect(reply?.["body"]).toContain("IMPORTANT_TAIL_SENTINEL");
+    expect(reply?.["body"]).toContain("…[omitted]…");
+    expect(reply?.["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves tail content in fallback ReplyToBody via head+tail truncation", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " REPLY_TAIL_SENTINEL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToBody: longBody,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["body"]).toContain("REPLY_TAIL_SENTINEL");
+    expect(reply["body"]).toContain("…[omitted]…");
+    expect(reply["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves fallback ReplyToBody tail when the head is emoji-heavy", () => {
+    const head = "😀".repeat(1_200);
+    const tail = " TAIL_AFTER_EMOJI_HEAD";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ReplyToSender: "Quoter",
+      ReplyToBody: longBody,
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["body"]).toContain("TAIL_AFTER_EMOJI_HEAD");
+    expect(reply["body"]).toContain("…[omitted]…");
+    expect(reply["body"]).not.toContain("…[truncated]");
+  });
+
+  it("preserves chat window reply-target body tail content", () => {
+    const head = "BEGIN. ".repeat(300);
+    const tail = " CHAT_WINDOW_TAIL";
+    const longBody = head + tail;
+    expect(longBody.length).toBeGreaterThan(2_000);
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToId: "msg-1",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          type: "chat_window",
+          payload: {
+            relation: "around_reply_target",
+            messages: [
+              {
+                message_id: "msg-1",
+                sender: "Avery",
+                body: longBody,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain("CHAT_WINDOW_TAIL");
+    expect(text).toContain("…[omitted]…");
+    expect(text).not.toContain("…[truncated]");
+    expect(text).not.toContain("Reply target of current user message");
   });
 
   it("caps serialized inbound history to the most recent bounded tail", () => {

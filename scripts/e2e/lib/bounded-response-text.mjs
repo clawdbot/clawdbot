@@ -5,6 +5,12 @@ function bodyTooLargeError(label, byteLimit) {
   });
 }
 
+function cancelReaderSoon(reader) {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => {});
+}
+
 export async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
   const contentLength = response.headers.get("content-length");
   if (contentLength) {
@@ -22,22 +28,35 @@ export async function readBoundedResponseText(response, label, byteLimit, timeou
   const decoder = new TextDecoder();
   let byteCount = 0;
   let text = "";
+  let canceled = false;
   try {
     while (true) {
-      const { done, value } = await (timeoutPromise
-        ? Promise.race([reader.read(), timeoutPromise])
-        : reader.read());
+      const read = reader.read();
+      const readWithTimeout = timeoutPromise
+        ? Promise.race([
+            read,
+            timeoutPromise.catch((error) => {
+              canceled = true;
+              cancelReaderSoon(reader);
+              throw error;
+            }),
+          ])
+        : read;
+      const { done, value } = await readWithTimeout;
       if (done) {
         return text + decoder.decode();
       }
       byteCount += value.byteLength;
       if (byteCount > byteLimit) {
+        canceled = true;
         await reader.cancel().catch(() => {});
         throw bodyTooLargeError(label, byteLimit);
       }
       text += decoder.decode(value, { stream: true });
     }
   } finally {
-    reader.releaseLock();
+    if (!canceled) {
+      reader.releaseLock();
+    }
   }
 }

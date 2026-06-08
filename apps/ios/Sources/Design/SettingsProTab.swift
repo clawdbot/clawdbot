@@ -57,6 +57,7 @@ struct SettingsProTab: View {
     @State var notificationActionText = "Request Access"
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
+    @State var showTalkIssueDetails = false
 
     var body: some View {
         NavigationStack {
@@ -127,6 +128,11 @@ struct SettingsProTab: View {
                     onPrimaryAction: {
                         Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
                     })
+            }
+        }
+        .sheet(isPresented: self.$showTalkIssueDetails) {
+            if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
+                TalkRuntimeIssueDetailsSheet(issue: issue)
             }
         }
         .sheet(isPresented: self.$showQRScanner) {

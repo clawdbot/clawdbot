@@ -362,7 +362,8 @@ function renderFieldLabel(text: string, required = false) {
 
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
-  const isAgentTurn = props.form.payloadKind === "agentTurn";
+  const payloadLocked = props.form.payloadLocked;
+  const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const isCronSchedule = props.form.scheduleKind === "cron";
   const channelOptions = buildChannelOptions(props);
   const selectedJob =
@@ -385,7 +386,8 @@ export function renderCron(props: CronProps) {
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const supportsAnnounce =
-    props.form.sessionTarget !== "main" && props.form.payloadKind === "agentTurn";
+    props.form.sessionTarget !== "main" &&
+    (props.form.payloadKind === "agentTurn" || payloadLocked);
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const formOpen = props.cronFormCollapsed === false || isEditing;
@@ -919,26 +921,35 @@ export function renderCron(props: CronProps) {
                       </select>
                       <div class="cron-help">${t("cron.form.wakeModeHelp")}</div>
                     </label>
-                    <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
-                      ${renderFieldLabel(t("cron.form.payloadKind"))}
-                      <select
-                        id="cron-payload-kind"
-                        .value=${props.form.payloadKind}
-                        @change=${(e: Event) =>
-                          props.onFormChange({
-                            payloadKind: (e.target as HTMLSelectElement)
-                              .value as CronFormState["payloadKind"],
-                          })}
-                      >
-                        <option value="systemEvent">${t("cron.form.systemEvent")}</option>
-                        <option value="agentTurn">${t("cron.form.agentTurn")}</option>
-                      </select>
-                      <div class="cron-help">
-                        ${props.form.payloadKind === "systemEvent"
-                          ? t("cron.form.systemEventHelp")
-                          : t("cron.form.agentTurnHelp")}
-                      </div>
-                    </label>
+                    ${payloadLocked
+                      ? html`
+                          <label class="field cron-span-2">
+                            ${renderFieldLabel(t("cron.form.payloadKind"))}
+                            <input id="cron-payload-kind" .value=${"Command"} readonly />
+                          </label>
+                        `
+                      : html`
+                          <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
+                            ${renderFieldLabel(t("cron.form.payloadKind"))}
+                            <select
+                              id="cron-payload-kind"
+                              .value=${props.form.payloadKind}
+                              @change=${(e: Event) =>
+                                props.onFormChange({
+                                  payloadKind: (e.target as HTMLSelectElement)
+                                    .value as CronFormState["payloadKind"],
+                                })}
+                            >
+                              <option value="systemEvent">${t("cron.form.systemEvent")}</option>
+                              <option value="agentTurn">${t("cron.form.agentTurn")}</option>
+                            </select>
+                            <div class="cron-help">
+                              ${props.form.payloadKind === "systemEvent"
+                                ? t("cron.form.systemEventHelp")
+                                : t("cron.form.agentTurnHelp")}
+                            </div>
+                          </label>
+                        `}
                     ${isAgentTurn
                       ? html`
                           <label class="field">
@@ -969,14 +980,17 @@ export function renderCron(props: CronProps) {
                   </div>
                   <label class="field cron-span-2">
                     ${renderFieldLabel(
-                      props.form.payloadKind === "systemEvent"
-                        ? t("cron.form.mainTimelineMessage")
-                        : t("cron.form.assistantTaskPrompt"),
+                      payloadLocked
+                        ? "Command"
+                        : props.form.payloadKind === "systemEvent"
+                          ? t("cron.form.mainTimelineMessage")
+                          : t("cron.form.assistantTaskPrompt"),
                       true,
                     )}
                     <textarea
                       id="cron-payload-text"
                       .value=${props.form.payloadText}
+                      ?readonly=${payloadLocked}
                       aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
                       aria-describedby=${ifDefined(
                         props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
@@ -1714,6 +1728,29 @@ function renderJobPayload(job: CronJob) {
       : delivery?.channel || delivery?.to
         ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
         : "";
+
+  if (payload.kind === "command") {
+    return html`
+      <div class="cron-job-detail">
+        <div class="cron-job-detail-section">
+          <span class="cron-job-detail-label">Command</span>
+          <code class="muted cron-job-detail-value">${payload.argv.join(" ")}</code>
+        </div>
+        ${payload.cwd
+          ? html`<div class="cron-job-detail-section">
+              <span class="cron-job-detail-label">CWD</span>
+              <span class="muted cron-job-detail-value">${payload.cwd}</span>
+            </div>`
+          : nothing}
+        ${delivery
+          ? html`<div class="cron-job-detail-section">
+              <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
+              <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+            </div>`
+          : nothing}
+      </div>
+    `;
+  }
 
   return html`
     <div class="cron-job-detail">

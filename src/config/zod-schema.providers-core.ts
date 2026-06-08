@@ -1415,6 +1415,16 @@ export const IMessageAccountSchemaBase = z
     sendReadReceipts: z.boolean().optional(),
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
+    catchup: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
+        perRunLimit: z.number().int().min(1).max(500).optional(),
+        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
+        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
+      })
+      .strict()
+      .optional(),
     groups: z
       .record(
         z.string(),
@@ -1428,16 +1438,6 @@ export const IMessageAccountSchemaBase = z
           .strict()
           .optional(),
       )
-      .optional(),
-    catchup: z
-      .object({
-        enabled: z.boolean().optional(),
-        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
-        perRunLimit: z.number().int().min(1).max(500).optional(),
-        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
-        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
-      })
-      .strict()
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,

@@ -549,6 +549,16 @@ export type CronWakeMode = "next-heartbeat" | "now";
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
   | {
+      kind: "command";
+      argv: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      input?: string;
+      timeoutSeconds?: number;
+      noOutputTimeoutSeconds?: number;
+      outputMaxBytes?: number;
+    }
+  | {
       kind: "agentTurn";
       message: string;
       model?: string;

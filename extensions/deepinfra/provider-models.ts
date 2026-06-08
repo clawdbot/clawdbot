@@ -1,7 +1,11 @@
 // Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveProviderModelRows,
+  LiveModelCatalogHttpError,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
@@ -66,10 +70,6 @@ interface DeepInfraAgentModelEntry {
   metadata: DeepInfraAgentModelMetadata | null;
 }
 
-interface DeepInfraAgentModelsResponse {
-  data?: DeepInfraAgentModelEntry[];
-}
-
 export type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
 
 export interface DeepInfraSurfaceModel {
@@ -97,12 +97,8 @@ export interface DeepInfraDiscoveredCatalog {
   live: boolean;
 }
 
-let cachedCatalog: DeepInfraDiscoveredCatalog | null = null;
-let cachedAt = 0;
-
 export function resetDeepInfraModelCacheForTest(): void {
-  cachedCatalog = null;
-  cachedAt = 0;
+  clearLiveCatalogCacheForTests();
 }
 
 const SURFACE_FOR_TAG: Record<string, DeepInfraSurface> = {
@@ -173,6 +169,10 @@ function bucketBySurface(models: DeepInfraSurfaceModel[]): DeepInfraDiscoveredCa
     }
   }
   return catalog;
+}
+
+function hasDeepInfraSurfaceModelRows(rows: readonly unknown[]): boolean {
+  return rows.some((entry) => entryToSurfaceModel(entry as DeepInfraAgentModelEntry) !== null);
 }
 
 // Static fallback. Chat rows live in openclaw.plugin.json (manifest-validated);
@@ -409,29 +409,24 @@ export async function discoverDeepInfraSurfaces(options?: {
     return manifestFallbackCatalog();
   }
 
-  if (cachedCatalog && Date.now() - cachedAt < DISCOVERY_CACHE_TTL_MS) {
-    return cachedCatalog;
-  }
-
   try {
-    const response = await fetchWithTimeout(
-      DEEPINFRA_MODELS_URL,
-      { headers: { Accept: "application/json" } },
-      DISCOVERY_TIMEOUT_MS,
-    );
-    if (!response.ok) {
-      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
-      return manifestFallbackCatalog();
-    }
-    const body = (await response.json()) as DeepInfraAgentModelsResponse;
-    if (!Array.isArray(body.data) || body.data.length === 0) {
+    const data = await getCachedLiveProviderModelRows({
+      providerId: "deepinfra",
+      endpoint: DEEPINFRA_MODELS_URL,
+      timeoutMs: DISCOVERY_TIMEOUT_MS,
+      ttlMs: DISCOVERY_CACHE_TTL_MS,
+      buildRequestHeaders: () => ({ Accept: "application/json" }),
+      auditContext: "deepinfra-model-discovery",
+      shouldCacheRows: hasDeepInfraSurfaceModelRows,
+    });
+    if (data.length === 0) {
       log.warn("No models found from DeepInfra agent-projection endpoint, using static catalog");
       return manifestFallbackCatalog();
     }
     const seenIds = new Set<string>();
     const surfaceModels: DeepInfraSurfaceModel[] = [];
-    for (const entry of body.data) {
-      const model = entryToSurfaceModel(entry);
+    for (const entry of data) {
+      const model = entryToSurfaceModel(entry as DeepInfraAgentModelEntry);
       if (!model || seenIds.has(model.id)) {
         continue;
       }
@@ -441,11 +436,12 @@ export async function discoverDeepInfraSurfaces(options?: {
     if (surfaceModels.length === 0) {
       return manifestFallbackCatalog();
     }
-    const catalog = bucketBySurface(surfaceModels);
-    cachedCatalog = catalog;
-    cachedAt = Date.now();
-    return catalog;
+    return bucketBySurface(surfaceModels);
   } catch (error) {
+    if (error instanceof LiveModelCatalogHttpError) {
+      log.warn(`Failed to discover models: HTTP ${error.status}, using static catalog`);
+      return manifestFallbackCatalog();
+    }
     log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return manifestFallbackCatalog();
   }

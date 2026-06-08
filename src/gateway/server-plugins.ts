@@ -91,6 +91,10 @@ function getFallbackGatewayContext(): GatewayRequestContext | undefined {
   return resolved ?? fallbackGatewayContextState.context;
 }
 
+export function hasInProcessGatewayContext(): boolean {
+  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
+}
+
 type PluginSubagentOverridePolicy = {
   allowModelOverride: boolean;
   allowAnyModel: boolean;
@@ -330,6 +334,49 @@ function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
+function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? resolveSafeTimeoutDelayMs(timeoutMs)
+    : undefined;
+}
+
+function resolveInProcessDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
+  return safeTimeoutMs === undefined ? undefined : Date.now() + safeTimeoutMs;
+}
+
+function resolveRemainingInProcessDispatchTimeoutMs(deadlineMs?: number): number | undefined {
+  return deadlineMs === undefined
+    ? undefined
+    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+}
+
+async function waitForInProcessDispatch<T>(
+  method: string,
+  promise: Promise<T>,
+  deadlineMs?: number,
+): Promise<T> {
+  const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
+  if (remainingTimeoutMs === undefined) {
+    return await promise;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`gateway request timeout for ${method}`));
+        }, remainingTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function dispatchGatewayMethodInProcessRaw(
   method: string,
   params: unknown,
@@ -351,7 +398,16 @@ export async function dispatchGatewayMethodInProcessRaw(
 
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
+  let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFirstResponse: ((err: Error) => void) | undefined;
   let resolveFinalResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
+  let rejectFinalResponse: ((err: Error) => void) | undefined;
+  let postFirstResponseError: Error | undefined;
+  const firstResponsePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+    resolveFirstResponse = resolve;
+    rejectFirstResponse = reject;
+  });
+  const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -375,7 +431,7 @@ export async function dispatchGatewayMethodInProcessRaw(
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
-  await handleGatewayRequest({
+  void handleGatewayRequest({
     req: {
       type: "req",
       id: `plugin-subagent-${randomUUID()}`,
@@ -391,6 +447,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       const response = { ok, payload, error, ...(meta ? { meta } : {}) };
       if (!firstResponse) {
         firstResponse = response;
+        resolveFirstResponse?.(response);
         return;
       }
       if (!finalResponse) {
@@ -399,40 +456,63 @@ export async function dispatchGatewayMethodInProcessRaw(
       }
     },
     context,
-  });
+  })
+    .then(() => {
+      if (!firstResponse) {
+        rejectFirstResponse?.(
+          new Error(`Gateway method "${method}" completed without a response.`),
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (!firstResponse) {
+        rejectFirstResponse?.(error);
+        return;
+      }
+      postFirstResponseError = error;
+      rejectFinalResponse?.(error);
+    });
 
-  if (!firstResponse) {
-    throw new Error(`Gateway method "${method}" completed without a response.`);
-  }
+  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
+  }
+  if (postFirstResponseError) {
+    throw postFirstResponseError;
   }
   const final =
     finalResponse ??
     (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
       resolveFinalResponse = resolve;
-      const timeoutMs =
-        typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-          ? resolveSafeTimeoutDelayMs(options.timeoutMs)
-          : undefined;
+      const timeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
       const timeout =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
               reject(new Error(`gateway request timeout for ${method}`));
             }, timeoutMs);
-      if (finalResponse) {
+      const clearFinalTimeout = () => {
         if (timeout) {
           clearTimeout(timeout);
         }
+      };
+      rejectFinalResponse = (err) => {
+        clearFinalTimeout();
+        reject(err);
+      };
+      if (postFirstResponseError) {
+        rejectFinalResponse(postFirstResponseError);
+        return;
+      }
+      if (finalResponse) {
+        clearFinalTimeout();
         resolve(finalResponse);
         return;
       }
       resolveFinalResponse = (response) => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearFinalTimeout();
         resolve(response);
       };
     }));

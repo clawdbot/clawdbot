@@ -7,11 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
-  testing,
+  createSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+  testing,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -1591,7 +1592,6 @@ process.on("SIGINT", shutdown);`,
           activeLeases += 1;
           return () => {
             activeLeases -= 1;
-            lastUsedAt = now;
           };
         },
         dispose: async () => {
@@ -1626,6 +1626,65 @@ process.on("SIGINT", shutdown);`,
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
   });
 
+  it("evicts immediately after release when TTL already elapsed during active lease", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      let activeLeases = 0;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        get activeLeases() {
+          return activeLeases;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+          };
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-idle-post-release",
+      sessionKey: "agent:test:session-idle-post-release",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
+    });
+    const releaseLease = runtime.acquireLease?.();
+
+    // TTL elapses while the lease is still held, so sweep skips active runtimes.
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+
+    // Release must not reset lastUsedAt; the runtime is evictable on the very
+    // next sweep without waiting another full TTL.
+    releaseLease?.();
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
+
+    expect(disposed).toEqual(["session-idle-post-release"]);
+    expect(manager.listSessionIds()).toStrictEqual([]);
+  });
+
   it("keeps idle runtime eviction disabled when the TTL is zero", async () => {
     let now = 1_000;
     const disposed: string[] = [];
@@ -1654,6 +1713,21 @@ process.on("SIGINT", shutdown);`,
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toStrictEqual([]);
+  });
+
+  it("production createSessionMcpRuntime acquireLease release does not refresh lastUsedAt", () => {
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-lease-timestamp-check",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    });
+    const lastUsedBefore = runtime.lastUsedAt;
+    if (!runtime.acquireLease) {
+      throw new Error("Expected production session MCP runtime to expose acquireLease");
+    }
+    const release = runtime.acquireLease();
+    release();
+    expect(runtime.lastUsedAt).toBe(lastUsedBefore);
   });
 });
 

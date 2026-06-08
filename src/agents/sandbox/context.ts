@@ -4,6 +4,7 @@
  * Prepares workspace layout, backend handle, filesystem bridge, browser bridge, and registry state for one run.
  */
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ensureBrowserControlAuth,
@@ -14,17 +15,58 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { SkillEligibilityContext } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { SANDBOX_STATE_DIR } from "./constants.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
+import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
+
+async function syncSandboxSkillsToWorkspace(params: {
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+  config?: OpenClawConfig;
+  agentId: string;
+  rawSessionKey: string;
+}): Promise<SkillEligibilityContext | undefined> {
+  try {
+    const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
+      await Promise.all([
+        import("../../skills/loading/workspace.js"),
+        import("../../skills/runtime/remote.js"),
+        import("../exec-defaults.js"),
+      ]);
+    const eligibility: SkillEligibilityContext = {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: params.config,
+          sessionKey: params.rawSessionKey,
+          agentId: params.agentId,
+        }),
+      }),
+    };
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: params.sourceWorkspaceDir,
+      targetWorkspaceDir: params.targetWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility,
+    });
+    return eligibility;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : JSON.stringify(error);
+    defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
+    return undefined;
+  }
+}
 
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
@@ -36,6 +78,8 @@ async function ensureSandboxWorkspaceLayout(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   sandboxWorkspaceDir: string;
+  skillsWorkspaceDir: string;
+  skillsEligibility?: SkillEligibilityContext;
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
@@ -48,47 +92,49 @@ async function ensureSandboxWorkspaceLayout(params: {
   const sandboxWorkspaceDir =
     cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
+    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
+    scopeKey,
+  );
+  const skillsWorkspaceDir =
+    cfg.workspaceAccess === "rw"
+      ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)
+      : sandboxWorkspaceDir;
 
-  if (workspaceDir === sandboxWorkspaceDir) {
+  let skillsEligibility: SkillEligibilityContext | undefined;
+  if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
-    if (cfg.workspaceAccess !== "rw") {
-      try {
-        const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
-          await Promise.all([
-            import("../../skills/loading/workspace.js"),
-            import("../../skills/runtime/remote.js"),
-            import("../exec-defaults.js"),
-          ]);
-        await syncSkillsToWorkspace({
-          sourceWorkspaceDir: agentWorkspaceDir,
-          targetWorkspaceDir: sandboxWorkspaceDir,
-          config: params.config,
-          agentId: params.agentId,
-          eligibility: {
-            remote: getRemoteSkillEligibility({
-              advertiseExecNode: canExecRequestNode({
-                cfg: params.config,
-                sessionKey: rawSessionKey,
-                agentId: params.agentId,
-              }),
-            }),
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : JSON.stringify(error);
-        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-      }
-    }
+    skillsEligibility = await syncSandboxSkillsToWorkspace({
+      sourceWorkspaceDir: agentWorkspaceDir,
+      targetWorkspaceDir: sandboxWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      rawSessionKey,
+    });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
+    skillsEligibility = await syncSandboxSkillsToWorkspace({
+      sourceWorkspaceDir: agentWorkspaceDir,
+      targetWorkspaceDir: skillsWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      rawSessionKey,
+    });
   }
 
-  return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
+  return {
+    agentWorkspaceDir,
+    scopeKey,
+    sandboxWorkspaceDir,
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
+    workspaceDir,
+  };
 }
 
 export async function resolveSandboxDockerUser(params: {
@@ -147,13 +193,14 @@ export async function resolveSandboxContext(params: {
     await (await import("./prune.js")).maybePruneSandboxes(cfg);
   }
 
-  const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
-    cfg,
-    agentId: runtime.agentId,
-    rawSessionKey,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const { agentWorkspaceDir, scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
+    await ensureSandboxWorkspaceLayout({
+      cfg,
+      agentId: runtime.agentId,
+      rawSessionKey,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -167,6 +214,7 @@ export async function resolveSandboxContext(params: {
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
+    skillsWorkspaceDir,
     cfg: resolvedCfg,
   });
   await updateRegistry({
@@ -214,6 +262,7 @@ export async function resolveSandboxContext(params: {
           scopeKey,
           workspaceDir,
           agentWorkspaceDir,
+          skillsWorkspaceDir,
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
@@ -227,6 +276,8 @@ export async function resolveSandboxContext(params: {
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
     workspaceAccess: resolvedCfg.workspaceAccess,
     runtimeId: backend.runtimeId,
     runtimeLabel: backend.runtimeLabel,

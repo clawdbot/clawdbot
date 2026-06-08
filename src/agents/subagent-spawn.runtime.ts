@@ -17,6 +17,10 @@ export {
 export { ensureContextEnginesInitialized } from "../context-engine/init.js";
 export { resolveContextEngine } from "../context-engine/registry.js";
 export { callGateway } from "../gateway/call.js";
+export {
+  dispatchGatewayMethodInProcess,
+  hasInProcessGatewayContext,
+} from "../gateway/server-plugins.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
 export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 export {

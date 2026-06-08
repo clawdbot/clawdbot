@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
   testing as facadeRuntimeTesting,
@@ -48,7 +49,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       if (value === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   });

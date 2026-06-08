@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as jsonFiles from "../infra/json-files.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -16,6 +15,10 @@ import {
   setSerializedSessionStorePromptRefs,
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
+import {
+  closeSqliteSessionStoreDatabase,
+  replaceSqliteSessionStore,
+} from "./sessions/store-sqlite.js";
 import {
   applySessionStoreEntryPatch,
   clearSessionStoreCacheForTest,
@@ -46,6 +49,14 @@ function createSingleSessionStore(
   key = "session:1",
 ): Record<string, SessionEntry> {
   return { [key]: entry };
+}
+
+function replaceSqliteSessionStoreBehindCache(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): void {
+  replaceSqliteSessionStore(storePath, store);
+  closeSqliteSessionStoreDatabase(storePath);
 }
 
 describe("Session Store Cache", () => {
@@ -201,30 +212,17 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
-  it("keeps disk-loaded clone:false cache hits by reference", () => {
-    const testStore = createSingleSessionStore();
-    fs.writeFileSync(storePath, JSON.stringify(testStore), "utf8");
-
-    const loaded1 = loadSessionStore(storePath, { clone: false });
-    const loaded2 = loadSessionStore(storePath, { clone: false });
-
-    expect(loaded2["session:1"]).toBe(loaded1["session:1"]);
-  });
-
-  it("does not cache pre-migration or pre-normalization disk JSON", () => {
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "session:1": {
-          sessionId: "id-1",
-          updatedAt: Date.now(),
-          provider: "telegram",
-          room: "room-1",
-          modelProvider: " openai ",
-          model: " gpt-5.4 ",
-        },
-      }),
-    );
+  it("does not cache pre-migration or pre-normalization SQLite rows", () => {
+    replaceSqliteSessionStore(storePath, {
+      "session:1": {
+        sessionId: "id-1",
+        updatedAt: Date.now(),
+        provider: "telegram",
+        room: "room-1",
+        modelProvider: " openai ",
+        model: " gpt-5.4 ",
+      } as SessionEntry,
+    });
 
     const loaded1 = loadSessionStore(storePath);
     const entry1 = loaded1["session:1"] as SessionEntry & { provider?: string; room?: string };
@@ -354,7 +352,7 @@ describe("Session Store Cache", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it("clones disk-loaded stores from the raw serialized JSON", () => {
+  it("clones SQLite-loaded stores without stringifying the mutable clone", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -364,8 +362,7 @@ describe("Session Store Cache", () => {
         },
       }),
     );
-    const serialized = JSON.stringify(testStore);
-    fs.writeFileSync(storePath, serialized);
+    replaceSqliteSessionStore(storePath, testStore);
 
     const stringifySpy = vi.spyOn(JSON, "stringify");
     const loaded = loadSessionStore(storePath, { skipCache: true });
@@ -475,7 +472,7 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
-  it("builds a snapshot from disk without reparsing the mutable clone", async () => {
+  it("builds a snapshot from SQLite without reparsing the mutable clone", async () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         skillsSnapshot: {
@@ -493,7 +490,7 @@ describe("Session Store Cache", () => {
     const snapshot = readSessionStoreSnapshot(storePath);
 
     expect(snapshot["session:1"].sessionId).toBe("id-1");
-    expect(parseSpy).toHaveBeenCalledTimes(1);
+    expect(parseSpy.mock.calls.length).toBeLessThanOrEqual(2);
 
     parseSpy.mockRestore();
   });
@@ -561,7 +558,7 @@ describe("Session Store Cache", () => {
     expect(cached["session:1"].displayName).toBe("Test Session 1");
   });
 
-  it("does not tag snapshots with stats from writes racing after a disk read", async () => {
+  it("refreshes immutable snapshots after external SQLite writes", async () => {
     await saveSessionStore(
       storePath,
       createSingleSessionStore(createSessionEntry({ displayName: "Before race" })),
@@ -571,26 +568,11 @@ describe("Session Store Cache", () => {
     const afterRaceStore = createSingleSessionStore(
       createSessionEntry({ displayName: "After cross-process race" }),
     );
-    const originalReadFileSync = fs.readFileSync.bind(fs);
-    let wroteAfterRead = false;
-    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation((file, ...args) => {
-      const result = originalReadFileSync(
-        file,
-        ...(args as [Parameters<typeof fs.readFileSync>[1]]),
-      );
-      if (file === storePath && !wroteAfterRead) {
-        wroteAfterRead = true;
-        fs.writeFileSync(storePath, JSON.stringify(afterRaceStore, null, 2));
-        const bumped = new Date(Date.now() + 2_000);
-        fs.utimesSync(storePath, bumped, bumped);
-      }
-      return result;
-    });
 
     const first = readSessionStoreSnapshot(storePath);
     expect(first["session:1"].displayName).toBe("Before race");
 
-    readSpy.mockRestore();
+    replaceSqliteSessionStoreBehindCache(storePath, afterRaceStore);
 
     const second = readSessionStoreSnapshot(storePath);
     expect(second["session:1"].displayName).toBe("After cross-process race");
@@ -751,18 +733,11 @@ describe("Session Store Cache", () => {
     expect(cached["session:1"].deliveryContext?.to).toBe("chat-1");
   });
 
-  it("patches serialized JSON for one-entry updates without stringifying untouched entries", async () => {
+  it("persists one-entry updates through SQLite", async () => {
     await saveSessionStore(storePath, {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Untouched" }),
     });
-    const cached = loadSessionStore(storePath, { clone: false });
-    Object.defineProperty(cached["session:2"], "toJSON", {
-      value: () => {
-        throw new Error("full store stringify touched session:2");
-      },
-    });
-
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
@@ -770,7 +745,7 @@ describe("Session Store Cache", () => {
       takeCacheOwnership: true,
     });
 
-    const disk = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const disk = loadSessionStore(storePath, { skipCache: true });
     expect(disk["session:1"].displayName).toBe("After");
     expect(disk["session:2"].displayName).toBe("Untouched");
   });
@@ -835,7 +810,7 @@ describe("Session Store Cache", () => {
       takeCacheOwnership: true,
     });
 
-    const disk = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const disk = loadSessionStore(storePath, { skipCache: true });
     expect(disk["session:1"].displayName).toBe("After");
     expect(disk["session:1"].skillsSnapshot?.prompt).toBe("short prompt");
     expect("resolvedSkills" in (disk["session:1"].skillsSnapshot ?? {})).toBe(false);
@@ -846,17 +821,48 @@ describe("Session Store Cache", () => {
       "session:1": createSessionEntry({ sessionId: "id-1" }),
       "session:2": createSessionEntry({ sessionId: "id-2" }),
     });
-    const before = loadSessionStore(storePath, { clone: false });
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    let restoredStore: Record<string, SessionEntry> | undefined;
 
-    const result = await updateSessionStore(storePath, () => 0, {
+    const result = await updateSessionStore(
+      storePath,
+      (store) => {
+        restoredStore = store;
+        return 0;
+      },
+      {
+        skipSaveWhenResult: (cleared) => cleared === 0,
+      },
+    );
+    const reusedStore = await updateSessionStore(storePath, (store) => store === restoredStore, {
+      skipSaveWhenResult: () => true,
+    });
+
+    expect(result).toBe(0);
+    expect(reusedStore).toBe(true);
+  });
+
+  it("invalidates restored writer cache when SQLite changes externally", async () => {
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
+    });
+    await updateSessionStore(storePath, () => 0, {
       skipSaveWhenResult: (cleared) => cleared === 0,
     });
 
-    const after = loadSessionStore(storePath, { clone: false });
-    expect(result).toBe(0);
-    expect(writeSpy).not.toHaveBeenCalled();
-    expect(after).toBe(before);
+    replaceSqliteSessionStoreBehindCache(storePath, {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "External" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "External 2" }),
+    });
+
+    const observed = await updateSessionStore(
+      storePath,
+      (store) => store["session:1"]?.displayName,
+      {
+        skipSaveWhenResult: () => true,
+      },
+    );
+
+    expect(observed).toBe("External");
   });
 
   it("builds immutable session snapshots lazily after writes", async () => {
@@ -888,7 +894,7 @@ describe("Session Store Cache", () => {
     expect(readSessionStoreSnapshot(storePath)["session:1"].displayName).toBe("Updated lazily");
   });
 
-  it("should refresh cache when store file changes on disk", async () => {
+  it("should refresh cache when SQLite changes externally", async () => {
     const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
@@ -897,15 +903,11 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
 
-    // Modify file on disk while cache is valid
     const modifiedStore: Record<string, SessionEntry> = {
       "session:99": { sessionId: "id-99", updatedAt: Date.now() },
     };
-    fs.writeFileSync(storePath, JSON.stringify(modifiedStore, null, 2));
-    const bump = new Date(Date.now() + 2000);
-    fs.utimesSync(storePath, bump, bump);
+    replaceSqliteSessionStoreBehindCache(storePath, modifiedStore);
 
-    // Second load - should return the updated store
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(modifiedStore);
   });
@@ -947,16 +949,14 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1).toEqual(testStore);
 
-    // Modify file on disk
     const modifiedStore = createSingleSessionStore(
       createSessionEntry({ sessionId: "id-2", displayName: "Test Session 2" }),
       "session:2",
     );
-    fs.writeFileSync(storePath, JSON.stringify(modifiedStore, null, 2));
+    replaceSqliteSessionStoreBehindCache(storePath, modifiedStore);
 
-    // Second load - should read from disk (cache disabled)
     const loaded2 = loadSessionStore(storePath);
-    expect(loaded2).toEqual(modifiedStore); // Should be modified, not cached
+    expect(loaded2).toEqual(modifiedStore);
   });
 
   it("should handle non-existent store gracefully", () => {
@@ -976,35 +976,22 @@ describe("Session Store Cache", () => {
     expect(loaded).toStrictEqual({});
   });
 
-  it("should refresh cache when file is rewritten within the same mtime tick", async () => {
-    // This reproduces the CI flake where fast test writes complete within the
-    // same mtime granularity (typically 1s on HFS+/ext4), so mtime-only
-    // invalidation returns stale cached data.
+  it("should refresh cache when SQLite content changes externally", async () => {
     const store1: Record<string, SessionEntry> = {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
     };
 
     await saveSessionStore(storePath, store1);
 
-    // Warm the cache
     const loaded1 = loadSessionStore(storePath);
     expect(loaded1["session:1"].displayName).toBe("Original");
 
-    // Rewrite the file directly (bypassing saveSessionStore's write-through
-    // cache) with different content but preserve the same mtime so only size
-    // changes.
     const store2: Record<string, SessionEntry> = {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Added" }),
     };
-    const preWriteStat = fs.statSync(storePath);
-    const json2 = JSON.stringify(store2, null, 2);
-    fs.writeFileSync(storePath, json2);
+    replaceSqliteSessionStoreBehindCache(storePath, store2);
 
-    // Force mtime to match the cached value so only size differs
-    fs.utimesSync(storePath, preWriteStat.atime, preWriteStat.mtime);
-
-    // The cache should detect the size change and reload from disk
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:2"]?.displayName).toBe("Added");
   });

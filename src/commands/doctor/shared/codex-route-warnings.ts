@@ -1,5 +1,4 @@
 // Doctor warnings and repairs for legacy OpenAI Codex model/provider routing.
-import fs from "node:fs";
 import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -3030,7 +3029,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
 }): Promise<CodexSessionRouteRepairSummary> {
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
     env: params.env ?? process.env,
-  }).filter((target) => fs.existsSync(target.storePath));
+  });
   if (targets.length === 0) {
     return {
       scannedStores: 0,

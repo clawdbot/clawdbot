@@ -3,16 +3,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  type MockInstance,
-  vi,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -29,6 +20,7 @@ vi.mock("../channels/plugins/pairing.js", () => ({
   getPairingAdapter: pairingMocks.getPairingAdapter,
 }));
 
+import { drainFileLockStateForTest, resetFileLockStateForTest } from "../infra/file-lock.js";
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -50,9 +42,6 @@ type FileReadSpy = {
   mockRestore: () => void;
 };
 
-let randomIntSpy: MockInstance<RandomIntSync>;
-let nextRandomInt = 0;
-
 beforeAll(() => {
   fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
 });
@@ -64,25 +53,19 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  resetFileLockStateForTest();
   clearPairingAllowFromReadCacheForTest();
   pairingMocks.getPairingAdapter.mockReset();
-  nextRandomInt = 0;
-  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;
-  setDefaultRandomIntMock();
 });
 
-afterAll(() => {
-  randomIntSpy?.mockRestore();
+afterEach(async () => {
+  await drainFileLockStateForTest();
+  resetFileLockStateForTest();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
-
-function setDefaultRandomIntMock() {
-  randomIntSpy.mockImplementation((minOrMax: number, max?: number) => {
-    const min = max === undefined ? 0 : minOrMax;
-    const upper = max === undefined ? minOrMax : max;
-    const span = Math.max(upper - min, 1);
-    return min + (nextRandomInt++ % span);
-  });
-}
 
 function requireFirstPairingRequest(
   requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
@@ -249,6 +232,11 @@ async function withMockRandomInt(params: {
   fallbackValue?: number;
   run: () => Promise<void>;
 }) {
+  const randomIntSpy = vi.spyOn(crypto, "randomInt") as unknown as {
+    mockImplementation: (impl: RandomIntSync) => void;
+    mockRestore: () => void;
+    mockReturnValue: (value: number) => void;
+  };
   try {
     if (params.initialValue !== undefined) {
       randomIntSpy.mockReturnValue(params.initialValue);
@@ -261,7 +249,7 @@ async function withMockRandomInt(params: {
 
     await params.run();
   } finally {
-    setDefaultRandomIntMock();
+    randomIntSpy.mockRestore();
   }
 }
 
@@ -496,7 +484,8 @@ describe("pairing store", () => {
   it("regenerates when a generated code collides", async () => {
     await withTempStateDir(async (_stateDir, env) => {
       await withMockRandomInt({
-        initialValue: 0,
+        sequence: Array(16).fill(0).concat(Array(8).fill(1)),
+        fallbackValue: 1,
         run: async () => {
           const first = await upsertChannelPairingRequest({
             channel: "telegram",
@@ -506,19 +495,13 @@ describe("pairing store", () => {
           });
           expect(first.code).toBe("AAAAAAAA");
 
-          await withMockRandomInt({
-            sequence: Array(8).fill(0).concat(Array(8).fill(1)),
-            fallbackValue: 1,
-            run: async () => {
-              const second = await upsertChannelPairingRequest({
-                channel: "telegram",
-                id: "456",
-                accountId: DEFAULT_ACCOUNT_ID,
-                env,
-              });
-              expect(second.code).toBe("BBBBBBBB");
-            },
+          const second = await upsertChannelPairingRequest({
+            channel: "telegram",
+            id: "456",
+            accountId: DEFAULT_ACCOUNT_ID,
+            env,
           });
+          expect(second.code).toBe("BBBBBBBB");
         },
       });
     });

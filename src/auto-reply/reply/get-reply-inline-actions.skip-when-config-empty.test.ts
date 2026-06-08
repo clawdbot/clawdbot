@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -69,8 +70,7 @@ async function writeSessionStore(
   entries: Record<string, unknown>,
 ) {
   const storePath = storeTemplate.replaceAll("{agentId}", agentId);
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  await writeSessionStoreForTestAsync(storePath, entries);
 }
 
 const createHandleInlineActionsInput = (params: {

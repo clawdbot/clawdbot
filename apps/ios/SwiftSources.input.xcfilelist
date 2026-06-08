@@ -21,6 +21,7 @@ Sources/Design/SettingsProTab.swift
 Sources/Design/SettingsProTabSupport.swift
 Sources/Design/SettingsProTabSections.swift
 Sources/Design/SettingsProTabActions.swift
+Sources/Design/TalkRuntimeIssueBanner.swift
 Sources/Design/CommandCenterSupport.swift
 Sources/Design/AgentProTab+Overview.swift
 Sources/Design/AgentProTab+Destinations.swift

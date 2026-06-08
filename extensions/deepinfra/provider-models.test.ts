@@ -74,7 +74,7 @@ async function withFetchPathTest(
     if (value === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = value;
+      Reflect.set(process.env, key, value);
     }
   }
   vi.stubGlobal("fetch", mockFetch);
@@ -86,7 +86,7 @@ async function withFetchPathTest(
       if (env[key] === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = env[key];
+        Reflect.set(process.env, key, env[key]);
       }
     }
     if (env.NODE_ENV !== undefined) {
@@ -205,12 +205,11 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [fetchUrl, fetchInit] = requireFirstFetchCall(mockFetch);
       const fetchSignal = Reflect.get(fetchInit ?? {}, "signal");
+      const fetchHeaders = Reflect.get(fetchInit ?? {}, "headers");
       expect(fetchUrl).toBe(DEEPINFRA_MODELS_URL);
       expect(fetchSignal).toBeInstanceOf(AbortSignal);
-      expect(fetchInit).toEqual({
-        headers: { Accept: "application/json" },
-        signal: fetchSignal,
-      });
+      expect(fetchHeaders).toBeInstanceOf(Headers);
+      expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
       expect(models).toEqual(
         expectedLiveChatCatalog([
           {
@@ -354,6 +353,40 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(expectedIds);
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not cache successful responses that produce no live catalog rows", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [makeAgentModelEntry({ id: "recovered/model" })] }),
+      });
+
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedStaticChatCatalog().map((model) => model.id),
+      );
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(
+        expectedLiveChatCatalog([
+          {
+            id: "recovered/model",
+            name: "recovered/model",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 65536,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+            compat: { supportsUsageInStreaming: true },
+          },
+        ]).map((model) => model.id),
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 });

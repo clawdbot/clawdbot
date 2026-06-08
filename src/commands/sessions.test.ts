@@ -1,6 +1,7 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSqliteSessionStoreDatabasePath } from "../config/sessions/store-sqlite.js";
 import {
   makeRuntime,
   mockSessionsConfig,
@@ -44,7 +45,8 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    expect(fs.existsSync(store)).toBe(false);
+    fs.rmSync(store, { force: true });
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
@@ -81,7 +83,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     expect(logs.join("\n")).toContain("Runtime");
 
@@ -118,7 +120,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
@@ -138,7 +140,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
@@ -350,8 +352,10 @@ describe("sessionsCommand", () => {
     expect(errors).toStrictEqual([
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
+    expect(fs.existsSync(store)).toBe(true);
+    expect(fs.existsSync(resolveSqliteSessionStoreDatabasePath(store))).toBe(false);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
   });
 
   it("rejects partial --active values", async () => {
@@ -371,7 +375,7 @@ describe("sessionsCommand", () => {
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
   });
 
   it("rejects invalid --limit values", async () => {
@@ -391,6 +395,6 @@ describe("sessionsCommand", () => {
       '--limit must be a positive integer or "all", for example --limit 25.',
     ]);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
   });
 });

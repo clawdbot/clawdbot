@@ -1,6 +1,7 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -17,6 +18,10 @@ import {
   formatTrajectoryCommandExportSummary,
   type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
+import {
+  ensureExplicitSessionStoreMigratedForCommand,
+  ensureSessionStateMigratedForCommand,
+} from "./session-state-migration.js";
 
 type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
@@ -115,10 +120,15 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
+  const cfg = getRuntimeConfig();
+  await ensureSessionStateMigratedForCommand(cfg);
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolvedOpts.store
     ? path.resolve(resolvedOpts.store)
     : resolveDefaultSessionStorePath(targetAgentId);
+  await ensureExplicitSessionStoreMigratedForCommand(storePath, {
+    onWarning: (warning) => runtime.error?.(warning),
+  });
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {

@@ -137,6 +137,27 @@ function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string
   return agentId || undefined;
 }
 
+export function resolveAgentIdFromSessionStorePath(storePath: string): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(storePath);
+  if (!parsed) {
+    return undefined;
+  }
+  const { parts, sessionsIndex } = parsed;
+  if (parts[sessionsIndex + 1] !== "sessions.json") {
+    return undefined;
+  }
+  const agentId = parts[sessionsIndex - 1];
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+export function resolveStateDirFromSessionStorePath(storePath: string): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(storePath);
+  if (!parsed || parsed.parts[parsed.sessionsIndex + 1] !== "sessions.json") {
+    return undefined;
+  }
+  return path.dirname(path.dirname(path.dirname(path.dirname(path.resolve(storePath)))));
+}
+
 function resolveStructuralSessionFallbackPath(
   candidateAbsPath: string,
   expectedAgentId: string,

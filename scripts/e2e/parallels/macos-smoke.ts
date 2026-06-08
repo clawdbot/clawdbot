@@ -1013,9 +1013,31 @@ sleep 1`,
 deadline=$((SECONDS + 120))
 while [ $SECONDS -lt $deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/ >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
-    grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      exit 0
+    if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
+      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+      asset_paths="$(
+        sed -nE 's/.*<(script|link)[^>]*(src|href)=["'"'"']([^"'"'"']+)["'"'"'].*/\3/p' /tmp/openclaw-dashboard-smoke.html |
+          grep -E '(^|/)assets/' |
+          grep -Ev '^(https?:)?//' |
+          sort -u
+      )"
+      if [ -n "$asset_paths" ]; then
+        assets_ok=1
+        while IFS= read -r asset_path; do
+          [ -n "$asset_path" ] || continue
+          case "$asset_path" in
+            http://127.0.0.1:18789/*) asset_url="$asset_path" ;;
+            /*) asset_url="http://127.0.0.1:18789$asset_path" ;;
+            *) asset_url="http://127.0.0.1:18789/$asset_path" ;;
+          esac
+          curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url" >/dev/null 2>/dev/null ||
+            assets_ok=0
+        done <<EOF
+$asset_paths
+EOF
+        [ "$assets_ok" -eq 1 ] && exit 0
+      fi
+    fi
   fi
   sleep 1
 done

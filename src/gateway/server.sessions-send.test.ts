@@ -15,6 +15,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
+  readSessionStore,
   startGatewayServer,
   setTestPluginRegistry,
   testState,
@@ -76,13 +77,7 @@ async function emitLifecycleAssistantReply(params: {
   const runId = commandParams.runId ?? sessionId;
   let sessionFile = resolveSessionTranscriptPath(sessionId);
   if (testState.sessionStorePath && commandParams.sessionKey) {
-    const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        sessionId?: string;
-        sessionFile?: string;
-      }
-    >;
+    const rawStore = readSessionStore(testState.sessionStorePath);
     const entry = rawStore[commandParams.sessionKey];
     if (entry?.sessionId === sessionId && entry.sessionFile) {
       sessionFile = entry.sessionFile;
@@ -427,14 +422,7 @@ describe("sessions_send agent targeting", () => {
         expect(orionCall).toBeDefined();
         expect(orionCall?.sessionId).toBeTypeOf("string");
 
-        const rawStore = JSON.parse(
-          await fs.readFile(testState.sessionStorePath, "utf-8"),
-        ) as Record<
-          string,
-          {
-            sessionId?: string;
-          }
-        >;
+        const rawStore = readSessionStore(testState.sessionStorePath);
         expect(rawStore["agent:orion:main"]?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;

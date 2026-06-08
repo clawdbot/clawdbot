@@ -291,6 +291,102 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("defaults local-model lean embedded runs to Tool Search controls", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.includeToolSearchControls).toBe(true);
+    const optionsConfig = requireRecord(options.config, "createOpenClawCodingTools config");
+    const toolsConfig = requireRecord(
+      optionsConfig.tools,
+      "createOpenClawCodingTools tools config",
+    );
+    expect(toolsConfig.toolSearch).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+  });
+
+  it("keeps Tool Search controls off for lean message-tool-only delivery", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "message",
+        label: "Message",
+        description: "Send a visible reply.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "sent" }),
+      },
+      {
+        name: "browser",
+        label: "Browser",
+        description: "Open a browser session.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "opened" }),
+      },
+    ]);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.includeToolSearchControls).toBe(false);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    expect(customTools.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
   it("quarantines unsupported tool schemas before creating the model session", async () => {
     hoisted.createOpenClawCodingToolsMock.mockReturnValue([
       {

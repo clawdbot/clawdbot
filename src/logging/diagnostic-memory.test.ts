@@ -369,6 +369,49 @@ describe("diagnostic memory", () => {
     );
   });
 
+  it("logs warning pressure with readable units and operator guidance", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        records.push(event);
+      }
+    });
+    try {
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 2_012_905_472, heapUsed: 1_307_038_712 }),
+        thresholds: {
+          rssWarningBytes: 1_610_612_736,
+          rssCriticalBytes: 3_221_225_472,
+          pressureRepeatMs: 60_000,
+        },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      stop();
+    }
+
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "WARN",
+          message: expect.stringContaining(
+            "memory pressure: level=warning reason=rss_threshold rss=1.87 GiB heap=1.22 GiB threshold=1.5 GiB thresholdRatio=125%",
+          ),
+          attributes: expect.objectContaining({
+            subsystem: "gateway/diagnostics/memory",
+          }),
+        }),
+      ]),
+    );
+    expect(records.at(-1)?.message).toContain("rssBytes=2012905472");
+    expect(records.at(-1)?.message).toContain("heapUsedBytes=1307038712");
+    expect(records.at(-1)?.message).toContain(
+      "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists",
+    );
+  });
+
   it("writes a stability bundle when critical pressure is emitted", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-"));
     const customRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-custom-sessions-"));

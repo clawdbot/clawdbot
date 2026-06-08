@@ -17,6 +17,8 @@ const hoisted = vi.hoisted(() => ({
   pruneLegacyStoreKeysMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
+  dispatchGatewayMethodInProcessMock: vi.fn(),
+  hasInProcessGatewayContextMock: vi.fn(),
   resolveAgentConfigMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
@@ -67,6 +69,8 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
+      dispatchGatewayMethodInProcessMock: hoisted.dispatchGatewayMethodInProcessMock,
+      hasInProcessGatewayContextMock: hoisted.hasInProcessGatewayContextMock,
       getRuntimeConfig: () => hoisted.configOverride,
       loadSessionStoreMock: hoisted.loadSessionStoreMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
@@ -88,6 +92,8 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.pruneLegacyStoreKeysMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
+    hoisted.dispatchGatewayMethodInProcessMock.mockReset();
+    hoisted.hasInProcessGatewayContextMock.mockReset().mockReturnValue(false);
     hoisted.resolveAgentConfigMock.mockReset();
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -264,6 +270,76 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("dispatches spawned agent runs in process when a gateway context is available", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        return { runId: "run-in-process" };
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn without websocket self-connection",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.runId).toBe("run-in-process");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        message: expect.stringContaining("spawn without websocket self-connection"),
+        sessionKey: result.childSessionKey,
+      }),
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("spawn failed");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "spawn failure cleanup",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("spawn failed");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
+      "sessions.delete",
+      expect.objectContaining({
+        key: result.childSessionKey,
+        deleteTranscript: true,
+      }),
+      expect.objectContaining({
+        forceSyntheticClient: true,
+        syntheticScopes: ["operator.admin"],
+        timeoutMs: 60_000,
+      }),
+    );
   });
 
   it("inherits requester thinking level when no spawn or subagent default is configured", async () => {

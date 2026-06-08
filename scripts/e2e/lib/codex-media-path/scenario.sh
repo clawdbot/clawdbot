@@ -52,5 +52,5 @@ openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 480 "$PORT"
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
   tsx scripts/e2e/lib/codex-media-path/client.mjs >"$CLIENT_LOG" 2>&1
 
-cat "$CLIENT_LOG"
+openclaw_e2e_print_log "$CLIENT_LOG"
 echo "Codex media-path Docker E2E passed"

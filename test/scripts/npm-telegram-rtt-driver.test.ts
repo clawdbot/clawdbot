@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const DRIVER_SCRIPT = "scripts/e2e/npm-telegram-rtt-driver.mjs";
 
@@ -136,8 +137,8 @@ function runDriverAsync(env: Record<string, string>, timeoutMs = 5000): Promise<
       },
       stdio: "pipe",
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) {
@@ -145,14 +146,20 @@ function runDriverAsync(env: Record<string, string>, timeoutMs = 5000): Promise<
       }
       settled = true;
       child.kill("SIGKILL");
-      resolve({ status: null, signal: "SIGKILL", stdout, stderr, timedOut: true });
+      resolve({
+        status: null,
+        signal: "SIGKILL",
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+        timedOut: true,
+      });
     }, timeoutMs);
     timeout.unref?.();
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr.append(chunk);
     });
     child.on("close", (status, signal) => {
       if (settled) {
@@ -160,7 +167,7 @@ function runDriverAsync(env: Record<string, string>, timeoutMs = 5000): Promise<
       }
       settled = true;
       clearTimeout(timeout);
-      resolve({ status, signal, stdout, stderr, timedOut: false });
+      resolve({ status, signal, stdout: stdout.text(), stderr: stderr.text(), timedOut: false });
     });
   });
 }

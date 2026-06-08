@@ -1213,6 +1213,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     payload: sendPayload.payload,
     mediaUrl: sendPayload.mediaUrl,
     mediaUrls: sendPayload.mediaUrls,
+    buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
+    filename: readStringParam(params, "filename") ?? undefined,
+    contentType: readStringParam(params, "contentType") ?? undefined,
     asVoice: sendPayload.asVoice,
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
@@ -1520,17 +1523,32 @@ export async function runMessageAction(
     sandboxRoot: input.sandboxRoot,
     mediaAccess,
   });
+  const gateway = resolveGateway(input);
+  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const preserveSendBuffer =
+    action === "send" &&
+    Boolean(gateway) &&
+    (channelPlugin?.actions?.resolveExecutionMode?.({
+      action: "send",
+    }) === "gateway" ||
+      channelPlugin?.outbound?.deliveryMode === "gateway");
 
-  await hydrateAttachmentParamsForAction({
-    cfg,
-    channel,
-    accountId,
-    args: params,
-    action,
-    dryRun,
-    mediaPolicy,
-    extraParamKeys: extraActionMediaSourceParamKeys,
-  });
+  const hydrateActionAttachmentParams = () =>
+    hydrateAttachmentParamsForAction({
+      cfg,
+      channel,
+      accountId,
+      args: params,
+      action,
+      dryRun,
+      preserveSendBuffer,
+      mediaPolicy,
+      extraParamKeys: extraActionMediaSourceParamKeys,
+    });
+
+  if (action !== "send") {
+    await hydrateActionAttachmentParams();
+  }
 
   const resolvedTarget = await resolveActionTarget({
     cfg,
@@ -1549,7 +1567,9 @@ export async function runMessageAction(
     agentId: resolvedAgentId,
   });
 
-  const gateway = resolveGateway(input);
+  if (action === "send") {
+    await hydrateActionAttachmentParams();
+  }
 
   if (action === "send") {
     return handleSendAction({

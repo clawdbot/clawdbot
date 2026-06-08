@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
   ModelCatalogCost,
+  ModelCatalogMediaInputConfig,
   ModelCatalogModel,
   ModelCatalogTieredCost,
 } from "@openclaw/model-catalog-core/model-catalog-types";
@@ -48,6 +49,7 @@ type LiveCatalogCacheEntry<T> = {
   value: Promise<T>;
 };
 
+const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
 const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
@@ -62,6 +64,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
   load: () => Promise<T>;
+  /** Optional predicate for values that are healthy enough to retain. */
+  shouldCache?: (value: T) => boolean;
   /** Cache lifetime in milliseconds; defaults to a short provider-discovery TTL. */
   ttlMs?: number;
   /** Test hook for deterministic cache expiry. */
@@ -80,13 +84,25 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const value = params.load();
   const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
   if (expiresAt !== undefined) {
+    // Auth-scoped live provider catalogs can vary by token; keep this
+    // process-local cache bounded so discovery cannot grow without limit.
+    if (liveCatalogCache.size >= LIVE_CATALOG_CACHE_MAX_ENTRIES) {
+      const oldestKey = liveCatalogCache.keys().next();
+      if (!oldestKey.done) {
+        liveCatalogCache.delete(oldestKey.value);
+      }
+    }
     liveCatalogCache.set(key, {
       expiresAt,
       value,
     });
   }
   try {
-    return await value;
+    const resolved = await value;
+    if (params.shouldCache && !params.shouldCache(resolved)) {
+      liveCatalogCache.delete(key);
+    }
+    return resolved;
   } catch (err) {
     // Failed live discovery should not poison later retries for the same provider/config.
     liveCatalogCache.delete(key);
@@ -142,6 +158,17 @@ function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefiniti
   return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
 }
 
+function cloneManifestCatalogMediaInput(
+  mediaInput?: ModelCatalogMediaInputConfig,
+): ModelDefinitionConfig["mediaInput"] | undefined {
+  if (!mediaInput?.image) {
+    return undefined;
+  }
+  return {
+    image: { ...mediaInput.image },
+  };
+}
+
 function buildManifestCatalogModel(
   providerId: string,
   model: ModelCatalogModel,
@@ -168,6 +195,7 @@ function buildManifestCatalogModel(
     maxTokens: model.maxTokens,
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),
+    ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
   };
 }
 

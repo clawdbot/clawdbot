@@ -1132,13 +1132,14 @@ function convertMessages(
               text: sanitizeSurrogates(block.thinking),
             });
           } else {
-            const thinking =
-              block.thinkingSignature === "reasoning_content"
-                ? sanitizeSurrogates(block.thinking)
-                : block.thinking;
+            // OpenAI-compatible reasoning markers are field names, not native
+            // Anthropic replay signatures; sending them bricks persisted replays.
+            if (block.thinkingSignature === "reasoning_content") {
+              continue;
+            }
             blocks.push({
               type: "thinking",
-              thinking,
+              thinking: block.thinking,
               signature: block.thinkingSignature,
             });
           }

@@ -156,6 +156,39 @@ export async function hasProviderStaticCatalogForFilter(params: {
   registryIndex?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<boolean> {
+  return await hasProviderCatalogForFilter(
+    params,
+    (provider) => typeof provider.staticCatalog?.run === "function",
+    { discoveryEntriesOnly: true },
+  );
+}
+
+export async function hasProviderRuntimeCatalogForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+  registryIndex?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<boolean> {
+  return await hasProviderCatalogForFilter(
+    params,
+    (provider) =>
+      typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function",
+    { discoveryEntriesOnly: false },
+  );
+}
+
+async function hasProviderCatalogForFilter(
+  params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    providerFilter: string;
+    registryIndex?: PluginRegistrySnapshot;
+    metadataSnapshot?: PluginMetadataSnapshot;
+  },
+  predicate: (provider: ProviderPlugin) => boolean,
+  options: { discoveryEntriesOnly: boolean },
+): Promise<boolean> {
   const env = params.env ?? process.env;
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
@@ -184,14 +217,12 @@ export async function hasProviderStaticCatalogForFilter(params: {
     env,
     onlyPluginIds: scopedPluginIds,
     includeUntrustedWorkspacePlugins: false,
-    requireCompleteDiscoveryEntryCoverage: true,
-    discoveryEntriesOnly: true,
+    requireCompleteDiscoveryEntryCoverage: options.discoveryEntriesOnly,
+    discoveryEntriesOnly: options.discoveryEntriesOnly,
     pluginMetadataSnapshot: params.metadataSnapshot,
   });
   return providers.some(
-    (provider) =>
-      typeof provider.staticCatalog?.run === "function" &&
-      providerMatchesFilter({ provider, providerFilter }),
+    (provider) => predicate(provider) && providerMatchesFilter({ provider, providerFilter }),
   );
 }
 
@@ -215,6 +246,65 @@ function modelFromProviderCatalog(params: {
     headers: params.model.headers,
     compat: params.model.compat,
   } as Model;
+}
+
+async function runProviderCatalogForList(params: {
+  provider: ProviderPlugin;
+  cfg: OpenClawConfig;
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
+  staticOnly?: boolean;
+}): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | null> {
+  if (params.staticOnly === true) {
+    return (
+      (await runProviderStaticCatalog({
+        provider: params.provider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        env: params.env,
+      })) ?? null
+    );
+  }
+
+  const hasRuntimeCatalog =
+    typeof params.provider.catalog?.run === "function" ||
+    typeof params.provider.discovery?.run === "function";
+  if (hasRuntimeCatalog) {
+    const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+    const resolveProviderApiKey = createProviderApiKeyResolver(params.env, authStore, params.cfg);
+    const resolveProviderAuth = createProviderAuthResolver(params.env, authStore, params.cfg);
+    try {
+      const runtimeResult = await runProviderCatalog({
+        provider: params.provider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        env: params.env,
+        resolveProviderApiKey: (providerId) =>
+          resolveProviderApiKey(providerId?.trim() || params.provider.id),
+        resolveProviderAuth: (providerId, options) =>
+          resolveProviderAuth(providerId?.trim() || params.provider.id, options),
+      });
+      if (runtimeResult) {
+        return runtimeResult;
+      }
+    } catch (error) {
+      log.warn(
+        `provider runtime catalog failed for ${params.provider.id}: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  if (typeof params.provider.staticCatalog?.run !== "function") {
+    return null;
+  }
+  return (
+    (await runProviderStaticCatalog({
+      provider: params.provider,
+      config: params.cfg,
+      agentDir: params.agentDir,
+      env: params.env,
+    })) ?? null
+  );
 }
 
 /** Loads model rows from provider static/runtime catalog hooks for model-list output. */
@@ -280,28 +370,13 @@ export async function loadProviderCatalogModelsForList(params: {
       }
       let result: Awaited<ReturnType<typeof runProviderCatalog>> | null;
       try {
-        if (params.staticOnly === true || typeof provider.staticCatalog?.run === "function") {
-          result = await runProviderStaticCatalog({
-            provider,
-            config: params.cfg,
-            agentDir: params.agentDir,
-            env,
-          });
-        } else {
-          const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
-          const resolveProviderApiKey = createProviderApiKeyResolver(env, authStore, params.cfg);
-          const resolveProviderAuth = createProviderAuthResolver(env, authStore, params.cfg);
-          result = await runProviderCatalog({
-            provider,
-            config: params.cfg,
-            agentDir: params.agentDir,
-            env,
-            resolveProviderApiKey: (providerId) =>
-              resolveProviderApiKey(providerId?.trim() || provider.id),
-            resolveProviderAuth: (providerId, options) =>
-              resolveProviderAuth(providerId?.trim() || provider.id, options),
-          });
-        }
+        result = await runProviderCatalogForList({
+          provider,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          env,
+          staticOnly: params.staticOnly,
+        });
       } catch (error) {
         log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
         result = null;

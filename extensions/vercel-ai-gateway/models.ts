@@ -1,9 +1,11 @@
 // Vercel Ai Gateway plugin module implements models behavior.
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  getCachedLiveProviderModelRows,
+  LiveModelCatalogHttpError,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
@@ -20,6 +22,8 @@ export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
 } as const;
 
 const log = createSubsystemLogger("agents/vercel-ai-gateway");
+const VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS = 60_000;
+const VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS = 5000;
 
 type VercelPricingShape = {
   input?: number | string;
@@ -199,30 +203,23 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
   }
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-      timeoutMs: 5000,
+    const data = await getCachedLiveProviderModelRows({
+      providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
+      endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
+      ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
       auditContext: "vercel-ai-gateway.models",
     });
-    try {
-      if (!response.ok) {
-        log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${response.status}`);
-        return getStaticVercelAiGatewayModelCatalog();
-      }
-      const data = await readProviderJsonArrayFieldResponse(
-        response,
-        "Vercel AI Gateway model list",
-        "data",
-      );
-      const discovered = data
-        .map(asVercelGatewayModelShape)
-        .map(buildDiscoveredModelDefinition)
-        .filter((entry): entry is ModelDefinitionConfig => entry !== null);
-      return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();
-    } finally {
-      await release();
-    }
+    const discovered = data
+      .map(asVercelGatewayModelShape)
+      .map(buildDiscoveredModelDefinition)
+      .filter((entry): entry is ModelDefinitionConfig => entry !== null);
+    return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();
   } catch (error) {
+    if (error instanceof LiveModelCatalogHttpError) {
+      log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${error.status}`);
+      return getStaticVercelAiGatewayModelCatalog();
+    }
     log.warn(`Failed to discover Vercel AI Gateway models: ${String(error)}`);
     return getStaticVercelAiGatewayModelCatalog();
   }

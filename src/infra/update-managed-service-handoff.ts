@@ -5,10 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
-import {
-  SUPERVISOR_HINT_ENV_VARS,
-  type RespawnSupervisor,
-} from "./supervisor-markers.js";
+import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,

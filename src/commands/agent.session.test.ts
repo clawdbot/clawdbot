@@ -8,6 +8,7 @@ import { updateSessionStoreAfterAgentRun } from "../agents/command/session-store
 import { resolveSession } from "../agents/command/session.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -41,8 +42,7 @@ function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
 ) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions));
+  writeSessionStoreForTest(storePath, sessions);
 }
 
 async function withCrossAgentResumeFixture(
@@ -313,13 +313,17 @@ describe("agent session resolution", () => {
         storePath: resolution.storePath,
         agentId: "main",
       });
-      expect(resolvedTranscript.sessionFile).toBe(sessionFile);
+      expect(fs.realpathSync.native(resolvedTranscript.sessionFile)).toBe(
+        fs.realpathSync.native(sessionFile),
+      );
 
       const persisted = loadSessionStore(resolution.storePath, { skipCache: true })[
         resolution.sessionKey
       ];
       expect(persisted?.sessionId).toBe(sessionId);
-      expect(persisted?.sessionFile).toBe(sessionFile);
+      expect(fs.realpathSync.native(persisted?.sessionFile ?? "")).toBe(
+        fs.realpathSync.native(sessionFile),
+      );
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);

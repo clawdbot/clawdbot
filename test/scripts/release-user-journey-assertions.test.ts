@@ -137,6 +137,31 @@ describe("release user journey assertions", () => {
     }
   });
 
+  it("rejects oversized JSON artifacts before parsing release user journey config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, ["configure-mock-model", "18080"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("JSON artifact exceeded");
+      expect(result.stderr).toContain("recent json tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("fails when uninstall leaves the managed plugin directory behind", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");

@@ -11,7 +11,9 @@ import { logConfigUpdated } from "../config/logging.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
+  resolveStorePath,
 } from "../config/sessions.js";
+import { closeSqliteSessionStoreDatabase } from "../config/sessions/store-sqlite.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -25,6 +27,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -148,6 +151,8 @@ export async function agentsDeleteCommand(
     return;
   }
 
+  await ensureSessionStateMigratedForCommand(cfg);
+
   await replaceConfigFile({
     nextConfig: result.config,
     ...(baseHash !== undefined ? { baseHash } : {}),
@@ -158,7 +163,9 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
+  const sessionStorePath = resolveStorePath(cfg.session?.store, { agentId });
   await purgeAgentSessionStoreEntries(cfg, agentId);
+  closeSqliteSessionStoreDatabase(sessionStorePath);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).

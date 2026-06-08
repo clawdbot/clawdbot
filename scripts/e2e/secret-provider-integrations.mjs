@@ -1265,6 +1265,15 @@ async function p3ThroughP6StaticReloadAndCommandSnapshot() {
   return "static capture, reload success, reload LKG, and command snapshot resolution proved";
 }
 
+function assertAllowedFailureCommandSucceeded(result, label, combinedOutput) {
+  if (result.signal) {
+    throw new Error(`${label} terminated by signal ${result.signal}: ${combinedOutput}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${label} failed (${String(result.code)}): ${combinedOutput}`);
+  }
+}
+
 async function p7AuthProfileSecretRefPersistsAndResolves() {
   await withProofEnv("p7", async (envCtx, _plugin, storePath) => {
     const port = await allocatePort();
@@ -1316,6 +1325,11 @@ async function p7AuthProfileSecretRefPersistsAndResolves() {
         `auth-profile SecretRef did not resolve through plugin integration: ${combined}`,
       );
     }
+    assertAllowedFailureCommandSucceeded(
+      result,
+      "auth-profile SecretRef model status probe",
+      combined,
+    );
     const callsAfter = readJson(storePath).calls;
     if (callsAfter <= callsBefore) {
       throw new Error("auth-profile proof did not invoke the plugin-managed resolver");
@@ -1897,6 +1911,7 @@ async function main() {
 }
 
 export {
+  assertAllowedFailureCommandSucceeded,
   collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,

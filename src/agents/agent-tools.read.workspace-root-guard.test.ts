@@ -40,7 +40,7 @@ async function loadModule() {
 let wrapToolWorkspaceRootGuardWithOptions: typeof import("./agent-tools.read.js").wrapToolWorkspaceRootGuardWithOptions;
 
 describe("wrapToolWorkspaceRootGuardWithOptions", () => {
-  const root = "/tmp/root";
+  const root = path.resolve("/tmp/root");
   const assertSandboxPathImpl: AssertSandboxPath = async ({ filePath }) => ({
     resolved:
       filePath.startsWith("file://") || path.isAbsolute(filePath)
@@ -216,7 +216,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
   it("maps additional container mounts to their own guarded host roots", async () => {
     const { tool } = createToolHarness();
-    const agentRoot = "/tmp/agent-root";
+    const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",
@@ -231,9 +231,26 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("normalizes container paths before matching additional mounts", async () => {
+    const { tool } = createToolHarness();
+    const skillRoot = path.resolve("/tmp/skill-root");
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/workspace/skills", hostRoot: skillRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-skill-traverse", { path: "/workspace/skills/../README.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "README.md"),
+      cwd: root,
+      root,
+    });
+  });
+
   it("maps file URLs under additional container mounts", async () => {
     const { tool } = createToolHarness();
-    const agentRoot = "/tmp/agent-root";
+    const agentRoot = path.resolve("/tmp/agent-root");
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
       containerWorkdir: "/workspace",

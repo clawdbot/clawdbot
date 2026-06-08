@@ -12,14 +12,7 @@
  */
 
 import MarkdownIt from "markdown-it";
-
-import type {
-  AstBlock,
-  AstItem,
-  Diagnostic,
-  FrontmatterEntry,
-  ParseResult,
-} from "./ast.js";
+import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
 import { slugify } from "./slug.js";
 
 type Token = ReturnType<MarkdownIt["parse"]>[number];
@@ -153,7 +146,9 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
   const items: AstItem[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (t.type !== "list_item_open" || t.map === null) {continue;}
+    if (t.type !== "list_item_open" || t.map === null) {
+      continue;
+    }
     // First inline at the item's own depth is the item text.
     let nestedDepth = 0;
     let text = "";
@@ -175,9 +170,7 @@ function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[]
       text,
       slug: kvMatch ? slugify(kvMatch[1]) : slugify(text),
       line: bodyFileLine + t.map[0],
-      ...(kvMatch !== null
-        ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } }
-        : {}),
+      ...(kvMatch !== null ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } } : {}),
     });
   }
   return items;

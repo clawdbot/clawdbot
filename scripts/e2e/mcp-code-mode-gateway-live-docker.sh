@@ -116,9 +116,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Live Docker MCP code-mode API-file smoke failed"
-  cat "$CLIENT_LOG"
+  docker_e2e_print_log "$CLIENT_LOG"
   exit "$status"
 fi
 
-cat "$CLIENT_LOG"
+docker_e2e_print_log "$CLIENT_LOG"
 echo "OK"

@@ -221,11 +221,17 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-/** Payload variants cron can execute in main-session or isolated-agent modes. */
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+/** Payload variants cron can execute in main-session or detached modes. */
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
 
 /** Partial payload update shape used by cron patch/edit flows. */
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -253,6 +259,25 @@ type CronAgentTurnPayloadPatch = {
 } & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
     toolsAllow?: string[] | null;
   };
+
+type CronCommandPayloadFields = {
+  /** Explicit argv vector to execute. Use a shell wrapper argv for shell syntax. */
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  input?: string;
+  timeoutSeconds?: number;
+  noOutputTimeoutSeconds?: number;
+  outputMaxBytes?: number;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;

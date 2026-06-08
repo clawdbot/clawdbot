@@ -7,6 +7,7 @@ import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbo
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
+import type { WhatsAppSendResult } from "./send-result.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 const imageOps = vi.hoisted(() => ({
@@ -105,10 +106,7 @@ describe("createWebSendApi", () => {
     expectRecordFields(requireSendContent(callIndex), fields);
   }
 
-  function expectSendResultFields(
-    result: Awaited<ReturnType<typeof api.sendMessage | typeof api.sendReaction>>,
-    fields: Record<string, unknown>,
-  ) {
+  function expectSendResultFields(result: WhatsAppSendResult, fields: Record<string, unknown>) {
     expectRecordFields(requireRecord(result, "send result"), fields);
   }
 
@@ -226,6 +224,72 @@ describe("createWebSendApi", () => {
       channel: "whatsapp",
       accountId: "main",
       direction: "outbound",
+    });
+  });
+
+  it("sends structured contact messages through the canonical send path", async () => {
+    const res = await api.sendContact("+1555", {
+      displayName: "QA Contact",
+      vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      contacts: {
+        displayName: "QA Contact",
+        contacts: [
+          {
+            displayName: "QA Contact",
+            vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+          },
+        ],
+      },
+    });
+    expectSendResultFields(res, {
+      kind: "contact",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("sends structured location messages through the canonical send path", async () => {
+    const res = await api.sendLocation("+1555", {
+      degreesLatitude: 37.7749,
+      degreesLongitude: -122.4194,
+      name: "QA Location",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      location: {
+        address: undefined,
+        degreesLatitude: 37.7749,
+        degreesLongitude: -122.4194,
+        name: "QA Location",
+      },
+    });
+    expectSendResultFields(res, {
+      kind: "location",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+  });
+
+  it("sends structured sticker messages through the canonical send path", async () => {
+    const payload = Buffer.from("webp");
+    const res = await api.sendSticker("+1555", payload);
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      sticker: payload,
+      mimetype: "image/webp",
+    });
+    expectSendResultFields(res, {
+      kind: "sticker",
+      messageId: "msg-1",
+      providerAccepted: true,
     });
   });
 

@@ -4,6 +4,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../config/sessions/test-helpers.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -41,7 +46,7 @@ async function previewMainAliasFromStore(params: {
   for (const [sessionId, content] of Object.entries(params.transcripts)) {
     await writeTranscriptMessage(dir, sessionId, content);
   }
-  await fs.writeFile(storePath, JSON.stringify(params.store, null, 2), "utf-8");
+  await writeSessionStoreForTestAsync(storePath, params.store);
 
   const { ws } = await openClient();
   try {
@@ -130,11 +135,10 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
     "utf-8",
   );
 
-  const writeRawStore = async (store: Record<string, unknown>) => {
-    await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  const writeRawStore = async (store: Record<string, SessionEntry>) => {
+    await writeSessionStoreForTestAsync(storePath, store);
   };
-  const readStore = async () =>
-    JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
+  const readStore = async () => readSessionStoreForTest(storePath);
 
   await writeRawStore({
     "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },

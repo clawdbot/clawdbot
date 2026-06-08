@@ -157,6 +157,7 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import {
+  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -262,6 +263,10 @@ import {
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
@@ -1034,13 +1039,24 @@ export async function runEmbeddedAttempt(
     }
   };
   try {
-    const skillsSnapshotForRun =
-      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
+    const {
+      skillsEligibility,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+      skillsSnapshot: skillsSnapshotForRun,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      workspaceOnly: loadSkillsWorkspaceOnly,
+    } = resolveSandboxSkillRuntimeInputs({
+      sandbox,
+      effectiveWorkspace,
+      skillsSnapshot: params.skillsSnapshot,
+    });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsWorkspace,
       config: params.config,
       agentId: sessionAgentId,
+      eligibility: skillsEligibility,
       skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly: loadSkillsWorkspaceOnly,
     });
     restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
@@ -1051,13 +1067,19 @@ export async function runEmbeddedAttempt(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: promptSkillEntries,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: sessionAgentId,
+      eligibility: skillsEligibility,
     });
     prepStages.mark("skills");
 
@@ -1119,12 +1141,12 @@ export async function runEmbeddedAttempt(
       });
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
+    const forceDirectMessageTool =
+      params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
     const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
       params.toolsAllow,
       {
-        forceMessageTool:
-          params.forceMessageTool === true ||
-          params.sourceReplyDeliveryMode === "message_tool_only",
+        forceMessageTool: forceDirectMessageTool,
       },
     );
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -1134,6 +1156,13 @@ export async function runEmbeddedAttempt(
     });
     const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
+    const toolSearchRuntimeConfig = forceDirectMessageTool
+      ? params.config
+      : applyLocalModelLeanToolSearchDefaults({
+          config: params.config,
+          agentId: sessionAgentId,
+          sessionKey: sandboxSessionKey,
+        });
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
       params.disableTools !== true &&
@@ -1146,7 +1175,7 @@ export async function runEmbeddedAttempt(
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
-      resolveToolSearchConfig(params.config).enabled;
+      resolveToolSearchConfig(toolSearchRuntimeConfig).enabled;
     const effectiveToolsAllow =
       toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
         ? [
@@ -1221,7 +1250,7 @@ export async function runEmbeddedAttempt(
                     sandbox,
                     resolvedWorkspace,
                   }),
-            config: params.config,
+            config: toolSearchRuntimeConfig,
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
@@ -1607,7 +1636,7 @@ export async function runEmbeddedAttempt(
         })
       : applyToolSearchCatalog({
           tools: effectiveTools,
-          config: params.config,
+          config: toolSearchRuntimeConfig,
           sessionId: params.sessionId,
           sessionKey: sandboxSessionKey,
           agentId: sessionAgentId,
@@ -2200,7 +2229,7 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: sandboxSessionKey,
-              config: params.config,
+              config: toolSearchRuntimeConfig,
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
@@ -2220,7 +2249,7 @@ export async function runEmbeddedAttempt(
           })
         : addClientToolsToToolSearchCatalog({
             tools: clientToolDefs,
-            config: params.config,
+            config: toolSearchRuntimeConfig,
             sessionId: params.sessionId,
             sessionKey: sandboxSessionKey,
             agentId: sessionAgentId,

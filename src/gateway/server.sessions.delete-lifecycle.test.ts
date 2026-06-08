@@ -8,7 +8,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, readSessionStore, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -192,12 +192,8 @@ test("sessions.delete scopes selected global deletes to the requested agent", as
     agentId: "work",
     deleteTranscript: false,
   });
-  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
-  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
+  const mainStore = readSessionStore(globalStores.mainStorePath);
+  const workStore = readSessionStore(globalStores.workStorePath);
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global).toBeUndefined();
   await resetConfiguredGlobalAgentSessionStore(globalStores);
@@ -444,10 +440,7 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   );
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
+  const store = readSessionStore(storePath);
   expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
   expect(

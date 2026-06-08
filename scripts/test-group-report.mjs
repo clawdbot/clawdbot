@@ -254,7 +254,7 @@ export function spawnText(command, args, options) {
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
+    let outputBytes = 0;
     let outputTail = Buffer.alloc(0);
     let stderrTail = Buffer.alloc(0);
     let streamedLogBytes = 0;
@@ -383,7 +383,7 @@ export function spawnText(command, args, options) {
         appendTail(buffer);
         return;
       }
-      output += message;
+      appendTail(buffer);
     }
     const appendOutput = (chunk, streamName) => {
       if (logFd !== null) {
@@ -417,10 +417,15 @@ export function spawnText(command, args, options) {
         return;
       }
 
-      output += chunk.toString("utf8");
-      if (Buffer.byteLength(output) > maxBuffer) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      outputBytes += buffer.byteLength;
+      appendTail(buffer);
+      if (streamName === "stderr") {
+        appendTail(buffer, "stderr");
+      }
+      if (outputBytes > maxBuffer) {
         outputExceeded = true;
-        output += `\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`;
+        appendDiagnostic(`\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`);
         signalChild("SIGTERM");
         scheduleKill(
           "[test-group-report] command did not exit after output limit; sending SIGKILL\n",
@@ -444,7 +449,7 @@ export function spawnText(command, args, options) {
       const result = {
         status: outputExceeded || timedOut ? 1 : (code ?? 1),
         signal,
-        output: logFd === null ? output : streamedOutput(),
+        output: streamedOutput(),
         timedOut,
       };
       if (waitingForKillGrace && processGroupIsAlive()) {

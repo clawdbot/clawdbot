@@ -456,6 +456,13 @@ type RunCronAgentTurnParams = {
   lane?: string;
 };
 
+function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
+  if (input.job.payload.kind === "agentTurn") {
+    return input.job.payload.message;
+  }
+  return input.message;
+}
+
 type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
 ) => RunCronAgentTurnResult;
@@ -765,7 +772,8 @@ async function prepareCronRunContext(params: {
     });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
-  const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
+  const message = resolveCronAgentTurnMessage(input);
+  const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
   const isExternalHook =
     hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
   const allowUnsafeExternalContent =
@@ -776,7 +784,7 @@ async function prepareCronRunContext(params: {
 
   if (isExternalHook) {
     const { detectSuspiciousPatterns } = await loadCronExternalContentRuntime();
-    const suspiciousPatterns = detectSuspiciousPatterns(input.message);
+    const suspiciousPatterns = detectSuspiciousPatterns(message);
     if (suspiciousPatterns.length > 0) {
       logWarn(
         `[security] Suspicious patterns detected in external hook content ` +
@@ -789,7 +797,7 @@ async function prepareCronRunContext(params: {
     const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
     const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
     const safeContent = buildSafeExternalPrompt({
-      content: input.message,
+      content: message,
       source: hookType,
       jobName: input.job.name,
       jobId: input.job.id,

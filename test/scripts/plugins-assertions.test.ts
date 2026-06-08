@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
 
@@ -32,8 +33,8 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
         env: { ...process.env, ...env },
         stdio: ["ignore", "pipe", "pipe"],
       });
-      let stdout = "";
-      let stderr = "";
+      const stdout = createBoundedChildOutput();
+      const stderr = createBoundedChildOutput();
       const timeout = setTimeout(() => {
         child.kill("SIGKILL");
         reject(new Error(`assertion helper did not exit: ${args.join(" ")}`));
@@ -43,10 +44,10 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
-        stdout += chunk;
+        stdout.append(chunk);
       });
       child.stderr.on("data", (chunk) => {
-        stderr += chunk;
+        stderr.append(chunk);
       });
       child.on("error", (error) => {
         clearTimeout(timeout);
@@ -54,7 +55,7 @@ function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
       });
       child.on("close", (status) => {
         clearTimeout(timeout);
-        resolve({ status, stdout, stderr });
+        resolve({ status, stdout: stdout.text(), stderr: stderr.text() });
       });
     },
   );

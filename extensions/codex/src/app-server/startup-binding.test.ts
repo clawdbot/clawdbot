@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
@@ -34,14 +35,17 @@ describe("Codex app-server startup binding", () => {
 
   async function writeSessionRecord(sessionFile: string, record: Record<string, unknown>) {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(path.dirname(sessionFile), "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:session-1": {
+          sessionId: "session-1",
           sessionFile,
+          updatedAt: Date.now(),
           ...record,
         },
-      }),
+      },
+      { skipMaintenance: true },
     );
   }
 
@@ -78,29 +82,33 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
-  it("reuses the session record cache while sessions.json is unchanged", async () => {
+  it("reads updated SQLite-backed session records between startup checks", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     await writeSessionRecord(sessionFile, { totalTokens: 12_000 });
-    const sessionsJson = path.join(path.dirname(sessionFile), "sessions.json");
-    const readFileSpy = vi.spyOn(fs, "readFile");
 
-    for (let i = 0; i < 2; i += 1) {
-      const binding = await rotateOversizedCodexAppServerStartupBinding({
-        binding: await readCodexAppServerBinding(sessionFile),
-        sessionFile,
-        agentDir,
-        config: undefined,
-      });
-      expect(binding?.threadId).toBe("thread-existing");
-    }
+    const firstBinding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      config: undefined,
+    });
+    expect(firstBinding?.threadId).toBe("thread-existing");
 
-    const sessionStoreReads = readFileSpy.mock.calls.filter(
-      ([file]) => typeof file === "string" && file === sessionsJson,
-    );
-    expect(sessionStoreReads).toHaveLength(1);
+    await writeSessionRecord(sessionFile, { totalTokens: 400_000 });
+
+    const secondBinding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      config: undefined,
+    });
+
+    expect(secondBinding).toBeUndefined();
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding).toBeUndefined();
   });
 
   it("checks native rollout token pressure under default compaction config", async () => {

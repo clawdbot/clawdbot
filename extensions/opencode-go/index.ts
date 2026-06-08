@@ -5,6 +5,8 @@ import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-mo
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
+  buildOpencodeGoLiveProviderConfig,
+  buildStaticOpencodeGoProviderConfig,
   listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
@@ -20,6 +22,26 @@ const OPENCODE_SHARED_WIZARD_GROUP = {
   groupLabel: "OpenCode",
   groupHint: OPENCODE_SHARED_HINT,
 } as const;
+
+type OpencodeGoCatalogAuth = {
+  apiKey?: string;
+  discoveryApiKey?: string;
+};
+
+function hasCatalogAuth(auth: OpencodeGoCatalogAuth): boolean {
+  return Boolean(auth.apiKey || auth.discoveryApiKey);
+}
+
+function resolveOpencodeGoCatalogAuth(
+  resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
+): OpencodeGoCatalogAuth | undefined {
+  const opencodeGoAuth = resolveProviderApiKey(PROVIDER_ID);
+  if (hasCatalogAuth(opencodeGoAuth)) {
+    return opencodeGoAuth;
+  }
+  const sharedOpencodeAuth = resolveProviderApiKey("opencode");
+  return hasCatalogAuth(sharedOpencodeAuth) ? sharedOpencodeAuth : undefined;
+}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -92,6 +114,26 @@ export default definePluginEntry({
           : undefined;
       },
       resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
+          if (!auth) {
+            return null;
+          }
+          if (!auth.discoveryApiKey) {
+            return {
+              provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
+            };
+          }
+          return {
+            provider: await buildOpencodeGoLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        },
+      },
       augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
