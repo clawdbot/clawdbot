@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Search Providers
+    category_note: bundled-structured-search-providers.md
+    coverage: 76
+    quality: 72
+    completeness: 76
+  - name: Setup and Diagnostics
+    category_note: operator-setup-provider-selection-and-credential-repair.md
+    coverage: 74
+    quality: 70
+    completeness: 74
+  - name: Network Safety
+    category_note: network-safety-ssrf-redirects-and-untrusted-content.md
+    coverage: 84
+    quality: 84
+    completeness: 84
+  - name: Tool Availability and Fetch
+    category_note: tool-exposure-policy-and-runtime-tool-wiring.md
+    coverage: 82
+    quality: 80
+    completeness: 82

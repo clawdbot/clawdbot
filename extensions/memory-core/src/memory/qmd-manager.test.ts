@@ -5848,6 +5848,170 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+
+  it("rebinds a managed collection when its root path changed (show reveals old path)", async () => {
+    // Regression: listCollectionsBestEffort gets only the name from `collection list`
+    // (no path). The fix enriches path via `collection show`; without it shouldRebindCollection
+    // hits the `!listed.path` branch and skips the rebind, leaving the old path pinned.
+    const oldWorkspaceDir = path.join(tmpRoot, "old-workspace");
+    const newWorkspaceDir = workspaceDir; // the manager is configured for this new path
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: newWorkspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const collectionName = `workspace-${agentId}`;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        // Real qmd: names only, no path/pattern in list output.
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([collectionName]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show" && args[2] === collectionName) {
+        // Real qmd `collection show` output — exposes the stale (old) path.
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            `Collection: ${collectionName}`,
+            `  Path:     ${oldWorkspaceDir}`,
+            `  Pattern:  **/*.md`,
+            `  Include:  yes (default)`,
+          ].join("\n"),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+
+    const removeCall = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === collectionName,
+    );
+    expect(removeCall).toBeDefined(); // rebind must remove the stale collection
+
+    const addCall = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === collectionName;
+    });
+    expect(addCall).toBeDefined();
+    // The new add must target the NEW workspace path, not the old one.
+    expect(addCall?.[2]).toBe(newWorkspaceDir);
+  });
+
+  it("rebinds a stale in-container collection root to the host workspace (sandbox-mode transition)", async () => {
+    // Sandbox coverage: an agent that previously ran with its workspace bind-mounted under
+    // /home/node/.openclaw/... stored that in-container path as the collection root. Resolved
+    // with host paths, `collection show` reveals the stale container path; the rebind is
+    // path-namespace-agnostic and re-binds to the current host root.
+    const containerRoot = "/home/node/.openclaw/teams/x/workspace";
+    const newWorkspaceDir = workspaceDir; // host path the manager is configured for
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: newWorkspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const collectionName = `workspace-${agentId}`;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([collectionName]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show" && args[2] === collectionName) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            `Collection: ${collectionName}`,
+            `  Path:     ${containerRoot}`,
+            `  Pattern:  **/*.md`,
+            `  Include:  yes (default)`,
+          ].join("\n"),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeCall = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === collectionName,
+    );
+    expect(removeCall).toBeDefined();
+    const addCall = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === collectionName;
+    });
+    expect(addCall).toBeDefined();
+    // Re-added at the host workspace root, not the stale container path.
+    expect(addCall?.[2]).toBe(newWorkspaceDir);
+  });
+
+  it("parseShownCollection extracts path and pattern from qmd collection show output", async () => {
+    // Unit test for the private parser — accessed via type cast to avoid exporting internals.
+    const { manager } = await createManager({ mode: "status" });
+    type WithParser = {
+      parseShownCollection: (output: string) => { path?: string; pattern?: string };
+    };
+    const parser = (manager as unknown as WithParser).parseShownCollection.bind(manager);
+
+    const sampleOutput = [
+      "Collection: memory-dir-example",
+      "  Path:     /home/node/.openclaw/teams/example-team/workspace-example/memory",
+      "  Pattern:  **/*.md",
+      "  Include:  yes (default)",
+    ].join("\n");
+
+    const result = parser(sampleOutput);
+    expect(result.path).toBe("/home/node/.openclaw/teams/example-team/workspace-example/memory");
+    expect(result.pattern).toBe("**/*.md");
+
+    // Tolerant of missing fields.
+    expect(parser("")).toEqual({});
+    expect(parser("Collection: no-path-here\n  Include:  yes")).toEqual({});
+
+    // Path-only (no pattern line).
+    const pathOnly = parser("Collection: x\n  Path:  /some/path\n");
+    expect(pathOnly.path).toBe("/some/path");
+    expect(pathOnly.pattern).toBeUndefined();
+
+    await manager.close();
+  });
 });
 
 function createDeferred<T>() {

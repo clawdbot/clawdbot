@@ -12,6 +12,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
@@ -491,6 +492,7 @@ type PreparedCronRunContext = {
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
+  inheritDefaultFallbacksForAgentStringModel: boolean;
   modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
@@ -536,10 +538,13 @@ async function prepareCronRunContext(params: {
         ? input.job.agentId
         : undefined;
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
-  const agentConfigOverride = normalizedRequested
-    ? resolveAgentConfig(runtimeCfg, normalizedRequested)
-    : undefined;
   const agentId = normalizedRequested ?? defaultAgentId;
+  const selectedAgentConfig = resolveAgentConfig(runtimeCfg, agentId);
+  const agentConfigOverride = normalizedRequested ? selectedAgentConfig : undefined;
+  const matchesDefaultFallbackAgentStringModel =
+    typeof selectedAgentConfig?.model === "string" &&
+    resolveAgentModelPrimaryValue(selectedAgentConfig.model) ===
+      resolveAgentModelPrimaryValue(runtimeCfg.agents?.defaults?.model);
   const agentCfg: AgentDefaultsConfig = buildCronAgentDefaultsConfig({
     defaults: runtimeCfg.agents?.defaults,
     agentConfigOverride,
@@ -652,6 +657,10 @@ async function prepareCronRunContext(params: {
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
+  const inheritDefaultFallbacksForAgentStringModel =
+    matchesDefaultFallbackAgentStringModel &&
+    (resolvedModelSelection.modelSource === "default" ||
+      resolvedModelSelection.modelSource === "agent");
 
   const modelPreflightRuntime = await loadCronModelPreflightRuntime();
   const preflightCandidates = resolveCronPreflightCandidates({
@@ -661,6 +670,7 @@ async function prepareCronRunContext(params: {
     provider,
     model,
     useSubagentFallbacks,
+    inheritDefaultFallbacksForAgentStringModel,
   });
   let selectedPreflightCandidate: { provider: string; model: string } | undefined;
   let selectedPreflightCandidateIndex = -1;
@@ -910,6 +920,7 @@ async function prepareCronRunContext(params: {
       skillsSnapshot,
       liveSelection,
       useSubagentFallbacks,
+      inheritDefaultFallbacksForAgentStringModel,
       modelFallbacksOverride,
       thinkLevel,
       timeoutMs,
@@ -1316,6 +1327,8 @@ export async function runCronIsolatedAgentTurn(params: {
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
+      inheritDefaultFallbacksForAgentStringModel:
+        prepared.context.inheritDefaultFallbacksForAgentStringModel,
       modelFallbacksOverride: prepared.context.modelFallbacksOverride,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,

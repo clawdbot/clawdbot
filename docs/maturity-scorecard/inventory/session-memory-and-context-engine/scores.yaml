@@ -1,0 +1,48 @@
+version: 1
+process_version: 3
+data:
+  - name: CLI Session and Transcript Management
+    category_note: cli-session-and-transcript-management.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Token Management
+    category_note: compaction-pruning-and-token-pressure.md
+    coverage: 78
+    quality: 60
+    completeness: 78
+  - name: Context Engine
+    category_note: context-engine-and-runtime-assembly.md
+    coverage: 72
+    quality: 80
+    completeness: 72
+  - name: Cross-client History and Session Parity
+    category_note: cross-client-history-and-session-parity.md
+    coverage: 76
+    quality: 62
+    completeness: 76
+  - name: Diagnostics, Maintenance, and Recovery
+    category_note: diagnostics-maintenance-and-recovery.md
+    coverage: 72
+    quality: 68
+    completeness: 72
+  - name: Core Prompts and Context
+    category_note: instruction-profile-and-context-visibility.md
+    coverage: 68
+    quality: 70
+    completeness: 68
+  - name: Memory
+    category_note: memory-files-tools-and-active-memory.md
+    coverage: 66
+    quality: 58
+    completeness: 66
+  - name: Session Routing
+    category_note: session-routing-and-conversation-binding.md
+    coverage: 82
+    quality: 74
+    completeness: 82
+  - name: Transcript Persistence
+    category_note: transcript-persistence-and-durability.md
+    coverage: 78
+    quality: 58
+    completeness: 78

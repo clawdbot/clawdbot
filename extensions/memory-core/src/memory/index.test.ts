@@ -364,6 +364,27 @@ describe("memory index", () => {
     }
   }
 
+  it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-missing-table.sqlite"),
+      vectorEnabled: true,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    managersForCleanup.add(manager);
+    type VectorState = { available: boolean | null; dims?: number };
+    const vector = Reflect.get(manager, "vector") as VectorState;
+    vector.available = true;
+    vector.dims = 4;
+    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+
+    await expect(
+      Reflect.apply(Reflect.get(manager, "runUnsafeReindex"), manager, [
+        { reason: "test", force: true },
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
   async function getFtsSessionManager(params: {
     stateDirName: string;
     storeFileName: string;
@@ -528,12 +549,13 @@ describe("memory index", () => {
     }
   });
 
-  it("does not search stale rows when index metadata is missing", async () => {
+  it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({
       storePath: dbPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
     const oldManager = await getFreshManager(cfg);
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
@@ -559,6 +581,19 @@ describe("memory index", () => {
         status: "missing",
         reason: "index metadata is missing",
       });
+
+      vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+      await nextManager.sync({ reason: "test" });
+
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const repairedAlphaResults = await nextManager.search("alpha");
+      expect(
+        repairedAlphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md")),
+      ).toBe(false);
+      const repairedResults = await nextManager.search("beta");
+      expect(repairedResults.length).toBeGreaterThan(0);
+      expect(repairedResults[0]?.path).toContain("memory/2026-01-13.md");
     } finally {
       await nextManager.close?.();
     }
@@ -585,6 +620,46 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toMatchObject({
         status: "mismatched",
       });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
+  it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
+    const dbPath = path.join(workspaceDir, "index-missing-meta-provider-unavailable.sqlite");
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      model: "semantic-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    forceNoProvider = true;
+    const nextManager = await getFreshManager(oldCfg);
+    try {
+      const db = (
+        nextManager as unknown as {
+          db: {
+            exec: (sql: string) => void;
+            prepare: (sql: string) => {
+              get: () => { model?: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+
+      await nextManager.sync({ reason: "test" });
+
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
+      const row = db.prepare("SELECT model FROM chunks LIMIT 1").get();
+      expect(row?.model).toBe("semantic-embed");
     } finally {
       await nextManager.close?.();
     }

@@ -67,7 +67,7 @@ function requireIncludedCounts(prompt: string): [included: number, total: number
 describe("formatSkillsCompact", () => {
   it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
     const skills = [
-      makeSkill("weather", "Get weather <data> & forecasts"),
+      { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
     ];
     expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
@@ -85,9 +85,12 @@ describe("formatSkillsCompact", () => {
   });
 
   it("omits description, keeps name and location", () => {
-    const out = formatSkillsCompact([makeSkill("weather", "Get weather data")]);
+    const out = formatSkillsCompact([
+      { ...makeSkill("weather", "Get weather data"), promptVersion: "sha256:abc123" },
+    ]);
     expect(out).toContain("<name>weather</name>");
     expect(out).toContain("<location>/skills/weather/SKILL.md</location>");
+    expect(out).toContain("<version>sha256:abc123</version>");
     expect(out).not.toContain("Get weather data");
     expect(out).not.toContain("<description>");
   });
@@ -219,6 +222,28 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("only-one");
     const [included] = requireIncludedCounts(prompt);
     expect(included).toBe(0);
+  });
+
+  it("budgets the final rendered prompt including versions and limit notices", () => {
+    const skills = Array.from({ length: 24 }, (_, i) => ({
+      ...makeSkill(`skill-${i}`, "A".repeat(160)),
+      promptVersion: `sha256:${String(i).padStart(16, "0")}`,
+    }));
+    const budget = 2_200;
+
+    const prompt = buildPrompt(skills, { maxChars: budget });
+
+    expect(prompt.length).toBeLessThanOrEqual(budget);
+    expect(prompt).toContain("<version>sha256:");
+    expect(prompt).toContain("included");
+  });
+
+  it("keeps no-skill catalogs empty instead of emitting version guidance", () => {
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [],
+    });
+
+    expect(prompt).toBe("");
   });
 
   it("count truncation only: shows included X of Y without compact note", () => {

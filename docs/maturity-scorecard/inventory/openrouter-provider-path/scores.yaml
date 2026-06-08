@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Provider Setup and Auth
+    category_note: operator-setup-and-provider-registration.md
+    coverage: 78
+    quality: 64
+    completeness: 78
+  - name: Chat Runtime and Normalization
+    category_note: chat-completions-transport-routing-and-reasoning.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Provider Recovery and Diagnostics
+    category_note: failover-errors-overflow-and-diagnostics.md
+    coverage: 74
+    quality: 65
+    completeness: 74
+  - name: Media Generation and Speech
+    category_note: media-generation-speech-and-media-understanding.md
+    coverage: 72
+    quality: 66
+    completeness: 72

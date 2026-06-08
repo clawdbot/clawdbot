@@ -306,6 +306,8 @@ export async function executeNodeHostCommand(
         const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
           approvalId,
           sessionKey: params.notifySessionKey ?? params.sessionKey,
+          expectedSessionId: params.sessionId,
+          sessionStore: params.sessionStore,
           bashElevated: params.bashElevated,
           turnSourceChannel: params.turnSourceChannel,
           turnSourceTo: params.turnSourceTo,

@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Installation and Updates
+    category_note: packaging-install-update-desktop-integration.md
+    coverage: 5
+    quality: 25
+    completeness: 5
+  - name: Gateway Connection
+    category_note: gateway-connection-pairing-local-remote.md
+    coverage: 8
+    quality: 35
+    completeness: 8
+  - name: Chat Sessions
+    category_note: native-chat-session-controls.md
+    coverage: 0
+    quality: 25
+    completeness: 0
+  - name: Status and Repair
+    category_note: diagnostics-health-operator-repair.md
+    coverage: 5
+    quality: 35
+    completeness: 5
+  - name: Desktop Tools and Permissions
+    category_note: node-host-capabilities-exec-approvals.md
+    coverage: 5
+    quality: 28
+    completeness: 5

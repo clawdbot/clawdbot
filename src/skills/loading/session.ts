@@ -9,6 +9,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/session
 import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
+import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -85,6 +86,7 @@ export interface Skill {
   description: string;
   filePath: string;
   baseDir: string;
+  promptVersion?: string;
   source: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
@@ -322,6 +324,7 @@ function loadSkillFromFile(
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
+        promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
         disableModelInvocation: frontmatter["disable-model-invocation"] === true,

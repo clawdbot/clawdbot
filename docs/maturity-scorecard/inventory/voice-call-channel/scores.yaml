@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-configuration-and-smoke.md
+    coverage: 42
+    quality: 56
+    completeness: 42
+  - name: Access and Identity
+    category_note: webhook-exposure-and-security.md
+    coverage: 60
+    quality: 62
+    completeness: 60
+  - name: Conversation Routing and Delivery
+    category_note: inbound-routing-sessions-and-lifecycle.md
+    coverage: 52
+    quality: 58
+    completeness: 52
+  - name: Media and Rich Content
+    category_note: provider-transports-and-call-control.md
+    coverage: 48
+    quality: 57
+    completeness: 48
+  - name: Realtime Voice and Calls
+    category_note: realtime-voice-and-agent-consult.md
+    coverage: 44
+    quality: 55
+    completeness: 44

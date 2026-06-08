@@ -1,0 +1,43 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Actions Commands and Approvals
+    category_note: channel-actions-commands-and-approvals.md
+    coverage: 68
+    quality: 72
+    completeness: 68
+  - name: Channel Setup
+    category_note: channel-setup.md
+    coverage: 84
+    quality: 78
+    completeness: 84
+  - name: Group Thread and Ambient Room Behavior
+    category_note: group-thread-and-ambient-room-behavior.md
+    coverage: 72
+    quality: 68
+    completeness: 72
+  - name: Inbound Access and Identity Gates
+    category_note: inbound-access-and-identity-gates.md
+    coverage: 80
+    quality: 76
+    completeness: 80
+  - name: Media Attachments and Rich Channel Data
+    category_note: media-attachments-and-rich-channel-data.md
+    coverage: 68
+    quality: 70
+    completeness: 68
+  - name: Outbound Delivery and Reply Pipeline
+    category_note: outbound-delivery-and-reply-pipeline.md
+    coverage: 82
+    quality: 75
+    completeness: 82
+  - name: Conversation Routing and Delivery
+    category_note: conversation-routing-and-delivery.md
+    coverage: 77
+    quality: 71
+    completeness: 77
+  - name: Status Health and Operator Controls
+    category_note: status-health-and-operator-controls.md
+    coverage: 82
+    quality: 78
+    completeness: 82

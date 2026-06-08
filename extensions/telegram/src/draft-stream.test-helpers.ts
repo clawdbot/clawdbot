@@ -23,14 +23,19 @@ export function createTestDraftStream(params?: {
   onStop?: () => void | Promise<void>;
   onDiscard?: () => void | Promise<void>;
   clearMessageIdOnForceNew?: boolean;
+  stopUpdatesOnDiscard?: boolean;
   visibleSinceMs?: number;
 }): TestDraftStream {
   let messageId = params?.messageId;
   let visibleSinceMs = params?.visibleSinceMs;
   let previewRevision = 0;
   let lastDeliveredText = "";
+  let stopped = false;
   return {
     update: vi.fn().mockImplementation((text: string) => {
+      if (stopped) {
+        return;
+      }
       previewRevision += 1;
       lastDeliveredText = text.trimEnd();
       params?.onUpdate?.(text);
@@ -45,10 +50,14 @@ export function createTestDraftStream(params?: {
       await params?.onStop?.();
     }),
     discard: vi.fn().mockImplementation(async () => {
+      if (params?.stopUpdatesOnDiscard) {
+        stopped = true;
+      }
       await params?.onDiscard?.();
     }),
     materialize: vi.fn().mockImplementation(async () => messageId),
     forceNewMessage: vi.fn().mockImplementation(() => {
+      stopped = false;
       if (params?.clearMessageIdOnForceNew) {
         messageId = undefined;
       }

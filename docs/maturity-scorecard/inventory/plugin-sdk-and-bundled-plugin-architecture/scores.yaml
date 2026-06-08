@@ -1,0 +1,48 @@
+version: 1
+process_version: 3
+data:
+  - name: Authoring and Packaging plugins
+    category_note: public-sdk-api-and-subpaths.md
+    coverage: 77
+    quality: 74
+    completeness: 72
+  - name: Bundled plugins
+    category_note: bundled-plugin-discovery-and-inventory.md
+    coverage: 86
+    quality: 84
+    completeness: 88
+  - name: Canvas plugin
+    category_note: canvas-plugin.md
+    coverage: 76
+    quality: 66
+    completeness: 74
+  - name: Installing and running plugins
+    category_note: runtime-loading-and-lifecycle.md
+    coverage: 86
+    quality: 84
+    completeness: 88
+  - name: Channel plugins
+    category_note: channel-plugin-architecture.md
+    coverage: 82
+    quality: 78
+    completeness: 80
+  - name: Provider and tool plugins
+    category_note: provider-tool-plugin-architecture.md
+    coverage: 84
+    quality: 82
+    completeness: 84
+  - name: Plugin approvals
+    category_note: approval-and-security-boundaries.md
+    coverage: 84
+    quality: 86
+    completeness: 86
+  - name: Publishing plugins
+    category_note: distribution-release-and-compatibility.md
+    coverage: 79
+    quality: 82
+    completeness: 74
+  - name: Testing plugins
+    category_note: developer-testing-and-fixtures.md
+    coverage: 84
+    quality: 81
+    completeness: 82

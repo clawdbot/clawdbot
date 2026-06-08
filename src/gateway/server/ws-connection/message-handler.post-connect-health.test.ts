@@ -158,6 +158,10 @@ function attachGatewayHarness(options: {
   connectNonce: string;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
   requestOrigin?: string;
+  requestHost?: string;
+  remoteAddr?: string;
+  localAddr?: string;
+  resolvedAuth?: ResolvedGatewayAuth;
   client?: unknown;
   close?: CloseGatewayConnection;
   isClosed?: () => boolean;
@@ -179,7 +183,10 @@ function attachGatewayHarness(options: {
   } as unknown as WebSocket;
   const send = vi.fn();
   let client: unknown = options.client ?? null;
-  const resolvedAuth: ResolvedGatewayAuth = {
+  const requestHost = options.requestHost ?? "127.0.0.1:19001";
+  const remoteAddr = options.remoteAddr ?? "127.0.0.1";
+  const localAddr = options.localAddr ?? "127.0.0.1";
+  const resolvedAuth: ResolvedGatewayAuth = options.resolvedAuth ?? {
     mode: "none",
     allowTailscale: false,
   };
@@ -187,15 +194,15 @@ function attachGatewayHarness(options: {
     socket,
     upgradeReq: {
       headers: {
-        host: "127.0.0.1:19001",
+        host: requestHost,
         ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
       },
-      socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
     connId: options.connId,
-    remoteAddr: "127.0.0.1",
-    localAddr: "127.0.0.1",
-    requestHost: "127.0.0.1:19001",
+    remoteAddr,
+    localAddr,
+    requestHost,
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
@@ -491,6 +498,50 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       internal?: { approvalRuntime?: boolean };
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).toBe(true);
+  });
+
+  it("does not trust approval runtime tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-approval-runtime-token",
+      connectNonce: "nonce-remote-approval-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-approval-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
   });
 });
 

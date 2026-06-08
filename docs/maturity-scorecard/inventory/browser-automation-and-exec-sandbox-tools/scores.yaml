@@ -1,0 +1,18 @@
+version: 1
+process_version: 3
+data:
+  - name: Browser Automation
+    category_note: browser-actions-snapshots-and-artifacts.md
+    coverage: 78
+    quality: 74
+    completeness: 78
+  - name: Tool Invocation and Execution
+    category_note: exec-routing-and-process-lifecycle.md
+    coverage: 82
+    quality: 79
+    completeness: 82
+  - name: Sandbox and Tool Policy
+    category_note: sandbox-backends-and-workspace-isolation.md
+    coverage: 76
+    quality: 72
+    completeness: 76

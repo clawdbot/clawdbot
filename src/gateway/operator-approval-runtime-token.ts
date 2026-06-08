@@ -1,15 +1,43 @@
 // Operator approval runtime token.
-// Provides a process-local loopback token for approval helper clients.
-import { randomBytes, timingSafeEqual } from "node:crypto";
+// Uses an existing shared socket token when available, with a process-local fallback.
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 
-let approvalRuntimeToken: string | null = null;
+const APPROVAL_RUNTIME_TOKEN_CONTEXT = "openclaw:gateway-approval-runtime-token:v1";
+
+let fallbackApprovalRuntimeToken: string | null = null;
+
+function deriveApprovalRuntimeToken(socketToken: string): string {
+  return createHmac("sha256", socketToken)
+    .update(APPROVAL_RUNTIME_TOKEN_CONTEXT)
+    .digest("base64url");
+}
+
+function readSharedApprovalRuntimeToken(): string | null {
+  const token = loadExecApprovals().socket?.token?.trim();
+  return token ? deriveApprovalRuntimeToken(token) : null;
+}
+
+function tokenMatches(token: string, expected: string | null | undefined): boolean {
+  if (!expected) {
+    return false;
+  }
+  const tokenBytes = Buffer.from(token);
+  const expectedBytes = Buffer.from(expected);
+  // timingSafeEqual requires equal lengths; keep length rejection explicit instead of catching.
+  return tokenBytes.length === expectedBytes.length && timingSafeEqual(tokenBytes, expectedBytes);
+}
 
 /**
- * Returns the process-local token used to authorize loopback operator-approval clients.
+ * Returns the token used to authorize local operator-approval clients.
  */
 export function getOperatorApprovalRuntimeToken(): string {
-  approvalRuntimeToken ??= randomBytes(32).toString("base64url");
-  return approvalRuntimeToken;
+  const sharedToken = readSharedApprovalRuntimeToken();
+  if (sharedToken) {
+    return sharedToken;
+  }
+  fallbackApprovalRuntimeToken ??= randomBytes(32).toString("base64url");
+  return fallbackApprovalRuntimeToken;
 }
 
 /**
@@ -20,9 +48,11 @@ export function isOperatorApprovalRuntimeToken(value: string | null | undefined)
   if (!token) {
     return false;
   }
-  const expected = getOperatorApprovalRuntimeToken();
-  const tokenBytes = Buffer.from(token);
-  const expectedBytes = Buffer.from(expected);
-  // timingSafeEqual requires equal lengths; keep length rejection explicit instead of catching.
-  return tokenBytes.length === expectedBytes.length && timingSafeEqual(tokenBytes, expectedBytes);
+  const sharedToken = readSharedApprovalRuntimeToken();
+  if (tokenMatches(token, sharedToken)) {
+    return true;
+  }
+  const fallbackToken =
+    fallbackApprovalRuntimeToken ?? (sharedToken ? null : getOperatorApprovalRuntimeToken());
+  return tokenMatches(token, fallbackToken);
 }

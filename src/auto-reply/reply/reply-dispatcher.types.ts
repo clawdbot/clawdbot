@@ -3,9 +3,14 @@ import type { ReplyPayload } from "../types.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
+export type ReplyDispatchRuntimeInfo = {
+  kind: ReplyDispatchKind;
+  assistantMessageIndex?: number;
+};
+
 export type ReplyDispatchBeforeDeliver = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
+  info: ReplyDispatchRuntimeInfo,
 ) => Promise<ReplyPayload | null> | ReplyPayload | null;
 
 export type ReplyDispatcher = {

@@ -1,175 +1,55 @@
 [
   {
-    "source": "OpenClaw",
-    "target": "OpenClaw"
+    "source": "/cli/config",
+    "target": "/cli/config"
   },
   {
-    "source": "macOS platform notes",
-    "target": "macOS 平台说明"
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
   },
   {
-    "source": "Logging",
-    "target": "日志"
+    "source": "/gateway/configuration#config-hot-reload",
+    "target": "/gateway/configuration#config-hot-reload"
   },
   {
-    "source": "iMessage",
-    "target": "iMessage"
+    "source": "/gateway/configuration#strict-validation",
+    "target": "/gateway/configuration#strict-validation"
   },
   {
-    "source": "Coming from BlueBubbles",
-    "target": "Coming from BlueBubbles"
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
   },
   {
-    "source": "BlueBubbles removal and the imsg iMessage path",
-    "target": "BlueBubbles removal and the imsg iMessage path"
+    "source": "ACP agents",
+    "target": "ACP 智能体"
   },
   {
-    "source": "BlueBubbles",
-    "target": "BlueBubbles"
-  },
-  {
-    "source": "Configuration reference - iMessage",
-    "target": "Configuration reference - iMessage"
-  },
-  {
-    "source": "Pairing",
-    "target": "配对"
-  },
-  {
-    "source": "Channel Routing",
-    "target": "频道路由"
-  },
-  {
-    "source": "ClawHub",
-    "target": "ClawHub"
-  },
-  {
-    "source": "OpenAI",
-    "target": "OpenAI"
-  },
-  {
-    "source": "OpenAI provider",
-    "target": "OpenAI provider"
-  },
-  {
-    "source": "Mantis",
-    "target": "Mantis"
-  },
-  {
-    "source": "OpenClaw App SDK",
-    "target": "OpenClaw 应用 SDK"
-  },
-  {
-    "source": "OpenClaw App SDK API design",
-    "target": "OpenClaw 应用 SDK API 设计"
-  },
-  {
-    "source": "Message lifecycle refactor",
-    "target": "消息生命周期重构"
+    "source": "ACP agents setup",
+    "target": "ACP Agents 设置"
   },
   {
     "source": "ACP lifecycle refactor",
     "target": "ACP 生命周期重构"
   },
   {
-    "source": "Channel message API",
-    "target": "频道消息 API"
+    "source": "Active memory",
+    "target": "主动记忆"
   },
   {
-    "source": "Channel ingress API",
-    "target": "频道入口 API"
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
   },
   {
-    "source": "Channel access cleanup",
-    "target": "频道访问清理"
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
   },
   {
-    "source": "Ingress core shrink plan",
-    "target": "入口核心精简计划"
+    "source": "Additional bundled variants",
+    "target": "其他内置变体"
   },
   {
-    "source": "Ingress core shrink",
-    "target": "入口核心精简"
-  },
-  {
-    "source": "Talk mode",
-    "target": "Talk 模式"
-  },
-  {
-    "source": "Azure Speech",
-    "target": "Azure Speech"
-  },
-  {
-    "source": "Azure Speech provider",
-    "target": "Azure Speech provider"
-  },
-  {
-    "source": "Web tools",
-    "target": "Web 工具"
-  },
-  {
-    "source": "Status",
-    "target": "状态"
-  },
-  {
-    "source": "Gateway",
-    "target": "Gateway 网关"
-  },
-  {
-    "source": "Gateway health",
-    "target": "Gateway 健康"
-  },
-  {
-    "source": "Gateway RPC reference",
-    "target": "Gateway RPC 参考"
-  },
-  {
-    "source": "Secure file operations",
-    "target": "安全文件操作"
-  },
-  {
-    "source": "Sessions",
-    "target": "会话"
-  },
-  {
-    "source": "Pi",
-    "target": "Pi"
-  },
-  {
-    "source": "Agent runtimes",
-    "target": "Agent Runtimes"
-  },
-  {
-    "source": "Agent Runtimes",
-    "target": "Agent Runtimes"
-  },
-  {
-    "source": "Code mode",
-    "target": "代码模式"
-  },
-  {
-    "source": "Codex harness",
-    "target": "Codex harness"
-  },
-  {
-    "source": "Codex harness reference",
-    "target": "Codex harness reference"
-  },
-  {
-    "source": "Codex harness runtime",
-    "target": "Codex harness runtime"
-  },
-  {
-    "source": "Native Codex plugins",
-    "target": "Native Codex plugins"
-  },
-  {
-    "source": "Codex Computer Use",
-    "target": "Codex Computer Use"
-  },
-  {
-    "source": "Diagnostics export",
-    "target": "诊断导出"
+    "source": "agent",
+    "target": "智能体"
   },
   {
     "source": "Agent harness plugins",
@@ -180,272 +60,136 @@
     "target": "Agent harness plugins (SDK reference)"
   },
   {
-    "source": "Copilot SDK harness",
-    "target": "Copilot SDK harness"
-  },
-  {
-    "source": "Copilot plugin",
-    "target": "Copilot plugin"
-  },
-  {
-    "source": "GitHub Copilot agent runtime",
-    "target": "GitHub Copilot agent runtime"
-  },
-  {
-    "source": "copilot",
-    "target": "copilot"
-  },
-  {
     "source": "Agent loop",
     "target": "Agent loop"
   },
   {
-    "source": "Steering queue",
-    "target": "Steering queue"
+    "source": "Agent Runtime - Agent Turn Execution Maturity Note",
+    "target": "Agent Runtime - Agent Turn Execution Maturity Note"
   },
   {
-    "source": "Steer",
-    "target": "Steer"
+    "source": "Agent Runtime - Hosted Provider Execution Maturity Note",
+    "target": "Agent Runtime - Hosted Provider Execution Maturity Note"
   },
   {
-    "source": "Models",
-    "target": "Models"
+    "source": "Agent Runtime - Provider Auth Maturity Note",
+    "target": "Agent Runtime - Provider Auth Maturity Note"
   },
   {
-    "source": "Skills",
-    "target": "Skills"
+    "source": "Agent Runtime - Streaming and Progress Maturity Note",
+    "target": "Agent Runtime - Streaming and Progress Maturity Note"
   },
   {
-    "source": "Skills config",
-    "target": "Skills 配置"
+    "source": "Agent Runtime - Tool Execution Controls Maturity Note",
+    "target": "Agent Runtime - Tool Execution Controls Maturity Note"
   },
   {
-    "source": "Skills Config",
-    "target": "Skills 配置"
+    "source": "Agent runtime architecture",
+    "target": "Agent runtime architecture"
   },
   {
-    "source": "local loopback",
-    "target": "local loopback"
+    "source": "Agent Runtime Maturity Report",
+    "target": "Agent Runtime Maturity Report"
   },
   {
-    "source": "Tailscale",
-    "target": "Tailscale"
+    "source": "Agent runtimes",
+    "target": "Agent Runtimes"
   },
   {
-    "source": "Getting Started",
-    "target": "入门指南"
+    "source": "Agent Runtimes",
+    "target": "Agent Runtimes"
   },
   {
-    "source": "Getting started",
-    "target": "入门指南"
+    "source": "Agent workspace",
+    "target": "Agent 工作区"
   },
   {
-    "source": "Quick start",
-    "target": "快速开始"
+    "source": "agentDirTemplate",
+    "target": "Agent 目录模板"
   },
   {
-    "source": "Quick Start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Chutes",
-    "target": "Chutes"
-  },
-  {
-    "source": "DeepInfra",
-    "target": "DeepInfra"
-  },
-  {
-    "source": "Qwen",
-    "target": "Qwen"
-  },
-  {
-    "source": "Feishu",
-    "target": "Feishu"
-  },
-  {
-    "source": "Yuanbao",
-    "target": "腾讯元宝"
-  },
-  {
-    "source": "WeChat",
-    "target": "微信"
-  },
-  {
-    "source": "Weixin",
-    "target": "微信"
-  },
-  {
-    "source": "Mattermost",
-    "target": "Mattermost"
-  },
-  {
-    "source": "BytePlus (International)",
-    "target": "BytePlus（国际版）"
-  },
-  {
-    "source": "Volcengine TTS HTTP API",
-    "target": "Volcengine TTS HTTP API"
+    "source": "Agents",
+    "target": "智能体"
   },
   {
     "source": "Amazon Bedrock Mantle",
     "target": "Amazon Bedrock Mantle"
   },
   {
+    "source": "Android app - Connection Setup Maturity Note",
+    "target": "Android app - Connection Setup Maturity Note"
+  },
+  {
+    "source": "Android app - Device Runtime Maturity Note",
+    "target": "Android app - Device Runtime Maturity Note"
+  },
+  {
+    "source": "Android app - Distribution Maturity Note",
+    "target": "Android app - Distribution Maturity Note"
+  },
+  {
+    "source": "Android app - Media Capture Maturity Note",
+    "target": "Android app - Media Capture Maturity Note"
+  },
+  {
+    "source": "Android app - Mobile Chat Maturity Note",
+    "target": "Android app - Mobile Chat Maturity Note"
+  },
+  {
+    "source": "Android app - Settings Maturity Note",
+    "target": "Android app - Settings Maturity Note"
+  },
+  {
+    "source": "Android app - Voice Maturity Note",
+    "target": "Android app - Voice Maturity Note"
+  },
+  {
+    "source": "Android app Maturity Report",
+    "target": "Android app Maturity Report"
+  },
+  {
     "source": "Anthropic (API + Claude CLI)",
     "target": "Anthropic（API + Claude CLI）"
   },
   {
-    "source": "Moonshot AI",
-    "target": "Moonshot AI"
+    "source": "Anthropic provider path - Media Inputs Maturity Note",
+    "target": "Anthropic provider path - Media Inputs Maturity Note"
   },
   {
-    "source": "Model providers",
-    "target": "模型提供商"
+    "source": "Anthropic provider path Maturity Report",
+    "target": "Anthropic provider path Maturity Report"
   },
   {
-    "source": "Model Providers",
-    "target": "模型提供商"
+    "source": "Archive-only",
+    "target": "仅归档"
   },
   {
-    "source": "NVIDIA",
-    "target": "NVIDIA"
+    "source": "Async Exec Duplicate Completion Investigation",
+    "target": "Async Exec Duplicate Completion Investigation"
   },
   {
-    "source": "NVIDIA API key",
-    "target": "NVIDIA API key"
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
   },
   {
-    "source": "Provider directory",
-    "target": "提供商目录"
+    "source": "Automation",
+    "target": "自动化"
   },
   {
-    "source": "Additional bundled variants",
-    "target": "其他内置变体"
+    "source": "Automation overview",
+    "target": "自动化概览"
   },
   {
-    "source": "Diffs",
-    "target": "Diffs"
+    "source": "Automation: cron, hooks, tasks, polling Maturity Report",
+    "target": "Automation: cron, hooks, tasks, polling Maturity Report"
   },
   {
-    "source": "Dreaming",
-    "target": "Dreaming"
+    "source": "Azure Speech",
+    "target": "Azure Speech"
   },
   {
-    "source": "Capability Cookbook",
-    "target": "能力扩展手册"
-  },
-  {
-    "source": "WhatsApp group messages",
-    "target": "WhatsApp 群组消息"
-  },
-  {
-    "source": "Oracle Cloud",
-    "target": "Oracle Cloud"
-  },
-  {
-    "source": "Install overview",
-    "target": "安装概览"
-  },
-  {
-    "source": "VPS hosting",
-    "target": "VPS 托管"
-  },
-  {
-    "source": "Linux server",
-    "target": "Linux 服务器"
-  },
-  {
-    "source": "Platforms",
-    "target": "平台"
-  },
-  {
-    "source": "Adding capabilities (redirect)",
-    "target": "添加能力（重定向）"
-  },
-  {
-    "source": "Adding capabilities (contributor guide)",
-    "target": "添加能力（贡献者指南）"
-  },
-  {
-    "source": "Plugin internals",
-    "target": "插件内部机制"
-  },
-  {
-    "source": "SDK overview",
-    "target": "SDK 概览"
-  },
-  {
-    "source": "Creating skills",
-    "target": "创建技能"
-  },
-  {
-    "source": "Setup Wizard Reference",
-    "target": "设置向导参考"
-  },
-  {
-    "source": "CLI Setup Reference",
-    "target": "CLI 设置参考"
-  },
-  {
-    "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
-  },
-  {
-    "source": "Docs directory",
-    "target": "文档目录"
-  },
-  {
-    "source": "Credits",
-    "target": "致谢"
-  },
-  {
-    "source": "Features",
-    "target": "功能"
-  },
-  {
-    "source": "DMs",
-    "target": "私信"
-  },
-  {
-    "source": "DM",
-    "target": "私信"
-  },
-  {
-    "source": "sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "Sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing note",
-    "target": "沙箱注意事项"
-  },
-  {
-    "source": "Companion apps",
-    "target": "配套应用"
-  },
-  {
-    "source": "expected keys",
-    "target": "预期键名"
+    "source": "Azure Speech provider",
+    "target": "Azure Speech provider"
   },
   {
     "source": "block streaming",
@@ -456,392 +200,68 @@
     "target": "分块流式传输"
   },
   {
-    "source": "Progress drafts",
-    "target": "进度草稿"
+    "source": "BlueBubbles",
+    "target": "BlueBubbles"
   },
   {
-    "source": "Streaming and chunking",
-    "target": "流式传输和分块"
-  },
-  {
-    "source": "Messages",
-    "target": "消息"
-  },
-  {
-    "source": "Channel configuration",
-    "target": "频道配置"
-  },
-  {
-    "source": "Discord",
-    "target": "Discord"
-  },
-  {
-    "source": "Matrix",
-    "target": "Matrix"
-  },
-  {
-    "source": "Microsoft Teams",
-    "target": "Microsoft Teams"
-  },
-  {
-    "source": "Slack",
-    "target": "Slack"
-  },
-  {
-    "source": "Telegram",
-    "target": "Telegram"
-  },
-  {
-    "source": "Discovery + transports",
-    "target": "设备发现 + 传输协议"
-  },
-  {
-    "source": "Discovery",
-    "target": "设备发现"
-  },
-  {
-    "source": "Network model",
-    "target": "网络模型"
+    "source": "BlueBubbles removal and the imsg iMessage path",
+    "target": "BlueBubbles removal and the imsg iMessage path"
   },
   {
     "source": "Bridge protocol (legacy nodes, historical)",
     "target": "Bridge protocol（旧版节点，历史参考）"
   },
   {
-    "source": "Doctor",
-    "target": "Doctor"
+    "source": "Browser automation and exec/sandbox tools Maturity Report",
+    "target": "Browser automation and exec/sandbox tools Maturity Report"
   },
   {
-    "source": "Config",
-    "target": "配置"
-  },
-  {
-    "source": "Memory Wiki",
-    "target": "Memory Wiki"
-  },
-  {
-    "source": "Memory overview",
-    "target": "记忆概览"
-  },
-  {
-    "source": "Active memory",
-    "target": "主动记忆"
-  },
-  {
-    "source": "Commitments",
-    "target": "跟进承诺"
-  },
-  {
-    "source": "Inferred Commitments",
-    "target": "推断式跟进承诺"
-  },
-  {
-    "source": "Inferred commitments",
-    "target": "推断式跟进承诺"
-  },
-  {
-    "source": "Heartbeat",
-    "target": "Heartbeat"
-  },
-  {
-    "source": "Scheduled tasks",
-    "target": "定时任务"
-  },
-  {
-    "source": "Configuration reference",
-    "target": "配置参考"
-  },
-  {
-    "source": "wiki",
-    "target": "wiki"
-  },
-  {
-    "source": "Polls",
-    "target": "投票"
-  },
-  {
-    "source": "QQ Bot",
-    "target": "QQ Bot"
-  },
-  {
-    "source": "Release Policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "Release policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "for full details",
-    "target": "了解详情"
-  },
-  {
-    "source": "First 60 seconds",
-    "target": "最初的六十秒"
-  },
-  {
-    "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
-  },
-  {
-    "source": "agent",
-    "target": "智能体"
-  },
-  {
-    "source": "channel",
-    "target": "渠道"
-  },
-  {
-    "source": "session",
-    "target": "会话"
-  },
-  {
-    "source": "provider",
-    "target": "提供商"
-  },
-  {
-    "source": "model",
-    "target": "模型"
-  },
-  {
-    "source": "tool",
-    "target": "工具"
-  },
-  {
-    "source": "CLI",
-    "target": "CLI"
-  },
-  {
-    "source": "/cli/gateway",
-    "target": "/cli/gateway"
-  },
-  {
-    "source": "/gateway#multiple-gateways-same-host",
-    "target": "/gateway#multiple-gateways-same-host"
-  },
-  {
-    "source": "install sanity",
-    "target": "安装完整性检查"
-  },
-  {
-    "source": "get unstuck",
-    "target": "解决问题"
-  },
-  {
-    "source": "troubleshooting",
-    "target": "故障排除"
-  },
-  {
-    "source": "FAQ",
-    "target": "常见问题"
-  },
-  {
-    "source": "Ollama Web Search",
-    "target": "Ollama Web 搜索"
-  },
-  {
-    "source": "Memory LanceDB",
-    "target": "Memory LanceDB"
-  },
-  {
-    "source": "onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "Onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "wizard",
-    "target": "向导"
-  },
-  {
-    "source": "environment variables",
-    "target": "环境变量"
-  },
-  {
-    "source": "environment variable",
-    "target": "环境变量"
-  },
-  {
-    "source": "env vars",
-    "target": "环境变量"
-  },
-  {
-    "source": "env var",
-    "target": "环境变量"
-  },
-  {
-    "source": "Google Meet Plugin",
-    "target": "Google Meet 插件"
-  },
-  {
-    "source": "Plugin SDK",
-    "target": "插件 SDK"
-  },
-  {
-    "source": "Tool plugins",
-    "target": "工具插件"
-  },
-  {
-    "source": "Plugin SDK subpaths",
-    "target": "插件 SDK 子路径"
-  },
-  {
-    "source": "Plugins CLI",
-    "target": "插件 CLI"
-  },
-  {
-    "source": "Plugins",
-    "target": "插件"
-  },
-  {
-    "source": "Manage plugins",
-    "target": "管理插件"
-  },
-  {
-    "source": "Plugin inventory",
-    "target": "插件清单"
-  },
-  {
-    "source": "Plugin reference",
-    "target": "插件参考"
-  },
-  {
-    "source": "Community plugins",
-    "target": "社区插件"
-  },
-  {
-    "source": "ClawHub publishing",
-    "target": "ClawHub 发布"
-  },
-  {
-    "source": "Plugin dependency resolution",
-    "target": "插件依赖解析"
-  },
-  {
-    "source": "Plugin path ownership",
-    "target": "插件路径所有权"
-  },
-  {
-    "source": "Path",
-    "target": "路径"
-  },
-  {
-    "source": "OC Path plugin",
-    "target": "OC Path 插件"
-  },
-  {
-    "source": "Parallel plugin",
-    "target": "Parallel 插件"
-  },
-  {
-    "source": "Parallel search",
-    "target": "Parallel 搜索"
-  },
-  {
-    "source": "CLI reference",
-    "target": "CLI 参考"
-  },
-  {
-    "source": "Docker permissions",
-    "target": "Docker 权限"
-  },
-  {
-    "source": "Plugin manifest",
-    "target": "插件清单"
+    "source": "Building Plugins",
+    "target": "Building Plugins"
   },
   {
     "source": "Building plugins",
     "target": "构建插件"
   },
   {
-    "source": "Plugin SDK Overview",
-    "target": "插件 SDK 概览"
+    "source": "BytePlus (International)",
+    "target": "BytePlus（国际版）"
   },
   {
-    "source": "Plugin SDK overview",
-    "target": "插件 SDK 概览"
+    "source": "Capabilities",
+    "target": "能力"
   },
   {
-    "source": "SDK Overview",
-    "target": "SDK 概览"
+    "source": "Capability Cookbook",
+    "target": "能力扩展手册"
   },
   {
-    "source": "Plugin Entry Points",
-    "target": "插件入口点"
+    "source": "channel",
+    "target": "渠道"
   },
   {
-    "source": "Plugin entry points",
-    "target": "插件入口点"
+    "source": "Channel access cleanup",
+    "target": "频道访问清理"
   },
   {
-    "source": "Plugin hooks",
-    "target": "插件钩子"
+    "source": "Channel configuration",
+    "target": "频道配置"
   },
   {
-    "source": "Internal hooks",
-    "target": "内部钩子"
+    "source": "Channel framework - Channel Setup Maturity Note",
+    "target": "Channel framework - Channel Setup Maturity Note"
   },
   {
-    "source": "Plugin architecture internals",
-    "target": "插件架构内部机制"
+    "source": "Channel framework Maturity Report",
+    "target": "Channel framework Maturity Report"
   },
   {
-    "source": "Entry Points",
-    "target": "入口点"
+    "source": "Channel ingress API",
+    "target": "频道入口 API"
   },
   {
-    "source": "Plugin Runtime",
-    "target": "插件运行时"
-  },
-  {
-    "source": "Runtime",
-    "target": "运行时"
-  },
-  {
-    "source": "Plugin Setup",
-    "target": "插件设置"
-  },
-  {
-    "source": "Setup",
-    "target": "设置"
-  },
-  {
-    "source": "Migrate",
-    "target": "迁移"
-  },
-  {
-    "source": "Migrate CLI",
-    "target": "迁移 CLI"
-  },
-  {
-    "source": "Migrating",
-    "target": "迁移"
-  },
-  {
-    "source": "Migrating from Hermes",
-    "target": "从 Hermes 迁移"
-  },
-  {
-    "source": "Migrating from Claude",
-    "target": "从 Claude 迁移"
-  },
-  {
-    "source": "Agent workspace",
-    "target": "Agent 工作区"
-  },
-  {
-    "source": "Migration",
-    "target": "迁移"
-  },
-  {
-    "source": "Hermes",
-    "target": "Hermes"
-  },
-  {
-    "source": "Archive-only",
-    "target": "仅归档"
+    "source": "Channel message API",
+    "target": "频道消息 API"
   },
   {
     "source": "Channel Plugin SDK",
@@ -852,192 +272,268 @@
     "target": "渠道插件"
   },
   {
-    "source": "Provider Plugin SDK",
-    "target": "提供商插件 SDK"
-  },
-  {
-    "source": "Provider Plugins",
-    "target": "提供商插件"
-  },
-  {
-    "source": "Plugin SDK Testing",
-    "target": "插件 SDK 测试"
-  },
-  {
-    "source": "Testing",
-    "target": "测试"
-  },
-  {
-    "source": "Update and plugin tests",
-    "target": "更新和插件测试"
-  },
-  {
-    "source": "Testing updates and plugins",
-    "target": "更新和插件测试"
-  },
-  {
-    "source": "Testing: updates and plugins",
-    "target": "更新和插件测试"
-  },
-  {
-    "source": "Async Exec Duplicate Completion Investigation",
-    "target": "Async Exec Duplicate Completion Investigation"
-  },
-  {
-    "source": "QA Refactor",
-    "target": "QA 重构"
-  },
-  {
-    "source": "Matrix QA",
-    "target": "Matrix QA"
-  },
-  {
-    "source": "Matrix presentation metadata",
-    "target": "Matrix 呈现元数据"
-  },
-  {
-    "source": "QA overview",
-    "target": "QA overview"
-  },
-  {
-    "source": "QA channel",
-    "target": "QA channel"
-  },
-  {
-    "source": "Rich Output Protocol",
-    "target": "富输出协议"
-  },
-  {
-    "source": "Trajectory export",
-    "target": "轨迹导出"
-  },
-  {
-    "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
-  },
-  {
-    "source": "Codex Harness Context Engine Port",
-    "target": "Codex Harness Context Engine Port"
-  },
-  {
-    "source": "Plugin refactor plan",
-    "target": "插件重构计划"
-  },
-  {
-    "source": "Retry policy",
-    "target": "重试策略"
+    "source": "Channel Routing",
+    "target": "频道路由"
   },
   {
     "source": "Channel turn kernel",
     "target": "频道轮次内核"
   },
   {
-    "source": "/gateway/configuration#strict-validation",
-    "target": "/gateway/configuration#strict-validation"
+    "source": "Chutes",
+    "target": "Chutes"
   },
   {
-    "source": "/gateway/configuration#config-hot-reload",
-    "target": "/gateway/configuration#config-hot-reload"
+    "source": "ClawHub",
+    "target": "ClawHub"
   },
   {
-    "source": "/cli/config",
-    "target": "/cli/config"
+    "source": "ClawHub - Catalog Discovery Maturity Note",
+    "target": "ClawHub - Catalog Discovery Maturity Note"
   },
   {
-    "source": "Automation",
-    "target": "自动化"
+    "source": "ClawHub - Compatibility and Trust Maturity Note",
+    "target": "ClawHub - Compatibility and Trust Maturity Note"
   },
   {
-    "source": "Tools, skills, and plugins",
-    "target": "工具、技能和插件"
+    "source": "ClawHub - Plugin Lifecycle and Health Maturity Note",
+    "target": "ClawHub - Plugin Lifecycle and Health Maturity Note"
   },
   {
-    "source": "Capabilities",
-    "target": "能力"
+    "source": "ClawHub - Publishing Maturity Note",
+    "target": "ClawHub - Publishing Maturity Note"
   },
   {
-    "source": "Overview",
-    "target": "概览"
+    "source": "ClawHub Maturity Report",
+    "target": "ClawHub Maturity Report"
   },
   {
-    "source": "Tools, skills, and plugins overview",
-    "target": "工具、技能和插件概览"
+    "source": "ClawHub publishing",
+    "target": "ClawHub 发布"
   },
   {
-    "source": "Tools overview",
-    "target": "工具概览"
+    "source": "CLI",
+    "target": "CLI"
   },
   {
-    "source": "Automation overview",
-    "target": "自动化概览"
+    "source": "CLI - CLI Observability Maturity Note",
+    "target": "CLI - CLI Observability Maturity Note"
   },
   {
-    "source": "Sub-agents",
-    "target": "子智能体"
+    "source": "CLI - CLI Setup Maturity Note",
+    "target": "CLI - CLI Setup Maturity Note"
   },
   {
-    "source": "ACP agents",
-    "target": "ACP 智能体"
+    "source": "CLI - Doctor Maturity Note",
+    "target": "CLI - Doctor Maturity Note"
   },
   {
-    "source": "Tools and custom providers",
-    "target": "工具和自定义提供商"
+    "source": "CLI - Gateway Service Management Maturity Note",
+    "target": "CLI - Gateway Service Management Maturity Note"
   },
   {
-    "source": "Exec approvals",
-    "target": "Exec 审批"
+    "source": "CLI - Onboarding and Auth Setup Maturity Note",
+    "target": "CLI - Onboarding and Auth Setup Maturity Note"
   },
   {
-    "source": "Elevated exec",
-    "target": "提升权限的 Exec"
+    "source": "CLI - Plugin and Channel Setup Maturity Note",
+    "target": "CLI - Plugin and Channel Setup Maturity Note"
   },
   {
-    "source": "Sandbox vs tool policy vs elevated",
-    "target": "沙箱、工具策略和提升权限"
+    "source": "CLI - Updates and Upgrades Maturity Note",
+    "target": "CLI - Updates and Upgrades Maturity Note"
   },
   {
-    "source": "Per-agent sandbox and tool restrictions",
-    "target": "按 Agent 配置的沙箱和工具限制"
+    "source": "CLI Maturity Report",
+    "target": "CLI Maturity Report"
   },
   {
-    "source": "Agents",
-    "target": "智能体"
+    "source": "CLI reference",
+    "target": "CLI 参考"
   },
   {
-    "source": "fs-safe Cleanup Plan",
-    "target": "fs-safe Cleanup Plan"
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
   },
   {
-    "source": "Tool Search",
-    "target": "工具搜索"
+    "source": "ClickClack",
+    "target": "ClickClack"
   },
   {
     "source": "Code execution",
     "target": "代码执行"
   },
   {
-    "source": "Tools and plugins",
-    "target": "工具和插件"
+    "source": "Code mode",
+    "target": "代码模式"
   },
   {
-    "source": "Multi-agent sandbox and tools",
-    "target": "多 Agent 沙盒和工具"
+    "source": "Codex Computer Use",
+    "target": "Codex Computer Use"
   },
   {
-    "source": "Exec tool",
-    "target": "Exec 工具"
+    "source": "Codex harness",
+    "target": "Codex harness"
   },
   {
-    "source": "ACP agents setup",
-    "target": "ACP Agents 设置"
+    "source": "Codex Harness Context Engine Port",
+    "target": "Codex Harness Context Engine Port"
   },
   {
-    "source": "Policy CLI",
-    "target": "Policy CLI"
+    "source": "Codex harness reference",
+    "target": "Codex harness reference"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Codex harness runtime"
+  },
+  {
+    "source": "Coming from BlueBubbles",
+    "target": "Coming from BlueBubbles"
+  },
+  {
+    "source": "Commitments",
+    "target": "跟进承诺"
+  },
+  {
+    "source": "Community plugins",
+    "target": "社区插件"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套应用"
+  },
+  {
+    "source": "Config",
+    "target": "配置"
+  },
+  {
+    "source": "Configuration reference",
+    "target": "配置参考"
+  },
+  {
+    "source": "Configuration reference - iMessage",
+    "target": "Configuration reference - iMessage"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
+  },
+  {
+    "source": "copilot",
+    "target": "copilot"
+  },
+  {
+    "source": "Copilot plugin",
+    "target": "Copilot plugin"
+  },
+  {
+    "source": "Copilot SDK harness",
+    "target": "Copilot SDK harness"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
+  },
+  {
+    "source": "Credits",
+    "target": "致谢"
+  },
+  {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
+    "source": "Diagnostics export",
+    "target": "诊断导出"
+  },
+  {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Discord - Access and Identity Maturity Note",
+    "target": "Discord - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Discord - Approvals and Sensitive Actions Maturity Note",
+    "target": "Discord - Approvals and Sensitive Actions Maturity Note"
+  },
+  {
+    "source": "Discord - Channel Setup and Operations Maturity Note",
+    "target": "Discord - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "Discord - Conversation Routing and Delivery Maturity Note",
+    "target": "Discord - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "Discord - Media and Rich Content Maturity Note",
+    "target": "Discord - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "Discord - Message and Media Delivery Maturity Note",
+    "target": "Discord - Message and Media Delivery Maturity Note"
+  },
+  {
+    "source": "Discord - Native Controls and Approvals Maturity Note",
+    "target": "Discord - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "Discord - Realtime Voice and Calls Maturity Note",
+    "target": "Discord - Realtime Voice and Calls Maturity Note"
+  },
+  {
+    "source": "Discord Maturity Report",
+    "target": "Discord Maturity Report"
+  },
+  {
+    "source": "Discord voice",
+    "target": "Discord 语音"
+  },
+  {
+    "source": "Discovery",
+    "target": "设备发现"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "设备发现 + 传输协议"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "Docker / Podman hosting Maturity Report",
+    "target": "Docker / Podman hosting Maturity Report"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
+  },
+  {
+    "source": "Docs directory",
+    "target": "文档目录"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
   },
   {
     "source": "Doctor lint mode",
     "target": "Doctor lint mode"
+  },
+  {
+    "source": "Dreaming",
+    "target": "Dreaming"
   },
   {
     "source": "ds4 (local DeepSeek V4)",
@@ -1052,79 +548,1455 @@
     "target": "动态 Agent 创建"
   },
   {
-    "source": "multi-user isolation",
-    "target": "多用户隔离"
+    "source": "Elevated exec",
+    "target": "提升权限的 Exec"
   },
   {
-    "source": "workspaceTemplate",
-    "target": "工作空间模板"
+    "source": "Entry Points",
+    "target": "入口点"
   },
   {
-    "source": "agentDirTemplate",
-    "target": "Agent 目录模板"
+    "source": "env var",
+    "target": "环境变量"
   },
   {
-    "source": "Per-user agent isolation",
-    "target": "每用户 Agent 隔离"
+    "source": "env vars",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variable",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "Exec 审批"
+  },
+  {
+    "source": "Exec tool",
+    "target": "Exec 工具"
+  },
+  {
+    "source": "expected keys",
+    "target": "预期键名"
+  },
+  {
+    "source": "FAQ",
+    "target": "常见问题"
+  },
+  {
+    "source": "Features",
+    "target": "功能"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的六十秒"
+  },
+  {
+    "source": "for full details",
+    "target": "了解详情"
+  },
+  {
+    "source": "fs-safe Cleanup Plan",
+    "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway 网关"
   },
   {
     "source": "Gateway exposure runbook",
     "target": "Gateway 暴露运行手册"
   },
   {
-    "source": "Meeting Notes CLI",
-    "target": "Meeting Notes CLI"
+    "source": "Gateway health",
+    "target": "Gateway 健康"
   },
   {
-    "source": "Discord voice",
-    "target": "Discord 语音"
+    "source": "Gateway RPC reference",
+    "target": "Gateway RPC 参考"
   },
   {
-    "source": "Plugin management",
-    "target": "插件管理"
+    "source": "Gateway Runtime - Hosted Web Surface Maturity Note",
+    "target": "Gateway Runtime - Hosted Web Surface Maturity Note"
   },
   {
-    "source": "Plugin architecture",
-    "target": "插件架构"
+    "source": "Gateway Runtime - HTTP APIs Maturity Note",
+    "target": "Gateway Runtime - HTTP APIs Maturity Note"
   },
   {
-    "source": "Agent runtime architecture",
-    "target": "Agent runtime architecture"
+    "source": "Gateway Runtime Maturity Report",
+    "target": "Gateway Runtime Maturity Report"
   },
   {
-    "source": "OpenClaw agent runtime workflow",
-    "target": "OpenClaw agent runtime workflow"
+    "source": "Gateway Runtime WebSocket Feature Matrix - Protocol Compatibility",
+    "target": "Gateway Runtime WebSocket Feature Matrix - Protocol Compatibility"
   },
   {
-    "source": "OpenClaw agent runtime architecture",
-    "target": "OpenClaw agent runtime architecture"
+    "source": "Gateway Runtime WebSocket Feature Matrix - WebSocket Connection",
+    "target": "Gateway Runtime WebSocket Feature Matrix - WebSocket Connection"
+  },
+  {
+    "source": "Gateway Web App - Browser UI Maturity Note",
+    "target": "Gateway Web App - Browser UI Maturity Note"
+  },
+  {
+    "source": "Gateway Web App - Configuration Maturity Note",
+    "target": "Gateway Web App - Configuration Maturity Note"
+  },
+  {
+    "source": "Gateway Web App - Operator Console Maturity Note",
+    "target": "Gateway Web App - Operator Console Maturity Note"
+  },
+  {
+    "source": "Gateway Web App - WebChat Conversations Maturity Note",
+    "target": "Gateway Web App - WebChat Conversations Maturity Note"
+  },
+  {
+    "source": "Gateway Web App Maturity Report",
+    "target": "Gateway Web App Maturity Report"
+  },
+  {
+    "source": "get unstuck",
+    "target": "解决问题"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "GitHub Copilot agent runtime",
+    "target": "GitHub Copilot agent runtime"
+  },
+  {
+    "source": "Google Chat - Access and Identity Maturity Note",
+    "target": "Google Chat - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Google Chat - Webhook Auth Maturity Note",
+    "target": "Google Chat - Webhook Auth Maturity Note"
+  },
+  {
+    "source": "Google Chat Maturity Report",
+    "target": "Google Chat Maturity Report"
+  },
+  {
+    "source": "Google Meet Plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Google provider path - Prompt Caching Maturity Note",
+    "target": "Google provider path - Prompt Caching Maturity Note"
+  },
+  {
+    "source": "Google provider path Maturity Report",
+    "target": "Google provider path Maturity Report"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "Hermes",
+    "target": "Hermes"
+  },
+  {
+    "source": "Image/video/music generation tools - Image Generation Maturity Note",
+    "target": "Image/video/music generation tools - Image Generation Maturity Note"
+  },
+  {
+    "source": "Image/video/music generation tools - Music Generation Maturity Note",
+    "target": "Image/video/music generation tools - Music Generation Maturity Note"
+  },
+  {
+    "source": "Image/video/music generation tools - Video Generation Maturity Note",
+    "target": "Image/video/music generation tools - Video Generation Maturity Note"
+  },
+  {
+    "source": "Image/video/music generation tools Maturity Report",
+    "target": "Image/video/music generation tools Maturity Report"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "iMessage / BlueBubbles Maturity Report",
+    "target": "iMessage / BlueBubbles Maturity Report"
+  },
+  {
+    "source": "Inferred Commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Inferred commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Ingress core shrink",
+    "target": "入口核心精简"
+  },
+  {
+    "source": "Ingress core shrink plan",
+    "target": "入口核心精简计划"
   },
   {
     "source": "Install and Configure Plugins",
     "target": "安装和配置插件"
   },
   {
-    "source": "Building Plugins",
-    "target": "Building Plugins"
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "install sanity",
+    "target": "安装完整性检查"
+  },
+  {
+    "source": "Internal hooks",
+    "target": "内部钩子"
+  },
+  {
+    "source": "iOS app - Canvas and Screen Maturity Note",
+    "target": "iOS app - Canvas and Screen Maturity Note"
+  },
+  {
+    "source": "iOS app - Chat and Sessions Maturity Note",
+    "target": "iOS app - Chat and Sessions Maturity Note"
+  },
+  {
+    "source": "iOS app - Device Commands Maturity Note",
+    "target": "iOS app - Device Commands Maturity Note"
+  },
+  {
+    "source": "iOS app - Distribution Maturity Note",
+    "target": "iOS app - Distribution Maturity Note"
+  },
+  {
+    "source": "iOS app - Media and Sharing Maturity Note",
+    "target": "iOS app - Media and Sharing Maturity Note"
+  },
+  {
+    "source": "iOS app - Notifications and Background Maturity Note",
+    "target": "iOS app - Notifications and Background Maturity Note"
+  },
+  {
+    "source": "iOS app - Voice Maturity Note",
+    "target": "iOS app - Voice Maturity Note"
+  },
+  {
+    "source": "iOS app Maturity Report",
+    "target": "iOS app Maturity Report"
+  },
+  {
+    "source": "IRC",
+    "target": "IRC"
+  },
+  {
+    "source": "Kubernetes hosting - Access and Exposure Maturity Note",
+    "target": "Kubernetes hosting - Access and Exposure Maturity Note"
+  },
+  {
+    "source": "Kubernetes hosting - Cluster Lifecycle Maturity Note",
+    "target": "Kubernetes hosting - Cluster Lifecycle Maturity Note"
+  },
+  {
+    "source": "Kubernetes hosting - Configuration and Secrets Maturity Note",
+    "target": "Kubernetes hosting - Configuration and Secrets Maturity Note"
+  },
+  {
+    "source": "Kubernetes hosting - Deployment Setup Maturity Note",
+    "target": "Kubernetes hosting - Deployment Setup Maturity Note"
+  },
+  {
+    "source": "Kubernetes hosting Maturity Report",
+    "target": "Kubernetes hosting Maturity Report"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Linux companion app - App Distribution Maturity Note",
+    "target": "Linux companion app - App Distribution Maturity Note"
+  },
+  {
+    "source": "Linux companion app - Desktop Capabilities Maturity Note",
+    "target": "Linux companion app - Desktop Capabilities Maturity Note"
+  },
+  {
+    "source": "Linux companion app - Gateway Connectivity Maturity Note",
+    "target": "Linux companion app - Gateway Connectivity Maturity Note"
+  },
+  {
+    "source": "Linux companion app Maturity Report",
+    "target": "Linux companion app Maturity Report"
+  },
+  {
+    "source": "Linux Gateway host - Deployment Targets Maturity Note",
+    "target": "Linux Gateway host - Deployment Targets Maturity Note"
+  },
+  {
+    "source": "Linux Gateway host Maturity Report",
+    "target": "Linux Gateway host Maturity Report"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Logging",
+    "target": "日志"
+  },
+  {
+    "source": "Long-tail hosted providers - Provider Operations Maturity Note",
+    "target": "Long-tail hosted providers - Provider Operations Maturity Note"
+  },
+  {
+    "source": "Long-tail hosted providers Maturity Report",
+    "target": "Long-tail hosted providers Maturity Report"
+  },
+  {
+    "source": "LTS category proposal",
+    "target": "LTS category proposal"
+  },
+  {
+    "source": "macOS companion app - Canvas Maturity Note",
+    "target": "macOS companion app - Canvas Maturity Note"
+  },
+  {
+    "source": "macOS companion app - Local Setup Maturity Note",
+    "target": "macOS companion app - Local Setup Maturity Note"
+  },
+  {
+    "source": "macOS companion app - Native Capabilities Maturity Note",
+    "target": "macOS companion app - Native Capabilities Maturity Note"
+  },
+  {
+    "source": "macOS companion app - Remote Connections Maturity Note",
+    "target": "macOS companion app - Remote Connections Maturity Note"
+  },
+  {
+    "source": "macOS companion app - Remote WebChat Maturity Note",
+    "target": "macOS companion app - Remote WebChat Maturity Note"
+  },
+  {
+    "source": "macOS companion app - WebChat Maturity Note",
+    "target": "macOS companion app - WebChat Maturity Note"
+  },
+  {
+    "source": "macOS companion app Maturity Report",
+    "target": "macOS companion app Maturity Report"
+  },
+  {
+    "source": "macOS Gateway host - CLI Setup Maturity Note",
+    "target": "macOS Gateway host - CLI Setup Maturity Note"
+  },
+  {
+    "source": "macOS Gateway host Maturity Report",
+    "target": "macOS Gateway host Maturity Report"
+  },
+  {
+    "source": "macOS platform notes",
+    "target": "macOS 平台说明"
+  },
+  {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Matrix - Access and Identity Maturity Note",
+    "target": "Matrix - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Matrix - Approvals Maturity Note",
+    "target": "Matrix - Approvals Maturity Note"
+  },
+  {
+    "source": "Matrix - Channel Setup and Operations Maturity Note",
+    "target": "Matrix - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "Matrix - Conversation Routing and Delivery Maturity Note",
+    "target": "Matrix - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "Matrix - Encryption and Verification Maturity Note",
+    "target": "Matrix - Encryption and Verification Maturity Note"
+  },
+  {
+    "source": "Matrix - Media and Rich Content Maturity Note",
+    "target": "Matrix - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "Matrix - Native Controls and Approvals Maturity Note",
+    "target": "Matrix - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "Matrix - Runtime Lifecycle Maturity Note",
+    "target": "Matrix - Runtime Lifecycle Maturity Note"
+  },
+  {
+    "source": "Matrix Maturity Report",
+    "target": "Matrix Maturity Report"
+  },
+  {
+    "source": "Matrix presentation metadata",
+    "target": "Matrix 呈现元数据"
+  },
+  {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
+    "source": "Maturity scorecard",
+    "target": "Maturity scorecard"
+  },
+  {
+    "source": "Maturity scorecard process",
+    "target": "Maturity scorecard process"
+  },
+  {
+    "source": "Maturity taxonomy",
+    "target": "Maturity taxonomy"
+  },
+  {
+    "source": "Maturity taxonomy outline",
+    "target": "Maturity taxonomy outline"
+  },
+  {
+    "source": "Media understanding and media generation Maturity Report",
+    "target": "Media understanding and media generation Maturity Report"
+  },
+  {
+    "source": "Meeting Notes CLI",
+    "target": "Meeting Notes CLI"
+  },
+  {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
+    "source": "Memory overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Memory Wiki",
+    "target": "Memory Wiki"
+  },
+  {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Microsoft Teams - Access and Identity Maturity Note",
+    "target": "Microsoft Teams - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Microsoft Teams - Diagnostics and Repair Maturity Note",
+    "target": "Microsoft Teams - Diagnostics and Repair Maturity Note"
+  },
+  {
+    "source": "Microsoft Teams - Webhook and Delivery Maturity Note",
+    "target": "Microsoft Teams - Webhook and Delivery Maturity Note"
+  },
+  {
+    "source": "Microsoft Teams Maturity Report",
+    "target": "Microsoft Teams Maturity Report"
+  },
+  {
+    "source": "Migrate",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrate CLI",
+    "target": "迁移 CLI"
+  },
+  {
+    "source": "Migrating",
+    "target": "迁移"
+  },
+  {
+    "source": "Migrating from Claude",
+    "target": "从 Claude 迁移"
+  },
+  {
+    "source": "Migrating from Hermes",
+    "target": "从 Hermes 迁移"
+  },
+  {
+    "source": "Migration",
+    "target": "迁移"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Model Providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Models",
+    "target": "Models"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
+  },
+  {
+    "source": "Multi-agent orchestration - Account Routing Maturity Note",
+    "target": "Multi-agent orchestration - Account Routing Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration - Agent Isolation Maturity Note",
+    "target": "Multi-agent orchestration - Agent Isolation Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration - Agent Setup Maturity Note",
+    "target": "Multi-agent orchestration - Agent Setup Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration - Conversation Routing Maturity Note",
+    "target": "Multi-agent orchestration - Conversation Routing Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration - Delegate Identities Maturity Note",
+    "target": "Multi-agent orchestration - Delegate Identities Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration - Specialist Lanes Maturity Note",
+    "target": "Multi-agent orchestration - Specialist Lanes Maturity Note"
+  },
+  {
+    "source": "Multi-agent orchestration Maturity Report",
+    "target": "Multi-agent orchestration Maturity Report"
+  },
+  {
+    "source": "Multi-agent sandbox and tools",
+    "target": "多 Agent 沙盒和工具"
+  },
+  {
+    "source": "multi-user isolation",
+    "target": "多用户隔离"
+  },
+  {
+    "source": "Native Codex plugins",
+    "target": "Native Codex plugins"
+  },
+  {
+    "source": "Native Windows - CLI Maturity Note",
+    "target": "Native Windows - CLI Maturity Note"
+  },
+  {
+    "source": "Native Windows - Gateway Management Maturity Note",
+    "target": "Native Windows - Gateway Management Maturity Note"
+  },
+  {
+    "source": "Native Windows - Networking Maturity Note",
+    "target": "Native Windows - Networking Maturity Note"
+  },
+  {
+    "source": "Native Windows - Updates Maturity Note",
+    "target": "Native Windows - Updates Maturity Note"
+  },
+  {
+    "source": "Native Windows companion app Maturity Report",
+    "target": "Native Windows companion app Maturity Report"
+  },
+  {
+    "source": "Native Windows Maturity Report",
+    "target": "Native Windows Maturity Report"
+  },
+  {
+    "source": "Network model",
+    "target": "网络模型"
+  },
+  {
+    "source": "Nextcloud Talk",
+    "target": "Nextcloud Talk"
+  },
+  {
+    "source": "Nix install path - Install Handoff Maturity Note",
+    "target": "Nix install path - Install Handoff Maturity Note"
+  },
+  {
+    "source": "Nix install path - Plugin Lifecycle Maturity Note",
+    "target": "Nix install path - Plugin Lifecycle Maturity Note"
+  },
+  {
+    "source": "Nix install path Maturity Report",
+    "target": "Nix install path Maturity Report"
+  },
+  {
+    "source": "Nostr",
+    "target": "Nostr"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "NVIDIA API key",
+    "target": "NVIDIA API key"
+  },
+  {
+    "source": "Observability - Channel Health Monitor Maturity Note",
+    "target": "Observability - Channel Health Monitor Maturity Note"
+  },
+  {
+    "source": "Observability - Diagnostic Collection Maturity Note",
+    "target": "Observability - Diagnostic Collection Maturity Note"
+  },
+  {
+    "source": "Observability - Doctor Repair Diagnostics Maturity Note",
+    "target": "Observability - Doctor Repair Diagnostics Maturity Note"
+  },
+  {
+    "source": "Observability - Health and Repair Maturity Note",
+    "target": "Observability - Health and Repair Maturity Note"
+  },
+  {
+    "source": "Observability - Logging Maturity Note",
+    "target": "Observability - Logging Maturity Note"
+  },
+  {
+    "source": "Observability - Opentelemetry Export Maturity Note",
+    "target": "Observability - Opentelemetry Export Maturity Note"
+  },
+  {
+    "source": "Observability - Prometheus Metrics Export Maturity Note",
+    "target": "Observability - Prometheus Metrics Export Maturity Note"
+  },
+  {
+    "source": "Observability - Session Diagnostics Maturity Note",
+    "target": "Observability - Session Diagnostics Maturity Note"
+  },
+  {
+    "source": "Observability - Telemetry Export Maturity Note",
+    "target": "Observability - Telemetry Export Maturity Note"
+  },
+  {
+    "source": "Observability Maturity Report",
+    "target": "Observability Maturity Report"
+  },
+  {
+    "source": "OC Path plugin",
+    "target": "OC Path 插件"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
+  },
+  {
+    "source": "onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "OpenAI / Codex provider path Maturity Report",
+    "target": "OpenAI / Codex provider path Maturity Report"
+  },
+  {
+    "source": "OpenAI provider",
+    "target": "OpenAI provider"
+  },
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "OpenClaw agent runtime architecture",
+    "target": "OpenClaw agent runtime architecture"
+  },
+  {
+    "source": "OpenClaw agent runtime workflow",
+    "target": "OpenClaw agent runtime workflow"
+  },
+  {
+    "source": "OpenClaw App SDK",
+    "target": "OpenClaw 应用 SDK"
+  },
+  {
+    "source": "OpenClaw App SDK - Agent Conversations Maturity Note",
+    "target": "OpenClaw App SDK - Agent Conversations Maturity Note"
+  },
+  {
+    "source": "OpenClaw App SDK - Client API Maturity Note",
+    "target": "OpenClaw App SDK - Client API Maturity Note"
+  },
+  {
+    "source": "OpenClaw App SDK - Compatibility Maturity Note",
+    "target": "OpenClaw App SDK - Compatibility Maturity Note"
+  },
+  {
+    "source": "OpenClaw App SDK - Gateway Access Maturity Note",
+    "target": "OpenClaw App SDK - Gateway Access Maturity Note"
+  },
+  {
+    "source": "OpenClaw App SDK - Resource Helpers Maturity Note",
+    "target": "OpenClaw App SDK - Resource Helpers Maturity Note"
+  },
+  {
+    "source": "OpenClaw App SDK API design",
+    "target": "OpenClaw 应用 SDK API 设计"
+  },
+  {
+    "source": "OpenClaw App SDK Maturity Report",
+    "target": "OpenClaw App SDK Maturity Report"
+  },
+  {
+    "source": "OpenRouter provider path Maturity Report",
+    "target": "OpenRouter provider path Maturity Report"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Overview",
+    "target": "概览"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
+    "source": "Parallel plugin",
+    "target": "Parallel 插件"
+  },
+  {
+    "source": "Parallel search",
+    "target": "Parallel 搜索"
+  },
+  {
+    "source": "Path",
+    "target": "路径"
+  },
+  {
+    "source": "Per-agent sandbox and tool restrictions",
+    "target": "按 Agent 配置的沙箱和工具限制"
+  },
+  {
+    "source": "Per-user agent isolation",
+    "target": "每用户 Agent 隔离"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Plugin architecture",
+    "target": "插件架构"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "插件架构内部机制"
+  },
+  {
+    "source": "Plugin dependency resolution",
+    "target": "插件依赖解析"
+  },
+  {
+    "source": "Plugin Entry Points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "Plugin inventory",
+    "target": "插件清单"
+  },
+  {
+    "source": "Plugin management",
+    "target": "插件管理"
   },
   {
     "source": "Plugin Manifest",
     "target": "Plugin Manifest"
   },
   {
-    "source": "Workboard plugin",
-    "target": "Workboard 插件"
+    "source": "Plugin manifest",
+    "target": "插件清单"
+  },
+  {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Plugin refactor plan",
+    "target": "插件重构计划"
+  },
+  {
+    "source": "Plugin reference",
+    "target": "插件参考"
+  },
+  {
+    "source": "Plugin Runtime",
+    "target": "插件运行时"
+  },
+  {
+    "source": "Plugin SDK",
+    "target": "插件 SDK"
+  },
+  {
+    "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK subpaths",
+    "target": "插件 SDK 子路径"
+  },
+  {
+    "source": "Plugin SDK Testing",
+    "target": "插件 SDK 测试"
+  },
+  {
+    "source": "Plugin Setup",
+    "target": "插件设置"
+  },
+  {
+    "source": "Plugins",
+    "target": "插件"
+  },
+  {
+    "source": "Plugins - Authoring and Packaging Plugins Maturity Note",
+    "target": "Plugins - Authoring and Packaging Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Bundled Plugins Maturity Note",
+    "target": "Plugins - Bundled Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Canvas Plugin Maturity Note",
+    "target": "Plugins - Canvas Plugin Maturity Note"
+  },
+  {
+    "source": "Plugins - Channel Plugins Maturity Note",
+    "target": "Plugins - Channel Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Installing and Running Plugins Maturity Note",
+    "target": "Plugins - Installing and Running Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Plugin Approvals Maturity Note",
+    "target": "Plugins - Plugin Approvals Maturity Note"
+  },
+  {
+    "source": "Plugins - Provider and Tool Plugins Maturity Note",
+    "target": "Plugins - Provider and Tool Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Publishing Plugins Maturity Note",
+    "target": "Plugins - Publishing Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins - Testing Plugins Maturity Note",
+    "target": "Plugins - Testing Plugins Maturity Note"
+  },
+  {
+    "source": "Plugins CLI",
+    "target": "插件 CLI"
+  },
+  {
+    "source": "Plugins Feature Matrix",
+    "target": "Plugins Feature Matrix"
+  },
+  {
+    "source": "Policy CLI",
+    "target": "Policy CLI"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Progress drafts",
+    "target": "进度草稿"
+  },
+  {
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "Provider directory",
+    "target": "提供商目录"
+  },
+  {
+    "source": "Provider Plugin SDK",
+    "target": "提供商插件 SDK"
+  },
+  {
+    "source": "Provider Plugins",
+    "target": "提供商插件"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA Refactor",
+    "target": "QA 重构"
+  },
+  {
+    "source": "QQ bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "QQBot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "Quick start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Quick Start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
+    "source": "Raspberry Pi / small Linux devices Maturity Report",
+    "target": "Raspberry Pi / small Linux devices Maturity Report"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Retry policy",
+    "target": "重试策略"
+  },
+  {
+    "source": "Rich Output Protocol",
+    "target": "富输出协议"
+  },
+  {
+    "source": "Runtime",
+    "target": "运行时"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox vs tool policy vs elevated",
+    "target": "沙箱、工具策略和提升权限"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙箱注意事项"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "SDK Overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Secure file operations",
+    "target": "安全文件操作"
+  },
+  {
+    "source": "Security, auth, pairing, and secrets Maturity Report",
+    "target": "Security, auth, pairing, and secrets Maturity Report"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "Session, memory, and context engine Maturity Report",
+    "target": "Session, memory, and context engine Maturity Report"
+  },
+  {
+    "source": "Sessions",
+    "target": "会话"
+  },
+  {
+    "source": "Setup",
+    "target": "设置"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
+  },
+  {
+    "source": "Signal - Access and Identity Maturity Note",
+    "target": "Signal - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Signal - Channel Setup and Operations Maturity Note",
+    "target": "Signal - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "Signal - Conversation Routing and Delivery Maturity Note",
+    "target": "Signal - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "Signal - Media and Rich Content Maturity Note",
+    "target": "Signal - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "Signal - Native Controls and Approvals Maturity Note",
+    "target": "Signal - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "Signal - Reactions Message Tool Maturity Note",
+    "target": "Signal - Reactions Message Tool Maturity Note"
+  },
+  {
+    "source": "Signal - Transport Maturity Note",
+    "target": "Signal - Transport Maturity Note"
+  },
+  {
+    "source": "Signal Maturity Report",
+    "target": "Signal Maturity Report"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Slack - Access and Identity Maturity Note",
+    "target": "Slack - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Slack - Channel Setup and Operations Maturity Note",
+    "target": "Slack - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "Slack - Conversation Routing and Delivery Maturity Note",
+    "target": "Slack - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "Slack - Media and Rich Content Maturity Note",
+    "target": "Slack - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "Slack - Message Delivery and Media Maturity Note",
+    "target": "Slack - Message Delivery and Media Maturity Note"
+  },
+  {
+    "source": "Slack - Native Controls and Approvals Maturity Note",
+    "target": "Slack - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "Slack Maturity Report",
+    "target": "Slack Maturity Report"
+  },
+  {
+    "source": "SMS",
+    "target": "SMS"
+  },
+  {
+    "source": "Status",
+    "target": "状态"
+  },
+  {
+    "source": "Steer",
+    "target": "Steer"
+  },
+  {
+    "source": "Steering queue",
+    "target": "Steering queue"
+  },
+  {
+    "source": "Streaming and chunking",
+    "target": "流式传输和分块"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "子智能体"
+  },
+  {
+    "source": "Synology Chat",
+    "target": "Synology Chat"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Talk 模式"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Telegram - Access and Identity Maturity Note",
+    "target": "Telegram - Access and Identity Maturity Note"
+  },
+  {
+    "source": "Telegram - Channel Setup and Operations Maturity Note",
+    "target": "Telegram - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "Telegram - Conversation Routing and Delivery Maturity Note",
+    "target": "Telegram - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "Telegram - Media and Rich Content Maturity Note",
+    "target": "Telegram - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "Telegram - Native Controls and Approvals Maturity Note",
+    "target": "Telegram - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "Telegram - Runtime Lifecycle Maturity Note",
+    "target": "Telegram - Runtime Lifecycle Maturity Note"
+  },
+  {
+    "source": "Telegram Maturity Report",
+    "target": "Telegram Maturity Report"
+  },
+  {
+    "source": "Tencent Cloud (TokenHub)",
+    "target": "腾讯云（TokenHub）"
+  },
+  {
+    "source": "Testing",
+    "target": "测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing: updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Tlon",
+    "target": "Tlon"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "Tool plugins",
+    "target": "工具插件"
+  },
+  {
+    "source": "Tool Search",
+    "target": "工具搜索"
+  },
+  {
+    "source": "Tools and custom providers",
+    "target": "工具和自定义提供商"
+  },
+  {
+    "source": "Tools and plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Tools overview",
+    "target": "工具概览"
+  },
+  {
+    "source": "Tools, skills, and plugins",
+    "target": "工具、技能和插件"
+  },
+  {
+    "source": "Tools, skills, and plugins overview",
+    "target": "工具、技能和插件概览"
+  },
+  {
+    "source": "Trajectory export",
+    "target": "轨迹导出"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "TUI - Input and Commands Maturity Note",
+    "target": "TUI - Input and Commands Maturity Note"
+  },
+  {
+    "source": "TUI - Local Shell Execution Maturity Note",
+    "target": "TUI - Local Shell Execution Maturity Note"
+  },
+  {
+    "source": "TUI - Rendering and Output Safety Maturity Note",
+    "target": "TUI - Rendering and Output Safety Maturity Note"
+  },
+  {
+    "source": "TUI - Runtime Modes Maturity Note",
+    "target": "TUI - Runtime Modes Maturity Note"
+  },
+  {
+    "source": "TUI - Session Management Maturity Note",
+    "target": "TUI - Session Management Maturity Note"
+  },
+  {
+    "source": "TUI Maturity Report",
+    "target": "TUI Maturity Report"
+  },
+  {
+    "source": "Twilio",
+    "target": "Twilio"
+  },
+  {
+    "source": "Twitch",
+    "target": "Twitch"
+  },
+  {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Voice and realtime talk Maturity Report",
+    "target": "Voice and realtime talk Maturity Report"
+  },
+  {
+    "source": "Voice Call channel Maturity Report",
+    "target": "Voice Call channel Maturity Report"
+  },
+  {
+    "source": "Volcengine TTS HTTP API",
+    "target": "Volcengine TTS HTTP API"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "watchOS companion surfaces - Exec Approvals Maturity Note",
+    "target": "watchOS companion surfaces - Exec Approvals Maturity Note"
+  },
+  {
+    "source": "watchOS companion surfaces Maturity Report",
+    "target": "watchOS companion surfaces Maturity Report"
+  },
+  {
+    "source": "Web search tools - Network Safety Maturity Note",
+    "target": "Web search tools - Network Safety Maturity Note"
+  },
+  {
+    "source": "Web search tools - Search Providers Maturity Note",
+    "target": "Web search tools - Search Providers Maturity Note"
+  },
+  {
+    "source": "Web search tools Maturity Report",
+    "target": "Web search tools Maturity Report"
+  },
+  {
+    "source": "Web tools",
+    "target": "Web 工具"
+  },
+  {
+    "source": "WeChat",
+    "target": "微信"
+  },
+  {
+    "source": "Weixin",
+    "target": "微信"
+  },
+  {
+    "source": "WhatsApp - Access and Identity Maturity Note",
+    "target": "WhatsApp - Access and Identity Maturity Note"
+  },
+  {
+    "source": "WhatsApp - Channel Setup and Operations Maturity Note",
+    "target": "WhatsApp - Channel Setup and Operations Maturity Note"
+  },
+  {
+    "source": "WhatsApp - Conversation Routing and Delivery Maturity Note",
+    "target": "WhatsApp - Conversation Routing and Delivery Maturity Note"
+  },
+  {
+    "source": "WhatsApp - Media and Rich Content Maturity Note",
+    "target": "WhatsApp - Media and Rich Content Maturity Note"
+  },
+  {
+    "source": "WhatsApp - Native Controls and Approvals Maturity Note",
+    "target": "WhatsApp - Native Controls and Approvals Maturity Note"
+  },
+  {
+    "source": "WhatsApp - Outbound Delivery and Targeting Maturity Note",
+    "target": "WhatsApp - Outbound Delivery and Targeting Maturity Note"
+  },
+  {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "WhatsApp Maturity Report",
+    "target": "WhatsApp Maturity Report"
+  },
+  {
+    "source": "wiki",
+    "target": "wiki"
+  },
+  {
+    "source": "Windows via WSL2 - CLI Maturity Note",
+    "target": "Windows via WSL2 - CLI Maturity Note"
+  },
+  {
+    "source": "Windows via WSL2 Maturity Report",
+    "target": "Windows via WSL2 Maturity Report"
+  },
+  {
+    "source": "wizard",
+    "target": "向导"
   },
   {
     "source": "workboard",
     "target": "workboard"
   },
   {
-    "source": "Control UI",
-    "target": "Control UI"
+    "source": "Workboard plugin",
+    "target": "Workboard 插件"
+  },
+  {
+    "source": "workspaceTemplate",
+    "target": "工作空间模板"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
   },
   {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Zalo",
+    "target": "Zalo"
+  },
+  {
+    "source": "Zalo Personal",
+    "target": "Zalo Personal"
+  },
+  {
+    "source": "Zalo personal",
+    "target": "Zalo Personal"
   }
 ]

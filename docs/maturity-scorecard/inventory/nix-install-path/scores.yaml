@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Install Handoff
+    category_note: public-nix-docs-handoff.md
+    coverage: 25
+    quality: 45
+    completeness: 25
+  - name: Plugin Lifecycle
+    category_note: plugin-lifecycle-nix-store-loading.md
+    coverage: 40
+    quality: 35
+    completeness: 40
+  - name: Activation and App UX
+    category_note: nix-mode-activation-runtime-detection.md
+    coverage: 42
+    quality: 50
+    completeness: 42
+  - name: Config and State
+    category_note: state-config-path-immutable-store.md
+    coverage: 45
+    quality: 50
+    completeness: 45
+  - name: Service Runtime and Guards
+    category_note: gateway-service-path-nix-profile-discovery.md
+    coverage: 38
+    quality: 45
+    completeness: 38

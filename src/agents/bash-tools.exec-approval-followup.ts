@@ -7,14 +7,21 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import { buildExecApprovalFollowupIdempotencyKey } from "./bash-tools.exec-approval-followup-state.js";
+import {
+  buildExecApprovalFollowupIdempotencyKey,
+  isExecApprovalFollowupSessionRebound,
+} from "./bash-tools.exec-approval-followup-state.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
@@ -23,9 +30,17 @@ import {
 } from "./exec-approval-result.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+const log = createSubsystemLogger("agents/exec-approval-followup");
+
 type ExecApprovalFollowupParams = {
   approvalId: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested. Carried to the gateway
+   *  so a followup whose session key was rebound by /new or /reset is dropped. */
+  expectedSessionId?: string;
+  /** `session.store` template, used by the direct/denied path to resolve the
+   *  key's current sessionId and drop a rebound followup before sending. */
+  sessionStore?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -89,6 +104,41 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
 
 function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
+}
+
+/**
+ * Direct/denied followups bypass the gateway agent dispatch, so the gateway
+ * rebind guard never sees them. Resolve the session key's current sessionId
+ * from the on-disk store and report whether it was rebound away from the
+ * approval-time session by `/new` or `/reset` (#59349). Failure to resolve is
+ * treated as "not rebound" so a real result is never suppressed by accident.
+ */
+function isExecApprovalFollowupDirectDeliveryStale(params: {
+  sessionKey: string | undefined;
+  expectedSessionId: string | undefined;
+  sessionStore: string | undefined;
+}): boolean {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
+  if (!sessionKey || !expectedSessionId) {
+    return false;
+  }
+  try {
+    const storePath = resolveStorePath(normalizeOptionalString(params.sessionStore), {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+    });
+    const resolvedSessionId = normalizeOptionalString(
+      loadSessionStore(storePath)?.[sessionKey]?.sessionId,
+    );
+    return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
+  } catch (err) {
+    // Fail open: if the session store can't be resolved we deliver rather than
+    // risk dropping a real followup, but log it so this rare path is observable.
+    log.debug(
+      `exec approval followup session-rebind check skipped for ${sessionKey}; delivering: ${formatUnknownError(err)}`,
+    );
+    return false;
+  }
 }
 
 function formatDirectExecApprovalFollowupText(
@@ -199,6 +249,7 @@ function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
 function buildAgentFollowupArgs(params: {
   approvalId: string;
   sessionKey: string;
+  expectedSessionId?: string;
   resultText: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   sessionOnlyOriginChannel?: string;
@@ -240,6 +291,9 @@ function buildAgentFollowupArgs(params: {
       buildExecApprovalFollowupIdempotencyKey({
         approvalId: params.approvalId,
       }),
+    ...(params.expectedSessionId
+      ? { execApprovalFollowupExpectedSessionId: params.expectedSessionId }
+      : {}),
     ...(params.internalRuntimeHandoffId
       ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
       : {}),
@@ -310,6 +364,7 @@ export async function sendExecApprovalFollowup(
       const agentArgs = buildAgentFollowupArgs({
         approvalId: params.approvalId,
         sessionKey,
+        expectedSessionId: params.expectedSessionId,
         resultText,
         deliveryTarget,
         sessionOnlyOriginChannel,
@@ -342,6 +397,18 @@ export async function sendExecApprovalFollowup(
 
   if (isDenied) {
     if (
+      isExecApprovalFollowupDirectDeliveryStale({
+        sessionKey,
+        expectedSessionId: params.expectedSessionId,
+        sessionStore: params.sessionStore,
+      })
+    ) {
+      log.info(
+        `Dropping stale denied exec approval followup ${params.approvalId}: session ${sessionKey ?? ""} was rebound before the approval resolved`,
+      );
+      return false;
+    }
+    if (
       await sendDirectFollowupFallback({
         approvalId: params.approvalId,
         deliveryTarget,
@@ -355,6 +422,19 @@ export async function sendExecApprovalFollowup(
     if (sessionError) {
       throw new Error(`Session followup failed: ${formatUnknownError(sessionError)}`);
     }
+    return false;
+  }
+
+  if (
+    isExecApprovalFollowupDirectDeliveryStale({
+      sessionKey,
+      expectedSessionId: params.expectedSessionId,
+      sessionStore: params.sessionStore,
+    })
+  ) {
+    log.info(
+      `Dropping stale exec approval followup ${params.approvalId} direct fallback: session ${sessionKey ?? ""} was rebound before the approval resolved`,
+    );
     return false;
   }
 

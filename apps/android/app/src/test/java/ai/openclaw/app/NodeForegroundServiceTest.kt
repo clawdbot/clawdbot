@@ -34,15 +34,15 @@ class NodeForegroundServiceTest {
   @Test
   fun foregroundServiceTypesForVoiceMode_addsMicrophoneOnlyForTalkMode() {
     assertEquals(
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
       foregroundServiceTypesForVoiceMode(VoiceCaptureMode.Off),
     )
     assertEquals(
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
       foregroundServiceTypesForVoiceMode(VoiceCaptureMode.ManualMic),
     )
     assertEquals(
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
       foregroundServiceTypesForVoiceMode(VoiceCaptureMode.TalkMode),
     )
   }

@@ -2,8 +2,8 @@
  * Regression coverage for non-secret model-auth marker helpers.
  * Verifies core, plugin, env-var, OAuth, AWS, and secret-ref marker handling.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 
 const PLUGIN_MANIFEST_ENV_KEYS = [
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
@@ -33,7 +33,6 @@ let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvA
 let isNonSecretApiKeyMarker: typeof import("./model-auth-markers.js").isNonSecretApiKeyMarker;
 let listKnownNonSecretApiKeyMarkers: typeof import("./model-auth-markers.js").listKnownNonSecretApiKeyMarkers;
 let resolveOAuthApiKeyMarker: typeof import("./model-auth-markers.js").resolveOAuthApiKeyMarker;
-let manifestEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 async function loadMarkerModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -57,26 +56,16 @@ beforeAll(async () => {
   await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
 });
 
-beforeEach(() => {
-  manifestEnvSnapshot = captureEnv([...PLUGIN_MANIFEST_ENV_KEYS]);
-  for (const key of PLUGIN_MANIFEST_ENV_KEYS) {
-    delete process.env[key];
-  }
-});
-
-afterEach(() => {
-  manifestEnvSnapshot?.restore();
-  manifestEnvSnapshot = undefined;
-});
-
 describe("model auth markers", () => {
   it("recognizes explicit non-secret markers", () => {
-    expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);
-    expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
-    expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
-    expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
-    expect(isNonSecretApiKeyMarker(CODEX_APP_SERVER_AUTH_MARKER)).toBe(true);
-    expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
+    withEnv(cleanPluginManifestEnv(), () => {
+      expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);
+      expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
+      expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
+      expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
+      expect(isNonSecretApiKeyMarker(CODEX_APP_SERVER_AUTH_MARKER)).toBe(true);
+      expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
+    });
   });
 
   it("recognizes the Codex app-server marker without bundled plugin discovery", async () => {
@@ -88,35 +77,47 @@ describe("model auth markers", () => {
   });
 
   it("reads bundled plugin-owned non-secret markers from manifests", () => {
-    const markers = new Set(listKnownNonSecretApiKeyMarkers());
-    expect(markers.has("codex-app-server")).toBe(true);
-    expect(markers.has("gcp-vertex-credentials")).toBe(true);
-    expect(markers.has("lmstudio-local")).toBe(true);
-    expect(markers.has("minimax-oauth")).toBe(true);
-    expect(markers.has("ollama-local")).toBe(true);
+    withEnv(cleanPluginManifestEnv(), () => {
+      const markers = new Set(listKnownNonSecretApiKeyMarkers());
+      expect(markers.has("codex-app-server")).toBe(true);
+      expect(markers.has("gcp-vertex-credentials")).toBe(true);
+      expect(markers.has("lmstudio-local")).toBe(true);
+      expect(markers.has("minimax-oauth")).toBe(true);
+      expect(markers.has("ollama-local")).toBe(true);
+    });
   });
 
   it("does not treat removed provider markers as active auth markers", () => {
-    expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
+    withEnv(cleanPluginManifestEnv(), () => {
+      expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
+    });
   });
 
   it("recognizes known env marker names but not arbitrary all-caps keys", () => {
-    expect(isNonSecretApiKeyMarker("OPENAI_API_KEY")).toBe(true);
-    expect(isNonSecretApiKeyMarker("ALLCAPS_EXAMPLE")).toBe(false);
+    withEnv(cleanPluginManifestEnv(), () => {
+      expect(isNonSecretApiKeyMarker("OPENAI_API_KEY")).toBe(true);
+      expect(isNonSecretApiKeyMarker("ALLCAPS_EXAMPLE")).toBe(false);
+    });
   });
 
   it("recognizes all built-in provider env marker names", () => {
-    for (const envVarName of listKnownProviderEnvApiKeyNames()) {
-      expect(isNonSecretApiKeyMarker(envVarName)).toBe(true);
-    }
+    withEnv(cleanPluginManifestEnv(), () => {
+      for (const envVarName of listKnownProviderEnvApiKeyNames()) {
+        expect(isNonSecretApiKeyMarker(envVarName)).toBe(true);
+      }
+    });
   });
 
   it("can exclude env marker-name interpretation for display-only paths", () => {
-    expect(isNonSecretApiKeyMarker("OPENAI_API_KEY", { includeEnvVarName: false })).toBe(false);
+    withEnv(cleanPluginManifestEnv(), () => {
+      expect(isNonSecretApiKeyMarker("OPENAI_API_KEY", { includeEnvVarName: false })).toBe(false);
+    });
   });
 
   it("excludes aws-sdk env markers from known api key env marker helper", () => {
-    expect(isKnownEnvApiKeyMarker("OPENAI_API_KEY")).toBe(true);
-    expect(isKnownEnvApiKeyMarker("AWS_PROFILE")).toBe(false);
+    withEnv(cleanPluginManifestEnv(), () => {
+      expect(isKnownEnvApiKeyMarker("OPENAI_API_KEY")).toBe(true);
+      expect(isKnownEnvApiKeyMarker("AWS_PROFILE")).toBe(false);
+    });
   });
 });

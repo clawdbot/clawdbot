@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Agent Setup
+    category_note: agent-setup.md
+    coverage: 74
+    quality: 82
+    completeness: 84
+  - name: Agent Isolation
+    category_note: agent-isolation.md
+    coverage: 82
+    quality: 78
+    completeness: 76
+  - name: Conversation Routing
+    category_note: conversation-routing.md
+    coverage: 76
+    quality: 84
+    completeness: 86
+  - name: Account Routing
+    category_note: account-routing.md
+    coverage: 78
+    quality: 84
+    completeness: 82
+  - name: Specialist Lanes
+    category_note: specialist-lanes.md
+    coverage: 78
+    quality: 74
+    completeness: 76
+  - name: Delegate Identities
+    category_note: delegate-identities.md
+    coverage: 45
+    quality: 68
+    completeness: 62

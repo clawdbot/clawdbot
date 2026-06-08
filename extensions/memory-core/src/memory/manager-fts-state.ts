@@ -10,12 +10,8 @@ export function deleteMemoryFtsRows(params: {
   currentModel?: string;
 }): void {
   const tableName = params.tableName ?? "chunks_fts";
-  if (params.currentModel) {
-    params.db
-      .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ? AND model = ?`)
-      .run(params.path, params.source, params.currentModel);
-    return;
-  }
+  // Lexical search is model-agnostic, so refreshed/deleted files must not
+  // leave old-model FTS rows behind for the same path/source.
   params.db
     .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ?`)
     .run(params.path, params.source);

@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Delivery and Recovery
+    category_note: apns-background-recovery-and-stale-approval-cleanup.md
+    coverage: 46
+    quality: 60
+    completeness: 46
+  - name: Exec Approvals
+    category_note: exec-approval-review-decisions-and-snapshots.md
+    coverage: 54
+    quality: 64
+    completeness: 54
+  - name: Distribution and Support
+    category_note: packaging-signing-and-distribution-boundary.md
+    coverage: 38
+    quality: 48
+    completeness: 38
+  - name: Notifications and Replies
+    category_note: watch-notify-command-payloads-and-prompt-defaults.md
+    coverage: 44
+    quality: 57
+    completeness: 44
+  - name: Watch App UI
+    category_note: watch-inbox-ui-and-persistent-state.md
+    coverage: 42
+    quality: 58
+    completeness: 42

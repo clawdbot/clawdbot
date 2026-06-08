@@ -36,6 +36,10 @@
     "target": "Heartbeat"
   },
   {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
     "source": "Mintlify",
     "target": "Mintlify"
   },

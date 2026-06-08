@@ -369,6 +369,50 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears agentTurn payload.model when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-model-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      model: "openai/gpt-5.5",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.model).toBeUndefined();
+    }
+  });
+
+  it("omits null model when patch builds a replacement agentTurn payload", () => {
+    const job = createMainSystemEventJob("job-model-replace", { mode: "none" });
+
+    applyJobPatch(job, {
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        model: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.model).toBeUndefined();
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",

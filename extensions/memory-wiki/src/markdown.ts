@@ -372,7 +372,11 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
   });
 }
 
-function extractWikiLinks(markdown: string): string[] {
+function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string): string {
+  return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
+}
+
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
@@ -388,7 +392,7 @@ function extractWikiLinks(markdown: string): string[] {
     }
     const target = rawTarget.split("#")[0]?.split("?")[0]?.replace(/\\/g, "/").trim();
     if (target) {
-      links.push(target);
+      links.push(normalizeMarkdownLinkTarget(sourceRelativePath, target));
     }
   }
   return links;
@@ -397,12 +401,17 @@ function extractWikiLinks(markdown: string): string[] {
 export function formatWikiLink(params: {
   renderMode: "native" | "obsidian";
   relativePath: string;
+  sourceRelativeTo?: string;
   title: string;
 }): string {
   const withoutExtension = params.relativePath.replace(/\.md$/i, "");
-  return params.renderMode === "obsidian"
-    ? `[[${withoutExtension}|${params.title}]]`
-    : `[${params.title}](${params.relativePath})`;
+  if (params.renderMode === "obsidian") {
+    return `[[${withoutExtension}|${params.title}]]`;
+  }
+  const linkTarget = params.sourceRelativeTo
+    ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
+    : params.relativePath;
+  return `[${params.title}](${linkTarget})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
@@ -460,7 +469,7 @@ export function toWikiPageSummary(params: {
     canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
     aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
     sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-    linkTargets: extractWikiLinks(params.raw),
+    linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
     claims: normalizeWikiClaims(parsed.frontmatter.claims),
     contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
     questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),

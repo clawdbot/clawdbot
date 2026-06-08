@@ -6,6 +6,16 @@ export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
+const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
+const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
+
+export function isInternalFormattingArtifact(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
+}
+
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
 const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();

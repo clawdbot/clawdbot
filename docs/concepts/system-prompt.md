@@ -255,10 +255,11 @@ See [Date & Time](/date-time) for full behavior details.
 ## Skills
 
 When eligible skills exist, OpenClaw injects a compact **available skills list**
-(`formatSkillsForPrompt`) that includes the **file path** for each skill. The
-prompt instructs the model to use `read` to load the SKILL.md at the listed
-location (workspace, managed, or bundled). If no skills are eligible, the
-Skills section is omitted.
+(`formatSkillsForPrompt`) that includes the **file path** and content-derived
+`<version>` marker for each skill. The prompt instructs the model to use `read`
+to load the SKILL.md at the listed location (workspace, managed, or bundled),
+and to re-read a skill when its `<version>` differs from a previous turn. If no
+skills are eligible, the Skills section is omitted.
 
 Native Codex turns receive this list as turn-scoped collaboration developer
 instructions instead of per-turn user input, except lightweight cron turns that
@@ -283,6 +284,7 @@ that guidance directly in every tool description.
     <name>...</name>
     <description>...</description>
     <location>...</location>
+    <version>sha256:...</version>
   </skill>
 </available_skills>
 ```

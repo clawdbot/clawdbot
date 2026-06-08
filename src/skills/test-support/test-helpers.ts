@@ -32,6 +32,7 @@ export function createCanonicalFixtureSkill(params: {
   filePath: string;
   baseDir: string;
   source: string;
+  promptVersion?: string;
   disableModelInvocation?: boolean;
 }): Skill {
   return {
@@ -39,6 +40,7 @@ export function createCanonicalFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
+    promptVersion: params.promptVersion,
     source: params.source,
     sourceInfo: createSyntheticSourceInfo(params.filePath, {
       source: params.source,

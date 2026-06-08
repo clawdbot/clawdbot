@@ -186,6 +186,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<available_skills>");
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("External API writes: batch when safe");
   });
 
@@ -503,6 +504,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `Read`, then follow it.",
     );
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
@@ -682,6 +684,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `read`, then follow it.",
     );
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 

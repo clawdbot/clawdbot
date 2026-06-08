@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Approval Policy and Tool Safeguards
+    category_note: approval-policy-and-dangerous-tool-safeguards.md
+    coverage: 86
+    quality: 72
+    completeness: 86
+  - name: Gateway Auth and Remote Access
+    category_note: gateway-auth-and-network-exposure.md
+    coverage: 82
+    quality: 68
+    completeness: 82
+  - name: Channel Access Control
+    category_note: channel-identity-allowlists-and-sender-pairing.md
+    coverage: 78
+    quality: 66
+    completeness: 78
+  - name: Device and Node Pairing
+    category_note: device-identity-and-operator-pairing.md
+    coverage: 83
+    quality: 66
+    completeness: 83
+  - name: Plugin Trust
+    category_note: plugin-installation-trust-and-security-boundaries.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Credential and Secret Hygiene
+    category_note: secrets-storage-redaction-and-configuration-hygiene.md
+    coverage: 78
+    quality: 62
+    completeness: 78

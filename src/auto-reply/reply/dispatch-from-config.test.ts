@@ -6877,6 +6877,14 @@ describe("dispatchReplyFromConfig", () => {
       { text: "Alpha" },
       { assistantMessageIndex: 7 },
     );
+    const queuedPayload = onBlockReplyQueued.mock.calls[0]?.[0];
+    expect(queuedPayload ? getReplyPayloadMetadata(queuedPayload) : undefined).toMatchObject({
+      assistantMessageIndex: 7,
+    });
+    const deliveredPayload = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    expect(deliveredPayload ? getReplyPayloadMetadata(deliveredPayload) : undefined).toMatchObject({
+      assistantMessageIndex: 7,
+    });
   });
 });
 

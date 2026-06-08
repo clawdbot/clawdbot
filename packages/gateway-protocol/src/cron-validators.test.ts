@@ -94,6 +94,30 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
   });
 
+  it("accepts nullable model clears only on update payload patches", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "agentTurn",
+          message: "tick",
+          model: null,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts get params for id and jobId selectors", () => {
     expect(validateCronGetParams({ id: "job-1" })).toBe(true);
     expect(validateCronGetParams({ jobId: "job-2" })).toBe(true);

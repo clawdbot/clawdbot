@@ -224,6 +224,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     const hasAgentTurnSignal =
       isNonEmptyString(payload.message) ||
       isNonEmptyString(payload.model) ||
+      payload.model === null ||
       isNonEmptyString(payload.thinking) ||
       typeof payload.timeoutSeconds === "number" ||
       typeof payload.lightContext === "boolean" ||

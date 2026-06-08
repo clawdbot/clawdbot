@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Model and Auth
+    category_note: canonical-openai-model-routing-and-catalog.md
+    coverage: 78
+    quality: 66
+    completeness: 78
+  - name: Responses and Tool Compatibility
+    category_note: codex-responses-transport-and-payload-compatibility.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Native Codex Harness
+    category_note: native-codex-app-server-harness-and-thread-lifecycle.md
+    coverage: 82
+    quality: 72
+    completeness: 82
+  - name: Image and Multimodal Input
+    category_note: image-generation-editing-and-multimodal-input.md
+    coverage: 80
+    quality: 72
+    completeness: 80
+  - name: Voice and Realtime Audio
+    category_note: realtime-voice-transcription-and-speech.md
+    coverage: 72
+    quality: 68
+    completeness: 72

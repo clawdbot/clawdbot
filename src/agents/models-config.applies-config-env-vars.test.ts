@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
@@ -566,17 +567,23 @@ describe("models-config", () => {
 
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
-      process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
-      process.env[TEST_ENV_VAR] = "from-host";
-      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-        createConfigEnvVarsConfig(),
-      );
+      await withEnvAsync(
+        {
+          OPENROUTER_API_KEY: "from-host", // pragma: allowlist secret
+          [TEST_ENV_VAR]: "from-host",
+        },
+        async () => {
+          const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+            createConfigEnvVarsConfig(),
+          );
 
-      expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
-      expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
-      expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
-      expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
-      expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+          expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
+          expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
+          expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
+          expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
+          expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+        },
+      );
     });
   });
 });

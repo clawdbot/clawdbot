@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: app-install-auth-manifest-and-scopes.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Access and Identity
+    category_note: dm-pairing-and-sender-authorization.md
+    coverage: 74
+    quality: 70
+    completeness: 74
+  - name: Conversation Routing and Delivery
+    category_note: channel-thread-routing-and-session-isolation.md
+    coverage: 64
+    quality: 66
+    completeness: 64
+  - name: Media and Rich Content
+    category_note: media-attachments-files-and-vision.md
+    coverage: 64
+    quality: 66
+    completeness: 64
+  - name: Native Controls and Approvals
+    category_note: slash-commands-and-native-command-routing.md
+    coverage: 72
+    quality: 70
+    completeness: 72

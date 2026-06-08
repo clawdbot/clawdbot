@@ -1119,6 +1119,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           suppressNextUserMessagePersistence: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          allowEmptyAssistantReplyAsSilent: true,
         },
       }),
     );
@@ -1129,6 +1130,8 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentInboundEventKind).toBe("room_event");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
   });
@@ -1378,6 +1381,82 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     expect(onToolStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(true);
+        expect(params.emitCommentaryText).toBe(true);
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
+          },
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+            },
+          },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onItemEvent, commentaryProgressEnabled: true },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        progressText: "Let me check the files.",
+        itemId: "commentary-1",
+      }),
+    );
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {

@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Health and Repair
+    category_note: health-status-probes.md
+    coverage: 80
+    quality: 76
+    completeness: 80
+  - name: Logging
+    category_note: logging-log-tail-and-redaction.md
+    coverage: 82
+    quality: 84
+    completeness: 82
+  - name: Diagnostic Collection
+    category_note: diagnostics-export-support-bundles.md
+    coverage: 76
+    quality: 74
+    completeness: 76
+  - name: Telemetry Export
+    category_note: diagnostic-events-hooks-and-trace-context.md
+    coverage: 78
+    quality: 78
+    completeness: 78
+  - name: Session Diagnostics
+    category_note: session-run-and-usage-diagnostics.md
+    coverage: 82
+    quality: 78
+    completeness: 82

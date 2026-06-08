@@ -642,8 +642,15 @@
                   "type": "string"
                 },
                 "model": {
-                  "description": "Model override",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Model override, or null to clear"
                 },
                 "text": {
                   "description": "systemEvent text",

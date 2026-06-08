@@ -57,7 +57,7 @@ export function toError(error: unknown): Error {
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
  *
- * `name`, `description`, and `filePath` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
+ * `name`, `description`, `filePath`, and optional `promptVersion` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
  * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
  */
 export interface Skill {
@@ -69,6 +69,8 @@ export interface Skill {
   content: string;
   /** Absolute path to the skill file. Used for model-visible location and resolving relative references. */
   filePath: string;
+  /** Deterministic marker for the skill content, rendered as <version> when available. */
+  promptVersion?: string;
   /** Exclude this skill from model-visible skill lists while still allowing explicit application invocation. */
   disableModelInvocation?: boolean;
 }

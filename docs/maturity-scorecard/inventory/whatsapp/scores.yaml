@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: operator-install-and-configuration.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Access and Identity
+    category_note: pairing-login-and-session-auth.md
+    coverage: 76
+    quality: 72
+    completeness: 76
+  - name: Conversation Routing and Delivery
+    category_note: group-routing-and-activation.md
+    coverage: 76
+    quality: 72
+    completeness: 76
+  - name: Media and Rich Content
+    category_note: media-attachments-and-voice.md
+    coverage: 76
+    quality: 80
+    completeness: 76
+  - name: Native Controls and Approvals
+    category_note: native-approvals-and-reactions.md
+    coverage: 78
+    quality: 84
+    completeness: 78

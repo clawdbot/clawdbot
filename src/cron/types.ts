@@ -256,7 +256,8 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "toolsAllow">> & {
+    model?: string | null;
     toolsAllow?: string[] | null;
   };
 

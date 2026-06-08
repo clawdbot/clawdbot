@@ -1,0 +1,638 @@
+---
+title: "Maturity taxonomy outline"
+version: 3
+summary: "Rendered outline of active OpenClaw maturity-scorecard surfaces grouped by family."
+---
+
+# Maturity taxonomy outline
+
+This file is generated from
+`.agents/skills/claw-score/taxonomy.yaml`. Edit the taxonomy, then rerender this file.
+Only active inventory-backed surfaces are rendered here; archived surfaces are
+intentionally omitted.
+
+## Surface outline
+
+### Core (15 surfaces)
+
+- [Gateway runtime](inventory/gateway-runtime/report.md) (`gateway-runtime`)
+  - [Approvals and Remote Execution](inventory/gateway-runtime/approval-and-execution-safety.md)
+    - Features: Exec approvals; Plugin approvals; Node exec approvals; Approved node execution; Approval mutation safety; Delivery fallback behavior
+  - [HTTP APIs](inventory/gateway-runtime/http-apis.md)
+    - Features: OpenAI-compatible APIs; Tool invocation API; Admin API access; Hook ingress
+  - [Hosted Web Surface](inventory/gateway-runtime/hosted-web-surface.md)
+    - Features: Control UI; WebChat hosting; Plugin web routes; Canvas and A2UI routes
+  - [Gateway RPC APIs and Events](inventory/gateway-runtime/core-rpc-coverage.md)
+    - Features: Health APIs; Identity and presence APIs; Model APIs; Usage and memory APIs; Session APIs; Chat APIs; Channel APIs; Web login and wake APIs; Config and secrets APIs; Update and setup APIs; Agent and artifact APIs; Task and automation APIs; Tool and skill APIs; Request and event envelopes; Idempotent side effects; Method discovery; Event discovery; Accepted-then-final results; Event ordering; State refresh after gaps
+  - [Device Auth and Pairing](inventory/gateway-runtime/device-identity-auth-and-pairing.md)
+    - Features: Shared-secret login; Trusted proxy auth; Private ingress mode; Device challenge signing; Device tokens; Setup-code bootstrap; Auth mismatch recovery; Device auth migration; Client pairing; Node pairing
+  - [Network Access and Discovery](inventory/gateway-runtime/network-exposure-and-transport-selection.md)
+    - Features: Loopback and LAN access; Tailnet access; SSH tunnels; Endpoint discovery; Saved endpoints; TLS pinning
+  - [Nodes and Remote Capabilities](inventory/gateway-runtime/node-transport-and-capability-relay.md)
+    - Features: Node presence; Node capabilities; Node inventory; Node actions; Node events; Pending work delivery; Remote device capabilities; Remote host commands
+  - [Health, Diagnostics, and Repair](inventory/gateway-runtime/observability-health-and-repair.md)
+    - Features: Health snapshots; Channel readiness; Stability diagnostics; Payload diagnostics; Diagnostics exports; Doctor checks; Log tailing
+  - [Protocol Compatibility](inventory/gateway-runtime/protocol-typing-and-compatibility.md)
+    - Features: Published protocol schema; Runtime request validation; JSON Schema export; Swift client models; Version negotiation; Client transport defaults; Backward-compatible evolution
+  - [Roles and Permissions](inventory/gateway-runtime/roles-scopes-and-operator-policy.md)
+    - Features: Role negotiation; Operator permissions; Approval-gated actions; Untrusted node declarations; Event scoping
+  - [Gateway Lifecycle](inventory/gateway-runtime/runtime-lifecycle-and-supervision.md)
+    - Features: Foreground startup; Service installation; Restart and stop; Service status; Bind and port settings; Config reload; Multi-gateway isolation
+  - [Security Controls](inventory/gateway-runtime/security-and-hardening-posture.md)
+    - Features: Non-loopback auth; Trusted proxy exceptions; Gateway and node trust boundaries; Trusted CIDR auto-approval; Fail-closed protocol handling; Remote execution safeguards
+  - [WebSocket Connection](inventory/gateway-runtime/websocket-handshake-and-session-establishment.md)
+    - Features: WebSocket transport; Connect challenge; Connect request; Protocol version negotiation; hello-ok snapshot; Startup retry; Session limits; Plugin surface URLs
+- [CLI](inventory/cli-install-update-onboard-doctor/report.md) (`cli-install-update-onboard-doctor`)
+  - [CLI Setup](inventory/cli-install-update-onboard-doctor/package-install-and-cli-entrypoints.md)
+    - Features: Installer scripts; Local prefix install; Package-manager installs; Supported Node runtime; Source checkout install; CLI entrypoint
+  - [Onboarding and Auth Setup](inventory/cli-install-update-onboard-doctor/first-run-onboarding-and-auth-selection.md)
+    - Features: Guided onboarding; Targeted reconfiguration; Auth choices; Gateway auth storage; Remote onboarding
+  - [Plugin and Channel Setup](inventory/cli-install-update-onboard-doctor/plugin-and-channel-setup-during-onboarding.md)
+    - Features: Channel picker; Plugin install sources; Channel account setup; Post-setup probes; Remote gateway caveat
+  - [Gateway Service Management](inventory/cli-install-update-onboard-doctor/gateway-service-install-and-lifecycle.md)
+    - Features: Foreground gateway runs; Service install and control; Service auth wiring; Drift and reinstall recovery; Service health checks
+  - [CLI Observability](inventory/cli-install-update-onboard-doctor/status-health-logs-and-diagnostics-support-path.md)
+    - Features: Status snapshots; Health snapshots; Remote log tailing; Diagnostics export; Support-safe redaction
+  - [Doctor](inventory/cli-install-update-onboard-doctor/doctor-config-auth-plugin-and-lint.md)
+    - Features: Interactive repair; Config migration; Auth and SecretRef checks; Plugin validation and repair; Lint and JSON findings; Extra gateway discovery; Supervisor drift repair; Port and startup diagnosis; Runtime path checks; Restart guidance
+  - [Updates and Upgrades](inventory/cli-install-update-onboard-doctor/update-channel-and-core-upgrade-flow.md)
+    - Features: Update channels; Install-kind switching; Managed gateway restart; Update status and RPC; Plugin convergence
+- [Plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/report.md) (`plugin-sdk-and-bundled-plugin-architecture`)
+  - [Authoring and Packaging plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/public-sdk-api-and-subpaths.md)
+    - Features: Root SDK entrypoint; Focused SDK imports; Entrypoint discovery; Migration shims; Plugin manifest; Package metadata; Runtime compatibility; Validation feedback
+  - [Bundled plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/bundled-plugin-discovery-and-inventory.md)
+    - Features: Bundled plugin listing; Bundled source overlays; Packaged bundled plugins; Generated plugin inventory; Bundled channel IDs
+  - [Canvas plugin](inventory/plugin-sdk-and-bundled-plugin-architecture/canvas-plugin.md)
+    - Features: Hosted Canvas and A2UI surfaces; Agent canvas tool; Node Canvas commands; Control UI embeds; Canvas documents; A2UI transport and snapshots
+  - [Installing and running plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/runtime-loading-and-lifecycle.md)
+    - Features: Plugin setup; Runtime activation; Enable and disable; Safe load failures; Dependency repair; Install update and uninstall
+  - [Channel plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/channel-plugin-architecture.md)
+    - Features: Inbound event handling; Outbound delivery; Ingress authorization; Destination resolution; Native approval prompts
+  - [Provider and tool plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/provider-tool-plugin-architecture.md)
+    - Features: Provider plugins; Tool plugins; Model catalogs; Provider auth; Web search and fetch; Mixed plugins
+  - [Plugin approvals](inventory/plugin-sdk-and-bundled-plugin-architecture/approval-and-security-boundaries.md)
+    - Features: Approval requests; Native approval delivery; Same-chat fallbacks; Exec and plugin separation; Approval replay protection; Security helpers
+  - [Publishing plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/distribution-release-and-compatibility.md)
+    - Features: Install sources; ClawHub publishing; npm publishing; Compatibility signaling; Update and rollback expectations; Third-party publication rules
+  - [Testing plugins](inventory/plugin-sdk-and-bundled-plugin-architecture/developer-testing-and-fixtures.md)
+    - Features: Test fixtures; Local test environment; Plugin runtime harness; Unit and integration scaffolds; Docker lifecycle suites; Smoke tests
+- [Agent Runtime](inventory/agent-runtime-and-provider-execution/report.md) (`agent-runtime-and-provider-execution`)
+  - [Agent Turn Execution](inventory/agent-runtime-and-provider-execution/agent-turn-orchestration-and-runtime-lifecycle.md)
+    - Features: Turn startup and runtime choice; Session and run coordination; Abort and terminal outcomes
+  - [External Runtimes and Subagents](inventory/agent-runtime-and-provider-execution/cli-harnesses-external-runtimes-and-subagents.md)
+    - Features: External harness selection; CLI runtime aliases; Subagent turns; Runtime recovery
+  - [Hosted Provider Execution](inventory/agent-runtime-and-provider-execution/hosted-provider-adapters-and-payload-compatibility.md)
+    - Features: Hosted provider turns; Provider-specific model options; Hosted tool use; Reasoning and cache controls; Hosted streaming and replies
+  - [Local and Self-hosted Providers](inventory/agent-runtime-and-provider-execution/local-and-self-hosted-provider-execution.md)
+    - Features: Local provider profiles; Tool-capability flags; Timeouts and context windows; Local smoke checks; Local failure handling
+  - [Model and Runtime Selection](inventory/agent-runtime-and-provider-execution/model-selection-provider-routing-and-runtime-policy.md)
+    - Features: Model reference selection; Provider and runtime overrides; Thinking and context settings; Invalid route recovery
+  - [Provider Auth](inventory/agent-runtime-and-provider-execution/provider-auth-profiles-and-credential-health.md)
+    - Features: Login and API-key setup; Auth profile selection; Credential health checks; Auth failover; Provider fallback recovery; Rate-limit and capacity recovery; Missing-key and OAuth guidance; Restart and stale-route recovery; Structured provider diagnostics; Subagent credential propagation
+  - [Streaming and Progress](inventory/agent-runtime-and-provider-execution/streaming-progress-and-preview-visibility.md)
+    - Features: Streaming replies; Progress visibility
+  - [Tool Calls and Response Handling](inventory/agent-runtime-and-provider-execution/streaming-tool-call-and-response-normalization.md)
+    - Features: Tool-call handling; Usage and response reporting; Failure recovery
+  - [Tool Execution Controls](inventory/agent-runtime-and-provider-execution/tool-execution-approvals-and-sandbox-policy.md)
+    - Features: Tool availability rules; Sandboxed exec behavior; Approval flow; Elevated execution; Tool safety controls; Delegated tool access
+- [Session, memory, and context engine](inventory/session-memory-and-context-engine/report.md) (`session-memory-and-context-engine`)
+  - [CLI Session and Transcript Management](inventory/session-memory-and-context-engine/cli-session-and-transcript-management.md)
+    - Features: CLI Session; Transcript Management
+  - [Token Management](inventory/session-memory-and-context-engine/compaction-pruning-and-token-pressure.md)
+    - Features: Compaction; Pruning; Token Pressure
+  - [Context Engine](inventory/session-memory-and-context-engine/context-engine-and-runtime-assembly.md)
+    - Features: Context Engine; Runtime Assembly
+  - [Cross-client History and Session Parity](inventory/session-memory-and-context-engine/cross-client-history-and-session-parity.md)
+    - Features: Cross-client History; Session Parity
+  - [Diagnostics, Maintenance, and Recovery](inventory/session-memory-and-context-engine/diagnostics-maintenance-and-recovery.md)
+    - Features: Session diagnostic reports; Session maintenance warnings; Session and transcript recovery
+  - [Core Prompts and Context](inventory/session-memory-and-context-engine/instruction-profile-and-context-visibility.md)
+    - Features: Instruction Profile; Context Visibility
+  - [Memory](inventory/session-memory-and-context-engine/memory-files-tools-and-active-memory.md)
+    - Features: Memory Backend Storage; Embedding Search; Memory Files; Memory search and store tools; Active Memory
+  - [Session Routing](inventory/session-memory-and-context-engine/session-routing-and-conversation-binding.md)
+    - Features: Session Routing; Conversation routing
+  - [Transcript Persistence](inventory/session-memory-and-context-engine/transcript-persistence-and-durability.md)
+    - Features: Transcript Persistence; Durability
+- [Channel framework](inventory/channel-framework/report.md) (`channel-framework`)
+  - [Channel Actions Commands and Approvals](inventory/channel-framework/channel-actions-commands-and-approvals.md)
+    - Features: Channel-native commands; Native command session target; Message actions; Message tool API discovery; Channel-native approval prompts
+  - [Channel Setup](inventory/channel-framework/channel-setup.md)
+    - Features: Supported channel catalog; Channel status taxonomy in channels list; Setup/onboarding flows; Install-on-demand; Setup wizard metadata
+  - [Group Thread and Ambient Room Behavior](inventory/channel-framework/group-thread-and-ambient-room-behavior.md)
+    - Features: Group/channel session isolation; Mention-required; Native threads; Broadcast groups; Bot-loop protection
+  - [Inbound Access and Identity Gates](inventory/channel-framework/inbound-access-and-identity-gates.md)
+    - Features: DM pairing; Group/channel allowlists; Access group expansion; Mention gating; Sanitized inbound identity/route projections
+  - [Media Attachments and Rich Channel Data](inventory/channel-framework/media-attachments-and-rich-channel-data.md)
+    - Features: Inbound media normalization; Outbound direct text/media sends; Provider-specific channelData; Media roots
+  - [Outbound Delivery and Reply Pipeline](inventory/channel-framework/outbound-delivery-and-reply-pipeline.md)
+    - Features: Automatic final reply delivery; Durable outbound send orchestration; Reply pipeline transforms; Provider outbound adapter bridge
+  - [Conversation Routing and Delivery](inventory/channel-framework/conversation-routing-and-delivery.md)
+    - Features: Inbound conversation routing; Session key construction; Agent selection precedence; Runtime conversation routing; Thread/parent-child placement; Plugin registry resolution; Channel account startup; Whole-channel lifecycle controls; Config/secrets reload interactions; Auto-restart
+  - [Status Health and Operator Controls](inventory/channel-framework/status-health-and-operator-controls.md)
+    - Features: channels.status; Channel health policy; Operator CLI controls; Status read-model
+- [Security, auth, pairing, and secrets](inventory/security-auth-pairing-and-secrets/report.md) (`security-auth-pairing-and-secrets`)
+  - [Approval Policy and Tool Safeguards](inventory/security-auth-pairing-and-secrets/approval-policy-and-dangerous-tool-safeguards.md)
+    - Features: Approval Policy; Dangerous Tool Safeguards
+  - [Gateway Auth and Remote Access](inventory/security-auth-pairing-and-secrets/gateway-auth-and-network-exposure.md)
+    - Features: Shared Gateway token/password auth; Gateway auth mode; Trusted-proxy identity; Tailscale Serve/Funnel; Bind and origin restrictions; WebSocket handshake auth; Operator-facing docs; Browser Control UI; Remote Client Trust
+  - [Channel Access Control](inventory/security-auth-pairing-and-secrets/channel-identity-allowlists-and-sender-pairing.md)
+    - Features: Channel Identity; Allowlists; Sender Pairing
+  - [Device and Node Pairing](inventory/security-auth-pairing-and-secrets/device-identity-and-operator-pairing.md)
+    - Features: Setup codes; Device identity creation; Device-token issuance; Device pairing approvals for operator; Operator scopes that gate pairing; Local Control UI; Auth migration; Operator-facing docs; Node Pairing; Capability Trust; Remote Exec Approvals
+  - [Plugin Trust](inventory/security-auth-pairing-and-secrets/plugin-installation-trust-and-security-boundaries.md)
+    - Features: Plugin Installation Trust; Security Boundaries
+  - [Credential and Secret Hygiene](inventory/security-auth-pairing-and-secrets/secrets-storage-redaction-and-configuration-hygiene.md)
+    - Features: Provider Auth Profiles; API Key Health; Secrets Storage; Redaction; Configuration Hygiene
+- [Observability](inventory/telemetry-diagnostics-and-observability/report.md) (`telemetry-diagnostics-and-observability`)
+  - [Health and Repair](inventory/telemetry-diagnostics-and-observability/health-status-probes.md)
+    - Features: Background health-monitor loop; Per-account enable/disable settings; Startup grace; Restart logging; openclaw doctor; Structured health checks; Core doctor checks; Plugin SDK doctor/health contracts; openclaw status; openclaw health; Gateway RPC health; Cached health snapshots
+  - [Logging](inventory/telemetry-diagnostics-and-observability/logging-log-tail-and-redaction.md)
+    - Features: Rolling Gateway JSONL file logs; openclaw logs; Gateway RPC logs.tail; Redaction patterns and sinks; Trace correlation fields
+  - [Diagnostic Collection](inventory/telemetry-diagnostics-and-observability/diagnostics-export-support-bundles.md)
+    - Features: openclaw gateway diagnostics export; openclaw gateway stability --bundle; Chat /diagnostics; Support zip composition; Bounded in-process stability recorder; openclaw gateway stability; Memory pressure events; Critical memory pressure snapshot option
+  - [Telemetry Export](inventory/telemetry-diagnostics-and-observability/diagnostic-events-hooks-and-trace-context.md)
+    - Features: Diagnostic event types; Async dispatch; W3C trace context creation; Plugin SDK diagnostic runtime exports; Model-call diagnostic events; diagnostics-otel plugin install; OTLP/HTTP traces; Trusted trace context; Model and runtime telemetry; diagnostics-prometheus plugin install; Gateway-authenticated GET /api/diagnostics/prometheus; Prometheus text exposition; Trusted diagnostic event subscription
+  - [Session Diagnostics](inventory/telemetry-diagnostics-and-observability/session-run-and-usage-diagnostics.md)
+    - Features: session.state; Diagnostic session activity snapshots; Model usage; Export of session signals to stability
+- [Automation: cron, hooks, tasks, polling](inventory/automation-cron-hooks-tasks-polling/report.md) (`automation-cron-hooks-tasks-polling`)
+  - [Cron Jobs](inventory/automation-cron-hooks-tasks-polling/cron-job-lifecycle.md)
+    - Features: Create/edit/remove jobs; Schedule types; Timezone and stagger; Cron RPCs; Agent cron tool; Manual cron runs; Isolated cron execution; Model/provider preflight; Run history; Timeout and denial diagnostics; Chat announce delivery; Webhook delivery; Failure destinations; Skipped-run alerts; Delivery previews
+  - [Event Ingress](inventory/automation-cron-hooks-tasks-polling/channel-polling-webhooks.md)
+    - Features: Telegram long polling; Telegram webhook mode; Zalo polling/webhook mode; Polling stall diagnostics; iMessage watch fallback; Gmail setup wizard; Watcher start/serve; Tailscale/public routing; Push token validation; Gmail event routing; POST /hooks/wake; POST /hooks/agent; Mapped hooks; Hook auth policy; Async dispatch
+  - [Automation Hooks](inventory/automation-cron-hooks-tasks-polling/internal-hooks.md)
+    - Features: HOOK.md authoring; Hook discovery; Hook CLI management; Hook packs; Lifecycle event dispatch; api.on registration; Tool-call policy hooks; Message hooks; Session/lifecycle hooks; Plugin approval requests; cron_changed
+  - [Background Tasks and Flows](inventory/automation-cron-hooks-tasks-polling/background-task-ledger.md)
+    - Features: Task list/show/cancel; Task notifications; Task audit and maintenance; Chat task board; Task pressure status; Managed flows; Mirrored flows; openclaw tasks flow; Flow audit and maintenance; Plugin managedFlows
+  - [Heartbeat](inventory/automation-cron-hooks-tasks-polling/heartbeat-commitments.md)
+    - Features: Heartbeat scheduling; Active hours; Wake and cooldown handling; Due-only heartbeat tasks; Commitment check-ins
+  - [Polling Controls](inventory/automation-cron-hooks-tasks-polling/message-polls-process-polling.md)
+    - Features: openclaw message poll; Telegram polls; Teams polls; Poll flags; Channel capability gates; process poll; process log; Background process status; No-progress loop detection; Process input controls
+- [Media understanding and media generation](inventory/media-understanding-and-media-generation/report.md) (`media-understanding-and-media-generation`)
+  - [Media Intake and Access](inventory/media-understanding-and-media-generation/media-file-intake-storage-and-secure-access.md)
+    - Features: Local and remote media references; MIME and type detection; Size caps and bounded reads; Safe remote fetch; Local root policy; Inbound media store; PDF/document extraction dispatch; QR and media helper classification
+  - [Channel Media Handling](inventory/media-understanding-and-media-generation/channel-attachment-staging-and-reply-media-delivery.md)
+    - Features: Inbound attachment staging; Sandbox media rewrites; Reply media templating; Message-tool attachment delivery; Duplicate delivery suppression
+  - [Media Configuration](inventory/media-understanding-and-media-generation/media-understanding-orchestration-and-configuration.md)
+    - Features: Media capability configuration
+  - [Text-to-Speech Delivery](inventory/media-understanding-and-media-generation/tts-and-outbound-voice-audio-delivery.md)
+    - Features: TTS; Outbound Voice Audio Delivery
+  - [Media Understanding](inventory/media-understanding-and-media-generation/image-understanding-and-vision-routing.md)
+    - Features: Audio attachment selection; Batch STT provider and CLI fallback; Voice-note mention preflight; Transcript insertion and echo; Audio proxy and limit handling; Inbound image summarization; Active vision model bypass; Text-only model media offload; Vision provider fallback; Image and PDF input routing; Video Understanding; Direct Video Analysis
+  - [Media Generation](inventory/media-understanding-and-media-generation/image-generation-tool-and-provider-routing.md)
+    - Features: Image generation tool invocation; Provider and model selection; Reference image editing; Generated image task lifecycle; Generated image persistence and delivery; Music generation tool invocation; Provider and model selection; Lyrics, instrumental, duration, and format controls; Reference inputs where supported; Music task lifecycle and duplicate status; Generated audio persistence and delivery; Video generation tool invocation; Mode and provider capability selection; Reference image, video, and audio inputs; Provider option validation; Video task lifecycle and status; Generated video persistence and delivery
+- [Voice and realtime talk](inventory/voice-and-realtime-talk/report.md) (`voice-and-realtime-talk`)
+  - [Talk Providers](inventory/voice-and-realtime-talk/talk-configuration-catalog-and-provider-selection.md)
+    - Features: OpenAI Realtime voice backend bridge; Google Gemini Live backend bridge; Realtime voice provider SDK contracts; Provider diagnostics; Talk catalog; Talk provider config; Shared native config parsing
+  - [Realtime Talk Sessions](inventory/voice-and-realtime-talk/gateway-relay-and-realtime-session-runtime.md)
+    - Features: Agent consult handoff; Active Talk agent-run status; Talkback runtime behavior; Forced consult scheduling; Browser Talk start/stop UI; Browser WebRTC sessions; Browser relay mode; Browser tool-call forwarding; Realtime session controls; Gateway relay sessions; Audio-frame limits
+  - [Speech and Transcription](inventory/voice-and-realtime-talk/speech-transcription-directives-and-talk-speak.md)
+    - Features: Voice directives; Talk speech playback; Transcription relay sessions; Realtime transcription providers; Native directive parsing
+  - [Native App Talk](inventory/voice-and-realtime-talk/native-app-talk-loops-ios-android-macos.md)
+    - Features: macOS native Talk mode; iOS Talk mode; Android Talk mode; Shared Talk config
+  - [Voice Wake and Routing](inventory/voice-and-realtime-talk/voice-wake-push-to-talk-and-routing.md)
+    - Features: Wake-word settings; Wake routing; macOS Voice Wake runtime; Mobile wake preferences
+  - [Talk Observability](inventory/voice-and-realtime-talk/observability-diagnostics-session-health-and-latency.md)
+    - Features: Talk event logging; Session-log health; Live smoke output; Prometheus diagnostic counters; Operator visibility into setup
+- [Gateway Web App](inventory/browser-control-ui-and-webchat/report.md) (`browser-control-ui-and-webchat`)
+  - [Browser Realtime Talk](inventory/browser-control-ui-and-webchat/browser-realtime-talk-controls-and-voice-transports.md)
+    - Features: Browser Talk start/stop; Provider session selection; Gateway relay audio; Tool-call consults; Steer and cancel
+  - [Browser Access and Trust](inventory/browser-control-ui-and-webchat/gateway-connection-auth-device-pairing-and-origins.md)
+    - Features: Device pairing; Token/password auth; Tailscale Serve auth; Trusted proxy auth; Allowed origins/gatewayUrl
+  - [Configuration](inventory/browser-control-ui-and-webchat/config-schema-editing-and-safe-writes.md)
+    - Features: Config snapshots; Schema form editing; Raw JSON editing; Base-hash guarded writes; Apply and restart
+  - [Browser UI](inventory/browser-control-ui-and-webchat/control-ui-static-shell-routing-and-pwa.md)
+    - Features: Gateway-hosted UI; Dashboard open/auth bootstrap; Base-path routing; Static asset recovery; Dev gatewayUrl target; PWA install metadata; Service worker updates; VAPID keys; Subscribe/unsubscribe; Test notifications
+  - [WebChat Conversations](inventory/browser-control-ui-and-webchat/chat-composer-session-model-controls-and-rendering.md)
+    - Features: Send and abort; Session and agent picker; Model/thinking controls; Attachments; Markdown/tool/media rendering; chat.history projection; chat.send lifecycle; Abort/partial retention; Injected assistant notes; Reconnect continuity; Hosted embeds; External embed gating; Assistant media tickets; Authenticated avatars; CSP image policy
+  - [Operator Console](inventory/browser-control-ui-and-webchat/diagnostics-logs-update-and-activity.md)
+    - Features: Health/status/models; Live log tail; Update run/status; Activity summaries; RPC timing telemetry; Channels/login; Session manager and history; Cron; Skills/nodes; Exec approvals/agents
+- [TUI](inventory/tui-and-terminal-ux/report.md) (`tui-and-terminal-ux`)
+  - [Runtime Modes](inventory/tui-and-terminal-ux/launch-modes-and-cli-entrypoints.md)
+    - Features: Gateway TUI launch; Local chat launch; Terminal alias launch; Initial message launch; Launch option validation; Gateway connection; Gateway authentication; History load on attach; Reconnect visibility; Gateway command RPCs; Embedded local chat; Local auth flow; Config repair loop; Gateway-free recovery
+  - [Input and Commands](inventory/tui-and-terminal-ux/composer-keybindings-and-input-editing.md)
+    - Features: Message composition; Input history; Keyboard shortcuts; Paste and busy-submit handling; IME and AltGr handling; Slash Commands; Pickers; Settings
+  - [Session Management](inventory/tui-and-terminal-ux/session-lifecycle-history-and-resume.md)
+    - Features: Session Lifecycle; History; Resume
+  - [Local Shell Execution](inventory/tui-and-terminal-ux/local-shell-execution-and-approval-boundary.md)
+    - Features: Bang-command routing; Approval prompt; Command output display; Execution environment marker
+  - [Rendering and Output Safety](inventory/tui-and-terminal-ux/streaming-message-rendering-and-tool-cards.md)
+    - Features: Streaming Message Rendering; Tool Cards; Terminal Rendering Primitives; Output Safety
+- [ClawHub](inventory/clawhub-and-external-plugin-distribution/report.md) (`clawhub-and-external-plugin-distribution`)
+  - [Publishing](inventory/clawhub-and-external-plugin-distribution/clawhub-and-npm-publishing-release-validation.md)
+    - Features: ClawHub package publishing owner; OpenClaw-owned package release validation for ClawHub; Version bump gates; npm trusted publishing provenance; External code plugin package contract required; Skill package metadata; Skill publishing flow
+  - [Catalog Discovery](inventory/clawhub-and-external-plugin-distribution/clawhub-discovery-catalog-metadata-and-package-lookup.md)
+    - Features: openclaw plugins search as the ClawHub; Search result metadata; Distinction between plugin search; Catalog lookup failure; Skill catalog search
+  - [Compatibility and Trust](inventory/clawhub-and-external-plugin-distribution/compatibility-gates-and-official-external-catalog.md)
+    - Features: openclaw.compat.pluginApi; ClawHub package compatibility validation; npm compatibility fallback to the newest; Official external plugin catalog behavior; Compatibility docs; Operator trust model for installing; ClawHub archive; npm integrity drift; Built-in dangerous-code scanner; ClawHub publishing review/hidden-release behavior as upstream; Skill archive safety; Skill audit signals
+  - [Plugin Lifecycle and Health](inventory/clawhub-and-external-plugin-distribution/plugin-lifecycle-and-health.md)
+    - Features: Source prefixes; Bare package behavior during the launch; Explicit pinned versions; Managed install records that preserve source; Codex; Local; Marketplace list; Supported mapped features; Remote marketplace path safety; Update by plugin id; Reinstall vs update semantics; Downgrade; Uninstall config/index/policy/file cleanup; Gateway restart/reload requirements after; Per-plugin managed npm project; npm-pack local release-candidate installs; Dependency ownership between plugin packages; Peer dependency relinking; Legacy dependency root cleanup; plugins list; Local plugin index; Troubleshooting stale config; Runtime verification after Gateway; ClawHub skill installs; Skill upload install path; Skill dependency installers
+- [OpenClaw App SDK](inventory/openclaw-app-sdk/report.md) (`openclaw-app-sdk`)
+  - [Client API](inventory/openclaw-app-sdk/client-api.md)
+    - Features: SDK entrypoints; Namespace layout; Package split; App/plugin boundary
+  - [Gateway Access](inventory/openclaw-app-sdk/gateway-access.md)
+    - Features: Gateway connect; URL and token config; Auto gateway; Custom transport; Scopes and redaction
+  - [Agent Conversations](inventory/openclaw-app-sdk/agent-conversations.md)
+    - Features: Agent handles; Agent runs; Run results; Session creation; Session send; Session controls
+  - [Events and Approvals](inventory/openclaw-app-sdk/events-and-approvals.md)
+    - Features: Event stream; Event envelope; Replay cursors; Approval callbacks; Questions
+  - [Resource Helpers](inventory/openclaw-app-sdk/resource-helpers.md)
+    - Features: Models; ToolSpace; Artifacts; Tasks; Environments
+  - [Compatibility](inventory/openclaw-app-sdk/compatibility.md)
+    - Features: Generated client; Ergonomic wrappers; Unsupported calls; Schema alignment; Public package contract
+
+### Platform (14 surfaces)
+
+- [macOS Gateway host](inventory/macos-gateway-host/report.md) (`macos-gateway-host`)
+  - [CLI Setup](inventory/macos-gateway-host/cli-install-runtime-prerequisites.md)
+    - Features: Hosted installer; Node 24 recommendation; App-triggered CLI install; Shell PATH and version-manager drift
+  - [Local Gateway Integration](inventory/macos-gateway-host/local-gateway-mode-host-configuration.md)
+    - Features: App local/remote connection mode; App-managed Gateway LaunchAgent install/restart/uninstall; CLI install detection; Attach-to-existing local Gateway compatibility; Gateway endpoint; gateway.mode=local configuration; Loopback bind; Local app endpoint resolution; Bonjour discovery
+  - [Remote Gateway Mode](inventory/macos-gateway-host/remote-gateway-mode-transport.md)
+    - Features: macOS app "Remote over SSH"; SSH tunnel setup; Tailscale MagicDNS; Remote endpoint token/password/TLS fingerprint; Local node host startup
+  - [Gateway Service Lifecycle](inventory/macos-gateway-host/launchagent-service-lifecycle.md)
+    - Features: Per-user Gateway LaunchAgent install; launchctl bootstrap; LaunchAgent labels; Gateway token/env handling; App-managed LaunchAgent handoff; openclaw update package/git handoff; Managed service refresh; Stale updater launchd job detection; openclaw uninstall; Stranded service recovery
+  - [Diagnostics and Observability](inventory/macos-gateway-host/diagnostics-logs-operator-observability.md)
+    - Features: LaunchAgent log paths; openclaw gateway status --deep; Gateway silently stops responding; Stale updater jobs
+  - [Permissions and Native Capabilities](inventory/macos-gateway-host/macos-permissions-native-node-capabilities.md)
+    - Features: macOS TCC permission prompts/status; Native node capability exposure; system.run policy; Permission-driven support
+  - [Profiles and Isolation](inventory/macos-gateway-host/profiles-multi-gateway-isolation.md)
+    - Features: Profile-specific LaunchAgent labels; Profile-specific state/config/workspace roots; Derived ports; Rescue bot setup; Extra Gateway process detection
+- [macOS companion app](inventory/macos-companion-app/report.md) (`macos-companion-app`)
+  - [Canvas](inventory/macos-companion-app/canvas-a2ui.md)
+    - Features: Canvas panel open/hide/navigate/eval/snapshot; Local custom URL scheme; A2UI host auto-navigation; Canvas enable/disable setting
+  - [Local Setup](inventory/macos-companion-app/onboarding-cli-workspace.md)
+    - Features: Local mode Gateway attach/start/stop; LaunchAgent install/update/restart/uninstall; Existing-listener detection; Native first-run onboarding flow; CLI discovery; Local workspace selection; Onboarding WebChat session separation
+  - [Status and Settings](inventory/macos-companion-app/settings-health-diagnostics.md)
+    - Features: Menu-bar status; Activity state ingestion; Settings navigation; Health polling; Channels settings
+  - [Native Capabilities](inventory/macos-companion-app/node-mode-system-run-exec-host.md)
+    - Features: Mac node session connection; system.run; Exec approval policy; Permission requests; TCC persistence
+  - [Remote Connections](inventory/macos-companion-app/remote-mode-discovery-tunnels.md)
+    - Features: Remote connection mode selection; SSH tunnel; Gateway discovery
+  - [Voice and Talk](inventory/macos-companion-app/voice-wake-talk.md)
+    - Features: Voice Wake runtime; Push-to-talk; Talk provider playback plan
+  - [WebChat](inventory/macos-companion-app/webchat-sessions.md)
+    - Features: Native SwiftUI WebChat window; Gateway chat transport; Local and remote data-plane reuse
+  - [Remote WebChat](inventory/macos-companion-app/native-webchat-and-remote-client-bridges.md)
+    - Features: macOS WebChat transport; SSH tunnel data plane; Direct ws/wss remote mode; Session continuity; Remote troubleshooting
+- [Linux Gateway host](inventory/linux-gateway-host/report.md) (`linux-gateway-host`)
+  - [Host Setup and Updates](inventory/linux-gateway-host/linux-cli-install-and-update-path.md)
+    - Features: Linux CLI install; Node runtime prerequisites; Package-manager policy; Update path
+  - [Gateway Runtime and Service Control](inventory/linux-gateway-host/foreground-gateway-runtime-and-process-control.md)
+    - Features: Foreground Gateway Runtime; Process Control; Systemd User Service Lifecycle setup; Systemd User Service Lifecycle operation; Systemd User Service Lifecycle status; Systemd User Service Lifecycle recovery
+  - [Remote Access and Security](inventory/linux-gateway-host/remote-network-exposure-tls-and-tailscale.md)
+    - Features: Remote Network Exposure; TLS; Tailscale; Gateway exposure safeguards; Gateway authentication modes; Secret Handling
+  - [Diagnostics and Repair](inventory/linux-gateway-host/diagnostics-logs-doctor-and-repair.md)
+    - Features: Gateway diagnostic reports; Gateway log tailing; Doctor checks; Operator repair guidance
+  - [Deployment Targets](inventory/linux-gateway-host/vps-container-and-cloud-deployment-guidance.md)
+    - Features: VPS; Container; Cloud Deployment Guidance
+- [Linux companion app](inventory/linux-companion-app/report.md) (`linux-companion-app`)
+  - [App Distribution](inventory/linux-companion-app/packaging-install-update-desktop-integration.md)
+    - Features: Native app package; Distro package targets; Official release metadata
+  - [Gateway Connectivity](inventory/linux-companion-app/gateway-connection-pairing-local-remote.md)
+    - Features: Local Gateway attach and status; Gateway pairing and auth; Remote mode; Local and remote resource boundaries
+  - [Chat and Sessions](inventory/linux-companion-app/native-chat-session-controls.md)
+    - Features: Native Linux chat window; Transcript; Gateway chat transport
+  - [Desktop Capabilities](inventory/linux-companion-app/desktop-permissions-secrets-sandbox.md)
+    - Features: Linux desktop permissions; Secret storage; Sandbox/package posture; Linux native node identity; Host command execution; Desktop tools; Linux native Talk; Microphone capture; Native media permissions
+  - [Status and Diagnostics](inventory/linux-companion-app/diagnostics-health-operator-repair.md)
+    - Features: Native Linux app readiness; Gateway health/status display; Log/transcript opening; Doctor/repair affordances; Linux tray/status item; Runtime status row; Desktop-environment integration
+- [Windows via WSL2](inventory/windows-via-wsl2/report.md) (`windows-via-wsl2`)
+  - [WSL Setup](inventory/windows-via-wsl2/wsl2-install-and-runtime-prerequisites.md)
+    - Features: WSL2 + Ubuntu installation; Node runtime; Linux install flow inside WSL2; WSL2 runtime boundary; WSL2 network-family requirements; Source install and build inside WSL2
+  - [CLI](inventory/windows-via-wsl2/wsl2-cli.md)
+    - Features: WSL2 CLI entrypoints; openclaw onboard; openclaw doctor status and logs; openclaw update; npm/pnpm/git package-root; Managed systemd Gateway restart; Service metadata refresh; Package-manager caveats
+  - [Gateway Service Lifecycle](inventory/windows-via-wsl2/systemd-gateway-service-lifecycle.md)
+    - Features: Onboarded systemd install; Gateway service install; systemd user unit rendering; WSL-aware systemd unavailable hints; Doctor service repair; WSL user-service linger; Systemd availability after Windows boot; Windows startup task for WSL; Verification before Windows sign-in; Clear expectations around PC power
+  - [Gateway Access and Exposure](inventory/windows-via-wsl2/auth-secrets-and-exposure-posture.md)
+    - Features: Gateway token/password auth; Provider credentials; Gateway auth SecretRefs; Remote URL credential precedence; WSL virtual network; Windows portproxy setup; Windows Firewall rules; Reachable Gateway URLs; Loopback and LAN exposure; WSL2 IPv4 networking; Tailscale remote access
+  - [Diagnostics and Repair](inventory/windows-via-wsl2/diagnostics-doctor-logs-and-repair.md)
+    - Features: openclaw doctor; openclaw status; openclaw logs; SecretRef; WSL/systemd unavailable hints; Operator repair guidance after WSL2 service
+  - [Browser and Control UI](inventory/windows-via-wsl2/split-host-browser-and-control-ui-interop.md)
+    - Features: WSL2 Gateway with Windows browser; Windows Control UI URL; Raw remote CDP to Windows Chrome; Host-local Chrome MCP; Browser profile cdpUrl; Layered diagnostics
+- [Native Windows](inventory/native-windows-cli-and-gateway/report.md) (`native-windows-cli-and-gateway`)
+  - [CLI](inventory/native-windows-cli-and-gateway/native-powershell-install-and-cli-entrypoints.md)
+    - Features: PowerShell installer; Node and package-manager bootstrap; npm global install; Packaged CLI launcher; Windows command shims; openclaw onboard; Local Gateway config; Daemon install flags; Native-vs-WSL setup boundary
+  - [Gateway Management](inventory/native-windows-cli-and-gateway/native-gateway-foreground-runtime-and-process-control.md)
+    - Features: openclaw gateway; Foreground runtime health/readiness; Windows-specific restart/signal; Unmanaged foreground mode; openclaw gateway install; Gateway launcher files; Scheduled Task runtime status; Startup-folder fallback; openclaw status; Windows service inspection; Post-install diagnostics
+  - [Networking](inventory/native-windows-cli-and-gateway/windows-host-networking-portproxy-and-remote-access.md)
+    - Features: Native Windows host networking; netsh interface portproxy; Gateway status and probe output; Loopback, LAN, and WSL boundary
+  - [Updates](inventory/native-windows-cli-and-gateway/windows-update-restart-handoff-and-package-locks.md)
+    - Features: openclaw update on native Windows package; Managed Gateway stop/restart; Detached update handoff; Windows package locks
+- [Native Windows companion app](inventory/native-windows-companion-app/report.md) (`native-windows-companion-app`)
+  - [Installation and Updates](inventory/native-windows-companion-app/packaging-install-update-desktop-integration.md)
+    - Features: Official app download; MSI/MSIX/App Installer/winget-style packaging; Windows architecture handling for x64; App release channel
+  - [Gateway Connection](inventory/native-windows-companion-app/gateway-connection-pairing-local-remote.md)
+    - Features: App-managed local Gateway attach/start; Remote Gateway connection modes; Device/node pairing
+  - [Chat Sessions](inventory/native-windows-companion-app/native-chat-session-controls.md)
+    - Features: Native Windows chat window; Gateway chat transport
+  - [Status and Repair](inventory/native-windows-companion-app/diagnostics-health-operator-repair.md)
+    - Features: App health states; App-specific repair; Windows system tray app; Status indicators; App-specific notification permission
+  - [Desktop Tools and Permissions](inventory/native-windows-companion-app/node-host-capabilities-exec-approvals.md)
+    - Features: Windows node identity; Host command execution; Desktop command policy; App approval prompts; Screen and media capture; Canvas host behavior; Windows shell integrations; App secrets; Windows ACL; Command approval
+- [Android app](inventory/android-app/report.md) (`android-app`)
+  - [Media Capture](inventory/android-app/camera-media-capture.md)
+    - Features: Camera and media capture
+  - [Mobile Chat](inventory/android-app/chat-sessions-ui.md)
+    - Features: Chat tab
+  - [Connection Setup](inventory/android-app/gateway-pairing-security.md)
+    - Features: Gateway discovery
+  - [Distribution](inventory/android-app/install-release-distribution.md)
+    - Features: Public Google Play install path; Manual install path; Release smoke and startup performance
+  - [Settings](inventory/android-app/settings-permissions-diagnostics.md)
+    - Features: Settings sheet
+  - [Voice](inventory/android-app/voice-talk-wake.md)
+    - Features: Voice tab
+  - [Device Runtime](inventory/android-app/node-device-capabilities.md)
+    - Features: Background reconnect and presence; Device command availability
+- [iOS app](inventory/ios-app/report.md) (`ios-app`)
+  - [Media and Sharing](inventory/ios-app/camera-media-photos-and-share-extension.md)
+    - Features: Camera list/snap/clip
+  - [Canvas and Screen](inventory/ios-app/canvas-screen-and-a2ui.md)
+    - Features: Canvas present/hide/navigate/eval/snapshot
+  - [Chat and Sessions](inventory/ios-app/chat-operator-ui-and-session-controls.md)
+    - Features: Chat sessions and operator controls
+  - [Gateway Setup and Diagnostics](inventory/ios-app/settings-permissions-and-diagnostics.md)
+    - Features: Bonjour/local; Manual host/port; Gateway connect configuration persistence; TLS fingerprint trust prompt; Pairing approval; Pairing/auth diagnostics for users; Settings tab
+  - [Distribution](inventory/ios-app/install-signing-and-testflight-distribution.md)
+    - Features: Internal preview status
+  - [Device Commands](inventory/ios-app/node-capability-routing-and-device-commands.md)
+    - Features: Location modes; Device command handling
+  - [Notifications and Background](inventory/ios-app/relay-push-background-and-live-activity.md)
+    - Features: APNs registration and relay delivery
+  - [Voice](inventory/ios-app/voice-talk-mode-and-wake.md)
+    - Features: Voice wake
+- [watchOS companion surfaces](inventory/watchos-companion-surfaces/report.md) (`watchos-companion-surfaces`)
+  - [Delivery and Recovery](inventory/watchos-companion-surfaces/apns-background-recovery-and-stale-approval-cleanup.md)
+    - Features: APNs relay/direct registration as it affects; Silent push; Pending approval recovery IDs; Gateway-side iOS exec approval; iPhone-side WatchConnectivity transport; Watch-side receiver activation; Delivery fallback among reachable messages
+  - [Exec Approvals](inventory/watchos-companion-surfaces/exec-approval-review-decisions-and-snapshots.md)
+    - Features: Watch exec approval prompt; Watch approval list/detail UI; iPhone-side prompt caching
+  - [Distribution and Support](inventory/watchos-companion-surfaces/packaging-signing-and-distribution-boundary.md)
+    - Features: Watch app; Signing/profile variables; Public/support status; Changelog; Release metadata; Historical bug/regression themes relevant to scoring
+  - [Notifications and Replies](inventory/watchos-companion-surfaces/watch-notify-command-payloads-and-prompt-defaults.md)
+    - Features: watch.status; Payload normalization; Mirrored iOS notification fallback when watch; Watch action buttons from generic prompt; Watch-to-iPhone reply payloads; iPhone-side dedupe; Mirrored iOS notification action
+  - [Watch App UI](inventory/watchos-companion-surfaces/watch-inbox-ui-and-persistent-state.md)
+    - Features: Watch app entry point; Generic inbox; Persistent watch inbox state
+- [Raspberry Pi / small Linux devices](inventory/raspberry-pi-small-linux-devices/report.md) (`raspberry-pi-small-linux-devices`)
+  - [Setup and Compatibility](inventory/raspberry-pi-small-linux-devices/arm-linux-install-and-runtime-prerequisites.md)
+    - Features: Hardware and 64-bit OS requirements; Node runtime setup; OpenClaw install and onboarding; First-run verification; Supported Pi model selection; 64-bit ARM boundary; Unsupported device guidance; Slow-device caveats; npm/pnpm/Bun install modes; Installer architecture detection; Optional ARM binary checks; Fallback/build guidance
+  - [Remote Access and Auth](inventory/raspberry-pi-small-linux-devices/remote-access-tailscale-ssh-and-control-ui.md)
+    - Features: Headless API-key auth; Gateway shared-secret auth; Device pairing approvals; SecretRef handling; Token drift recovery; SSH tunnel dashboard access; Tailscale Serve/Funnel; Loopback/non-loopback exposure controls; Authenticated Control UI access
+  - [Gateway Runtime](inventory/raspberry-pi-small-linux-devices/headless-gateway-runtime-and-model-routing.md)
+    - Features: Always-on Gateway process; Cloud model configuration; Channel startup; Gateway health/status; User service install; linger/boot persistence; Service drop-ins; Restart tuning; Status/log inspection; Backup/restore
+  - [Performance and Diagnostics](inventory/raspberry-pi-small-linux-devices/resource-tuning-diagnostics-and-low-memory-behavior.md)
+    - Features: Swap and low-RAM tuning; USB SSD guidance; Compile cache/no-respawn settings; OOM/performance troubleshooting; Diagnostics bundles
+- [Docker / Podman hosting](inventory/docker-podman-hosting/report.md) (`docker-podman-hosting`)
+  - [Container Setup](inventory/docker-podman-hosting/docker-install-compose-and-first-run-setup.md)
+    - Features: Local Image Setup Script; Docker Compose gateway; First-run onboarding; Docker-only first-run notes; Podman setup scripts and Quadlet template; Rootless Podman image setup
+  - [Container Operations](inventory/docker-podman-hosting/runtime-configuration-state-volumes-and-secrets.md)
+    - Features: Host CLI routing into running Docker/Podman; Container Targeting; Container update/rebuild/restart guidance for Docker; Docker Compose; Gateway token generation; Ownership; Docker Compose; Container health endpoints; Provider/VPS Docker hosting docs; Docker VM persistence/update guidance; Operator-facing update
+  - [Image Release and Validation](inventory/docker-podman-hosting/image-build-release-packaging-and-attestations.md)
+    - Features: Root Dockerfile build stages; Docker release workflow; Docker E2E package artifact generation; Docker E2E plan/scheduler scripts; Release-path install
+  - [Agent Sandbox and Tooling](inventory/docker-podman-hosting/containerized-agents-sandbox-and-tooling-support.md)
+    - Features: Docker gateway setup; Docker-backed agent sandbox support; Container image dependency baking
+- [Kubernetes hosting](inventory/kubernetes-hosting/report.md) (`kubernetes-hosting`)
+  - [Deployment Setup](inventory/kubernetes-hosting/deployment-setup.md)
+    - Features: Kustomize packaging; Cluster prerequisites; Quick deploy; Manifest apply; Kind validation
+  - [Configuration and Secrets](inventory/kubernetes-hosting/configuration-and-secrets.md)
+    - Features: Agent instructions; Gateway config; Provider secrets; Secret rotation; Image and namespace
+  - [Access and Exposure](inventory/kubernetes-hosting/access-and-exposure.md)
+    - Features: Port-forward access; Service endpoint; Ingress exposure; Auth and TLS; Localhost posture
+  - [Cluster Lifecycle](inventory/kubernetes-hosting/cluster-lifecycle.md)
+    - Features: Resource layout; State persistence; Redeploy; Teardown; Security context
+- [Nix install path](inventory/nix-install-path/report.md) (`nix-install-path`)
+  - [Install Handoff](inventory/nix-install-path/public-nix-docs-handoff.md)
+    - Features: Nix install overview; nix-openclaw source-of-truth; Install discoverability; Verification handoff
+  - [Plugin Lifecycle](inventory/nix-install-path/plugin-lifecycle-nix-store-loading.md)
+    - Features: Lifecycle command refusal; Declarative plugin selection; Nix-store plugin loading; Hardlink safety
+  - [Activation and App UX](inventory/nix-install-path/nix-mode-activation-runtime-detection.md)
+    - Features: Environment activation; macOS defaults activation; Runtime Nix-mode detection; Stable Nix defaults; Managed-by-Nix banner; Read-only config controls; Onboarding skip
+  - [Config and State](inventory/nix-install-path/state-config-path-immutable-store.md)
+    - Features: Immutable config guard; Config writer refusal; Agent-first Nix edits; Explicit config path; Writable state directory; Immutable-store config support; State integrity checks
+  - [Service Runtime and Guards](inventory/nix-install-path/gateway-service-path-nix-profile-discovery.md)
+    - Features: Nix profile PATH discovery; Profile precedence; Service PATH fallback; Trusted binary boundaries; Setup write refusal; Doctor repair refusal; Update handoff; Service lifecycle handoff
+
+### Channel (12 surfaces)
+
+- [Discord](inventory/discord/report.md) (`discord`)
+  - [Channel Setup and Operations](inventory/discord/bot-setup-and-account-configuration.md)
+    - Features: Application and bot setup; Token and application ID configuration; Setup wizard and account inspection; Status, doctor, and intent checks; Multi-account bot configuration; Account monitor startup; Gateway WebSocket lifecycle; Reconnect and heartbeat handling; Rate limits and gateway metadata; Status, probe, and health-monitor recovery
+  - [Access and Identity](inventory/discord/dm-pairing-and-sender-authorization.md)
+    - Features: DM policy modes; Allowlist inheritance; Pairing-code approval; Sender authorization; Access-group authorization; Group DM authorization
+  - [Conversation Routing and Delivery](inventory/discord/guild-channel-routing-and-session-isolation.md)
+    - Features: Guild and channel admission; Mention gating; Session key isolation; Configured and runtime routing; Inbound context visibility; Forum and media-channel thread posts; Thread actions; Target parsing; Thread context resolution; Thread-bound session routing; ACP agent routing; Routing lifecycle
+  - [Media and Rich Content](inventory/discord/media-attachments-and-voice-message-handling.md)
+    - Features: Media and Rich Content
+  - [Native Controls and Approvals](inventory/discord/native-slash-commands-components-and-interactive-callbacks.md)
+    - Features: Native slash command registration; Native slash command execution; Model Picker Commands; Components v2 messages; Callback TTL
+  - [Realtime Voice and Calls](inventory/discord/realtime-discord-voice-channels.md)
+    - Features: Voice Channel Lifecycle; Auto-join and follow-users; Realtime voice modes; Wake, barge-in, and echo handling; Voice codec and DAVE recovery
+- [Telegram](inventory/telegram/report.md) (`telegram`)
+  - [Channel Setup and Operations](inventory/telegram/bot-setup-and-account-configuration.md)
+    - Features: BotFather token creation; TELEGRAM_BOT_TOKEN; Setup wizard credential capture; Startup getMe; Doctor/status surfacing; Named account configuration; CLI/message-tool targets; Directory adapters; Channel status; Account-scoped outbound
+  - [Access and Identity](inventory/telegram/dm-pairing-and-sender-authorization.md)
+    - Features: dmPolicy modes; Pairing-code approval; Numeric Telegram user ID normalization with telegram; allowFrom; Unauthorized DM; Group allowlists; Supergroup negative chat IDs; Forum topic session keys; ACP topic routing; Session key construction
+  - [Conversation Routing and Delivery](inventory/telegram/group-forum-topic-and-session-routing.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/telegram/media-location-polls-and-rich-inputs.md)
+    - Features: Media and Rich Content
+  - [Native Controls and Approvals](inventory/telegram/inline-buttons-approvals-and-actions.md)
+    - Features: Inline keyboard rendering; Exec approvals in DMs; Message actions; Action capability discovery; Native setMyCommands startup sync; Command name/description normalization; Built-in commands; Command authorization in DMs; Model buttons
+- [WhatsApp](inventory/whatsapp/report.md) (`whatsapp`)
+  - [Channel Setup and Operations](inventory/whatsapp/operator-install-and-configuration.md)
+    - Features: Official @openclaw/whatsapp plugin metadata; openclaw plugin install whatsapp; Channel config schema; Baileys socket lifecycle; Operator troubleshooting
+  - [Access and Identity](inventory/whatsapp/pairing-login-and-session-auth.md)
+    - Features: QR login; Baileys multi-file auth persistence; DM pairing challenge; Multi-account/default-account resolution; Direct-message dmPolicy; Sender identity extraction; Privacy controls for plugin hooks
+  - [Conversation Routing and Delivery](inventory/whatsapp/group-routing-and-activation.md)
+    - Features: Group allowlists; Group session keys; Outbound text sends; Provider-accepted receipts
+  - [Media and Rich Content](inventory/whatsapp/media-attachments-and-voice.md)
+    - Features: Inbound media download; Outbound image
+  - [Native Controls and Approvals](inventory/whatsapp/native-approvals-and-reactions.md)
+    - Features: Native exec; Approver target resolution
+- [Slack](inventory/slack/report.md) (`slack`)
+  - [Channel Setup and Operations](inventory/slack/app-install-auth-manifest-and-scopes.md)
+    - Features: App Install; Slack app credentials; Manifest; Scopes; Channel status diagnostics; Slack account status; Operator Repair; Socket; HTTP transport; Runtime Lifecycle
+  - [Access and Identity](inventory/slack/dm-pairing-and-sender-authorization.md)
+    - Features: Access and Identity
+  - [Conversation Routing and Delivery](inventory/slack/channel-thread-routing-and-session-isolation.md)
+    - Features: Channel allowlists; Thread routing; Session Isolation; DM Pairing; Sender Authorization
+  - [Media and Rich Content](inventory/slack/media-attachments-files-and-vision.md)
+    - Features: Media and Rich Content
+  - [Native Controls and Approvals](inventory/slack/slash-commands-and-native-command-routing.md)
+    - Features: Slash Commands; Native Command Routing; Interactive Replies; App Home; Assistant Events; Native Approvals; Actions; Security-sensitive Ops
+- [iMessage / BlueBubbles](inventory/imessage-bluebubbles/report.md) (`imessage-bluebubbles`)
+  - [Channel Setup and Operations](inventory/imessage-bluebubbles/setup-status-doctor-and-account-config.md)
+    - Features: Translate legacy config; Cut over safely; Handle migration caveats; Run local imsg; Run through SSH wrapper; Grant macOS permissions; Probe runtime health; Account setup prompts; Account status checks; Doctor repair checks; Account Config
+  - [Access and Identity](inventory/imessage-bluebubbles/dm-pairing-access-and-session-routing.md)
+    - Features: Authorize direct senders; Route direct conversations; Bind ACP sessions; Group Policy; Mentions; System Prompts
+  - [Conversation Routing and Delivery](inventory/imessage-bluebubbles/inbound-monitoring-coalescing-catchup-and-history.md)
+    - Features: Watch live messages; Coalesce split-send DMs; Replay missed messages; Seed conversation history
+  - [Media and Rich Content](inventory/imessage-bluebubbles/media-attachments-remote-fetch-and-chunking.md)
+    - Features: Media; Attachments; Remote Fetch; Chunking; Native Actions; Private API; Message Tool
+  - [Native Controls and Approvals](inventory/imessage-bluebubbles/native-approvals-reactions-and-operator-control.md)
+    - Features: Native Approvals; Reactions; Operator Control
+- [Signal](inventory/signal/report.md) (`signal`)
+  - [Channel Setup and Operations](inventory/signal/setup-install-account-provisioning.md)
+    - Features: QR link setup; SMS registration; Installer and binary setup; Container account provisioning; Status probes; Setup diagnostics; Account safety guardrails
+  - [Access and Identity](inventory/signal/dm-pairing-access-control.md)
+    - Features: DM pairing; DM allowlists; Sender identity normalization; Group allowlists; Mention gates; Pending group history
+  - [Conversation Routing and Delivery](inventory/signal/group-routing-mention-history.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/signal/outbound-delivery-media-receipts.md)
+    - Features: Text delivery targets; Media delivery and limits; Typing and read receipts; Styled/chunked output; Reaction action discovery; Add/remove reactions; Group reaction targeting
+  - [Native Controls and Approvals](inventory/signal/approval-routing-reaction-resolution.md)
+    - Features: Native approval routing; Reaction approval responses; Approver targeting
+- [Google Chat](inventory/google-chat/report.md) (`google-chat`)
+  - [Channel Setup and Operations](inventory/google-chat/setup-auth-and-workspace-app.md)
+    - Features: Google Cloud project setup; Chat app configuration; Service account setup; Webhook audience and path; Workspace visibility and app status; Guided channel setup; Account resolution; Service account SecretRefs; Env file and inline credentials; Channel status and probes; Directory and mutable-id diagnostics; NPM and ClawHub install; Plugin docs and catalog routing; Channel aliases and labels; Operator status UI; Install/update metadata
+  - [Access and Identity](inventory/google-chat/dm-pairing-and-sender-authorization.md)
+    - Features: DM pairing approval; Sender allowlists; Google Chat identity matching; Direct session routing; Pairing diagnostics; Space allowlists; Mention gating; Sender access groups; Group session isolation; Bot-loop protection; Space diagnostics
+  - [Conversation Routing and Delivery](inventory/google-chat/space-routing-mentions-and-session-isolation.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/google-chat/media-attachments-and-file-transfer.md)
+    - Features: Media and Rich Content
+  - [Native Controls and Approvals](inventory/google-chat/message-actions-reactions-and-approval-auth.md)
+    - Features: Inbound attachments; Outbound media replies; Message upload action; Media source and size controls; Media receipts and thread placement; Text send action; Upload-file action; Reaction actions; Action capability gates; Approval sender matching; Thread-aware replies; Streaming and chunked replies; Typing placeholder lifecycle; Message-tool current-source replies; NO_REPLY cleanup; Markdown/text rendering
+- [Matrix](inventory/matrix/report.md) (`matrix`)
+  - [Channel Setup and Operations](inventory/matrix/setup-config-and-account-selection.md)
+    - Features: Matrix plugin identity; Setup wizard; Account discovery; Matrix doctor warnings; Matrix probe/status
+  - [Access and Identity](inventory/matrix/dm-room-routing-and-access-policy.md)
+    - Features: DM policy; Direct-room classification; Inbound route selection across sender-bound DMs; Mention gates; Matrix thread reply routing; Persisted Matrix thread routing managers; ACP/subagent spawn hooks
+  - [Conversation Routing and Delivery](inventory/matrix/threads-acp-and-subagent-bindings.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/matrix/outbound-messages-media-and-streaming.md)
+    - Features: Media and Rich Content
+  - [Native Controls and Approvals](inventory/matrix/actions-profile-polls-reactions-and-room-tools.md)
+    - Features: Channel action discovery; Message send/read/edit/delete; Profile media loading; Outbound Matrix text; Message presentation metadata; Inbound media failure handling
+  - [Encryption and Verification](inventory/matrix/e2ee-verification-backup-and-migration.md)
+    - Features: Encryption setup; Encrypted media upload/download; Legacy state
+- [Microsoft Teams](inventory/microsoft-teams/report.md) (`microsoft-teams`)
+  - [Channel Setup and Operations](inventory/microsoft-teams/setup-app-registration-credentials-admin-install.md)
+    - Features: Teams CLI app creation; Bot registration and manifest upload; Credential configuration; Teams app install verification; Setup status; Probe and scope reporting; Teams app doctor; Webhook and health diagnostics; Operator repair paths
+  - [Access and Identity](inventory/microsoft-teams/dm-pairing-sender-authorization-config-writes.md)
+    - Features: DM pairing; Stable sender identity; Allowlists and access groups; Invoke and command authorization; Teams-originated config writes; Bot Framework SSO invokes; Delegated token storage; Graph directory lookup; Member profile lookup
+  - [Conversation Routing and Delivery](inventory/microsoft-teams/team-channel-routing-mention-gates-sessions-thread-context.md)
+    - Features: Team and channel allowlists; Deterministic channel replies; Mention-gated group access; Session routing; Reply and thread context
+  - [Media and Rich Content](inventory/microsoft-teams/media-attachments-file-consent-graph-file-flows.md)
+    - Features: Inbound attachments; Graph-hosted media; File consent; SharePoint and OneDrive sharing; Media fetch safety
+  - [Native Controls and Approvals](inventory/microsoft-teams/actions-reactions-polls-approvals-group-management.md)
+    - Features: Message action discovery; Polls and reactions; Read, edit, delete, and pin; Native approval cards; Feedback and group actions
+- [Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat](inventory/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat/report.md) (`mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat`)
+  - [Channel Setup and Operations](inventory/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat/channel-setup-and-operations.md)
+    - Features: Channel Setup and Operations
+  - [Access and Identity](inventory/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat/access-and-identity.md)
+    - Features: Access and Identity
+  - [Conversation Routing and Delivery](inventory/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat/conversation-routing-and-delivery.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat/media-and-rich-content.md)
+    - Features: Media and Rich Content
+- [Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels](inventory/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels/report.md) (`feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels`)
+  - [Channel Setup and Operations](inventory/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels/shared-regional-channel-catalog-install-status.md)
+    - Features: Docs channel index; Official external channel catalog entries; Core channel-plugin catalog; Channel setup wizard; Missing-plugin; Cross-channel ingress/access/refactor concerns
+  - [Access and Identity](inventory/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels/access-and-identity.md)
+    - Features: Access and Identity
+  - [Conversation Routing and Delivery](inventory/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels/conversation-routing-and-delivery.md)
+    - Features: Conversation Routing and Delivery
+  - [Media and Rich Content](inventory/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels/media-and-rich-content.md)
+    - Features: Media and Rich Content
+- [Voice Call channel](inventory/voice-call-channel/report.md) (`voice-call-channel`)
+  - [Channel Setup and Operations](inventory/voice-call-channel/setup-configuration-and-smoke.md)
+    - Features: Voice Call Channel; Voice Call Channel
+  - [Access and Identity](inventory/voice-call-channel/webhook-exposure-and-security.md)
+    - Features: Voice Call Channel
+  - [Conversation Routing and Delivery](inventory/voice-call-channel/inbound-routing-sessions-and-lifecycle.md)
+    - Features: Voice Call Channel
+  - [Media and Rich Content](inventory/voice-call-channel/provider-transports-and-call-control.md)
+    - Features: Voice Call Channel; Voice Call Channel
+  - [Realtime Voice and Calls](inventory/voice-call-channel/realtime-voice-and-agent-consult.md)
+    - Features: Voice Call Channel; Voice Call Channel
+
+### Provider and tool (9 surfaces)
+
+- [OpenAI / Codex provider path](inventory/openai-codex-provider-path/report.md) (`openai-codex-provider-path`)
+  - [Model and Auth](inventory/openai-codex-provider-path/canonical-openai-model-routing-and-catalog.md)
+    - Features: Canonical OpenAI Model Routing; Catalog; Codex OAuth Profiles; Subscription Usage; Doctor Diagnostics; Operator Repair
+  - [Responses and Tool Compatibility](inventory/openai-codex-provider-path/codex-responses-transport-and-payload-compatibility.md)
+    - Features: Codex Responses Transport; Payload Compatibility; Tool Context; Capability Compatibility
+  - [Native Codex Harness](inventory/openai-codex-provider-path/native-codex-app-server-harness-and-thread-lifecycle.md)
+    - Features: Native Codex App-server Harness; Thread Lifecycle
+  - [Image and Multimodal Input](inventory/openai-codex-provider-path/image-generation-editing-and-multimodal-input.md)
+    - Features: Image Generation Editing; Multimodal Input
+  - [Voice and Realtime Audio](inventory/openai-codex-provider-path/realtime-voice-transcription-and-speech.md)
+    - Features: Realtime Voice Transcription; Speech
+- [Anthropic provider path](inventory/anthropic-provider-path/report.md) (`anthropic-provider-path`)
+  - [Provider Auth and Recovery](inventory/anthropic-provider-path/auth-onboarding-and-credential-profile-health.md)
+    - Features: API-key onboarding; Claude CLI credential reuse; Setup-token auth; Auth profile health; Model status; Usage windows; Cooldown/profile reporting; Long-context recovery; Fallback guidance
+  - [Model and Runtime Selection](inventory/anthropic-provider-path/model-catalog-aliases-and-runtime-policy.md)
+    - Features: Bundled Claude catalog; Canonical anthropic refs; Claude CLI compatibility; Model picker availability; Capability metadata; Runtime selection; Session continuity; MCP/tool bridge; Permission-mode mapping; Fallback prelude
+  - [Request Transport and Turn Semantics](inventory/anthropic-provider-path/direct-anthropic-messages-transport-and-streaming.md)
+    - Features: API-key/OAuth transport; Messages payloads; Streaming decode; Usage and stop reasons; Abort/error handling; Tool-use blocks; Tool-result replay; Partial JSON recovery; Native thinking; Signed/redacted thinking replay
+  - [Prompt Cache and Context](inventory/anthropic-provider-path/prompt-caching-context-windows-and-request-knobs.md)
+    - Features: Cache retention; System-prompt cache boundary; 1M context; Fast mode/service tier; Cache diagnostics
+  - [Media Inputs](inventory/anthropic-provider-path/media-understanding-and-document-inputs.md)
+    - Features: Image input; PDF document input; Media model fallback; Image tool results
+- [Google provider path](inventory/google-provider-path/report.md) (`google-provider-path`)
+  - [Provider Setup and Credentials](inventory/google-provider-path/provider-auth-credentials-and-operator-setup.md)
+    - Features: API key onboarding; Auth choice metadata; Gemini CLI OAuth setup; Vertex ADC setup; Daemon and fallback credentials; CLI runtime selection; OAuth login and refresh; Canonical Google model refs; CLI usage normalization; OAuth diagnostics
+  - [Model Routing and Endpoints](inventory/google-provider-path/model-catalog-provider-routing-and-config-normalization.md)
+    - Features: Catalog rows and aliases; Dynamic model resolution; Provider routing; Google-native config normalization; Model picker availability; Vertex provider selection; ADC/service-account auth; Project/location endpoints; Custom base URL policy; Compatibility boundaries
+  - [Direct Gemini Runtime](inventory/google-provider-path/direct-gemini-api-transport-streaming-and-multimodal-payloads.md)
+    - Features: Direct Gemini chat; Multimodal inputs; Tool-call streaming; Usage and stop reasons; Thought-signature replay; Thinking-level mapping; Thought-signature replay; Tool turn ordering; Incomplete-turn recovery; Planning-only turn recovery
+  - [Media, Search, and Realtime](inventory/google-provider-path/plugin-distribution-and-cross-surface-capability-adapters.md)
+    - Features: Bundled plugin distribution; Provider auto-enable metadata; Image and media adapters; Speech and realtime adapters; Search and generation tools; Realtime voice sessions; Constrained browser tokens; Audio and transcript events; Live tool calls; Session reconnects
+  - [Prompt Caching](inventory/google-provider-path/prompt-cache-cache-retention-and-usage-accounting.md)
+    - Features: Cache retention config; Managed cachedContents; Manual cachedContent handles; Cache usage accounting; Cache diagnostics and live proof
+- [OpenRouter provider path](inventory/openrouter-provider-path/report.md) (`openrouter-provider-path`)
+  - [Provider Setup and Auth](inventory/openrouter-provider-path/operator-setup-and-provider-registration.md)
+    - Features: First-run setup; Default model selection; Provider plugin registration; Model-ref examples; OPENROUTER_API_KEY; Auth profiles and auth order; Status/probe and removal; Provider-entry SecretRef/API-key resolution; Gateway env inheritance; Static catalog rows; Dynamic /models discovery; openrouter/auto and nested refs; Free-model scan/probe; Model list/picker cache
+  - [Chat Runtime and Normalization](inventory/openrouter-provider-path/chat-completions-transport-routing-and-reasoning.md)
+    - Features: Chat completions route; Provider routing params; Per-model route overrides; Reasoning payload policy; Anthropic/Gemini/DeepSeek variants; Streamed content parsing; reasoning_details visible output; Tool-call delta preservation; Family-specific replay policy; Response-model and usage normalization; Attribution headers; Response-cache headers/TTL/clear; Anthropic cache-control markers; Cache usage mapping; Custom proxy exclusions
+  - [Provider Recovery and Diagnostics](inventory/openrouter-provider-path/failover-errors-overflow-and-diagnostics.md)
+    - Features: Timeout/retry classification; Auth/billing/key-limit classification; Context overflow; Model fallback notices; Guarded fetch/pricing warnings
+  - [Media Generation and Speech](inventory/openrouter-provider-path/media-generation-speech-and-media-understanding.md)
+    - Features: image_generate OpenRouter route; video_generate async jobs/polling/download; music_generate audio route; Text-to-speech; Speech-to-text transcription; Inbound media understanding; Generated artifact delivery
+- [Local model providers: Ollama, vLLM, SGLang, LM Studio](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/report.md) (`local-model-providers-ollama-vllm-sglang-lm-studio`)
+  - [Provider Setup, Lifecycle, and Diagnostics](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/provider-selection-and-onboarding.md)
+    - Features: Provider Selection; Onboarding; localService configuration; Process startup and readiness; Request leases and idle shutdown; Health checks and restart; Provider recipes; Local provider status; Backend reachability probes; Model availability errors; Memory readiness diagnostics; Provider troubleshooting docs
+  - [Native Provider Plugins](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/ollama-native-provider.md)
+    - Features: Ollama setup and model pulling; Model discovery; Streaming and vision; Ollama embeddings; Web-search support; LM Studio setup; Model discovery and auth; Model preload and JIT loading; Streaming compatibility; LM Studio embeddings
+  - [OpenAI-Compatible Runtime Compatibility](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/request-stream-compatibility-and-tool-calling.md)
+    - Features: Bundled provider setup; Model Discovery Endpoint; Non-interactive configuration; vLLM thinking controls; OpenAI-compatible chat and tool semantics; SGLang compatibility guidance; Request Stream Compatibility; Tool Calling
+  - [Local Memory and Embeddings](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/local-embeddings-and-memory-provider-usage.md)
+    - Features: Embedding provider selection; Memory search readiness; memoryFlush model override; Fallback lexical search; Provider mismatch guidance
+  - [Network Safety and Prompt Controls](inventory/local-model-providers-ollama-vllm-sglang-lm-studio/safety-network-and-prompt-pressure-controls.md)
+    - Features: Safety Network; Prompt Pressure Controls
+- [Long-tail hosted providers](inventory/long-tail-hosted-providers/report.md) (`long-tail-hosted-providers`)
+  - [Hosted LLM Providers](inventory/long-tail-hosted-providers/openai-compatible-hosted-text-adapters.md)
+    - Features: Bedrock setup; Gateway/proxy routing; Copilot/OpenCode hosted access; Proxy capability diagnostics; Hosted text completion; Tool-call and streaming compatibility; Model catalog resolution; Provider-specific request shaping; Regional provider setup; Region and plan routing; Regional live smoke; Account prerequisite diagnostics
+  - [Hosted Media Providers](inventory/long-tail-hosted-providers/hosted-media-generation-providers.md)
+    - Features: Image generation providers; Video generation providers; Music generation providers; Media mode coverage; Text-to-speech providers; Speech-to-text providers; Realtime transcription providers; Audio format diagnostics
+  - [Provider Operations](inventory/long-tail-hosted-providers/setup-auth-profiles-and-credential-health.md)
+    - Features: Provider directory; Provider install catalog; Model catalog metadata; Catalog parity checks; Provider setup descriptors; Auth profiles and aliases; Credential health probes; Key rotation and recovery; Direct provider smoke; Gateway live smoke; Models status probes; Fallback trace and repair
+- [Web search tools](inventory/web-search-tools/report.md) (`web-search-tools`)
+  - [Search Providers](inventory/web-search-tools/bundled-structured-search-providers.md)
+    - Features: API-backed providers; Keyless and self-hosted providers; Provider comparison and auto-detection; Provider-specific filters and extraction; Result normalization; OpenAI native web_search; Codex native web_search; Gemini grounding; Grok web grounding; Kimi web search; Provider-native citations; Model and filter routing; webSearchProviders; registerWebSearchProvider; webFetchProviders; registerWebFetchProvider; public-artifact loading; runtime resolution; contract tests
+  - [Setup and Diagnostics](inventory/web-search-tools/operator-setup-provider-selection-and-credential-repair.md)
+    - Features: Provider credentials; Default provider selection; Credential repair; Status checks; Quota errors; Cache controls; Provider diagnostics; Retry and fallback; Operator repair
+  - [Network Safety](inventory/web-search-tools/network-safety-ssrf-redirects-and-untrusted-content.md)
+    - Features: Network Safety; SSRF; Redirects; Untrusted Content
+  - [Tool Availability and Fetch](inventory/web-search-tools/tool-exposure-policy-and-runtime-tool-wiring.md)
+    - Features: web_search exposure; web_fetch exposure; x_search exposure; group:web policy; disabled-state diagnostics; provider/model gating; URL fetch; HTML extraction; PDF/text extraction; Safe truncation; Content citation handoff
+- [Browser automation and exec/sandbox tools](inventory/browser-automation-and-exec-sandbox-tools/report.md) (`browser-automation-and-exec-sandbox-tools`)
+  - [Browser Automation](inventory/browser-automation-and-exec-sandbox-tools/browser-actions-snapshots-and-artifacts.md)
+    - Features: Browser Actions; Snapshots; Artifacts; Browser Plugin Service; Profiles; Browser Security; SSRF; Remote Control
+  - [Tool Invocation and Execution](inventory/browser-automation-and-exec-sandbox-tools/exec-routing-and-process-lifecycle.md)
+    - Features: Exec Routing; Process Lifecycle; Direct Tool Invoke API; Node System.run; Host Exec Approvals; Elevated Mode
+  - [Sandbox and Tool Policy](inventory/browser-automation-and-exec-sandbox-tools/sandbox-backends-and-workspace-isolation.md)
+    - Features: Sandbox Backends; Workspace Isolation; Sandboxed Browser; Codex Dynamic Tools; Tool Policy; Sandbox Tool Gates
+- [Image/video/music generation tools](inventory/image-video-music-generation-tools/report.md) (`image-video-music-generation-tools`)
+  - [Media Routing and Discovery](inventory/image-video-music-generation-tools/configuration-model-refs-and-provider-discovery.md)
+    - Features: default media model config; per-call model refs and fallbacks; auth-backed tool discovery; action=list provider inspection
+  - [Task Lifecycle and Delivery](inventory/image-video-music-generation-tools/session-backed-tool-invocation-and-task-lifecycle.md)
+    - Features: background task creation; task status/list/show/cancel; duplicate guards; progress keepalive; completion/failure wake; no-session inline fallback; local media persistence; MIME/filename inference; Hosted URL fallback; message-tool handoff; idempotent missing-media fallback; channel attachment proof
+  - [Image Generation](inventory/image-video-music-generation-tools/image-generation-and-editing-runtime.md)
+    - Features: text-to-image; reference-image editing; output hints; action=status; provider attempt metadata; OpenAI/Codex OAuth; API-key OpenAI; OpenRouter/xAI/fal/LiteLLM/DeepInfra/Google/MiniMax/ComfyUI auth; provider error diagnostics
+  - [Video Generation](inventory/image-video-music-generation-tools/video-generation-modes-and-request-normalization.md)
+    - Features: text-to-video; image-to-video; video-to-video; reference role validation; audio refs; typed providerOptions; queue-backed jobs; polling/timeout handling; Hosted URL download; provider skip explanations; returned asset metadata
+  - [Music Generation](inventory/image-video-music-generation-tools/music-generation-tools-and-providers.md)
+    - Features: prompt and lyrics input; instrumental mode; duration/format controls; image-reference edit lanes; generated audio outputs; provider fallback

@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Host Setup and Updates
+    category_note: linux-cli-install-and-update-path.md
+    coverage: 82
+    quality: 78
+    completeness: 82
+  - name: Gateway Runtime and Service Control
+    category_note: foreground-gateway-runtime-and-process-control.md
+    coverage: 83
+    quality: 78
+    completeness: 83
+  - name: Remote Access and Security
+    category_note: remote-network-exposure-tls-and-tailscale.md
+    coverage: 78
+    quality: 74
+    completeness: 78
+  - name: Diagnostics and Repair
+    category_note: diagnostics-logs-doctor-and-repair.md
+    coverage: 82
+    quality: 78
+    completeness: 82
+  - name: Deployment Targets
+    category_note: vps-container-and-cloud-deployment-guidance.md
+    coverage: 76
+    quality: 72
+    completeness: 76

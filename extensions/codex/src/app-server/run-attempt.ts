@@ -309,6 +309,43 @@ function emitCodexAppServerEvent(
   }
 }
 
+function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<string, unknown> {
+  const sanitized = sanitizeCodexToolResponse(response);
+  const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
+  const result: Record<string, unknown> = {
+    ...sanitized,
+    // Progress events are UI/transcript-facing; map only sanitized content so
+    // event redaction cannot be bypassed by raw dynamic tool output.
+    content: contentItems.map(toTranscriptToolResultContentItem),
+  };
+  delete result.contentItems;
+  delete result.success;
+  return result;
+}
+
+function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
+  if (!item || typeof item !== "object") {
+    return { type: "text", text: "" };
+  }
+  const record = item as Record<string, unknown>;
+  if (record.type === "inputText") {
+    return { type: "text", text: typeof record.text === "string" ? record.text : "" };
+  }
+  if (record.type === "inputImage") {
+    return typeof record.imageUrl === "string"
+      ? { type: "image", url: record.imageUrl }
+      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+  }
+  return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+}
+
+function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
+  const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
+  const label = rawType ? rawType.slice(0, 80) : "unknown";
+  const suffix = rawType.length > 80 ? "..." : "";
+  return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
+}
+
 type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
@@ -1717,7 +1754,7 @@ export async function runCodexAppServerAttempt(
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               isError: !protocolResponse.success,
-              result: sanitizeCodexToolResponse(progressResponse),
+              result: toTranscriptToolResult(progressResponse),
             },
           });
         }
@@ -2770,6 +2807,7 @@ export const testing = {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,
+  toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,
   setOpenClawCodingToolsFactoryForTests,
   resetOpenClawCodingToolsFactoryForTests,

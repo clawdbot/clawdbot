@@ -1,0 +1,68 @@
+version: 1
+process_version: 3
+data:
+  - name: Approvals and Remote Execution
+    category_note: approval-and-execution-safety.md
+    coverage: 88
+    quality: 72
+    completeness: 78
+  - name: HTTP APIs
+    category_note: http-apis.md
+    coverage: 88
+    quality: 74
+    completeness: 72
+  - name: Hosted Web Surface
+    category_note: hosted-web-surface.md
+    coverage: 88
+    quality: 74
+    completeness: 72
+  - name: Gateway RPC APIs and Events
+    category_note: core-rpc-coverage.md
+    coverage: 68
+    quality: 57
+    completeness: 88
+  - name: Device Auth and Pairing
+    category_note: device-identity-auth-and-pairing.md
+    coverage: 88
+    quality: 72
+    completeness: 82
+  - name: Network Access and Discovery
+    category_note: network-exposure-and-transport-selection.md
+    coverage: 68
+    quality: 62
+    completeness: 74
+  - name: Nodes and Remote Capabilities
+    category_note: node-transport-and-capability-relay.md
+    coverage: 84
+    quality: 63
+    completeness: 76
+  - name: Health, Diagnostics, and Repair
+    category_note: observability-health-and-repair.md
+    coverage: 68
+    quality: 62
+    completeness: 78
+  - name: Protocol Compatibility
+    category_note: protocol-typing-and-compatibility.md
+    coverage: 72
+    quality: 70
+    completeness: 84
+  - name: Roles and Permissions
+    category_note: roles-scopes-and-operator-policy.md
+    coverage: 85
+    quality: 62
+    completeness: 80
+  - name: Gateway Lifecycle
+    category_note: runtime-lifecycle-and-supervision.md
+    coverage: 86
+    quality: 82
+    completeness: 88
+  - name: Security Controls
+    category_note: security-and-hardening-posture.md
+    coverage: 84
+    quality: 74
+    completeness: 80
+  - name: WebSocket Connection
+    category_note: websocket-handshake-and-session-establishment.md
+    coverage: 84
+    quality: 76
+    completeness: 82

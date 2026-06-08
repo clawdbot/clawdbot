@@ -1,0 +1,43 @@
+version: 1
+process_version: 3
+data:
+  - name: Media and Sharing
+    category_note: camera-media-photos-and-share-extension.md
+    coverage: 42
+    quality: 45
+    completeness: 42
+  - name: Canvas and Screen
+    category_note: canvas-screen-and-a2ui.md
+    coverage: 44
+    quality: 47
+    completeness: 44
+  - name: Chat and Sessions
+    category_note: chat-operator-ui-and-session-controls.md
+    coverage: 40
+    quality: 44
+    completeness: 40
+  - name: Gateway Setup and Diagnostics
+    category_note: settings-permissions-and-diagnostics.md
+    coverage: 41
+    quality: 47
+    completeness: 41
+  - name: Distribution
+    category_note: install-signing-and-testflight-distribution.md
+    coverage: 42
+    quality: 45
+    completeness: 42
+  - name: Device Commands
+    category_note: node-capability-routing-and-device-commands.md
+    coverage: 37
+    quality: 45
+    completeness: 37
+  - name: Notifications and Background
+    category_note: relay-push-background-and-live-activity.md
+    coverage: 44
+    quality: 46
+    completeness: 44
+  - name: Voice
+    category_note: voice-talk-mode-and-wake.md
+    coverage: 38
+    quality: 43
+    completeness: 38

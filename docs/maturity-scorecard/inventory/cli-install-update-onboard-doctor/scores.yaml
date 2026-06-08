@@ -1,0 +1,38 @@
+version: 1
+process_version: 3
+data:
+  - name: CLI Setup
+    category_note: package-install-and-cli-entrypoints.md
+    coverage: 78
+    quality: 75
+    completeness: 84
+  - name: Onboarding and Auth Setup
+    category_note: first-run-onboarding-and-auth-selection.md
+    coverage: 86
+    quality: 78
+    completeness: 80
+  - name: Plugin and Channel Setup
+    category_note: plugin-and-channel-setup-during-onboarding.md
+    coverage: 82
+    quality: 72
+    completeness: 76
+  - name: Gateway Service Management
+    category_note: gateway-service-install-and-lifecycle.md
+    coverage: 88
+    quality: 66
+    completeness: 84
+  - name: CLI Observability
+    category_note: status-health-logs-and-diagnostics-support-path.md
+    coverage: 84
+    quality: 74
+    completeness: 84
+  - name: Doctor
+    category_note: doctor-config-auth-plugin-and-lint.md
+    coverage: 80
+    quality: 68
+    completeness: 77
+  - name: Updates and Upgrades
+    category_note: update-channel-and-core-upgrade-flow.md
+    coverage: 82
+    quality: 68
+    completeness: 78

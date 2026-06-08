@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Media Routing and Discovery
+    category_note: configuration-model-refs-and-provider-discovery.md
+    coverage: 82
+    quality: 74
+    completeness: 82
+  - name: Task Lifecycle and Delivery
+    category_note: session-backed-tool-invocation-and-task-lifecycle.md
+    coverage: 78
+    quality: 65
+    completeness: 78
+  - name: Image Generation
+    category_note: image-generation-and-editing-runtime.md
+    coverage: 78
+    quality: 66
+    completeness: 78
+  - name: Video Generation
+    category_note: video-generation-modes-and-request-normalization.md
+    coverage: 76
+    quality: 62
+    completeness: 76
+  - name: Music Generation
+    category_note: music-generation-tools-and-providers.md
+    coverage: 72
+    quality: 61
+    completeness: 72

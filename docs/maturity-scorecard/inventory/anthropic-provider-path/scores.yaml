@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Provider Auth and Recovery
+    category_note: auth-onboarding-and-credential-profile-health.md
+    coverage: 78
+    quality: 70
+    completeness: 78
+  - name: Model and Runtime Selection
+    category_note: model-catalog-aliases-and-runtime-policy.md
+    coverage: 82
+    quality: 68
+    completeness: 82
+  - name: Request Transport and Turn Semantics
+    category_note: direct-anthropic-messages-transport-and-streaming.md
+    coverage: 82
+    quality: 72
+    completeness: 82
+  - name: Prompt Cache and Context
+    category_note: prompt-caching-context-windows-and-request-knobs.md
+    coverage: 82
+    quality: 76
+    completeness: 82
+  - name: Media Inputs
+    category_note: media-understanding-and-document-inputs.md
+    coverage: 74
+    quality: 82
+    completeness: 74

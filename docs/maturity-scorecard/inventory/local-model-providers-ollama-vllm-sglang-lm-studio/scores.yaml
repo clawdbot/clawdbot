@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Provider Setup, Lifecycle, and Diagnostics
+    category_note: provider-selection-and-onboarding.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Native Provider Plugins
+    category_note: ollama-native-provider.md
+    coverage: 78
+    quality: 78
+    completeness: 78
+  - name: OpenAI-Compatible Runtime Compatibility
+    category_note: request-stream-compatibility-and-tool-calling.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Local Memory and Embeddings
+    category_note: local-embeddings-and-memory-provider-usage.md
+    coverage: 76
+    quality: 68
+    completeness: 76
+  - name: Network Safety and Prompt Controls
+    category_note: safety-network-and-prompt-pressure-controls.md
+    coverage: 82
+    quality: 82
+    completeness: 82

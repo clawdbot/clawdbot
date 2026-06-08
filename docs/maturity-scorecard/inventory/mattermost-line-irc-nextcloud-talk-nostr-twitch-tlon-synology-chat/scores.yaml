@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: channel-setup-and-operations.md
+    coverage: 62
+    quality: 58
+    completeness: 62
+  - name: Access and Identity
+    category_note: access-and-identity.md
+    coverage: 62
+    quality: 58
+    completeness: 62
+  - name: Conversation Routing and Delivery
+    category_note: conversation-routing-and-delivery.md
+    coverage: 62
+    quality: 58
+    completeness: 62
+  - name: Media and Rich Content
+    category_note: media-and-rich-content.md
+    coverage: 62
+    quality: 58
+    completeness: 62

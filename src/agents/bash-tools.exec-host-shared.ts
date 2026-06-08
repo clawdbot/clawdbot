@@ -101,6 +101,12 @@ export type RegisteredExecApprovalRequestContext = {
 export type ExecApprovalFollowupTarget = {
   approvalId: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested. Lets the followup be
+   *  dropped if `/new` or `/reset` rebinds the session key to a new session. */
+  expectedSessionId?: string;
+  /** Session-store template, so the direct/denied path can resolve the key's
+   *  current sessionId and drop a rebound followup before sending. */
+  sessionStore?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -352,6 +358,8 @@ export function buildExecApprovalFollowupTarget(
   return {
     approvalId: params.approvalId,
     sessionKey: params.sessionKey,
+    expectedSessionId: params.expectedSessionId,
+    sessionStore: params.sessionStore,
     turnSourceChannel: params.turnSourceChannel,
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
@@ -457,6 +465,8 @@ export async function sendExecApprovalFollowupResult(
   await send({
     approvalId: target.approvalId,
     sessionKey: target.sessionKey,
+    expectedSessionId: target.expectedSessionId,
+    sessionStore: target.sessionStore,
     turnSourceChannel: target.turnSourceChannel,
     turnSourceTo: target.turnSourceTo,
     turnSourceAccountId: target.turnSourceAccountId,

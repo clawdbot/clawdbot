@@ -2661,6 +2661,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         content: [{ type: "text", text: "" }],
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
+    const postToolEmptyAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      lastAssistant: {
+        role: "assistant",
+        api: "openai-completions",
+        stopReason: "stop",
+        provider: "stepfun",
+        model: "step-router-v1",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
 
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
@@ -2678,6 +2690,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         aborted: false,
         timedOut: false,
         attempt: sideEffectAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: postToolEmptyAttempt,
       }),
     ).toBe(false);
   });
@@ -2712,6 +2733,65 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
     expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("retries post-tool openai-compatible empty stop turns even when empty silence is allowed", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "step-router-v1",
+        provider: "stepfun",
+        contextWindow: 200000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible StepFun answer."],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [{ type: "text", text: "Visible StepFun answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "stepfun",
+      model: "step-router-v1",
+      runId: "run-post-tool-openai-compatible-empty-stop",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(result.meta.terminalReplyKind).toBeUndefined();
+    expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
+    expectWarnMessageWith("empty response detected");
   });
 
   it("keeps retrying and surfacing clean empty assistant turns without the silence flag", async () => {

@@ -128,7 +128,11 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         isError?: boolean;
         name?: string;
         phase?: string;
-        result?: { success?: boolean };
+        result?: {
+          content?: Array<{ text?: string; type?: string; url?: string }>;
+          contentItems?: unknown;
+          success?: unknown;
+        };
         toolCallId?: string;
       };
       stream?: string;
@@ -150,7 +154,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     expect(resultEvent?.data?.name).toBe("lookup");
     expect(resultEvent?.data?.toolCallId).toBe("call-1");
     expect(resultEvent?.data?.isError).toBe(true);
-    expect(resultEvent?.data?.result?.success).toBe(false);
+    expect(resultEvent?.data?.result).not.toHaveProperty("success");
+    expect(resultEvent?.data?.result).not.toHaveProperty("contentItems");
+    expect(resultEvent?.data?.result?.content?.[0]?.type).toBe("text");
+    expect(resultEvent?.data?.result?.content?.[0]?.text).toBe("Unknown OpenClaw tool: lookup");
     expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
     const globalStartEvent = globalAgentEvents.find(
       (event) => event.stream === "tool" && event.data.phase === "start",

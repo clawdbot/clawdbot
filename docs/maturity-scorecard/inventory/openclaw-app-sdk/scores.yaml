@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Client API
+    category_note: client-api.md
+    coverage: 86
+    quality: 82
+    completeness: 78
+  - name: Gateway Access
+    category_note: gateway-access.md
+    coverage: 78
+    quality: 74
+    completeness: 64
+  - name: Agent Conversations
+    category_note: agent-conversations.md
+    coverage: 78
+    quality: 80
+    completeness: 84
+  - name: Events and Approvals
+    category_note: events-and-approvals.md
+    coverage: 74
+    quality: 73
+    completeness: 58
+  - name: Resource Helpers
+    category_note: resource-helpers.md
+    coverage: 58
+    quality: 72
+    completeness: 70
+  - name: Compatibility
+    category_note: compatibility.md
+    coverage: 76
+    quality: 70
+    completeness: 62

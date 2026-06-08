@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
@@ -214,9 +214,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       "utf-8",
     );
 
-    const env = captureEnv(["HOME"]);
-    try {
-      process.env.HOME = cliBundleMcpHarness.bundleProbeHomeDir;
+    await withEnvAsync({ HOME: cliBundleMcpHarness.bundleProbeHomeDir }, async () => {
       const prepared = await prepareCliBundleMcpConfig({
         enabled: true,
         mode: "claude-config-file",
@@ -263,8 +261,6 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       expect(raw.mcpServers?.omi?.env).toBeUndefined();
 
       await prepared.cleanup?.();
-    } finally {
-      env.restore();
-    }
+    });
   });
 });

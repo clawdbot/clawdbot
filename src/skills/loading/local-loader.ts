@@ -5,6 +5,7 @@ import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+import { computeSkillPromptVersion } from "./skill-version.js";
 
 type LoadedLocalSkill = {
   skill: Skill;
@@ -73,6 +74,7 @@ function loadSingleSkillDirectory(params: {
       description,
       filePath,
       baseDir,
+      promptVersion: computeSkillPromptVersion(raw),
       source: params.source,
       sourceInfo: createSyntheticSourceInfo(filePath, {
         source: params.source,

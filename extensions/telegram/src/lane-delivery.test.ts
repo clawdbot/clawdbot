@@ -142,6 +142,26 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(2);
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("keeps reasoning block text in an updatable draft lane", async () => {
+    const harness = createHarness();
+    harness.reasoning.setMessageId(777);
+
+    const result = await harness.deliverLaneText({
+      laneName: "reasoning",
+      text: "Checking source",
+      payload: { text: "Checking source", isReasoning: true },
+      infoKind: "block",
+    });
+
+    expect(result.kind).toBe("preview-updated");
+    expect(harness.reasoning.update).toHaveBeenCalledWith("Checking source");
+    expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.stopDraftLane).not.toHaveBeenCalled();
+    expect(harness.lanes.reasoning.finalized).toBe(false);
   });
 
   it("uses normal final delivery when the stream edit leaves stale text", async () => {
@@ -157,6 +177,145 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).toHaveBeenCalledWith({ text: "done" }, { durable: true });
     expect(harness.markDelivered).not.toHaveBeenCalled();
     expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("keeps media fallback non-durable when materializing an intermediate preview", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "visible block",
+      payload: { text: "visible block", mediaUrls: ["file:///site-a.png"] },
+      infoKind: "block",
+      finalizePreview: true,
+      durable: false,
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("visible block");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { mediaUrls: ["file:///site-a.png"] },
+      { durable: false },
+    );
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("does not use final transcript recovery when materializing an intermediate block preview", async () => {
+    const previousBlock =
+      "Here is the complete block preview with enough stable prefix text before the ellipsis...";
+    const nextAssistantBlock =
+      "Here is the complete block preview with enough stable prefix text before the ellipsis and later assistant continuation text.";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(nextAssistantBlock);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => nextAssistantBlock,
+    });
+    harness.lanes.answer.lastPartialText = previousBlock;
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: previousBlock,
+      payload: { text: previousBlock },
+      infoKind: "block",
+      finalizePreview: true,
+      durable: false,
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith(previousBlock);
+    expect(answer.update).not.toHaveBeenCalledWith(nextAssistantBlock);
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: previousBlock },
+      { durable: false },
+    );
+    expect(harness.sendPayload).not.toHaveBeenCalledWith(
+      { text: nextAssistantBlock },
+      expect.anything(),
+    );
+  });
+
+  it("keeps block delivery in the draft lane when delivered text is stale", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("working");
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "done",
+      payload: { text: "done" },
+      infoKind: "block",
+    });
+
+    expect(result.kind).toBe("preview-updated");
+    expect(answer.update).toHaveBeenCalledWith("done");
+    expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.lanes.answer.finalized).toBe(false);
+  });
+
+  it("discards an unmaterialized block preview before falling back to normal delivery", async () => {
+    const answer = createTestDraftStream();
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "short",
+      payload: { text: "short" },
+      infoKind: "block",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith("short");
+    expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
+    expect(answer.discard).toHaveBeenCalledTimes(1);
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: "short" }, { durable: false });
+    expect(harness.markDelivered).not.toHaveBeenCalled();
+    expect(harness.lanes.answer.lastPartialText).toBe("");
+    expect(harness.lanes.answer.hasStreamedMessage).toBe(false);
+    expect(harness.lanes.answer.finalized).toBe(false);
+  });
+
+  it("resets the stream after discarding an unmaterialized block preview", async () => {
+    const answerRef: { current?: ReturnType<typeof createTestDraftStream> } = {};
+    const answer = createTestDraftStream({
+      stopUpdatesOnDiscard: true,
+      onUpdate: (text) => {
+        if (text.startsWith("tool progress")) {
+          answerRef.current?.setMessageId(1001);
+        }
+      },
+    });
+    answerRef.current = answer;
+    const harness = createHarness({ answerStream: answer });
+
+    const blockResult = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "short",
+      payload: { text: "short" },
+      infoKind: "block",
+    });
+    const progressResult = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "tool progress after fallback",
+      payload: { text: "tool progress after fallback" },
+      infoKind: "tool",
+    });
+
+    expect(blockResult.kind).toBe("sent");
+    expect(progressResult.kind).toBe("preview-updated");
+    expect(answer.discard).toHaveBeenCalledTimes(1);
+    expect(answer.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answer.update).toHaveBeenNthCalledWith(2, "tool progress after fallback");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: "short" }, { durable: false });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a longer partial preview when the final payload is an ellipsis-truncated snapshot", async () => {

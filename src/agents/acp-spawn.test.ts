@@ -120,6 +120,12 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
+vi.mock("../channels/plugins/registry.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
@@ -460,6 +466,9 @@ function enableMatrixAcpThreadBindings(): void {
     },
   });
   const matrixPlugin = {
+    conversationBindings: {
+      defaultTopLevelPlacement: "child",
+    },
     messaging: {
       resolveDeliveryTarget: ({
         conversationId,

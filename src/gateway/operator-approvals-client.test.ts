@@ -122,7 +122,7 @@ describe("withOperatorApprovalsGatewayClient", () => {
     expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps device identity for remote shared-auth approval clients", async () => {
+  it("keeps device identity and omits approval runtime token for remote shared-auth approval clients", async () => {
     bootstrapState.url = "wss://gateway.example/ws";
     bootstrapState.urlSource = "config gateway.remote.url";
 
@@ -130,6 +130,17 @@ describe("withOperatorApprovalsGatewayClient", () => {
 
     expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
     expect(clientState.options?.deviceIdentity).toBeUndefined();
+    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it("keeps device identity for env loopback approval clients without runtime authority", async () => {
+    bootstrapState.url = "ws://127.0.0.1:18789";
+    bootstrapState.urlSource = "env OPENCLAW_GATEWAY_URL";
+
+    await runOperatorApprovalsGatewayClient();
+
+    expect(clientState.options?.deviceIdentity).toBeUndefined();
+    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
   });
 
   it.each([

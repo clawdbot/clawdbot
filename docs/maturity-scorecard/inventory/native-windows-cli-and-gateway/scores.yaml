@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: CLI
+    category_note: native-powershell-install-and-cli-entrypoints.md
+    coverage: 72
+    quality: 66
+    completeness: 72
+  - name: Gateway Management
+    category_note: native-gateway-foreground-runtime-and-process-control.md
+    coverage: 68
+    quality: 62
+    completeness: 68
+  - name: Networking
+    category_note: windows-host-networking-portproxy-and-remote-access.md
+    coverage: 58
+    quality: 56
+    completeness: 58
+  - name: Updates
+    category_note: windows-update-restart-handoff-and-package-locks.md
+    coverage: 74
+    quality: 68
+    completeness: 74

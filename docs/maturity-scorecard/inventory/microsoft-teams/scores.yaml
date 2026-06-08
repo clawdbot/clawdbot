@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-app-registration-credentials-admin-install.md
+    coverage: 58
+    quality: 64
+    completeness: 58
+  - name: Access and Identity
+    category_note: dm-pairing-sender-authorization-config-writes.md
+    coverage: 60
+    quality: 62
+    completeness: 60
+  - name: Conversation Routing and Delivery
+    category_note: team-channel-routing-mention-gates-sessions-thread-context.md
+    coverage: 68
+    quality: 66
+    completeness: 68
+  - name: Media and Rich Content
+    category_note: media-attachments-file-consent-graph-file-flows.md
+    coverage: 62
+    quality: 58
+    completeness: 62
+  - name: Native Controls and Approvals
+    category_note: actions-reactions-polls-approvals-group-management.md
+    coverage: 64
+    quality: 66
+    completeness: 64

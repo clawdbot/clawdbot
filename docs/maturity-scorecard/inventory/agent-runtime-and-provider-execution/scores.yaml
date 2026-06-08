@@ -1,0 +1,48 @@
+version: 1
+process_version: 3
+data:
+  - name: Agent Turn Execution
+    category_note: agent-turn-orchestration-and-runtime-lifecycle.md
+    coverage: 82
+    quality: 74
+    completeness: 82
+  - name: External Runtimes and Subagents
+    category_note: cli-harnesses-external-runtimes-and-subagents.md
+    coverage: 78
+    quality: 66
+    completeness: 78
+  - name: Hosted Provider Execution
+    category_note: hosted-provider-adapters-and-payload-compatibility.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Local and Self-hosted Providers
+    category_note: local-and-self-hosted-provider-execution.md
+    coverage: 70
+    quality: 60
+    completeness: 70
+  - name: Model and Runtime Selection
+    category_note: model-selection-provider-routing-and-runtime-policy.md
+    coverage: 84
+    quality: 72
+    completeness: 84
+  - name: Provider Auth
+    category_note: provider-auth-profiles-and-credential-health.md
+    coverage: 80
+    quality: 66
+    completeness: 80
+  - name: Streaming and Progress
+    category_note: streaming-progress-and-preview-visibility.md
+    coverage: 84
+    quality: 70
+    completeness: 84
+  - name: Tool Calls and Response Handling
+    category_note: streaming-tool-call-and-response-normalization.md
+    coverage: 80
+    quality: 66
+    completeness: 80
+  - name: Tool Execution Controls
+    category_note: tool-execution-approvals-and-sandbox-policy.md
+    coverage: 86
+    quality: 74
+    completeness: 86

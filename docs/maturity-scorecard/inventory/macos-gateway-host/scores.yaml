@@ -1,0 +1,38 @@
+version: 1
+process_version: 3
+data:
+  - name: CLI Setup
+    category_note: cli-install-runtime-prerequisites.md
+    coverage: 82
+    quality: 76
+    completeness: 82
+  - name: Local Gateway Integration
+    category_note: local-gateway-mode-host-configuration.md
+    coverage: 76
+    quality: 82
+    completeness: 76
+  - name: Remote Gateway Mode
+    category_note: remote-gateway-mode-transport.md
+    coverage: 72
+    quality: 82
+    completeness: 72
+  - name: Gateway Service Lifecycle
+    category_note: launchagent-service-lifecycle.md
+    coverage: 82
+    quality: 76
+    completeness: 82
+  - name: Diagnostics and Observability
+    category_note: diagnostics-logs-operator-observability.md
+    coverage: 80
+    quality: 83
+    completeness: 80
+  - name: Permissions and Native Capabilities
+    category_note: macos-permissions-native-node-capabilities.md
+    coverage: 62
+    quality: 73
+    completeness: 62
+  - name: Profiles and Isolation
+    category_note: profiles-multi-gateway-isolation.md
+    coverage: 74
+    quality: 82
+    completeness: 74

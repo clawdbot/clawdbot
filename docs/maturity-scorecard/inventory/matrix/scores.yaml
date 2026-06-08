@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-config-and-account-selection.md
+    coverage: 74
+    quality: 74
+    completeness: 74
+  - name: Access and Identity
+    category_note: dm-room-routing-and-access-policy.md
+    coverage: 72
+    quality: 66
+    completeness: 72
+  - name: Conversation Routing and Delivery
+    category_note: threads-acp-and-subagent-bindings.md
+    coverage: 72
+    quality: 66
+    completeness: 72
+  - name: Media and Rich Content
+    category_note: outbound-messages-media-and-streaming.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Native Controls and Approvals
+    category_note: actions-profile-polls-reactions-and-room-tools.md
+    coverage: 64
+    quality: 68
+    completeness: 64
+  - name: Encryption and Verification
+    category_note: e2ee-verification-backup-and-migration.md
+    coverage: 76
+    quality: 68
+    completeness: 76

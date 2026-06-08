@@ -250,6 +250,8 @@ describe("CronToolSchema", () => {
     // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
+    expect(patchProps?.payload?.properties?.model?.type).toBe("string");
+    expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the

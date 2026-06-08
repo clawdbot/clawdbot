@@ -1,5 +1,6 @@
 // Covers provider-specific failover matcher regressions.
 import { describe, expect, it } from "vitest";
+import { classifyFailoverReason } from "./errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -99,6 +100,34 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
     });
+  });
+});
+
+describe("Volcengine Coding Plan subscription errors", () => {
+  it("classifies InvalidSubscription JSON body as billing", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies long InvalidSubscription payloads as billing", () => {
+    const raw = JSON.stringify({
+      error: {
+        code: "InvalidSubscription",
+        message:
+          "Your account does not have a valid coding plan subscription, or your subscription has expired.",
+        details: "x".repeat(700),
+      },
+    });
+    expect(raw.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(raw)).toBe(true);
+  });
+
+  it("classifies InvalidSubscription as billing before auth or rate limit", () => {
+    const raw =
+      '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
+    expect(isRateLimitErrorMessage(raw)).toBe(false);
+    expect(classifyFailoverReason(raw)).toBe("billing");
   });
 });
 

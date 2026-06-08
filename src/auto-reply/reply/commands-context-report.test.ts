@@ -1,5 +1,7 @@
 /** Tests context report command output and generated report files. */
-import { readFile, unlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -15,6 +17,9 @@ function makeParams(
     totalTokensFresh?: boolean;
     cfg?: Record<string, unknown>;
     sessionKey?: string;
+    sessionId?: string;
+    sessionFile?: string;
+    storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
   },
@@ -28,12 +33,15 @@ function makeParams(
     sessionKey: options?.sessionKey ?? "agent:default:main",
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
+    storePath: options?.storePath,
     provider: "openai",
     model: "gpt-5",
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
     resolvedReasoningLevel: "off",
     sessionEntry: {
+      ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+      ...(options?.sessionFile ? { sessionFile: options.sessionFile } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh: options?.totalTokensFresh ?? true,
       inputTokens: 100,
@@ -81,7 +89,35 @@ function makeParams(
   } as unknown as HandleCommandsParams;
 }
 
+async function withTranscript(
+  messages: unknown[],
+  run: (sessionFile: string, dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "openclaw-context-report-"));
+  try {
+    const sessionFile = join(dir, "session.jsonl");
+    const lines = messages.map((message, index) =>
+      JSON.stringify({
+        id: `record-${index + 1}`,
+        timestamp: new Date(index + 1).toISOString(),
+        message,
+      }),
+    );
+    await writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+    await run(sessionFile, dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 describe("buildContextReply", () => {
+  it("describes compactable transcript counts in help output", async () => {
+    const result = await buildContextReply(makeParams("/context", false));
+    expect(result.text).toContain(
+      "/context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+    );
+  });
+
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
@@ -143,7 +179,81 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
     expect(result.text).toContain("Actual context usage (cached): 900 tok");
     expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
+    expect(result.text).toContain(
+      "Compactable transcript: unavailable (no active transcript session)",
+    );
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+  });
+
+  it("reports compactable real conversation messages from the active transcript", async () => {
+    await withTranscript(
+      [
+        { role: "user", content: "Please inspect the repo", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", toolName: "read", toolCallId: "call-1", args: {} }],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "package.json" }],
+          timestamp: 3,
+          toolCallId: "call-1",
+          toolName: "read",
+        },
+      ],
+      async (sessionFile) => {
+        const result = await buildContextReply(
+          makeParams("/context detail", false, {
+            contextTokens: 8_192,
+            totalTokens: 900,
+            sessionId: "session",
+            sessionFile,
+          }),
+        );
+
+        expect(result.text).toContain(
+          "Compactable transcript: 2 real conversation message(s) / 3 transcript message(s)",
+        );
+        expect(result.text).not.toContain("Compaction note:");
+      },
+    );
+  });
+
+  it("explains when cached prompt usage has no compactable conversation messages", async () => {
+    await withTranscript(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", toolName: "read", toolCallId: "call-1", args: {} }],
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "package.json" }],
+          timestamp: 2,
+          toolCallId: "call-1",
+          toolName: "read",
+        },
+      ],
+      async (sessionFile) => {
+        const result = await buildContextReply(
+          makeParams("/context detail", false, {
+            contextTokens: 8_192,
+            totalTokens: 900,
+            sessionId: "session",
+            sessionFile,
+          }),
+        );
+
+        expect(result.text).toContain(
+          "Compactable transcript: 0 real conversation message(s) / 2 transcript message(s)",
+        );
+        expect(result.text).toContain(
+          "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+        );
+      },
+    );
   });
 
   it("shows estimate-only detail output when cached context usage is unavailable", async () => {

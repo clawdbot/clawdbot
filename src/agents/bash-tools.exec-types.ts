@@ -50,6 +50,14 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID active when this exec tool was built. Regenerated
+   *  on `/new` and `/reset`, so it pins exec-approval followups to the original
+   *  session instance and lets stale followups drop after a session rebind. */
+  sessionId?: string;
+  /** `session.store` template from the runtime config. Lets the direct/denied
+   *  exec approval followup path resolve the session key's current sessionId and
+   *  drop the followup when the key was rebound by `/new` or `/reset`. */
+  sessionStore?: string;
   /** `session.mainKey` from the runtime config; passed through into
    *  runExecProcess so background-exit notifications can remap cron-run
    *  session keys to the agent's main queue without an ambient config load. */

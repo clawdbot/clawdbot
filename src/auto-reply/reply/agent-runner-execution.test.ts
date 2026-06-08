@@ -23,7 +23,10 @@ import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
+import {
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
+} from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -98,31 +101,36 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/embedded-agent-helpers.js", () => ({
-  BILLING_ERROR_USER_MESSAGE: "billing",
-  formatRateLimitOrOverloadedErrorCopy: (message: string) => {
-    if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
-      return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
-    }
-    if (/rate.limit|too many requests|429/i.test(message)) {
-      return "⚠️ API rate limit reached. Please try again later.";
-    }
-    if (/overloaded/i.test(message)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
-    }
-    return undefined;
-  },
-  isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
-  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-  isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: (message?: string) =>
-    state.isLikelyContextOverflowErrorMock(message),
-  isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-  isRateLimitErrorMessage: (message: string) =>
-    /rate.limit|too many requests|429|usage limit/i.test(message),
-  isTransientHttpError: () => false,
-  sanitizeUserFacingText: (text?: string) => text ?? "",
-}));
+vi.mock("../../agents/embedded-agent-helpers.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-helpers.js")>(
+    "../../agents/embedded-agent-helpers.js",
+  );
+  return {
+    BILLING_ERROR_USER_MESSAGE: "billing",
+    formatRateLimitOrOverloadedErrorCopy: (message: string) => {
+      if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
+        return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
+      }
+      if (/rate.limit|too many requests|429/i.test(message)) {
+        return "⚠️ API rate limit reached. Please try again later.";
+      }
+      if (/overloaded/i.test(message)) {
+        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      }
+      return undefined;
+    },
+    isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
+    isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
+    isBillingErrorMessage: actual.isBillingErrorMessage,
+    isLikelyContextOverflowError: (message?: string) =>
+      state.isLikelyContextOverflowErrorMock(message),
+    isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
+    isRateLimitErrorMessage: (message: string) =>
+      /rate.limit|too many requests|429|usage limit/i.test(message),
+    isTransientHttpError: () => false,
+    sanitizeUserFacingText: (text?: string) => text ?? "",
+  };
+});
 
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
@@ -1865,6 +1873,49 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("passes silent empty-reply policy to CLI backends for message-tool-only turns", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-sonnet-4-6"),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: SILENT_REPLY_TOKEN }],
+      meta: { executionTrace: { fallbackUsed: false } },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    followupRun.run.allowEmptyAssistantReplyAsSilent = true;
+    followupRun.originatingChannel = "telegram";
+
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+          ChatType: "group",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      sourceReplyDeliveryMode: "message_tool_only",
+      allowEmptyAssistantReplyAsSilent: true,
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
   it("passes prepared CLI user turns to the runtime persistence boundary", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -2191,22 +2242,30 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
-      });
-      return { payloads: [{ text: "Hello world" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello", delta: "Hello" },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello world", delta: " world" },
+        });
+        return { payloads: [{ text: "Hello world" }], meta: {} };
+      },
+    );
 
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (_payload) => undefined,
@@ -2251,22 +2310,30 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
-      });
-      return { payloads: [{ text: "Hello world" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello", delta: "Hello" },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello world", delta: " world" },
+        });
+        return { payloads: [{ text: "Hello world" }], meta: {} };
+      },
+    );
 
     let firstPreviewStarted: (() => void) | undefined;
     let releaseFirstPreview: (() => void) | undefined;
@@ -2334,32 +2401,40 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "Bash",
-          toolCallId: "toolu_01ABCD",
-          args: { command: "ls -la" },
-        },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "Bash",
-          toolCallId: "toolu_01ABCD",
-          isError: false,
-        },
-      });
-      return { payloads: [{ text: "done" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "Bash",
+            toolCallId: "toolu_01ABCD",
+            args: { command: "ls -la" },
+          },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "Bash",
+            toolCallId: "toolu_01ABCD",
+            isError: false,
+          },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -2395,6 +2470,75 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.name).toBe("Bash");
     expect(call?.phase).toBe("start");
     expect(call?.args).toEqual({ command: "ls -la" });
+  });
+
+  it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(true);
+        expect(params.emitCommentaryText).toBe(true);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
+          },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
+
+    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onItemEvent, commentaryProgressEnabled: true },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    const call = onItemEvent.mock.calls[0]?.[0];
+    expect(call?.kind).toBe("preamble");
+    expect(call?.progressText).toBe("Let me check the files.");
+    expect(call?.itemId).toBe("commentary-1");
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
@@ -5417,6 +5561,58 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Agent failed before reply");
       expect(result.payload.text).toContain("incomplete terminal response");
+    }
+  });
+
+  it("surfaces provider quota guidance for generic HTTP 429 failures before reply", async () => {
+    const error = new Error(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    Object.assign(error, { status: 429 });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE);
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe("billing");
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
 

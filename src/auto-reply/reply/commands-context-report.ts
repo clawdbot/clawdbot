@@ -2,15 +2,19 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
+  type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -57,6 +61,47 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
     config: params.cfg,
     agentId: params.agentId,
   }).sessionAgentId;
+}
+
+type TranscriptCompactabilityReport =
+  | {
+      available: true;
+      totalMessages: number;
+      realConversationMessages: number;
+    }
+  | {
+      available: false;
+      reason: string;
+    };
+
+function resolveTranscriptCompactabilityReport(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): TranscriptCompactabilityReport {
+  const sessionId = targetSessionEntry?.sessionId?.trim();
+  if (!sessionId) {
+    return { available: false, reason: "no active transcript session" };
+  }
+
+  const messages = readSessionMessages(
+    sessionId,
+    params.storePath,
+    targetSessionEntry?.sessionFile,
+  ) as AgentMessage[];
+  if (!messages.length) {
+    return { available: false, reason: "no transcript messages found" };
+  }
+
+  const realConversationMessages = messages.reduce(
+    (count, message, index) =>
+      count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
+    0,
+  );
+  return {
+    available: true,
+    totalMessages: messages.length,
+    realConversationMessages,
+  };
 }
 
 async function resolveContextReport(
@@ -108,7 +153,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "",
         "Try:",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
         "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
@@ -303,6 +348,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
+    const transcriptCompactability = resolveTranscriptCompactabilityReport(
+      params,
+      targetSessionEntry,
+    );
+    const transcriptCompactabilityLines = transcriptCompactability.available
+      ? [
+          `Compactable transcript: ${formatInt(transcriptCompactability.realConversationMessages)} real conversation message(s) / ${formatInt(transcriptCompactability.totalMessages)} transcript message(s)`,
+          ...(transcriptCompactability.realConversationMessages === 0
+            ? [
+                "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
+              ]
+            : []),
+        ]
+      : [`Compactable transcript: unavailable (${transcriptCompactability.reason})`];
 
     return {
       text: [
@@ -326,6 +385,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         trackedPromptLine,
         actualContextLine,
         ...(overheadLine ? [overheadLine] : []),
+        ...transcriptCompactabilityLines,
         "",
         totalsLine,
         "",

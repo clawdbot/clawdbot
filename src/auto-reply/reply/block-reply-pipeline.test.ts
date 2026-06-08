@@ -1,6 +1,6 @@
 /** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   createBlockReplyContentKey,
   createBlockReplyPayloadKey,
@@ -288,6 +288,31 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     await pipeline.flush({ force: true });
 
     expect(sent).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("preserves assistant metadata on coalesced text flushes", async () => {
+    const sent: Array<{ assistantMessageIndex?: number; text?: string }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({
+          assistantMessageIndex: getReplyPayloadMetadata(payload)?.assistantMessageIndex,
+          text: payload.text,
+        });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 100,
+        maxChars: 200,
+        idleMs: 1000,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 0 }));
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Beta" }, { assistantMessageIndex: 0 }));
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ assistantMessageIndex: 0, text: "Alpha Beta" }]);
   });
 });
 

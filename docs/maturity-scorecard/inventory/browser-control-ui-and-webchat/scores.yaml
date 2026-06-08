@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Browser Realtime Talk
+    category_note: browser-realtime-talk-controls-and-voice-transports.md
+    coverage: 78
+    quality: 70
+    completeness: 78
+  - name: Browser Access and Trust
+    category_note: gateway-connection-auth-device-pairing-and-origins.md
+    coverage: 84
+    quality: 68
+    completeness: 84
+  - name: Configuration
+    category_note: config-schema-editing-and-safe-writes.md
+    coverage: 82
+    quality: 78
+    completeness: 82
+  - name: Browser UI
+    category_note: control-ui-static-shell-routing-and-pwa.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: WebChat Conversations
+    category_note: chat-composer-session-model-controls-and-rendering.md
+    coverage: 78
+    quality: 66
+    completeness: 78
+  - name: Operator Console
+    category_note: diagnostics-logs-update-and-activity.md
+    coverage: 78
+    quality: 74
+    completeness: 78

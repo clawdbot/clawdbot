@@ -649,6 +649,17 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
+  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
+  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  if (
+    params.attempt.toolMetas.length > 0 &&
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
+    return false;
+  }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
     payloadCount: params.payloadCount,
     attempt: params.attempt,

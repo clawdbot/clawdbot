@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Talk Providers
+    category_note: talk-configuration-catalog-and-provider-selection.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Realtime Talk Sessions
+    category_note: gateway-relay-and-realtime-session-runtime.md
+    coverage: 72
+    quality: 68
+    completeness: 72
+  - name: Speech and Transcription
+    category_note: speech-transcription-directives-and-talk-speak.md
+    coverage: 72
+    quality: 68
+    completeness: 72
+  - name: Native App Talk
+    category_note: native-app-talk-loops-ios-android-macos.md
+    coverage: 68
+    quality: 64
+    completeness: 68
+  - name: Voice Wake and Routing
+    category_note: voice-wake-push-to-talk-and-routing.md
+    coverage: 74
+    quality: 66
+    completeness: 74
+  - name: Talk Observability
+    category_note: observability-diagnostics-session-health-and-latency.md
+    coverage: 76
+    quality: 70
+    completeness: 76

@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-install-account-provisioning.md
+    coverage: 55
+    quality: 58
+    completeness: 55
+  - name: Access and Identity
+    category_note: dm-pairing-access-control.md
+    coverage: 70
+    quality: 66
+    completeness: 70
+  - name: Conversation Routing and Delivery
+    category_note: group-routing-mention-history.md
+    coverage: 70
+    quality: 66
+    completeness: 70
+  - name: Media and Rich Content
+    category_note: outbound-delivery-media-receipts.md
+    coverage: 70
+    quality: 68
+    completeness: 70
+  - name: Native Controls and Approvals
+    category_note: approval-routing-reaction-resolution.md
+    coverage: 65
+    quality: 68
+    completeness: 65

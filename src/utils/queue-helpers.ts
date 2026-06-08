@@ -166,6 +166,15 @@ export function beginQueueDrain<T extends { draining: boolean }>(
   return queue;
 }
 
+export function removeQueuedItemsByRef<T>(items: T[], processed: readonly T[]): void {
+  for (const item of processed) {
+    const idx = items.indexOf(item);
+    if (idx !== -1) {
+      items.splice(idx, 1);
+    }
+  }
+}
+
 /** Run and remove the next queued item, returning false when empty. */
 export async function drainNextQueueItem<T>(
   items: T[],
@@ -176,7 +185,7 @@ export async function drainNextQueueItem<T>(
     return false;
   }
   await run(next);
-  items.shift();
+  removeQueuedItemsByRef(items, [next]);
   return true;
 }
 

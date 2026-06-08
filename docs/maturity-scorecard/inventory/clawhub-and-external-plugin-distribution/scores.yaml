@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Publishing
+    category_note: clawhub-and-npm-publishing-release-validation.md
+    coverage: 72
+    quality: 76
+    completeness: 72
+  - name: Catalog Discovery
+    category_note: clawhub-discovery-catalog-metadata-and-package-lookup.md
+    coverage: 66
+    quality: 72
+    completeness: 66
+  - name: Compatibility and Trust
+    category_note: compatibility-gates-and-official-external-catalog.md
+    coverage: 76
+    quality: 74
+    completeness: 76
+  - name: Plugin Lifecycle and Health
+    category_note: plugin-lifecycle-and-health.md
+    coverage: 76
+    quality: 71
+    completeness: 76

@@ -1,0 +1,18 @@
+version: 1
+process_version: 3
+data:
+  - name: Hosted LLM Providers
+    category_note: openai-compatible-hosted-text-adapters.md
+    coverage: 58
+    quality: 56
+    completeness: 58
+  - name: Hosted Media Providers
+    category_note: hosted-media-generation-providers.md
+    coverage: 70
+    quality: 64
+    completeness: 70
+  - name: Provider Operations
+    category_note: setup-auth-profiles-and-credential-health.md
+    coverage: 64
+    quality: 60
+    completeness: 64

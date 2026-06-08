@@ -176,6 +176,33 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt).toBe(prompt);
   });
 
+  it("renders a deterministic version that changes when SKILL.md content changes", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const skillDir = path.join(workspaceDir, "skills", "visible");
+    await writeSkill({
+      dir: skillDir,
+      name: "visible",
+      description: "Visible",
+      body: "# Visible\nfirst body\n",
+    });
+
+    const before = buildSnapshot(workspaceDir);
+    await writeSkill({
+      dir: skillDir,
+      name: "visible",
+      description: "Visible",
+      body: "# Visible\nsecond body\n",
+    });
+    const after = buildSnapshot(workspaceDir);
+
+    const beforeVersion = before.prompt.match(/<version>([^<]+)<\/version>/)?.[1];
+    const afterVersion = after.prompt.match(/<version>([^<]+)<\/version>/)?.[1];
+    expect(beforeVersion).toMatch(/^sha256:[a-f0-9]{16}$/);
+    expect(afterVersion).toMatch(/^sha256:[a-f0-9]{16}$/);
+    expect(afterVersion).not.toBe(beforeVersion);
+    expect(after.prompt).toContain("If a skill's <version> differs from a previous turn");
+  });
+
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {
     const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
 

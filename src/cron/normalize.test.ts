@@ -142,6 +142,17 @@ describe("normalizeCronJobCreate", () => {
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
   });
 
+  it("preserves explicit null model clear in payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    }) as unknown as Record<string, { model?: unknown }>;
+
+    expect(normalized.payload?.model).toBeNull();
+  });
+
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
     expectNormalizedAtSchedule({ kind: "at", at: "2026-01-12T18:00:00" });
   });

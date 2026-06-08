@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-auth-and-workspace-app.md
+    coverage: 64
+    quality: 62
+    completeness: 64
+  - name: Access and Identity
+    category_note: dm-pairing-and-sender-authorization.md
+    coverage: 58
+    quality: 55
+    completeness: 58
+  - name: Conversation Routing and Delivery
+    category_note: space-routing-mentions-and-session-isolation.md
+    coverage: 55
+    quality: 50
+    completeness: 55
+  - name: Media and Rich Content
+    category_note: media-attachments-and-file-transfer.md
+    coverage: 55
+    quality: 50
+    completeness: 55
+  - name: Native Controls and Approvals
+    category_note: message-actions-reactions-and-approval-auth.md
+    coverage: 55
+    quality: 50
+    completeness: 55

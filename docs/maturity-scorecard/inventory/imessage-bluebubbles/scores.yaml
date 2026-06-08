@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: setup-status-doctor-and-account-config.md
+    coverage: 62
+    quality: 70
+    completeness: 62
+  - name: Access and Identity
+    category_note: dm-pairing-access-and-session-routing.md
+    coverage: 75
+    quality: 74
+    completeness: 75
+  - name: Conversation Routing and Delivery
+    category_note: inbound-monitoring-coalescing-catchup-and-history.md
+    coverage: 74
+    quality: 73
+    completeness: 74
+  - name: Media and Rich Content
+    category_note: media-attachments-remote-fetch-and-chunking.md
+    coverage: 73
+    quality: 71
+    completeness: 73
+  - name: Native Controls and Approvals
+    category_note: native-approvals-reactions-and-operator-control.md
+    coverage: 73
+    quality: 71
+    completeness: 73

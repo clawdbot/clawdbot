@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: shared-regional-channel-catalog-install-status.md
+    coverage: 42
+    quality: 44
+    completeness: 42
+  - name: Access and Identity
+    category_note: access-and-identity.md
+    coverage: 42
+    quality: 44
+    completeness: 42
+  - name: Conversation Routing and Delivery
+    category_note: conversation-routing-and-delivery.md
+    coverage: 42
+    quality: 44
+    completeness: 42
+  - name: Media and Rich Content
+    category_note: media-and-rich-content.md
+    coverage: 47
+    quality: 55
+    completeness: 47

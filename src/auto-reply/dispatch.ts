@@ -20,6 +20,7 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import { copyReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -339,7 +340,7 @@ function buildMessageSendingBeforeDeliver(
       return null;
     }
     if (result?.content != null) {
-      return { ...payload, text: result.content };
+      return copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
     }
     return payload;
   };
@@ -407,7 +408,8 @@ function combineBeforeDeliverHooks(
       if (!current) {
         return null;
       }
-      current = await hook(current, info);
+      const next = await hook(current, info);
+      current = next ? copyReplyPayloadMetadata(current, next) : null;
     }
     return current;
   };

@@ -245,6 +245,16 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
+  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
+    const msg = makeAssistantError(
+      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    });
+    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");

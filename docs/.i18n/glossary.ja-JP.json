@@ -40,6 +40,10 @@
     "target": "Heartbeat"
   },
   {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },

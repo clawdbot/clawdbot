@@ -219,6 +219,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+    execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),

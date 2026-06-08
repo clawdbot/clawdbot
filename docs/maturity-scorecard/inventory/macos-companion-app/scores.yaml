@@ -1,0 +1,43 @@
+version: 1
+process_version: 3
+data:
+  - name: Canvas
+    category_note: canvas-a2ui.md
+    coverage: 74
+    quality: 66
+    completeness: 74
+  - name: Local Setup
+    category_note: onboarding-cli-workspace.md
+    coverage: 72
+    quality: 65
+    completeness: 72
+  - name: Status and Settings
+    category_note: settings-health-diagnostics.md
+    coverage: 70
+    quality: 72
+    completeness: 70
+  - name: Native Capabilities
+    category_note: node-mode-system-run-exec-host.md
+    coverage: 64
+    quality: 60
+    completeness: 64
+  - name: Remote Connections
+    category_note: remote-mode-discovery-tunnels.md
+    coverage: 72
+    quality: 68
+    completeness: 72
+  - name: Voice and Talk
+    category_note: voice-wake-talk.md
+    coverage: 70
+    quality: 63
+    completeness: 70
+  - name: WebChat
+    category_note: webchat-sessions.md
+    coverage: 72
+    quality: 62
+    completeness: 72
+  - name: Remote WebChat
+    category_note: native-webchat-and-remote-client-bridges.md
+    coverage: 74
+    quality: 76
+    completeness: 74

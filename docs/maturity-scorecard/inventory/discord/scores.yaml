@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Channel Setup and Operations
+    category_note: bot-setup-and-account-configuration.md
+    coverage: 74
+    quality: 71
+    completeness: 74
+  - name: Access and Identity
+    category_note: dm-pairing-and-sender-authorization.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Conversation Routing and Delivery
+    category_note: guild-channel-routing-and-session-isolation.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Media and Rich Content
+    category_note: media-attachments-and-voice-message-handling.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Native Controls and Approvals
+    category_note: native-slash-commands-components-and-interactive-callbacks.md
+    coverage: 58
+    quality: 72
+    completeness: 58
+  - name: Realtime Voice and Calls
+    category_note: realtime-discord-voice-channels.md
+    coverage: 74
+    quality: 66
+    completeness: 74

@@ -12,8 +12,12 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 
-function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
+function isClaudeCliProvider(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
+}
+
+function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
+  return isClaudeCliProvider(provider);
 }
 
 function createAgentEventBridge<T>(params: {
@@ -58,6 +62,25 @@ function createAgentEventBridge<T>(params: {
   };
 }
 
+type AgentEventBridge = {
+  unsubscribe: () => void;
+  drain: () => Promise<void>;
+};
+
+type CommentaryTextPayload = {
+  text: string;
+  itemId?: string;
+};
+
+async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
+  for (const bridge of bridges) {
+    bridge.unsubscribe();
+  }
+  for (const bridge of bridges) {
+    await bridge.drain();
+  }
+}
+
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -80,6 +103,17 @@ function createAssistantTextBridge(params: {
       return text;
     },
   });
+}
+
+function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
+  if (evt.stream !== "item" || evt.data.kind !== "preamble") {
+    return undefined;
+  }
+  const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
+  if (!text) {
+    return undefined;
+  }
+  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
 }
 
 export type CliToolEventPayload = {
@@ -173,6 +207,19 @@ function createToolEventBridge(params: {
   });
 }
 
+function createCommentaryEventBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: (payload: CommentaryTextPayload) => Promise<void>;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: readCommentaryTextPayload,
+  });
+}
+
 export async function runCliAgentWithLifecycle(params: {
   runId: string;
   provider: string;
@@ -185,6 +232,7 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
+  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 }): Promise<EmbeddedAgentRunResult> {
@@ -219,16 +267,24 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
   });
+  const commentaryBridge = createCommentaryEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onCommentaryText,
+  });
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge].filter(
+    (bridge): bridge is AgentEventBridge => bridge !== undefined,
+  );
   let lifecycleTerminalEmitted = false;
   try {
-    const rawResult = await runCliAgent(params.runParams);
+    const rawResult = await runCliAgent({
+      ...params.runParams,
+      classifyCommentaryText:
+        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
+      emitCommentaryText: Boolean(params.onCommentaryText),
+    });
     const result = params.transformResult?.(rawResult) ?? rawResult;
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     if (cliText) {
@@ -253,12 +309,7 @@ export async function runCliAgentWithLifecycle(params: {
     }
     return result;
   } catch (err) {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
@@ -275,9 +326,9 @@ export async function runCliAgentWithLifecycle(params: {
     }
     throw err;
   } finally {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
+    for (const bridge of bridges) {
+      bridge.unsubscribe();
+    }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,

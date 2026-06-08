@@ -1,0 +1,38 @@
+version: 1
+process_version: 3
+data:
+  - name: Media Capture
+    category_note: camera-media-capture.md
+    coverage: 66
+    quality: 62
+    completeness: 66
+  - name: Mobile Chat
+    category_note: chat-sessions-ui.md
+    coverage: 70
+    quality: 66
+    completeness: 70
+  - name: Connection Setup
+    category_note: gateway-pairing-security.md
+    coverage: 68
+    quality: 64
+    completeness: 68
+  - name: Distribution
+    category_note: install-release-distribution.md
+    coverage: 60
+    quality: 62
+    completeness: 60
+  - name: Settings
+    category_note: settings-permissions-diagnostics.md
+    coverage: 64
+    quality: 66
+    completeness: 64
+  - name: Voice
+    category_note: voice-talk-wake.md
+    coverage: 66
+    quality: 60
+    completeness: 66
+  - name: Device Runtime
+    category_note: node-device-capabilities.md
+    coverage: 62
+    quality: 55
+    completeness: 62

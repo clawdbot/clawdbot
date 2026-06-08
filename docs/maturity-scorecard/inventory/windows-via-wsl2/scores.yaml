@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: WSL Setup
+    category_note: wsl2-install-and-runtime-prerequisites.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: CLI
+    category_note: wsl2-cli.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Gateway Service Lifecycle
+    category_note: systemd-gateway-service-lifecycle.md
+    coverage: 64
+    quality: 66
+    completeness: 64
+  - name: Gateway Access and Exposure
+    category_note: auth-secrets-and-exposure-posture.md
+    coverage: 70
+    quality: 65
+    completeness: 70
+  - name: Diagnostics and Repair
+    category_note: diagnostics-doctor-logs-and-repair.md
+    coverage: 74
+    quality: 72
+    completeness: 74
+  - name: Browser and Control UI
+    category_note: split-host-browser-and-control-ui-interop.md
+    coverage: 72
+    quality: 70
+    completeness: 72

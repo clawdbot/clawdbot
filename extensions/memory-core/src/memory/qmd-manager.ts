@@ -657,6 +657,36 @@ export class QmdMemoryManager implements MemorySearchManager {
     } catch {
       // ignore; older qmd versions might not support list --json.
     }
+
+    // `qmd collection list` never emits the filesystem path, so `shouldRebindCollection`
+    // cannot detect a workspace move. Enrich the path for managed collections only
+    // (bounded subprocess count) via `qmd collection show`, which does expose it.
+    for (const collection of this.qmd.collections) {
+      const entry = existing.get(collection.name);
+      if (!entry || entry.path) {
+        // Not listed, or path already present (future-proof qmd version or text parser).
+        continue;
+      }
+      try {
+        const showResult = await this.runQmd(["collection", "show", collection.name], {
+          timeoutMs: this.qmd.update.commandTimeoutMs,
+        });
+        const shown = this.parseShownCollection(showResult.stdout);
+        if (shown.path) {
+          entry.path = shown.path;
+        }
+        // Only backfill pattern when the list parse left it absent; never overwrite a
+        // pattern already extracted from `collection list` output (e.g. a changed pattern
+        // detected via qmd text output would be lost if we clobber it here).
+        if (shown.pattern && !entry.pattern) {
+          entry.pattern = shown.pattern;
+        }
+      } catch {
+        // If show fails (old qmd, timeout, missing collection), leave path undefined.
+        // shouldRebindCollection preserves the safe defensive behavior in that case.
+      }
+    }
+
     return existing;
   }
 
@@ -979,6 +1009,28 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return listed;
+  }
+
+  // Parses the output of `qmd collection show <name>`, which emits:
+  //   Collection: <name>
+  //     Path:     <absolute-path>
+  //     Pattern:  <glob>
+  //     Include:  yes (default)
+  // This is the only qmd command that reliably surfaces the filesystem path.
+  private parseShownCollection(output: string): { path?: string; pattern?: string } {
+    const result: { path?: string; pattern?: string } = {};
+    for (const rawLine of output.split(/\r?\n/)) {
+      const pathMatch = /^\s*Path\s*:\s*(.+?)\s*$/.exec(rawLine);
+      if (pathMatch) {
+        result.path = pathMatch[1].trim();
+        continue;
+      }
+      const patternMatch = /^\s*Pattern\s*:\s*(.+?)\s*$/.exec(rawLine);
+      if (patternMatch) {
+        result.pattern = patternMatch[1].trim();
+      }
+    }
+    return result;
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {

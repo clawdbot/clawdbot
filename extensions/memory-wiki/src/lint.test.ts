@@ -41,7 +41,7 @@ describe("lintMemoryWikiVault", () => {
           title: "Alpha",
           sourceIds: ["source.alpha"],
         },
-        body: "# Alpha\n\n[Alpha Source](sources/alpha.md)\n",
+        body: "# Alpha\n\n[Alpha Source](../sources/alpha.md)\n",
       }),
       "utf8",
     );

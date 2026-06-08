@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Media Intake and Access
+    category_note: media-file-intake-storage-and-secure-access.md
+    coverage: 74
+    quality: 76
+    completeness: 74
+  - name: Channel Media Handling
+    category_note: channel-attachment-staging-and-reply-media-delivery.md
+    coverage: 84
+    quality: 68
+    completeness: 84
+  - name: Media Configuration
+    category_note: media-understanding-orchestration-and-configuration.md
+    coverage: 82
+    quality: 77
+    completeness: 82
+  - name: Text-to-Speech Delivery
+    category_note: tts-and-outbound-voice-audio-delivery.md
+    coverage: 84
+    quality: 70
+    completeness: 84
+  - name: Media Understanding
+    category_note: image-understanding-and-vision-routing.md
+    coverage: 72
+    quality: 62
+    completeness: 72
+  - name: Media Generation
+    category_note: image-generation-tool-and-provider-routing.md
+    coverage: 74
+    quality: 64
+    completeness: 74

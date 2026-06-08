@@ -1769,4 +1769,36 @@ describe("cron tool", () => {
       toolsAllow: null,
     });
   });
+
+  it("preserves null model payload patches on update", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-clear-model", {
+      action: "update",
+      id: "job-9",
+      patch: {
+        payload: {
+          model: null,
+        },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-9");
+    expect(params?.patch?.payload).toEqual({
+      kind: "agentTurn",
+      model: null,
+    });
+  });
 });

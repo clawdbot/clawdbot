@@ -12,6 +12,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClickClack",
+    "target": "ClickClack"
+  },
+  {
     "source": "CLI",
     "target": "命令列介面"
   },
@@ -36,12 +40,36 @@
     "target": "心跳偵測"
   },
   {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "IRC",
+    "target": "IRC"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
     "source": "Mintlify",
     "target": "Mintlify"
   },
   {
+    "source": "Nextcloud Talk",
+    "target": "Nextcloud Talk"
+  },
+  {
     "source": "Node",
     "target": "節點"
+  },
+  {
+    "source": "Nostr",
+    "target": "Nostr"
   },
   {
     "source": "OpenClaw",
@@ -56,8 +84,28 @@
     "target": "外掛"
   },
   {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "QQBot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "QQ bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "SMS",
+    "target": "SMS"
+  },
+  {
     "source": "Skills",
     "target": "Skills"
+  },
+  {
+    "source": "Synology Chat",
+    "target": "Synology Chat"
   },
   {
     "source": "Tailscale",
@@ -68,11 +116,47 @@
     "target": "TaskFlow"
   },
   {
+    "source": "Tlon",
+    "target": "Tlon"
+  },
+  {
+    "source": "Twitch",
+    "target": "Twitch"
+  },
+  {
+    "source": "Twilio",
+    "target": "Twilio"
+  },
+  {
     "source": "TUI",
     "target": "終端介面"
   },
   {
+    "source": "WeChat",
+    "target": "微信"
+  },
+  {
+    "source": "Weixin",
+    "target": "微信"
+  },
+  {
     "source": "Webhook",
     "target": "網路鉤子"
+  },
+  {
+    "source": "Yuanbao",
+    "target": "騰訊元寶"
+  },
+  {
+    "source": "Zalo",
+    "target": "Zalo"
+  },
+  {
+    "source": "Zalo Personal",
+    "target": "Zalo Personal"
+  },
+  {
+    "source": "Zalo personal",
+    "target": "Zalo Personal"
   }
 ]

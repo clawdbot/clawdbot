@@ -1,0 +1,28 @@
+version: 1
+process_version: 3
+data:
+  - name: Runtime Modes
+    category_note: launch-modes-and-cli-entrypoints.md
+    coverage: 78
+    quality: 72
+    completeness: 78
+  - name: Input and Commands
+    category_note: composer-keybindings-and-input-editing.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Session Management
+    category_note: session-lifecycle-history-and-resume.md
+    coverage: 80
+    quality: 68
+    completeness: 80
+  - name: Local Shell Execution
+    category_note: local-shell-execution-and-approval-boundary.md
+    coverage: 70
+    quality: 76
+    completeness: 70
+  - name: Rendering and Output Safety
+    category_note: streaming-message-rendering-and-tool-cards.md
+    coverage: 76
+    quality: 70
+    completeness: 76

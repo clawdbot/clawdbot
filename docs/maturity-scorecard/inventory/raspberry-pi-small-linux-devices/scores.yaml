@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Setup and Compatibility
+    category_note: arm-linux-install-and-runtime-prerequisites.md
+    coverage: 55
+    quality: 58
+    completeness: 55
+  - name: Remote Access and Auth
+    category_note: remote-access-tailscale-ssh-and-control-ui.md
+    coverage: 74
+    quality: 68
+    completeness: 74
+  - name: Gateway Runtime
+    category_note: headless-gateway-runtime-and-model-routing.md
+    coverage: 78
+    quality: 72
+    completeness: 78
+  - name: Performance and Diagnostics
+    category_note: resource-tuning-diagnostics-and-low-memory-behavior.md
+    coverage: 75
+    quality: 69
+    completeness: 75

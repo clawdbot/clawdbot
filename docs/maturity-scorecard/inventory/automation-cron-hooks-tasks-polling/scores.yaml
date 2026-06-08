@@ -1,0 +1,33 @@
+version: 1
+process_version: 3
+data:
+  - name: Cron Jobs
+    category_note: cron-job-lifecycle.md
+    coverage: 82
+    quality: 73
+    completeness: 82
+  - name: Event Ingress
+    category_note: channel-polling-webhooks.md
+    coverage: 65
+    quality: 58
+    completeness: 65
+  - name: Automation Hooks
+    category_note: internal-hooks.md
+    coverage: 78
+    quality: 72
+    completeness: 78
+  - name: Background Tasks and Flows
+    category_note: background-task-ledger.md
+    coverage: 73
+    quality: 68
+    completeness: 73
+  - name: Heartbeat
+    category_note: heartbeat-commitments.md
+    coverage: 82
+    quality: 72
+    completeness: 82
+  - name: Polling Controls
+    category_note: message-polls-process-polling.md
+    coverage: 74
+    quality: 70
+    completeness: 74

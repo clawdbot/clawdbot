@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Deployment Setup
+    category_note: deployment-setup.md
+    coverage: 55
+    quality: 76
+    completeness: 84
+  - name: Configuration and Secrets
+    category_note: configuration-and-secrets.md
+    coverage: 52
+    quality: 74
+    completeness: 76
+  - name: Access and Exposure
+    category_note: access-and-exposure.md
+    coverage: 43
+    quality: 72
+    completeness: 58
+  - name: Cluster Lifecycle
+    category_note: cluster-lifecycle.md
+    coverage: 50
+    quality: 78
+    completeness: 77

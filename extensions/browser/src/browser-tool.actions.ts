@@ -30,6 +30,7 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
 } from "./browser/constants.js";
+import { neutralizeMediaDirectives } from "./browser/vision.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -204,7 +205,12 @@ function wrapBrowserExternalJson(params: {
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(params.payload, null, 2);
+  const extractedText = JSON.stringify(
+    params.payload,
+    (_key: string, value: unknown) =>
+      typeof value === "string" ? neutralizeMediaDirectives(value) : value,
+    2,
+  );
   // Browser tabs, snapshots, and console output are page-controlled data. Keep
   // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {
@@ -465,7 +471,7 @@ export async function executeSnapshotAction(params: {
       };
     }
     const extractedText = snapshot.snapshot ?? "";
-    const wrappedSnapshot = wrapExternalContent(extractedText, {
+    const wrappedSnapshot = wrapExternalContent(neutralizeMediaDirectives(extractedText), {
       source: "browser",
       includeWarning: true,
     });

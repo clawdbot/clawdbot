@@ -347,10 +347,32 @@ async function loadSkillFromFile(
       description,
       content: body,
       filePath,
+      promptVersion: await computeSkillPromptVersion(rawContent.value),
       disableModelInvocation: frontmatter["disable-model-invocation"] === true,
     },
     diagnostics,
   };
+}
+
+async function computeSkillPromptVersion(content: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    return `hash:${computeStableFallbackHash(content)}`;
+  }
+  const digest = await subtle.digest("SHA-256", new TextEncoder().encode(content));
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256:${hex.slice(0, 16)}`;
+}
+
+function computeStableFallbackHash(content: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of content) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function validateName(name: string, parentDirName: string): string[] {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -218,22 +219,23 @@ describe("spawnSubagentDirect filename validation", () => {
       return store;
     });
     try {
-      vi.stubEnv("HOME", homeDir);
-      const { spawnSubagentDirect } = subagentSpawnModule;
-      const result = await spawnSubagentDirect(
-        {
-          task: "test",
-          cwd: "~/task-repo",
-          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
-        },
-        ctx,
-      );
+      await withEnvAsync({ HOME: homeDir }, async () => {
+        const { spawnSubagentDirect } = subagentSpawnModule;
+        const result = await spawnSubagentDirect(
+          {
+            task: "test",
+            cwd: "~/task-repo",
+            attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+          },
+          ctx,
+        );
 
-      expect(result.status).toBe("accepted");
-      const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
-      expect(fs.existsSync(attachmentsRoot)).toBe(true);
-      const childSessionKey = result.childSessionKey as string;
-      expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+        expect(result.status).toBe("accepted");
+        const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
+        expect(fs.existsSync(attachmentsRoot)).toBe(true);
+        const childSessionKey = result.childSessionKey as string;
+        expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+      });
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }

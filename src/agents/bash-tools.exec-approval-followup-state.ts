@@ -169,6 +169,21 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
 }
 
+/**
+ * A persisted exec-approval followup is stale when the session key it targeted
+ * has since been rebound to a different session id (via `/new` or `/reset`).
+ * Delivering it would leak the old approval result into the new session, so the
+ * gateway drops the followup instead of resuming the rebound session.
+ */
+export function isExecApprovalFollowupSessionRebound(params: {
+  expectedSessionId?: string;
+  resolvedSessionId?: string;
+}): boolean {
+  const expected = normalizeOptionalString(params.expectedSessionId);
+  const resolved = normalizeOptionalString(params.resolvedSessionId);
+  return Boolean(expected && resolved && expected !== resolved);
+}
+
 /** Clear exec approval follow-up handoffs between tests. */
 export function resetExecApprovalFollowupRuntimeHandoffsForTests(): void {
   execApprovalFollowupRuntimeHandoffs.clear();

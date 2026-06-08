@@ -1,0 +1,23 @@
+version: 1
+process_version: 3
+data:
+  - name: Container Setup
+    category_note: docker-install-compose-and-first-run-setup.md
+    coverage: 74
+    quality: 76
+    completeness: 74
+  - name: Container Operations
+    category_note: runtime-configuration-state-volumes-and-secrets.md
+    coverage: 76
+    quality: 70
+    completeness: 76
+  - name: Image Release and Validation
+    category_note: image-build-release-packaging-and-attestations.md
+    coverage: 84
+    quality: 78
+    completeness: 84
+  - name: Agent Sandbox and Tooling
+    category_note: containerized-agents-sandbox-and-tooling-support.md
+    coverage: 75
+    quality: 68
+    completeness: 75

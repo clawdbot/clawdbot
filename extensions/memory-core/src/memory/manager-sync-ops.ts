@@ -1616,9 +1616,9 @@ export abstract class MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
         : null;
-    const deleteFtsRowsByPathSourceAndModel =
+    const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
     const targetSessionFiles = params.needsFullReindex
@@ -1734,13 +1734,9 @@ export abstract class MemoryManagerSyncOps {
           } catch {}
         }
         deleteChunksByPathAndSource.run(stale.path, "sessions");
-        if (deleteFtsRowsByPathSourceAndModel) {
+        if (deleteFtsRowsByPathAndSource) {
           try {
-            deleteFtsRowsByPathSourceAndModel.run(
-              stale.path,
-              "sessions",
-              this.provider?.model ?? "fts-only",
-            );
+            deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
           } catch {}
         }
       } finally {
@@ -1846,11 +1842,18 @@ export abstract class MemoryManagerSyncOps {
     });
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    // Missing metadata cannot prove whether existing chunks were semantic.
+    // Wait for the configured provider before replacing them with a rebuilt index.
+    const canRebuildMissingIdentity =
+      this.provider !== null || !this.settings.provider || this.settings.provider === "none";
+    const needsMissingIdentityReindex =
+      indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       needsInitialIndex ||
+      needsMissingIdentityReindex ||
       needsExplicitIdentityReindex;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
@@ -2220,8 +2223,19 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
     }
     this.ensureSchema();
-    this.dropVectorTable();
-    this.vector.dims = undefined;
+    if (this.vector.enabled && this.vector.available) {
+      try {
+        this.db.exec(`DELETE FROM ${VECTOR_TABLE}`);
+      } catch {
+        this.dropVectorTable();
+        this.vector.dims = undefined;
+        this.vector.available = null;
+        this.vectorReady = null;
+      }
+    } else {
+      this.dropVectorTable();
+      this.vector.dims = undefined;
+    }
     this.sessionsDirtyFiles.clear();
   }
 
