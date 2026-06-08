@@ -96,7 +96,7 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` sets the **user-local timezone** for prompt context (and for `envelopeTimezone: "user"`).
-- `timeFormat` controls **12h/24h display** in prompt-facing times. `auto` follows OS preferences.
+- `timeFormat` controls **12h/24h display** in rendered time strings. `auto` follows OS prefs.
 
 ## Time format detection (auto)
 
