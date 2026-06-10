@@ -1953,15 +1953,6 @@ describe("provider-runtime", () => {
     const normalizeToolSchemas = vi.fn(
       ({ tools }: Pick<ProviderNormalizeToolSchemasContext, "tools">): AnyAgentTool[] => tools,
     );
-    const resolveToolSchemaCacheKey = vi.fn(
-      ({
-        provider,
-        workspaceDir,
-      }: Pick<ProviderNormalizeToolSchemasContext, "provider" | "workspaceDir">) => ({
-        provider,
-        workspaceDir,
-      }),
-    );
     const inspectToolSchemas = vi.fn(() => [] as { toolName: string; violations: string[] }[]);
     const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
     const resolveSyntheticAuth = vi.fn(() => ({
@@ -2018,7 +2009,6 @@ describe("provider-runtime", () => {
           sanitizeReplayHistory,
           validateReplayTurns,
           normalizeToolSchemas,
-          resolveToolSchemaCacheKey,
           inspectToolSchemas,
           resolveReasoningOutputMode,
           prepareExtraParams: ({ extraParams }) => ({
@@ -2341,7 +2331,7 @@ describe("provider-runtime", () => {
           tools: [DEMO_TOOL],
         }),
       }),
-    ).toContain('"hookCacheKey":{"provider":"demo","workspaceDir":"/tmp/demo-workspace"}');
+    ).toBeNull();
 
     expect(
       inspectProviderToolSchemasWithPlugin({
@@ -2484,7 +2474,6 @@ describe("provider-runtime", () => {
       sanitizeReplayHistory,
       validateReplayTurns,
       normalizeToolSchemas,
-      resolveToolSchemaCacheKey,
       inspectToolSchemas,
       resolveReasoningOutputMode,
       refreshOAuth,

@@ -241,141 +241,28 @@ describe("tool schema runtime cache", () => {
     });
   });
 
-  it("changes cache keys for provider-owned hook cache keys", () => {
-    let normalizeCall = 0;
-    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(
-      ({ context }: { context: { tools: MockProviderTool[] } }) => {
-        normalizeCall += 1;
-        return context.tools.map((tool) => ({
-          ...tool,
-          parameters: {
-            type: "object",
-            properties: { hook: { const: `hook:${normalizeCall}` } },
-          },
-        }));
-      },
-    );
-
-    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValueOnce("hook:first");
-    normalizeProviderToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
-    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValueOnce("hook:second");
-    const second = normalizeProviderToolSchemas({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
-
-    expect(second[0]?.parameters).toEqual({
-      type: "object",
-      properties: { hook: { const: "hook:2" } },
-    });
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
-    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
-      hit: 0,
-      miss: 2,
-      store: 2,
-    });
-  });
-
-  it("keys cache entries by the prepared provider runtime handle", () => {
-    const firstRuntimeHandle = {
-      provider: "example",
-      plugin: {
-        id: "example",
-        pluginId: "plugin-a",
-      },
-    };
-    const secondRuntimeHandle = {
-      provider: "example",
-      plugin: {
-        id: "example",
-        pluginId: "plugin-b",
-      },
-    };
-    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockImplementation(
-      ({ runtimeHandle }: { runtimeHandle?: { plugin?: { pluginId?: string } } }) =>
-        `hook:${runtimeHandle?.plugin?.pluginId ?? "missing"}`,
-    );
-    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(
-      ({
-        context,
-        runtimeHandle,
-      }: {
-        context: { tools: MockProviderTool[] };
-        runtimeHandle?: { plugin?: { pluginId?: string } };
-      }) =>
-        context.tools.map((tool) => ({
-          ...tool,
-          parameters: {
-            type: "object",
-            properties: {
-              plugin: { const: runtimeHandle?.plugin?.pluginId },
-            },
-          },
-        })),
-    );
-
-    normalizeProviderToolSchemas({
-      provider: "example",
-      runtimeHandle: firstRuntimeHandle as never,
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
-    const second = normalizeProviderToolSchemas({
-      provider: "example",
-      runtimeHandle: secondRuntimeHandle as never,
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
-
-    expect(second[0]?.parameters).toEqual({
-      type: "object",
-      properties: { plugin: { const: "plugin-b" } },
-    });
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
-    expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
-      hit: 0,
-      miss: 2,
-      store: 2,
-    });
-  });
-
-  it("caches provider hooks that opt into a hook-owned cache key", () => {
+  it("caches only provider hooks with an internal compat-family cache key", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
-    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockImplementation(
-      ({ context }: { context: { provider: string; workspaceDir?: string } }) =>
-        `hook-owned:${context.provider}:${context.workspaceDir ?? ""}`,
-    );
+    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue("compat:openai");
 
     normalizeProviderToolSchemas({
       provider: "example",
-      workspaceDir: "/tmp/work-a",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
     normalizeProviderToolSchemas({
       provider: "example",
-      workspaceDir: "/tmp/work-a",
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
-    normalizeProviderToolSchemas({
-      provider: "example",
-      workspaceDir: "/tmp/work-b",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
 
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(1);
     expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
       hit: 1,
-      miss: 2,
-      store: 2,
+      miss: 1,
+      store: 1,
     });
   });
 
-  it("bypasses provider hooks that do not opt into hook-owned cache keys", () => {
+  it("bypasses unknown provider hooks without a compat-family cache key", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
     mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue(null);
 

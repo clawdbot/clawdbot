@@ -6,9 +6,13 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelCatalogScope } from "../agents/model-discovery-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeDeepSeekToolSchemas,
+  normalizeGeminiToolSchemas,
+  normalizeOpenAIToolSchemas,
+} from "../plugin-sdk/provider-tools.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
-  createPluginCacheKey,
   PluginLruCache,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
@@ -37,8 +41,6 @@ import type {
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
-const providerHookFunctionIds = new WeakMap<Function, number>();
-let nextProviderHookFunctionId = 1;
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -90,20 +92,6 @@ function resolveProviderRuntimePluginCacheKey(
   });
 }
 
-function resolveProviderHookFunctionIdentity(hook: unknown): string {
-  if (typeof hook !== "function") {
-    return "";
-  }
-  const cached = providerHookFunctionIds.get(hook);
-  if (cached !== undefined) {
-    return String(cached);
-  }
-  const id = nextProviderHookFunctionId;
-  nextProviderHookFunctionId += 1;
-  providerHookFunctionIds.set(hook, id);
-  return String(id);
-}
-
 export function resolveProviderToolSchemaNormalizeCacheKey(
   params: ProviderRuntimePluginHandleParams & {
     context: ProviderNormalizeToolSchemasContext;
@@ -111,31 +99,27 @@ export function resolveProviderToolSchemaNormalizeCacheKey(
 ): string | null {
   const runtimeHandle = ensureProviderRuntimePluginHandle(params);
   const plugin = runtimeHandle.plugin;
-  if (!plugin?.normalizeToolSchemas || !plugin.resolveToolSchemaCacheKey) {
-    return null;
-  }
-  try {
-    const hookCacheKey = plugin.resolveToolSchemaCacheKey(params.context);
-    if (hookCacheKey == null || hookCacheKey === false) {
+  return resolveBundledToolSchemaNormalizeCacheKey(plugin, params.context);
+}
+
+function resolveBundledToolSchemaNormalizeCacheKey(
+  plugin: ProviderPlugin | undefined,
+  context: ProviderNormalizeToolSchemasContext,
+): string | null {
+  switch (plugin?.normalizeToolSchemas) {
+    case normalizeDeepSeekToolSchemas:
+      return "compat:deepseek";
+    case normalizeGeminiToolSchemas:
+      return "compat:gemini";
+    case normalizeOpenAIToolSchemas:
+      return JSON.stringify({
+        family: "openai",
+        provider: normalizeLowercaseStringOrEmpty(context.model?.provider ?? context.provider),
+        api: normalizeLowercaseStringOrEmpty(context.model?.api ?? context.modelApi),
+        baseUrl: normalizeOptionalString(context.model?.baseUrl) ?? "",
+      });
+    default:
       return null;
-    }
-    return createPluginCacheKey([
-      "provider-tool-schema-normalize-hook-cache",
-      resolveProviderRuntimePluginCacheKey(runtimeHandle),
-      {
-        pluginId: plugin.pluginId ?? "",
-        providerId: plugin.id,
-        aliases: [...(plugin.aliases ?? [])].toSorted(),
-        hookAliases: [...(plugin.hookAliases ?? [])].toSorted(),
-        normalizeToolSchemas: resolveProviderHookFunctionIdentity(plugin.normalizeToolSchemas),
-        resolveToolSchemaCacheKey: resolveProviderHookFunctionIdentity(
-          plugin.resolveToolSchemaCacheKey,
-        ),
-        hookCacheKey,
-      },
-    ]);
-  } catch {
-    return null;
   }
 }
 

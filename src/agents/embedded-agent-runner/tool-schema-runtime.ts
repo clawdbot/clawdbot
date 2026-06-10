@@ -137,13 +137,13 @@ function applyCachedToolParameters<TSchemaType extends TSchema = TSchema, TResul
 function buildProviderToolSchemaCacheKey(
   params: ProviderToolSchemaParams,
   provider: string,
-  hookCacheKey: string,
+  compatCacheKey: string,
 ): string | null {
   try {
     return createPluginCacheKey([
       "provider-tool-schema",
       PROVIDER_TOOL_SCHEMA_CACHE_VERSION,
-      hookCacheKey,
+      compatCacheKey,
       provider,
       normalizeCacheString(params.modelId),
       normalizeCacheString(params.modelApi),
@@ -197,7 +197,7 @@ export function normalizeProviderToolSchemas<
   const provider = params.provider.trim();
   const context = buildProviderToolSchemaContext(params, provider);
   const cacheEnabled = isProviderToolSchemaCacheEnabled(params.env);
-  const hookCacheKey =
+  const compatCacheKey =
     cacheEnabled && canResolveProviderToolSchemaCacheKey(params)
       ? resolveProviderToolSchemaNormalizeCacheKey({
           provider,
@@ -208,8 +208,8 @@ export function normalizeProviderToolSchemas<
           context,
         })
       : null;
-  const cacheKey = hookCacheKey
-    ? buildProviderToolSchemaCacheKey(params, provider, hookCacheKey)
+  const cacheKey = compatCacheKey
+    ? buildProviderToolSchemaCacheKey(params, provider, compatCacheKey)
     : null;
   if (cacheKey) {
     const cached = providerToolSchemaCache.get(cacheKey);
