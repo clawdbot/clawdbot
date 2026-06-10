@@ -284,7 +284,7 @@ describe("tool schema runtime cache", () => {
     });
   });
 
-  it("bypasses the cache when no provider hook cache key is available and when disabled", () => {
+  it("bypasses the cache when no compat-family cache key is available", () => {
     mocks.normalizeProviderToolSchemasWithPlugin.mockImplementation(({ context }) => context.tools);
     mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue(null);
 
@@ -296,16 +296,10 @@ describe("tool schema runtime cache", () => {
       provider: "example",
       tools: [makeTool("alpha", { type: "object" })] as never,
     });
-    mocks.resolveProviderToolSchemaNormalizeCacheKey.mockReturnValue("hook:disabled");
-    normalizeProviderToolSchemas({
-      provider: "openai",
-      env: { OPENCLAW_TOOL_SCHEMA_CACHE: "0" },
-      tools: [makeTool("alpha", { type: "object" })] as never,
-    });
 
-    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(3);
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledTimes(2);
     expect(getProviderToolSchemaCacheStatsForTest()).toMatchObject({
-      bypass: 3,
+      bypass: 2,
       hit: 0,
       miss: 0,
       store: 0,

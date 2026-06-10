@@ -68,10 +68,6 @@ function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, T
   };
 }
 
-function isProviderToolSchemaCacheEnabled(env: NodeJS.ProcessEnv | undefined): boolean {
-  return env?.OPENCLAW_TOOL_SCHEMA_CACHE !== "0";
-}
-
 function normalizeCacheString(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -196,18 +192,16 @@ export function normalizeProviderToolSchemas<
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const provider = params.provider.trim();
   const context = buildProviderToolSchemaContext(params, provider);
-  const cacheEnabled = isProviderToolSchemaCacheEnabled(params.env);
-  const compatCacheKey =
-    cacheEnabled && canResolveProviderToolSchemaCacheKey(params)
-      ? resolveProviderToolSchemaNormalizeCacheKey({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          runtimeHandle: params.runtimeHandle,
-          context,
-        })
-      : null;
+  const compatCacheKey = canResolveProviderToolSchemaCacheKey(params)
+    ? resolveProviderToolSchemaNormalizeCacheKey({
+        provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        runtimeHandle: params.runtimeHandle,
+        context,
+      })
+    : null;
   const cacheKey = compatCacheKey
     ? buildProviderToolSchemaCacheKey(params, provider, compatCacheKey)
     : null;
