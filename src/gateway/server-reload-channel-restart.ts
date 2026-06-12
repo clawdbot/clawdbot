@@ -188,7 +188,7 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          if (plan.reloadPlugins) {
+          if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
             await runOutsideGatewayRootWorkAdmission(() =>
               params.startChannel(name, undefined, { includeKnownAccounts: true }),
             );
