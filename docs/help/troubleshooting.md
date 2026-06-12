@@ -370,6 +370,7 @@ flowchart TD
     openclaw config get tools.exec.host
     openclaw config get tools.exec.security
     openclaw config get tools.exec.ask
+    openclaw exec-policy show
     openclaw gateway restart
     ```
 
@@ -383,13 +384,12 @@ flowchart TD
     - Unset `tools.exec.ask` defaults to `off`.
     - If you are seeing approvals, some host-local or per-session policy
       tightened exec away from these defaults.
+    - `openclaw exec-policy show` shows the requested config, host approvals file, and effective merged policy.
 
     Restore the current no-approval defaults:
 
     ```bash
-    openclaw config set tools.exec.host gateway
-    openclaw config set tools.exec.security full
-    openclaw config set tools.exec.ask off
+    openclaw exec-policy preset yolo
     openclaw gateway restart
     ```
 
