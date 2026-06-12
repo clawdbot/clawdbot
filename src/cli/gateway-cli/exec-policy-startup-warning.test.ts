@@ -19,7 +19,7 @@ import {
 } from "./exec-policy-startup-warning.js";
 
 describe("buildGlobalExecPolicyClampWarning", () => {
-  it("warns when host approvals clamp global full security to allowlist", () => {
+  it("warns when auto resolves to gateway and host approvals clamp global full security", () => {
     expect(
       buildGlobalExecPolicyClampWarning({
         cfg: { tools: { exec: { security: "full" } } },
@@ -33,6 +33,57 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toBe(
       'tools.exec.security=full is clamped to allowlist by host approvals (/tmp/openclaw-exec-approvals.json defaults.security). Run "openclaw exec-policy set --security full" to synchronize host approvals, or "openclaw exec-policy show" for details.',
     );
+  });
+
+  it("does not warn when auto resolves to sandbox", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not warn for auto when sandbox can own non-main sessions", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { defaults: { sandbox: { mode: "non-main" } } },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("warns for explicit gateway even when sandbox is available", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { exec: { host: "gateway", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toContain("tools.exec.security=full is clamped to allowlist");
   });
 
   it("warns when host approvals clamp global full security to deny", () => {

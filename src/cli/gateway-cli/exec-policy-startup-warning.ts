@@ -6,21 +6,41 @@ import {
   isExecPolicySecurityClampedByHost,
 } from "../../infra/exec-approvals-effective.js";
 import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
+
+function sandboxModeCanOwnAutoExec(mode: string | undefined): boolean {
+  return mode === "all" || mode === "non-main";
+}
+
+function resolveStartupSandboxAvailable(cfg: OpenClawConfig): boolean {
+  if (sandboxModeCanOwnAutoExec(cfg.agents?.defaults?.sandbox?.mode)) {
+    return true;
+  }
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  return agents.some((agent) => sandboxModeCanOwnAutoExec(agent?.sandbox?.mode));
+}
 
 export function buildGlobalExecPolicyClampWarning(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
   approvalsPath?: string;
+  sandboxAvailable?: boolean;
 }): string | undefined {
   const globalScope = collectExecPolicyScopeSnapshots({
     cfg: params.cfg,
     approvals: params.approvals,
     hostPath: params.approvalsPath,
   })[0];
+  const effectiveHost = globalScope
+    ? resolveExecTarget({
+        configuredTarget: globalScope.host.requested,
+        elevatedRequested: false,
+        sandboxAvailable: params.sandboxAvailable ?? resolveStartupSandboxAvailable(params.cfg),
+      }).effectiveHost
+    : undefined;
   if (
     !globalScope ||
-    globalScope.host.requested === "sandbox" ||
-    globalScope.host.requested === "node" ||
+    effectiveHost !== "gateway" ||
     !isExecPolicySecurityClampedByHost(globalScope)
   ) {
     return undefined;

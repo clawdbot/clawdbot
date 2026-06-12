@@ -20,8 +20,11 @@ import {
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import {
+  isRequestedExecTargetAllowed,
+  resolveExecTarget,
+} from "../infra/exec-target-resolution.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
 /** Session-scoped exec fields that may be carried across an isolated runtime boundary. */
