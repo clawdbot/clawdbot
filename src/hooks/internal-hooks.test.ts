@@ -240,15 +240,33 @@ describe("hooks", () => {
       ]);
     });
 
-    it("logs a warning for slow handlers", async () => {
+    it("logs a warning for slow handlers on the bootstrap diagnostic path", async () => {
       vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
       registerInternalHook("command:new", () => {});
 
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
+        yieldBetweenHandlers: true,
+      });
 
       expect(loggerMocks.warn).toHaveBeenCalledWith(
         "Slow hook handler [command:new] index=0 durationMs=501.0",
       );
+    });
+
+    it("does not warn for slow non-blocking handlers off the diagnostic path", async () => {
+      // Awaited wall time outside the bootstrap dispatch usually reflects
+      // non-blocking network/file work, so the slow-handler warning must stay
+      // scoped to yieldBetweenHandlers. Timing data still flows to callers.
+      vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
+      registerInternalHook("command:new", () => {});
+      const timings: Array<{ index: number; durationMs: number }> = [];
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
+        onHandlerTiming: (info) => timings.push(info),
+      });
+
+      expect(loggerMocks.warn).not.toHaveBeenCalled();
+      expect(timings).toStrictEqual([{ index: 0, durationMs: 501 }]);
     });
   });
 

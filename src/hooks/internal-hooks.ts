@@ -323,7 +323,12 @@ export async function triggerInternalHook(
     }
     const durationMs = performance.now() - handlerStartedAt;
     options?.onHandlerTiming?.({ index, durationMs });
-    if (durationMs > INTERNAL_HOOK_SLOW_HANDLER_WARN_MS) {
+    // The warning targets event-loop-stall diagnostics on the bootstrap dispatch
+    // path (the only caller passing yieldBetweenHandlers). Outside it, awaited
+    // wall time mostly reflects non-blocking network/file work, so a global
+    // duration warning is just false positives — timing data still flows via
+    // onHandlerTiming for callers that want it.
+    if (options?.yieldBetweenHandlers === true && durationMs > INTERNAL_HOOK_SLOW_HANDLER_WARN_MS) {
       log.warn(
         `Slow hook handler [${event.type}:${event.action}] index=${index} durationMs=${durationMs.toFixed(1)}`,
       );
