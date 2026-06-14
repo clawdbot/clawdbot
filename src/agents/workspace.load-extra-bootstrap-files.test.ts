@@ -111,6 +111,75 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
+  it("does not traverse dot directories a broad glob cannot match", async () => {
+    // Regression: `**/AGENTS.md` must not descend into dot directories like
+    // `.git`/`.openclaw`. Node fs.glob skips dot segments for `*`/`**`, so these
+    // bootstrap files are never matches; walking them only stalls bootstrap prep.
+    const workspaceDir = await createWorkspaceDir("glob-dot-prune");
+    const gitDir = path.join(workspaceDir, ".git", "hooks");
+    const openclawDir = path.join(workspaceDir, ".openclaw", "nested");
+    const realDir = path.join(workspaceDir, "packages");
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.mkdir(openclawDir, { recursive: true });
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(gitDir, "AGENTS.md"), "git agents", "utf-8");
+    await fs.writeFile(path.join(openclawDir, "AGENTS.md"), "openclaw agents", "utf-8");
+    await fs.writeFile(path.join(realDir, "AGENTS.md"), "real agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(realDir, "AGENTS.md"),
+        content: "real agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("descends into dot directories an explicitly dotted glob names", async () => {
+    // A pattern that names a literal-dot segment (`.openclaw/**`) must still walk
+    // into the dot directory and return its matches; only globs that cannot reach
+    // a dot segment are pruned.
+    const workspaceDir = await createWorkspaceDir("glob-dot-explicit");
+    const openclawDir = path.join(workspaceDir, ".openclaw", "nested");
+    await fs.mkdir(openclawDir, { recursive: true });
+    await fs.writeFile(path.join(openclawDir, "AGENTS.md"), "openclaw agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, [".openclaw/**/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(openclawDir, "AGENTS.md"),
+        content: "openclaw agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("descends into a dot directory named after a non-leading glob segment", async () => {
+    // `**/.config/*.md` aligns the literal `.config` segment with the dot
+    // directory, so the walker must descend even though the dot dir is not the
+    // pattern root.
+    const workspaceDir = await createWorkspaceDir("glob-dot-nonleading");
+    const configDir = path.join(workspaceDir, "nested", ".config");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(path.join(configDir, "AGENTS.md"), "config agents", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/.config/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(configDir, "AGENTS.md"),
+        content: "config agents",
+        missing: false,
+      },
+    ]);
+  });
+
   it("returns every matching file without an artificial match cap", async () => {
     const workspaceDir = await createWorkspaceDir("glob-no-match-cap");
     const fileCount = 140;
