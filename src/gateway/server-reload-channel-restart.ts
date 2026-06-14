@@ -9,18 +9,8 @@ import type { GatewayReloadPlan } from "./config-reload.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-export function startGatewayChannelFromActiveRegistry(
-  params: Pick<GatewayReloadHandlerParams, "startChannel">,
-  channel: ChannelKind,
-  accountId?: string,
-): Promise<void> {
-  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
-    runOutsideGatewayRootWorkAdmission(() =>
-      accountId === undefined
-        ? params.startChannel(channel)
-        : params.startChannel(channel, accountId),
-    ),
-  );
+function isChannelAccountIndexReloadPath(path: string, channel: ChannelKind): boolean {
+  return path === `channels.${channel}.channelConfigUpdatedAt`;
 }
 
 export async function restartGatewayChannels(options: {
@@ -181,6 +171,10 @@ export async function restartGatewayChannels(options: {
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
             return;
           }
+          const includeKnownAccounts =
+            (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) ||
+            (!plan.reloadPlugins &&
+              plan.changedPaths.some((path) => isChannelAccountIndexReloadPath(path, name)));
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
             await params.stopChannel(name, undefined, { manual: false });
@@ -188,7 +182,7 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          if (plan.reloadPlugins && channelsStoppedBeforePluginReload.has(name)) {
+          if (includeKnownAccounts) {
             await runOutsideGatewayRootWorkAdmission(() =>
               params.startChannel(name, undefined, { includeKnownAccounts: true }),
             );
