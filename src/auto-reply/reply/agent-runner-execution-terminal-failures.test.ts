@@ -328,6 +328,9 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
+  // Guard for the abort-ownership fix below: a normal takeover (reply
+  // operation not aborted) must still surface resend guidance and fail with
+  // "run_failed". The guard must not over-suppress this baseline path.
   it("surfaces embedded session takeover with specific resend guidance", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     const takeoverError = Object.assign(
@@ -342,6 +345,9 @@ describe("executeAgentTurn: terminal failures", () => {
       replyOperation,
     });
 
+    // result starts null in createMockReplyOperation: the guard must treat
+    // this as a normal takeover and emit the resend payload.
+    expect(replyOperation.result).toBeNull();
     expect(result.kind).toBe("final");
     if (result.kind !== "final") {
       throw new Error("expected final reply");
@@ -352,6 +358,80 @@ describe("executeAgentTurn: terminal failures", () => {
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("run_failed");
     expect(failCall[1]).toBe(takeoverError);
+  });
+
+  it("preserves restart lifecycle text when a takeover error is thrown after a restart abort", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    // Gateway restart already aborted the operation before the takeover error
+    // surfaced during cleanup/reacquire; abort ownership must win.
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_for_restart" } as const,
+      configurable: true,
+    });
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    );
+    expect(result.payload.text).not.toContain("Please resend your message");
+    // The takeover branch must not clobber the restart outcome with a
+    // run_failed failure.
+    expect(failMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves silent user-abort result when a takeover error is thrown after a user abort", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    // User stop already aborted the operation; the takeover error must not turn
+    // the intended silent result into visible resend guidance.
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_by_user" } as const,
+      configurable: true,
+    });
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    state.runWithModelFallbackMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+    expect(result.payload.text).not.toContain("Please resend your message");
+    expect(failMock).not.toHaveBeenCalled();
   });
 
   it("unwraps preserved prompt error from cleanup takeover and classifies normally", async () => {

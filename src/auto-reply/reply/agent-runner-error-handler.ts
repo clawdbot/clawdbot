@@ -223,7 +223,10 @@ export async function handleAgentExecutionError(params: {
         : undefined;
     if (preservedPromptError) {
       err = preservedPromptError;
-    } else {
+    } else if (
+      !isReplyOperationRestartAbort(turn.replyOperation) &&
+      !isReplyOperationUserAbort(turn.replyOperation)
+    ) {
       turn.replyOperation?.fail("run_failed", err);
       const text = turn.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
@@ -240,6 +243,13 @@ export async function handleAgentExecutionError(params: {
         }),
       };
     }
+    // Abort ownership wins: when a gateway restart or user stop already aborted
+    // the reply operation, a takeover error thrown during cleanup must not
+    // clobber the established lifecycle outcome with resend guidance. Fall
+    // through so the isReplyOperationRestartAbort / isReplyOperationUserAbort
+    // checks below emit the restart text / silent token. The classification
+    // between here and those checks has no early return and reads
+    // replyOperation.result, not err.
   }
   const message = formatErrorMessage(err);
   params.timing.logIfSlow({

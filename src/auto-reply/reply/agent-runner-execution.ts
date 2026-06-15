@@ -374,6 +374,13 @@ async function executeAgentTurnInternalWithRetryState(
         if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
           applyLiveModelSwitchToRun(effectiveRun, switchError);
         }
+        // Abort ownership wins: when a gateway restart or user stop already
+        // aborted the reply operation, a takeover error thrown during cleanup
+        // must not clobber the established lifecycle outcome with resend
+        // guidance. Fall through so the isReplyOperationRestartAbort /
+        // isReplyOperationUserAbort checks below emit the restart text /
+        // silent token. The classification between here and those checks has
+        // no early return and reads replyOperation.result, not err.
       }
       continue;
     }
