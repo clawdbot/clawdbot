@@ -1502,6 +1502,155 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("uses repaired no-drop prune output for summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    // An assistant tool call with no matching tool_result — simulates a
+    // provider-side timeout that interrupted the turn before the tool result
+    // was received.  The history fits inside the token budget (no chunks
+    // dropped), so the earlier code path never ran repairToolUseResultPairing.
+    const orphanToolCall: AgentMessage = {
+      role: "assistant" as const,
+      content: [{ type: "toolCall", id: "call-timeout", name: "read", arguments: {} }],
+      stopReason: "aborted",
+      errorMessage: "This operation was aborted",
+      errorCode: "20",
+      timestamp: 1,
+    } as AgentMessage;
+    const followupUser: AgentMessage = {
+      role: "user" as const,
+      content: "continue after timeout",
+      timestamp: 2,
+    };
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [orphanToolCall, followupUser] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 300_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expectCompactionResult(result);
+    const summaryCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const summaryMessages = requireArray(summaryCall.messages);
+    // The aborted assistant turn (stopReason=aborted) must be dropped entirely
+    // by erroredAssistantResultPolicy="drop". Only the follow-up user message
+    // should reach summarizeInStages — no orphaned toolCall, no synthetic toolResult.
+    expect(summaryMessages.map((m) => (m as { role?: unknown }).role)).toEqual(["user"]);
+    // Verify no unpaired toolCall reaches the summarizer.
+    const toolCallIds = summaryMessages
+      .flatMap((m) => {
+        const content = (m as { content?: unknown }).content;
+        if (!Array.isArray(content)) return [];
+        return content
+          .filter((b) => (b as { type?: string }).type === "toolCall")
+          .map((b) => (b as { id?: string }).id)
+          .filter(Boolean);
+      });
+    expect(toolCallIds).toHaveLength(0);
+  });
+
+  it("repairs orphaned tool_use in pruned.messages when chunks are dropped", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    // maxHistoryShare=0.1 forces the prune path to drop older chunks.
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      maxHistoryShare: 0.01,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyMock });
+
+    // Oldest messages: an orphaned assistant toolCall (no matching toolResult)
+    // simulating a provider-side timeout that aborted the turn mid-flight.
+    const orphanToolCall: AgentMessage = {
+      role: "assistant" as const,
+      content: [{ type: "toolCall", id: "call-dropped", name: "exec", arguments: {} }],
+      stopReason: "aborted",
+      errorMessage: "This operation was aborted",
+      errorCode: "20",
+      timestamp: 1,
+    } as AgentMessage;
+    // Newer messages — large enough to push usage past the history budget so
+    // that buildHistoryPrunePlan drops the older chunk containing the orphan.
+    const newerMessages: AgentMessage[] = Array.from({ length: 3 }, (_unused, i) => ({
+      role: "user" as const,
+      content: `msg-${i}-${"x".repeat(50_000)}`,
+      timestamp: i + 2,
+    }));
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [orphanToolCall, ...newerMessages] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 400_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = await compactionHandler(event, mockContext);
+    expectCompactionResult(result);
+
+    // summarizeInStages must be called (possibly for dropped chunks too).
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    // Verify no call received a messages array that contains an unpaired toolCall.
+    for (const call of mockSummarizeInStages.mock.calls) {
+      const callArg = call[0] as { messages?: unknown[] };
+      const msgs = callArg?.messages ?? [];
+      const toolCallIds = new Set(
+        msgs
+          .flatMap((m) => {
+            const content = (m as { content?: unknown }).content;
+            if (!Array.isArray(content)) return [];
+            return content
+              .filter((b) => (b as { type?: string }).type === "toolCall")
+              .map((b) => (b as { id?: string }).id)
+              .filter(Boolean);
+          }),
+      );
+      const toolResultIds = new Set(
+        msgs
+          .map((m) => (m as { toolCallId?: string }).toolCallId)
+          .filter(Boolean),
+      );
+      for (const id of toolCallIds) {
+        expect(toolResultIds.has(id)).toBe(true);
+      }
+    }
+  });
+
   it("caps summarization reserve tokens to the model output limit", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));

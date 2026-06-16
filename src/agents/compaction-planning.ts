@@ -382,7 +382,12 @@ function pruneHistoryForContextShare(params: {
   const defaultShare = isHandoff ? 0.2 : 0.5; // Stricter budget for handoff snapshots
   const maxHistoryShare = params.maxHistoryShare ?? defaultShare;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
-  let keptMessages = params.messages;
+  // Validate the retained history before any budget-driven chunk drop. Some
+  // timeout paths leave an assistant tool_use in history without its matching
+  // result even when the history already fits the target budget.
+  let keptMessages = repairToolUseResultPairing(params.messages, {
+    erroredAssistantResultPolicy: "drop",
+  }).messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
   let droppedMessages = 0;
@@ -405,7 +410,9 @@ function pruneHistoryForContextShare(params: {
     // orphaned tool_results (whose tool_use was in the dropped chunk).
     // repairToolUseResultPairing drops orphaned tool_results, preventing
     // "unexpected tool_use_id" errors from Anthropic's API.
-    const repairReport = repairToolUseResultPairing(flatRest);
+    const repairReport = repairToolUseResultPairing(flatRest, {
+      erroredAssistantResultPolicy: "drop",
+    });
     const repairedKept = repairReport.messages;
 
     // Track orphaned tool_results as dropped (they were in kept but their tool_use was dropped)

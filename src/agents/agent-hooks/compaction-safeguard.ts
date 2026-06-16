@@ -911,7 +911,9 @@ function splitPreservedRecentTurns(params: {
   const summarizableMessages = params.messages.filter((_, idx) => !preservedIndexSet.has(idx));
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
-  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages).messages;
+  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages, {
+    erroredAssistantResultPolicy: "drop",
+  }).messages;
   const preservedMessages = params.messages
     .filter((_, idx) => preservedIndexSet.has(idx))
     .filter((msg) => {
@@ -1270,6 +1272,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const { newContentTokens, maxHistoryTokens, pruned } = prunePlan;
 
         if (newContentTokens > maxHistoryTokens && pruned) {
+          // Pruning can leave orphaned tool_use blocks (e.g. when a provider timeout
+          // aborts an assistant turn mid-flight, leaving a toolCall with no matching
+          // toolResult). Repair pairings here so the compaction LLM call does not
+          // trip strict providers (Anthropic ValidationException: tool_use ids found
+          // without tool_result blocks). Mirrors the same repair in splitPreservedRecentTurns.
+          messagesToSummarize = repairToolUseResultPairing(pruned.messages, {
+            erroredAssistantResultPolicy: "drop",
+          }).messages;
+
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
             log.warn(
@@ -1278,7 +1289,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
-            messagesToSummarize = pruned.messages;
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
