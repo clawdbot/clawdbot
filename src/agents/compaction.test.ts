@@ -327,6 +327,29 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.messages.length).toBe(1);
   });
 
+  it("repairs retained tool_use turns even when no chunks are pruned", () => {
+    const messages: AgentMessage[] = [
+      makeAssistantToolCall(1, "call_timeout", "needs result"),
+      makeMessage(2, 100),
+    ];
+
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: 100_000,
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.droppedChunks).toBe(0);
+    expect(pruned.messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
+    const repairedResult = pruned.messages[1];
+    expect(repairedResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call_timeout",
+      isError: true,
+    });
+  });
+
   it("removes orphaned tool_result messages when tool_use is dropped", () => {
     // Pruning the assistant tool_use must also drop its result; orphaned
     // toolResult messages are not meaningful model context.
