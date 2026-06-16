@@ -1570,13 +1570,7 @@ async function resolveExtraBootstrapPatternPaths(
     // and the bootstrap character budget limits content downstream.
     matches.push(candidate);
   }
-  // Filesystem walk order follows directory order, which varies across machines.
-  // Sort by normalized relative path with a code-unit comparator (not
-  // localeCompare, whose ICU/locale rules could re-introduce drift) so bootstrap
-  // byte order stays deterministic across equivalent workspaces and the prompt
-  // cache stays stable.
   if (matches.length > 0) {
-    matches.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     return matches;
   }
   return [pattern];
