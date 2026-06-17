@@ -257,13 +257,13 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/AGENTS.md"]);
 
-    expect(files.map((file) => file.path).sort()).toStrictEqual(
+    expect(files.map((file) => file.path).toSorted()).toStrictEqual(
       [
         path.join(workspaceDir, "packages", "alpha", "AGENTS.md"),
         path.join(workspaceDir, "packages", "beta", "AGENTS.md"),
         path.join(workspaceDir, "packages", "mid", "AGENTS.md"),
         path.join(workspaceDir, "packages", "zeta", "AGENTS.md"),
-      ].sort(),
+      ].toSorted(),
     );
   });
 
