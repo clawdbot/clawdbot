@@ -241,6 +241,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "threaded stream" });
@@ -272,6 +273,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "fallback stream" });
