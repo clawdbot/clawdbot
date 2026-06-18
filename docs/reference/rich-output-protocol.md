@@ -31,7 +31,7 @@ Do not emit text commands for attachments from tools, plugins, streaming blocks,
 Legacy final-reply text may still be normalized for compatibility, but this is not a general plugin/tool protocol.
 </Warning>
 
-### Legacy `MEDIA:` lines
+## Legacy `MEDIA:` lines
 
 Legacy final assistant replies can still attach local media with a plain
 standalone `MEDIA:` line. The parser only recognizes lines whose trimmed text
