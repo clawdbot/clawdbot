@@ -360,6 +360,56 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBe(takeoverError);
   });
 
+  it("emits a lifecycle terminal error on the normal session takeover resend path", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const takeoverError = Object.assign(
+      new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl (phase: prompt_reacquire)",
+      ),
+      {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        sessionFile: "/tmp/session.jsonl",
+        phase: "prompt_reacquire",
+      },
+    );
+    // Throw from the embedded runner (not the fallback orchestrator) so the
+    // pending lifecycle terminal is established before the takeover surfaces;
+    // a rejected fallback mock would skip terminal setup and mask the emit.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(takeoverError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(
+      "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.",
+    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("run_failed");
+    expect(failCall[1]).toBe(takeoverError);
+    // Lifecycle/status consumers must still see the terminal failure even though
+    // the user only gets resend guidance. Regression guard: the resend branch
+    // previously skipped takePendingLifecycleTerminal()?.emit("error", err).
+    const lifecycleErrorEvent = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find(
+        (event) =>
+          event.stream === "lifecycle" &&
+          event.data.phase === "error" &&
+          typeof event.data.error === "string" &&
+          event.data.error.includes("session file changed while embedded prompt lock was released"),
+      );
+    expect(lifecycleErrorEvent).toBeDefined();
+  });
+
   it("preserves restart lifecycle text when a takeover error is thrown after a restart abort", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     // Gateway restart already aborted the operation before the takeover error

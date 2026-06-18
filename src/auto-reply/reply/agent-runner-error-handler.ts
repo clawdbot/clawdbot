@@ -227,6 +227,10 @@ export async function handleAgentExecutionError(params: {
       !isReplyOperationRestartAbort(turn.replyOperation) &&
       !isReplyOperationUserAbort(turn.replyOperation)
     ) {
+      // Emit the lifecycle terminal like every sibling terminal-failure exit
+      // below; without it status/lifecycle consumers miss the failure even
+      // though the user gets resend guidance.
+      takePendingLifecycleTerminal()?.emit("error", err);
       turn.replyOperation?.fail("run_failed", err);
       const text = turn.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
