@@ -99,7 +99,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(distDir, { recursive: true });
     await fs.writeFile(path.join(distDir, "AGENTS.md"), "dist agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["dist/**/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["dist/**/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -126,7 +126,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.writeFile(path.join(openclawDir, "AGENTS.md"), "openclaw agents", "utf-8");
     await fs.writeFile(path.join(realDir, "AGENTS.md"), "real agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["**/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -147,7 +147,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(openclawDir, { recursive: true });
     await fs.writeFile(path.join(openclawDir, "AGENTS.md"), "openclaw agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, [".openclaw/**/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, [".openclaw/**/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -168,7 +168,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(path.join(configDir, "AGENTS.md"), "config agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["**/.config/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["**/.config/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -255,9 +255,9 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
       await fs.writeFile(path.join(packageDir, "AGENTS.md"), name, "utf-8");
     }
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/AGENTS.md"]);
 
-    expect(files.map((file) => file.path).toSorted()).toStrictEqual(
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
       [
         path.join(workspaceDir, "packages", "alpha", "AGENTS.md"),
         path.join(workspaceDir, "packages", "beta", "AGENTS.md"),
