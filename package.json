@@ -756,7 +756,7 @@
     "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.61.1",
     "@mariozechner/pi-ai": "0.61.1",
-    "@mariozechner/pi-coding-agent": "0.61.1",
+    "@mariozechner/pi-coding-agent": "0.73.1",
     "@mariozechner/pi-tui": "0.61.1",
     "@modelcontextprotocol/sdk": "1.27.1",
     "@mozilla/readability": "^0.6.0",
@@ -771,7 +771,7 @@
     "express": "^5.2.1",
     "file-type": "21.3.4",
     "gaxios": "7.1.4",
-    "hono": "4.12.18",
+    "hono": "4.12.25",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
@@ -836,7 +836,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "hono": "4.12.18",
+      "hono": "4.12.25",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
