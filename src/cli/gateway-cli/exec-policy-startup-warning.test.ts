@@ -86,6 +86,26 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toContain("tools.exec.security=full is clamped to allowlist");
   });
 
+  it("warns when the main agent disables the default sandbox", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: {
+            defaults: { sandbox: { mode: "all" } },
+            list: [{ id: "main", sandbox: { mode: "off" } }],
+          },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toContain("tools.exec.security=full is clamped to allowlist");
+  });
+
   it("warns for auto when sandbox can only own non-main sessions", () => {
     expect(
       buildGlobalExecPolicyClampWarning({

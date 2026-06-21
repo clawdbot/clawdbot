@@ -8,19 +8,18 @@ import {
 } from "../../infra/exec-approvals-effective.js";
 import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 
 function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
   return mode === "all";
 }
 
 function resolveStartupSandboxAvailable(cfg: OpenClawConfig): boolean {
-  if (sandboxModeOwnsStartupAutoExec(cfg.agents?.defaults?.sandbox?.mode)) {
-    return true;
-  }
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const defaultAgent = agents.find((agent) => agent?.id === DEFAULT_AGENT_ID);
-  return sandboxModeOwnsStartupAutoExec(defaultAgent?.sandbox?.mode);
+  const defaultAgent = agents.find((agent) => normalizeAgentId(agent?.id) === DEFAULT_AGENT_ID);
+  return sandboxModeOwnsStartupAutoExec(
+    defaultAgent?.sandbox?.mode ?? cfg.agents?.defaults?.sandbox?.mode,
+  );
 }
 
 function hostSecuritySourceIsDefaults(source: string): boolean {
