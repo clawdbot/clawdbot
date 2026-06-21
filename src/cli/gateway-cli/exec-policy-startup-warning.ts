@@ -8,16 +8,16 @@ import {
 import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
 
-function sandboxModeCanOwnAutoExec(mode: string | undefined): boolean {
-  return mode === "all" || mode === "non-main";
+function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
+  return mode === "all";
 }
 
 function resolveStartupSandboxAvailable(cfg: OpenClawConfig): boolean {
-  if (sandboxModeCanOwnAutoExec(cfg.agents?.defaults?.sandbox?.mode)) {
+  if (sandboxModeOwnsStartupAutoExec(cfg.agents?.defaults?.sandbox?.mode)) {
     return true;
   }
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some((agent) => sandboxModeCanOwnAutoExec(agent?.sandbox?.mode));
+  return agents.some((agent) => sandboxModeOwnsStartupAutoExec(agent?.sandbox?.mode));
 }
 
 export function buildGlobalExecPolicyClampWarning(params: {

@@ -52,7 +52,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toBeUndefined();
   });
 
-  it("does not warn for auto when sandbox can own non-main sessions", () => {
+  it("warns for auto when sandbox can only own non-main sessions", () => {
     expect(
       buildGlobalExecPolicyClampWarning({
         cfg: {
@@ -66,7 +66,24 @@ describe("buildGlobalExecPolicyClampWarning", () => {
           agents: {},
         },
       }),
-    ).toBeUndefined();
+    ).toContain("tools.exec.security=full is clamped to allowlist");
+  });
+
+  it("warns for auto when only an agent-level sandbox can own non-main sessions", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { list: [{ id: "ops", sandbox: { mode: "non-main" } }] },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toContain("tools.exec.security=full is clamped to allowlist");
   });
 
   it("warns for explicit gateway even when sandbox is available", () => {

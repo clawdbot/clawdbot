@@ -75,8 +75,6 @@ export function isExecPolicySecurityClampedByHost(snapshot: {
   return snapshot.security.effective !== snapshot.security.requested;
 }
 
-type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
-
 type ExecPolicyRequestedField = "security" | "ask";
 
 function resolveRequestedHost(params: {
