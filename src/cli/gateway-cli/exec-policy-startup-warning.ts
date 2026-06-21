@@ -1,5 +1,6 @@
 // Gateway startup warning for requested exec policy clamped by host approvals.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -8,7 +9,7 @@ import {
 } from "../../infra/exec-approvals-effective.js";
 import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
   return mode === "all";
@@ -16,7 +17,8 @@ function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
 
 function resolveStartupSandboxAvailable(cfg: OpenClawConfig): boolean {
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const defaultAgent = agents.find((agent) => normalizeAgentId(agent?.id) === DEFAULT_AGENT_ID);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgent = agents.find((agent) => normalizeAgentId(agent?.id) === defaultAgentId);
   return sandboxModeOwnsStartupAutoExec(
     defaultAgent?.sandbox?.mode ?? cfg.agents?.defaults?.sandbox?.mode,
   );

@@ -69,11 +69,28 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toBeUndefined();
   });
 
+  it("does not warn when auto resolves to a configured default agent sandbox", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { list: [{ id: "ops", default: true, sandbox: { mode: "all" } }] },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("warns when only an unrelated agent sandbox owns auto exec", () => {
     expect(
       buildGlobalExecPolicyClampWarning({
         cfg: {
-          agents: { list: [{ id: "ops", sandbox: { mode: "all" } }] },
+          agents: { list: [{ id: "main" }, { id: "ops", sandbox: { mode: "all" } }] },
           tools: { exec: { host: "auto", security: "full" } },
         },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
