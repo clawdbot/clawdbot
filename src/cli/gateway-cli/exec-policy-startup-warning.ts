@@ -4,9 +4,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectExecPolicyScopeSnapshots,
   isExecPolicySecurityClampedByHost,
+  type ExecPolicyScopeSnapshot,
 } from "../../infra/exec-approvals-effective.js";
 import { readExecApprovalsSnapshot, type ExecApprovalsFile } from "../../infra/exec-approvals.js";
 import { resolveExecTarget } from "../../infra/exec-target-resolution.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 
 function sandboxModeOwnsStartupAutoExec(mode: string | undefined): boolean {
   return mode === "all";
@@ -17,7 +19,25 @@ function resolveStartupSandboxAvailable(cfg: OpenClawConfig): boolean {
     return true;
   }
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some((agent) => sandboxModeOwnsStartupAutoExec(agent?.sandbox?.mode));
+  const defaultAgent = agents.find((agent) => agent?.id === DEFAULT_AGENT_ID);
+  return sandboxModeOwnsStartupAutoExec(defaultAgent?.sandbox?.mode);
+}
+
+function hostSecuritySourceIsDefaults(source: string): boolean {
+  return /\bdefaults\.security$/.test(source);
+}
+
+function buildSecurityClampRemediation(globalScope: ExecPolicyScopeSnapshot): string {
+  if (
+    hostSecuritySourceIsDefaults(globalScope.security.hostSource) &&
+    globalScope.security.requestedSource !== "tools.exec.mode"
+  ) {
+    return `Run "openclaw exec-policy set --security ${globalScope.security.requested}" to synchronize host approvals, or "openclaw exec-policy show" for details.`;
+  }
+  const target = hostSecuritySourceIsDefaults(globalScope.security.hostSource)
+    ? `defaults.security=${globalScope.security.requested}`
+    : `the clamping host approval set to security=${globalScope.security.requested}`;
+  return `Run "openclaw approvals set --stdin" with ${target} to synchronize host approvals, or "openclaw exec-policy show" for details.`;
 }
 
 export function buildGlobalExecPolicyClampWarning(params: {
@@ -49,10 +69,7 @@ export function buildGlobalExecPolicyClampWarning(params: {
     globalScope.security.requestedSource === "tools.exec.mode"
       ? `${globalScope.security.requestedSource} requests security=${globalScope.security.requested}`
       : `${globalScope.security.requestedSource}=${globalScope.security.requested}`;
-  const remediation =
-    globalScope.security.requestedSource === "tools.exec.mode"
-      ? `Run "openclaw approvals set --stdin" with defaults.security=${globalScope.security.requested} to synchronize host approvals, or "openclaw exec-policy show" for details.`
-      : `Run "openclaw exec-policy set --security ${globalScope.security.requested}" to synchronize host approvals, or "openclaw exec-policy show" for details.`;
+  const remediation = buildSecurityClampRemediation(globalScope);
   return sanitizeTerminalText(
     [
       `${requestedSecurityDescription} is clamped to ${globalScope.security.effective} by host approvals (${globalScope.security.hostSource}).`,

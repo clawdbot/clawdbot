@@ -52,6 +52,40 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toBeUndefined();
   });
 
+  it("does not warn when auto resolves to the main agent sandbox", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { list: [{ id: "main", sandbox: { mode: "all" } }] },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("warns when only an unrelated agent sandbox owns auto exec", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: {
+          agents: { list: [{ id: "ops", sandbox: { mode: "all" } }] },
+          tools: { exec: { host: "auto", security: "full" } },
+        },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off" },
+          agents: {},
+        },
+      }),
+    ).toContain("tools.exec.security=full is clamped to allowlist");
+  });
+
   it("warns for auto when sandbox can only own non-main sessions", () => {
     expect(
       buildGlobalExecPolicyClampWarning({
@@ -129,6 +163,22 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     });
 
     expect(warning).toContain("tools.exec.mode requests security=full is clamped to allowlist");
+    expect(warning).toContain("openclaw approvals set --stdin");
+    expect(warning).not.toContain("openclaw exec-policy set --security");
+  });
+
+  it("uses approvals remediation when an agent approval clamps the global scope", () => {
+    const warning = buildGlobalExecPolicyClampWarning({
+      cfg: { tools: { exec: { security: "full" } } },
+      approvalsPath: "/tmp/openclaw-exec-approvals.json",
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "off" },
+        agents: { main: { security: "allowlist" } },
+      },
+    });
+
+    expect(warning).toContain("agents.main.security");
     expect(warning).toContain("openclaw approvals set --stdin");
     expect(warning).not.toContain("openclaw exec-policy set --security");
   });
