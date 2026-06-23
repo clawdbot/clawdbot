@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-live-account-state",
+  "name": "VC Trader AI Get Live Account State",
+  "description": "Read-only workspace-scoped tool: Read the signed-in user's live account-state (balance/equity/open PnL). Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_live_account_state"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

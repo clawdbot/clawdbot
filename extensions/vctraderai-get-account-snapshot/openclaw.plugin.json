@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-account-snapshot",
+  "name": "VC Trader AI Get Account Snapshot",
+  "description": "Read-only workspace-scoped tool: Read one owned account plus its latest synced snapshot. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_account_snapshot"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

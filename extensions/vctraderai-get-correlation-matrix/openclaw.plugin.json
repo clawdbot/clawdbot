@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-correlation-matrix",
+  "name": "VC Trader AI Get Correlation Matrix",
+  "description": "Read-only workspace-scoped tool: Read the workspace portfolio correlation matrix across accounts' daily net-PnL streams. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_correlation_matrix"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

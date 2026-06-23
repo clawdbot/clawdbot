@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-enqueue-walkforward-worker-job",
+  "name": "VC Trader AI Enqueue Walkforward Worker Job (Propose)",
+  "description": "Stages a dispatch a walkforward worker job. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name enqueue_walkforward_worker_job. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "enqueue_walkforward_worker_job"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

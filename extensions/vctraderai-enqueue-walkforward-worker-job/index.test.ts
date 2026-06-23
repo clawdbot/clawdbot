@@ -1,0 +1,63 @@
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import plugin, {
+  runEnqueueWalkforwardWorkerJob,
+  ENQUEUE_WALKFORWARD_WORKER_JOB_TOOL_NAME,
+} from "./index.js";
+
+describe("vctraderai-enqueue-walkforward-worker-job", () => {
+  const originalWorkspace = process.env.PFM_WORKSPACE_ID;
+  beforeEach(() => {
+    process.env.PFM_WORKSPACE_ID = "ws-001";
+  });
+  afterEach(() => {
+    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
+    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
+  });
+
+  it("registers the enqueue_walkforward_worker_job tool with the plugin api", () => {
+    const captured = createCapturedPluginRegistration({
+      id: "vctraderai-enqueue-walkforward-worker-job",
+    });
+    plugin.register(captured.api);
+    expect(captured.tools).toHaveLength(1);
+    expect(captured.tools[0]).toMatchObject({
+      name: ENQUEUE_WALKFORWARD_WORKER_JOB_TOOL_NAME,
+      label: "Enqueue Walkforward Worker Job",
+    });
+  });
+
+  it("posts to the stage path with the staging envelope (tool_name = allowlist key)", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedBody: any = undefined;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      capturedMethod = init?.method ?? "GET";
+      capturedBody = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      return new Response(JSON.stringify({ staged_action_id: "stg-1" }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    await runEnqueueWalkforwardWorkerJob({ trader_def_id: "x" } as any, { fetchImpl });
+    expect(new URL(capturedUrl).pathname).toBe("/api/v1/openclaw/stage");
+    expect(capturedMethod).toBe("POST");
+    expect(capturedBody.tool_name).toBe("enqueue_walkforward_worker_job");
+    expect(capturedBody.workspace_id).toBe("ws-001");
+    expect(capturedBody.params).toMatchObject({ trader_def_id: "x" });
+    expect(typeof capturedBody.summary).toBe("string");
+  });
+
+  it("surfaces a structured error on bff 403 (tool forbidden / not propose_only)", async () => {
+    const fetchImpl = (async () =>
+      new Response("forbidden", {
+        status: 403,
+        statusText: "Forbidden",
+      })) as typeof globalThis.fetch;
+    await expect(
+      runEnqueueWalkforwardWorkerJob({ trader_def_id: "x" } as any, { fetchImpl }),
+    ).rejects.toMatchObject({
+      name: "BffRequestError",
+      detail: { code: "bff_403", status: 403 },
+    });
+  });
+});

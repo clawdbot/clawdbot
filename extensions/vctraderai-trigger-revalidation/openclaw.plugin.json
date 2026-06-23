@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-trigger-revalidation",
+  "name": "VC Trader AI Trigger Revalidation (Propose)",
+  "description": "Stages a propose a strategy revalidation run. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name trigger_revalidation. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "trigger_revalidation"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

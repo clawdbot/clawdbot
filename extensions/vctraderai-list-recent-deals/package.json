@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-list-recent-deals",
+  "version": "2026.6.23",
+  "private": true,
+  "description": "VC Trader AI read-only workspace-scoped list_recent_deals tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

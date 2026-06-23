@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-annotate-trade",
+  "name": "VC Trader AI Annotate Trade (Propose)",
+  "description": "Stages a add a free-text annotation to a trade. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name annotate_trade. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "annotate_trade"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

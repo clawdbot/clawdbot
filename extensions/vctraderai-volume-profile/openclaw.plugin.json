@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-volume-profile",
+  "name": "VC Trader AI Volume Profile",
+  "description": "Read-only volume-profile (price-by-volume histogram) for a symbol + timeframe. Calls the propfirm_manager BFF data cluster at /api/v1/openclaw/data/volume-profile (gateway token). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "volume_profile"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

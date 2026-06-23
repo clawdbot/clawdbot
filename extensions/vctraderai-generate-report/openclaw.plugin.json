@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-generate-report",
+  "name": "VC Trader AI Generate Report (Propose)",
+  "description": "Stages a generate a workspace report. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name generate_report. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "generate_report"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

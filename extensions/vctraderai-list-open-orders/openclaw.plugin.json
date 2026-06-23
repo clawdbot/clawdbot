@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-open-orders",
+  "name": "VC Trader AI List Open Orders",
+  "description": "Read-only workspace-scoped tool: List live working orders via the read-only cross-VPC seam. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_open_orders"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

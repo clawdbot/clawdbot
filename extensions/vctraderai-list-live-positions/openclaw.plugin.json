@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-live-positions",
+  "name": "VC Trader AI List Live Positions",
+  "description": "Read-only workspace-scoped tool: List the signed-in user's live OPEN positions via the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_live_positions"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

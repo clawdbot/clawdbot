@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-traders-for-deployment",
+  "name": "VC Trader AI List Traders For Deployment",
+  "description": "Read-only workspace-scoped tool: List traders eligible for deployment. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_traders_for_deployment"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

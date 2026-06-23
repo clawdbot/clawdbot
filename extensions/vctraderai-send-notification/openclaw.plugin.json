@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-send-notification",
+  "name": "VC Trader AI Send Notification (Propose)",
+  "description": "Stages a surface an in-page notification to the user. proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name send_notification. PROPOSE_ONLY per ADR 0078 - it never executes directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "send_notification"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

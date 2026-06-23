@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-experiment-runs",
+  "name": "VC Trader AI List Experiment Runs",
+  "description": "Read-only workspace-scoped tool: List experiment runs for the workspace. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_experiment_runs"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

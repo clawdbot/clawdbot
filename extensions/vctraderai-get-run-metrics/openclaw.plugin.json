@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-run-metrics",
+  "name": "VC Trader AI Get Run Metrics",
+  "description": "Read-only workspace-scoped tool: Read the metrics for one experiment run. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_run_metrics"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

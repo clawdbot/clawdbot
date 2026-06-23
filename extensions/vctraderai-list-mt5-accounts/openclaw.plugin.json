@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-mt5-accounts",
+  "name": "VC Trader AI List MT5 Accounts",
+  "description": "Read-only workspace-scoped list of the workspace's MT5 accounts. Calls the propfirm_manager BFF at /api/v1/workspaces/{workspace_id}/openclaw/live/accounts as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_mt5_accounts"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
