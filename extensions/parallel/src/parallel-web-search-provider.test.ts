@@ -59,6 +59,40 @@ function cancelTrackedResponse(
   };
 }
 
+function streamedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  // Multi-chunk fixture: proves the bounded read stops pulling chunks before
+  // the whole (here syntactically broken / unbounded) body is buffered, and
+  // that the stream is cancelled on overflow.
+  let reads = 0;
+  let canceled = false;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    getReadCount: () => reads,
+    wasCanceled: () => canceled,
+  };
+}
+
 import { testing } from "../test-api.js";
 import { createParallelWebSearchProvider as createContractParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelWebSearchProvider } from "./parallel-web-search-provider.js";
@@ -581,6 +615,65 @@ describe("parallel web search provider", () => {
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
+    // 200-chunk x 1 MiB body (~200 MiB) caps at 16 MiB: the bounded reader must
+    // stop pulling chunks and cancel the stream well before draining it, then
+    // surface a bounded error rather than buffering the whole payload.
+    const streamed = streamedJsonResponse({ chunkCount: 200, chunkSize: 1024 * 1024 });
+    endpointMockState.responses.push(streamed.response);
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const error = await tool
+      .execute({
+        objective: `parallel-success-body-${Date.now()}-${Math.random()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      new RegExp(
+        `Parallel API: JSON response exceeds ${testing.PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES} bytes`,
+      ),
+    );
+    // Stopped well before draining all 200 chunks, and cancelled the stream.
+    expect(streamed.getReadCount()).toBeLessThan(200);
+    expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("parses a well-formed Parallel JSON body under the byte cap", async () => {
+    endpointMockState.responses.push(
+      new Response(
+        JSON.stringify({
+          search_id: "ok",
+          session_id: "ok-session",
+          results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const result = (await tool.execute({
+      objective: `parallel-success-ok-${Date.now()}-${Math.random()}`,
+      search_queries: ["openclaw"],
+    })) as { provider?: string; searchId?: string; count?: number };
+    expect(result).toMatchObject({ provider: "parallel", searchId: "ok", count: 1 });
   });
 
   it("does not surface a Parallel-generated sessionId on a cache hit", async () => {
