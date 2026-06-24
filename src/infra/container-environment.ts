@@ -39,7 +39,7 @@ function detectContainerEnvironment(): boolean {
   try {
     const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
     if (
-      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/.test(
+      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/cloudchamber(?:_[A-Za-z0-9]+)?\/[^/\s]+_oci\b|\/kubepods[/.]|\blxc\b/.test(
         cgroup,
       )
     ) {

@@ -637,6 +637,26 @@ describe("isContainerEnvironment", () => {
     expect(isContainerEnvironment()).toBe(true);
   });
 
+  it("returns true when /proc/1/cgroup contains Cloudflare Cloudchamber container marker", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\n",
+    );
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns false when /proc/1/cgroup contains cloudchamber.service (host machine)", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/system.slice/cloudchamber.service\n");
+    expect(isContainerEnvironment()).toBe(false);
+  });
+
   it("returns false when /proc/1/cgroup contains containerd.service (host machine)", () => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => {
