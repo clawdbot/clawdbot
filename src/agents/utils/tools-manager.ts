@@ -101,9 +101,12 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe" });
-    // Check for ENOENT error (command not found)
-    return result.error === undefined || result.error === null;
+    const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: 5_000 });
+    // Require a clean exit, not just a successful spawn. An installed-but-broken
+    // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
+    // spawns fine but exits non-zero; without the status check it would be
+    // misreported as available and block ensureTool's auto-install fallback.
+    return !result.error && result.status === 0;
   } catch {
     return false;
   }

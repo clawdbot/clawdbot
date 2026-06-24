@@ -155,3 +155,30 @@ describe("ensureTool", () => {
     );
   });
 });
+
+describe("getToolPath exit-status handling", () => {
+  it("treats a binary that spawns but exits non-zero as missing", async () => {
+    const { getToolPath } = await import("./tools-manager.js");
+    // execve succeeded (no result.error) but the child exited non-zero — the
+    // signature of an installed-but-broken binary (GLIBC / shared-lib mismatch).
+    // Must not be reported as available, or ensureTool skips its download path.
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 1,
+      stderr: Buffer.alloc(0),
+      stdout: Buffer.alloc(0),
+    });
+    expect(getToolPath("fd")).toBeNull();
+  });
+
+  it("reports a binary present when it spawns and exits 0", async () => {
+    const { getToolPath } = await import("./tools-manager.js");
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stderr: Buffer.alloc(0),
+      stdout: Buffer.alloc(0),
+    });
+    expect(getToolPath("fd")).toBe("fd");
+  });
+});
