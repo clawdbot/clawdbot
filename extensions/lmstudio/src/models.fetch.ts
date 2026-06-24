@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -285,12 +286,13 @@ export async function ensureLmstudioModelLoaded(params: {
           `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
         );
       }
-      let payload: LmstudioLoadResponse;
-      try {
-        payload = (await response.json()) as LmstudioLoadResponse;
-      } catch (cause) {
-        throw new Error("LM Studio model load returned malformed JSON", { cause });
-      }
+      // Read the success body through the shared byte-capped reader so a misbehaving
+      // or compromised LM Studio server cannot stream an unbounded JSON payload into
+      // memory before we parse it. Malformed JSON is wrapped with our own label.
+      const payload = await readProviderJsonResponse<LmstudioLoadResponse>(
+        response,
+        "LM Studio model load",
+      );
       if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
         throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
       }

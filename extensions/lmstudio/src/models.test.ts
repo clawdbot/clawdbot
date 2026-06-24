@@ -59,6 +59,21 @@ describe("lmstudio-models", () => {
     }
     return JSON.parse(init.body) as unknown;
   };
+  // The model fetch/load helpers now read bodies through the shared byte-capped
+  // reader, so success-path mocks must be real Response objects with a body
+  // stream rather than bare `{ ok, json }` placeholders.
+  const jsonResponse = (payload: unknown, init?: ResponseInit): Response =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      ...init,
+    });
+  const malformedJsonResponse = (init?: ResponseInit): Response =>
+    new Response("{ this is not valid json", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      ...init,
+    });
   const cancelTrackedResponse = (
     text: string,
     init: ResponseInit,
@@ -89,6 +104,7 @@ describe("lmstudio-models", () => {
   }) =>
     vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const key = params?.key ?? "qwen3-8b-instruct";
+      void init;
       if (String(url).endsWith("/api/v1/models")) {
         return jsonResponse({
           models: [
@@ -582,7 +598,53 @@ describe("lmstudio-models", () => {
         baseUrl: "http://localhost:1234/v1",
         modelKey: "qwen3-8b-instruct",
       }),
-    ).rejects.toThrow("LM Studio model load returned malformed JSON");
+    ).rejects.toThrow("LM Studio model load: malformed JSON response");
+  });
+
+  it("bounds oversized model load success bodies", async () => {
+    // A misbehaving server may stream an unbounded success JSON body; the load
+    // path must stop reading at the byte cap instead of buffering it all.
+    let canceled = false;
+    let bytesEmitted = 0;
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // Far exceeds the 16 MiB provider JSON cap if read to completion.
+        if (bytesEmitted >= 32 * 1024 * 1024) {
+          controller.close();
+          return;
+        }
+        bytesEmitted += 64 * 1024;
+        controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return new Response(oversizedStream, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/JSON response exceeds \d+ bytes/);
+    expect(canceled).toBe(true);
+    expect(bytesEmitted).toBeLessThan(32 * 1024 * 1024);
   });
 
   it("bounds model load error bodies", async () => {
