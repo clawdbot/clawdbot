@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
@@ -146,11 +147,11 @@ export async function queryOllamaModelShowInfo(
       if (!response.ok) {
         return {};
       }
-      const data = (await response.json()) as {
+      const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
         parameters?: unknown;
-      };
+      }>(response, "ollama-provider-models.show");
 
       let contextWindow: number | undefined;
       if (data.model_info) {
@@ -314,7 +315,10 @@ export async function fetchOllamaModels(
       if (!response.ok) {
         return { reachable: true, models: [] };
       }
-      const data = (await response.json()) as OllamaTagsResponse;
+      const data = await readProviderJsonResponse<OllamaTagsResponse>(
+        response,
+        "ollama-provider-models.tags",
+      );
       const models = (data.models ?? []).filter((m) => m.name);
       return { reachable: true, models };
     } finally {

@@ -5,7 +5,9 @@ import {
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
+  fetchOllamaModels,
   parseOllamaNumCtxParameter,
+  queryOllamaModelShowInfo,
   resetOllamaModelShowInfoCacheForTest,
   resolveOllamaApiBase,
   type OllamaTagModel,
@@ -379,5 +381,58 @@ describe("ollama provider models", () => {
     expect(parseOllamaNumCtxParameter("temperature 0.8\nnum_ctx -1\nnum_ctx 0")).toBeUndefined();
     expect(parseOllamaNumCtxParameter('stop "<|eot_id|>"')).toBeUndefined();
     expect(parseOllamaNumCtxParameter({ num_ctx: 8192 })).toBeUndefined();
+  });
+
+  it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
+    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels
+    // the stream mid-flight; if the cap were removed the reader would buffer the whole payload.
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
+    const chunk = new Uint8Array(ONE_MIB);
+
+    let bytesPulled = 0;
+    let canceled = false;
+    const makeOversizedJsonResponse = (): Response => {
+      bytesPulled = 0;
+      canceled = false;
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (pulled >= TOTAL_CHUNKS) {
+            controller.close();
+            return;
+          }
+          pulled += 1;
+          bytesPulled += chunk.length;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const tags = await fetchOllamaModels("http://127.0.0.1:11434");
+    expect(tags).toEqual({ reachable: false, models: [] });
+    expect(canceled).toBe(true);
+    // Only the bounded prefix is pulled, never the full advertised 32 MiB stream.
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => makeOversizedJsonResponse()),
+    );
+    const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "evil-model:latest");
+    expect(showInfo).toEqual({});
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 });
