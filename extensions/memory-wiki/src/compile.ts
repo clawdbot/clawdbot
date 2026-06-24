@@ -364,10 +364,15 @@ export type RefreshMemoryWikiIndexesResult = {
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const entries = await fs
+    .readdir(dirPath, { withFileTypes: true, recursive: true })
+    .catch(() => []);
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => path.join(relativeDir, entry.name))
+    .map((entry) => {
+      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
+      return path.relative(rootDir, absPath).split(path.sep).join("/");
+    })
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }
