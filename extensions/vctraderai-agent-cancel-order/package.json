@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-agent-cancel-order",
+  "version": "2026.6.24",
+  "private": true,
+  "description": "VC Trader AI workspace-scoped live-execute agent_cancel_order tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-agent-place-order",
+  "name": "VC Trader AI Agent Place Order",
+  "description": "Autonomously place a live order (with a mandatory stop-loss) while the owner's autonomous-unlock window is open; otherwise downgrade to a staged card. Requires account_id, symbol, side, qty, stop_loss, intended_price. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN) at /api/v1/workspaces/{ws}/live/orders/agent-place.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "agent_place_order"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

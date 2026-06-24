@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-agent-close-position",
+  "name": "VC Trader AI Agent Close Position",
+  "description": "Autonomously close a live OPEN position while the owner's autonomous-unlock window is open; otherwise downgrade to a staged card. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN) at /api/v1/workspaces/{ws}/live/positions/{position_id}/agent-close.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "agent_close_position"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

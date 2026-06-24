@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-agent-place-order",
+  "version": "2026.6.24",
+  "private": true,
+  "description": "VC Trader AI workspace-scoped live-execute agent_place_order tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
