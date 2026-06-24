@@ -1,4 +1,5 @@
 // Builds setup metadata for self-hosted provider plugins.
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -38,6 +39,12 @@ export {
 } from "../agents/self-hosted-provider-defaults.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
+
+// Self-hosted provider base URLs are user-supplied and untrusted (an attacker
+// who can influence the configured endpoint, e.g. via SSRF, could serve an
+// unbounded JSON stream). Cap discovery response bodies before parsing so a
+// hostile or buggy endpoint cannot drive the setup wizard into OOM.
+const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAICompatModelsResponse = {
   data?: Array<{
@@ -84,6 +91,21 @@ function readPositiveInteger(value: unknown): number | undefined {
     return undefined;
   }
   return Math.trunc(value);
+}
+
+/**
+ * Reads and parses a self-hosted discovery JSON body under a hard byte cap.
+ * Mirrors the byte-bounded reader pattern shared across provider/media reads so
+ * an untrusted endpoint cannot stream an unbounded body into memory.
+ */
+async function readSelfHostedDiscoveryJson(response: Response, label: string): Promise<unknown> {
+  const bytes = await readResponseWithLimit(response, SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `${label} discovery response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+      ),
+  });
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
@@ -133,7 +155,10 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
         await cancelUnreadResponseBody(response);
         return undefined;
       }
-      const data = (await response.json()) as LlamaCppPropsResponse;
+      const data = (await readSelfHostedDiscoveryJson(
+        response,
+        "llama.cpp /props",
+      )) as LlamaCppPropsResponse;
       return (
         readPositiveInteger(data.default_generation_settings?.n_ctx) ??
         readPositiveInteger(data.n_ctx)
@@ -178,7 +203,10 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = (await response.json()) as OpenAICompatModelsResponse;
+      const data = (await readSelfHostedDiscoveryJson(
+        response,
+        params.label,
+      )) as OpenAICompatModelsResponse;
       const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);

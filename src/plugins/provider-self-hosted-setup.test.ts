@@ -23,6 +23,42 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// Mirrors SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES in the source under test. Kept in
+// sync deliberately so the regression asserts the body is capped, not drained.
+const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Builds a Response body that would never terminate on its own: each pull emits
+ * a 1 MiB chunk forever. A bounded reader must cancel it after the byte cap.
+ */
+function createUnboundedJsonStream(): {
+  body: ReadableStream<Uint8Array>;
+  cancelCount: number;
+  bytesPulled: number;
+} {
+  const state = { cancelCount: 0, bytesPulled: 0 };
+  const chunk = new Uint8Array(CHUNK_BYTES).fill(0x20); // ASCII spaces: valid stream, never closes
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      state.bytesPulled += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      state.cancelCount += 1;
+    },
+  });
+  return {
+    body,
+    get cancelCount() {
+      return state.cancelCount;
+    },
+    get bytesPulled() {
+      return state.bytesPulled;
+    },
+  };
+}
+
 function createRuntime() {
   return {
     error: vi.fn(),
@@ -436,6 +472,75 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       timeoutMs: 5000,
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an unbounded /models discovery stream instead of buffering it", async () => {
+    const release = vi.fn(async () => undefined);
+    const oversized = createUnboundedJsonStream();
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(oversized.body, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      env: {},
+    });
+
+    // The reader cancels the body once the byte cap is exceeded; without the
+    // cap the stream would never finish and the discovery would buffer it all.
+    expect(models).toEqual([]);
+    expect(oversized.cancelCount).toBe(1);
+    expect(oversized.bytesPulled).toBeLessThanOrEqual(
+      SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES + 2 * CHUNK_BYTES,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an unbounded llama.cpp /props discovery stream instead of buffering it", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    const oversized = createUnboundedJsonStream();
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data: [{ id: "qwen3.6-mxfp4-moe" }] }), {
+        status: 200,
+      }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(oversized.body, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    // /props overflow is swallowed so discovery still succeeds, but the body is
+    // capped: the runtime context token probe is skipped, not OOM'd.
+    expect(models).toEqual([
+      {
+        id: "qwen3.6-mxfp4-moe",
+        name: "qwen3.6-mxfp4-moe",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
+    ]);
+    expect(oversized.cancelCount).toBe(1);
+    expect(oversized.bytesPulled).toBeLessThanOrEqual(
+      SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES + 2 * CHUNK_BYTES,
+    );
+    expect(modelsRelease).toHaveBeenCalledOnce();
+    expect(propsRelease).toHaveBeenCalledOnce();
   });
 });
 
