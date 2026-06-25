@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-fresh-candles",
+  "name": "VC Trader AI Get Fresh Candles",
+  "description": "Read-only workspace-scoped tool: Fresh historical candles for a symbol directly from the live broker via the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_fresh_candles"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

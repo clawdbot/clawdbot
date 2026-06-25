@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-live-quotes",
+  "name": "VC Trader AI Get Live Quotes",
+  "description": "Read-only workspace-scoped tool: Current live bid/ask for one or more symbols directly from the live broker via the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_live_quotes"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

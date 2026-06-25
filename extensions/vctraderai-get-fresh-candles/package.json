@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-get-fresh-candles",
+  "version": "2026.6.25",
+  "private": true,
+  "description": "VC Trader AI read-only workspace-scoped get_fresh_candles tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

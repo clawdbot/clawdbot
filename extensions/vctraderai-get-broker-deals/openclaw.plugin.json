@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-broker-deals",
+  "name": "VC Trader AI Get Broker Deals",
+  "description": "Read-only workspace-scoped tool: Recent deals/fills directly from the broker's own deal history via the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_broker_deals"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
