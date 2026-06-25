@@ -11,6 +11,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -55,16 +56,13 @@ type BytePlusTaskResponse = {
 
 type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
 
-async function readBytePlusJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readBytePlusJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // BytePlus submit/poll task bodies are read through the shared byte-bounded reader
+  // (readResponseWithLimit, via readProviderJsonResponse) so a hostile or buggy endpoint
+  // that streams an unbounded JSON body cannot force the runtime to buffer the whole
+  // payload before parsing. Overflow cancels the stream and throws a bounded error;
+  // malformed JSON keeps the existing `${label}: malformed JSON response` wrapping.
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }
