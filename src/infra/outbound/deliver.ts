@@ -1412,15 +1412,6 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        // If the platform send already started and the error carries partial
-        // send evidence (OutboundDeliveryError with sentBeforeError), the
-        // message may already have reached the channel. Calling failDelivery
-        // here leaves the entry in `send_attempt_started`, which reconnect
-        // drain later replays as "not yet sent" — producing duplicate
-        // messages when the adapter's unknown-send reconciliation misreports
-        // `not_sent`. Advance to `unknown_after_send` instead so drain routes
-        // the entry through reconcileUnknownQueuedDelivery (query the adapter
-        // for actual send state) rather than blind replay.
         const sendEvidence =
           platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
         if (sendEvidence) {

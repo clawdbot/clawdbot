@@ -328,7 +328,7 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
-  it("replays unknown-after-send entries only after adapter proves they were not sent", async () => {
+  it("moves unknown-after-send entries to failed when adapter reports not sent", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not sent" }] },
       tmpDir(),
@@ -346,24 +346,19 @@ describe("delivery-queue recovery", () => {
     });
 
     const deliver = vi.fn().mockResolvedValue([]);
-    const { result } = await runRecovery({ deliver });
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
 
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const deliverInput = mockCallArg(deliver) as {
-      channel?: string;
-      to?: string;
-      skipQueue?: boolean;
-    };
-    expect(deliverInput.channel).toBe("demo-channel-a");
-    expect(deliverInput.to).toBe("+1");
-    expect(deliverInput.skipQueue).toBe(true);
+    expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
-      recovered: 1,
-      failed: 0,
+      recovered: 0,
+      failed: 1,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expectMockMessageContaining(log.warn, "refusing full replay after post-send evidence");
   });
 
   it("keeps retryable unresolved unknown-after-send entries on the queue without replaying", async () => {

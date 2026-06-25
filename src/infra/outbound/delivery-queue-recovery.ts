@@ -389,15 +389,19 @@ async function drainQueuedEntry(opts: {
         return "failed";
       }
     }
-    if (reconciliation?.status === "not_sent") {
+    const reconciliationProvedPreSendFailure =
+      reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
+    if (reconciliationProvedPreSendFailure) {
       opts.log.info(
         `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
       );
     } else {
-      const errMsg =
-        reconciliation?.status === "unresolved" && reconciliation.error
-          ? `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`
-          : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      let errMsg = `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      if (reconciliation?.status === "not_sent") {
+        errMsg = `delivery state is ${entry.recoveryState}; refusing full replay after post-send evidence`;
+      } else if (reconciliation?.status === "unresolved" && reconciliation.error) {
+        errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`;
+      }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
       if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
