@@ -14,6 +14,7 @@ import {
   type GateHookResult,
   type InputGateDecision,
   isHookDecision,
+  mergeHookDecisions,
 } from "./hook-decision-types.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
@@ -1119,7 +1120,7 @@ export function createHookRunner(
   /**
    * Run before_agent_run gate hook.
    * Fires after session resolution and workspace preparation, before model inference.
-   * Returns the most-restrictive pass/block decision from all handlers.
+   * Returns the most-restrictive pass/transform/block decision from all handlers.
    * Handlers that return void are treated as pass.
    */
   async function runBeforeAgentRun(
@@ -1147,10 +1148,7 @@ export function createHookRunner(
                 outcome: "block",
                 reason: "before_agent_run returned an invalid decision",
               };
-          const merged =
-            !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
-              ? normalized
-              : _acc;
+          const merged = mergeHookDecisions(_acc, normalized) as InputGateDecision;
           if (merged === normalized) {
             winningPluginId = reg.pluginId;
           }

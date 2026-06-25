@@ -4704,6 +4704,95 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("uses before_agent_run transform for CLI model input while preserving transcript text", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const sensitivePrompt = "Hi OpenClaw, my credit card is 4111111111111111";
+    const redactedPrompt = "Hi OpenClaw, my credit card is [CreditCardNumber]";
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_agent_run", "llm_input"].includes(hookName),
+      ),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "redactor",
+        decision: {
+          outcome: "transform" as const,
+          prompt: redactedPrompt,
+          reason: "redacted payment card",
+        },
+      })),
+      runLlmInput: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-cli-transform",
+        openClawHistoryPrompt: [
+          "Continue this conversation using the OpenClaw transcript below as prior session history.",
+          "",
+          "<conversation_history>",
+          "User: earlier context",
+          "</conversation_history>",
+          "",
+          "<next_user_message>",
+          sensitivePrompt,
+          "</next_user_message>",
+        ].join("\n"),
+      });
+      await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: sensitivePrompt,
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: sensitivePrompt,
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+        },
+      });
+
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+      const beforeRunEvent = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
+        "before_agent_run event",
+      );
+      expect(beforeRunEvent.prompt).toBe(sensitivePrompt);
+      const llmInputEvent = requireRecord(
+        callArg(hookRunner.runLlmInput, 0, 0, "llm_input event"),
+        "llm_input event",
+      );
+      expect(llmInputEvent.prompt).toBe(redactedPrompt);
+      expect(JSON.stringify(llmInputEvent)).not.toContain("4111111111111111");
+      expect(JSON.stringify(supervisorSpawnMock.mock.calls)).toContain("[CreditCardNumber]");
+      expect(JSON.stringify(supervisorSpawnMock.mock.calls)).not.toContain("4111111111111111");
+
+      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+      const userTurnLine = JSON.parse(lines[lines.length - 1]);
+      expect(JSON.stringify(userTurnLine)).toContain(sensitivePrompt);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards channel identity context to CLI before_agent_run hooks", async () => {
     supervisorSpawnMock.mockClear();
     const hookRunner = {

@@ -21,10 +21,9 @@ type BeforeAgentRunSession = {
   agent: { state: { messages: AgentMessage[] } };
 };
 
-type BeforeAgentRunBlockOutcome = {
-  blockedBy: string;
-  promptError: Error;
-};
+export type BeforeAgentRunOutcome =
+  | { kind: "block"; blockedBy: string; promptError: Error }
+  | { kind: "transform"; prompt: string };
 
 export async function runEmbeddedAttemptBeforeAgentRun(input: {
   attempt: Pick<
@@ -39,7 +38,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   sessionManager: AttemptSessionManager;
   systemPrompt: string;
   withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
-}): Promise<BeforeAgentRunBlockOutcome | undefined> {
+}): Promise<BeforeAgentRunOutcome | undefined> {
   if (!input.hookRunner?.hasHooks("before_agent_run")) {
     return undefined;
   }
@@ -107,10 +106,13 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
       { blockedBy },
     );
     await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-    return { blockedBy, promptError: new Error(message) };
+    return { kind: "block", blockedBy, promptError: new Error(message) };
   }
 
   const beforeRunDecision = beforeRunResult?.decision;
+  if (beforeRunDecision?.outcome === "transform") {
+    return { kind: "transform", prompt: beforeRunDecision.prompt };
+  }
   if (beforeRunDecision?.outcome !== "block") {
     return undefined;
   }
@@ -118,5 +120,5 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   const message = resolveBlockMessage(beforeRunDecision, { blockedBy });
   log.warn(`before_agent_run hook blocked by ${blockedBy}`);
   await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-  return { blockedBy, promptError: new Error(message) };
+  return { kind: "block", blockedBy, promptError: new Error(message) };
 }

@@ -78,6 +78,37 @@ type EmbeddedAttemptPromptContext = {
   systemPromptForHook: string;
 };
 
+/**
+ * Normalizes the current-turn prompt text at the LLM boundary. Shared between
+ * the initial prompt-context pass and a later `before_agent_run` transform
+ * override, which must re-derive this text from the redacted prompt instead
+ * of the original one.
+ */
+export function buildLlmBoundaryPromptForPrecheck(params: {
+  prompt: string;
+  boundaryTimezone?: string;
+  includeBoundaryTimestamp: boolean;
+  isRawModelRun: boolean;
+  preparedUserTurnMessage?: AgentMessage;
+}): string {
+  const preparedUserTurnTimestamp = (
+    params.preparedUserTurnMessage as { timestamp?: unknown } | undefined
+  )?.timestamp;
+  return normalizeCurrentPromptTextForLlmBoundary({
+    prompt: params.prompt,
+    ...(params.boundaryTimezone ? { timezone: params.boundaryTimezone } : {}),
+    ...(params.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+    ...(typeof preparedUserTurnTimestamp === "number"
+      ? { currentUserTimestamp: preparedUserTurnTimestamp }
+      : {}),
+    // Admission must count the same persisted sender block that provider
+    // conversion projects after the active user turn is written.
+    ...(!params.isRawModelRun && params.preparedUserTurnMessage
+      ? { currentUserTranscriptMessage: params.preparedUserTurnMessage }
+      : {}),
+  });
+}
+
 export function prepareEmbeddedAttemptPromptContext(input: {
   attempt: PromptContextAttempt;
   boundaryTimezone?: string;
@@ -246,17 +277,13 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
     };
   }
-  const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+  const llmBoundaryPromptForPrecheck = buildLlmBoundaryPromptForPrecheck({
     prompt: promptForModel,
-    ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
-    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-    ...(typeof preparedUserTurnTimestamp === "number"
-      ? { currentUserTimestamp: preparedUserTurnTimestamp }
-      : {}),
-    // Admission must count the same persisted sender block that provider
-    // conversion projects after the active user turn is written.
-    ...(!input.isRawModelRun && input.preparedUserTurnMessage
-      ? { currentUserTranscriptMessage: input.preparedUserTurnMessage }
+    ...(input.boundaryTimezone ? { boundaryTimezone: input.boundaryTimezone } : {}),
+    includeBoundaryTimestamp: input.includeBoundaryTimestamp,
+    isRawModelRun: input.isRawModelRun,
+    ...(input.preparedUserTurnMessage
+      ? { preparedUserTurnMessage: input.preparedUserTurnMessage }
       : {}),
   });
 

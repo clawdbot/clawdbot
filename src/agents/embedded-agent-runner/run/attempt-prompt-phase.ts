@@ -10,7 +10,10 @@ import { log } from "../logger.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-assembly.js";
-import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import {
+  buildLlmBoundaryPromptForPrecheck,
+  prepareEmbeddedAttemptPromptContext,
+} from "./attempt-prompt-context.js";
 import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
 import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
@@ -26,6 +29,7 @@ type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
 type BeforeAgentRunOutcome = NonNullable<
   Awaited<ReturnType<typeof runEmbeddedAttemptBeforeAgentRun>>
 >;
+type BeforeAgentRunBlockOutcome = Extract<BeforeAgentRunOutcome, { kind: "block" }>;
 type PromptPhaseState = Omit<PromptDispatchInput["state"], "skipPromptSubmission">;
 
 type PromptAssemblyPhaseInput = Omit<
@@ -80,7 +84,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       changes: PromptAssemblyResult["promptCacheChangesForTurn"],
     ) => void;
     setFinalPromptText: (prompt: string) => void;
-    markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
+    markBeforeAgentRunBlocked: (outcome: BeforeAgentRunBlockOutcome) => void;
     markYieldAborted: () => void;
     readYieldState: () => Pick<
       PromptErrorInput,
@@ -168,7 +172,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             }),
           )
         : undefined;
-    const promptContext = prepareEmbeddedAttemptPromptContext({
+    let promptContext = prepareEmbeddedAttemptPromptContext({
       attempt,
       ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
@@ -195,13 +199,39 @@ export async function runEmbeddedAttemptPromptPhase(input: {
             systemPrompt: systemPromptForHook,
             withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
           });
-    if (beforeAgentRunOutcome) {
+    if (beforeAgentRunOutcome?.kind === "block") {
       input.lifecycle.markBeforeAgentRunBlocked(beforeAgentRunOutcome);
       patchState({
         promptError: beforeAgentRunOutcome.promptError,
         promptErrorSource: "hook:before_agent_run",
       });
       skipPromptSubmission = true;
+    } else if (beforeAgentRunOutcome?.kind === "transform") {
+      // A transform decision redacts the model-bound prompt; feed that same
+      // redacted text to the transcript, cache/trajectory recording, and image
+      // detection too, so the redaction doesn't leak back in via history.
+      const transformedPrompt = beforeAgentRunOutcome.prompt;
+      promptContext = {
+        ...promptContext,
+        effectivePrompt: transformedPrompt,
+        llmBoundaryPromptForPrecheck: buildLlmBoundaryPromptForPrecheck({
+          prompt: transformedPrompt,
+          ...(input.context.boundaryTimezone
+            ? { boundaryTimezone: input.context.boundaryTimezone }
+            : {}),
+          includeBoundaryTimestamp: input.context.includeBoundaryTimestamp,
+          isRawModelRun: input.context.isRawModelRun,
+          ...(input.context.preparedUserTurnMessage
+            ? { preparedUserTurnMessage: input.context.preparedUserTurnMessage }
+            : {}),
+        }),
+        promptForModel: transformedPrompt,
+        promptForSession: transformedPrompt,
+        promptSubmission: { ...promptContext.promptSubmission, prompt: transformedPrompt },
+      };
+      if (input.context.systemPromptReport?.currentTurn) {
+        input.context.systemPromptReport.currentTurn.promptChars = transformedPrompt.length;
+      }
     }
 
     if (!skipPromptSubmission) {

@@ -3,21 +3,21 @@
  * Core is outcome-agnostic — it handles the mechanics of each outcome
  * without knowing *why* the decision was made.
  */
-type HookDecision = HookDecisionPass | HookDecisionBlock;
+export type HookDecision = HookDecisionPass | HookDecisionTransform | HookDecisionBlock;
 
 /** Content is fine. Proceed normally. */
-type HookDecisionPass = {
+export type HookDecisionPass = {
   outcome: "pass";
 };
 
 /** Prefix for user-facing replacement messages when a `block` decision stops a request. */
-const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
+export const BLOCK_MESSAGE_PREFIX = "Your message could not be sent";
 
 /**
  * Content is blocked. `reason` is internal plugin-local detail; core must not log,
  * persist, broadcast, or expose it verbatim. `message` is user-facing detail.
  */
-type HookDecisionBlock = {
+export type HookDecisionBlock = {
   outcome: "block";
   /** Internal plugin-local reason. Do not log, persist, broadcast, or expose verbatim. */
   reason: string;
@@ -25,6 +25,21 @@ type HookDecisionBlock = {
   message?: string;
   /** Plugin-defined category for analytics (e.g. "violence", "pii", "cost_limit"). */
   category?: string;
+  /** Opaque metadata for the plugin's own use. Core does not interpret it. */
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Content can proceed after replacing the current model-bound prompt. The
+ * replacement is sent to the model and model-input observers; it does not
+ * rewrite the stored transcript prompt.
+ */
+export type HookDecisionTransform = {
+  outcome: "transform";
+  /** Replacement text for the current model-bound user prompt. */
+  prompt: string;
+  /** Internal plugin-local reason. Do not expose verbatim. */
+  reason?: string;
   /** Opaque metadata for the plugin's own use. Core does not interpret it. */
   metadata?: Record<string, unknown>;
 };
@@ -45,6 +60,24 @@ export function resolveBlockMessage(
     : `${BLOCK_MESSAGE_PREFIX}: blocked`;
 }
 
+/** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */
+export const HOOK_DECISION_SEVERITY: Record<HookDecision["outcome"], number> = {
+  pass: 0,
+  transform: 1,
+  block: 2,
+};
+
+/**
+ * Merge two HookDecisions using most-restrictive-wins semantics.
+ * `block > transform > pass`
+ */
+export function mergeHookDecisions(a: HookDecision | undefined, b: HookDecision): HookDecision {
+  if (!a) {
+    return b;
+  }
+  return HOOK_DECISION_SEVERITY[b.outcome] > HOOK_DECISION_SEVERITY[a.outcome] ? b : a;
+}
+
 /**
  * Type guard: does this object look like a HookDecision (has `outcome` field)?
  */
@@ -56,6 +89,25 @@ export function isHookDecision(value: unknown): value is HookDecision {
   const keys = Object.keys(v);
   if (v.outcome === "pass") {
     return keys.length === 1;
+  }
+  if (v.outcome === "transform") {
+    const allowedTransformKeys = new Set(["outcome", "prompt", "reason", "metadata"]);
+    if (keys.some((key) => !allowedTransformKeys.has(key))) {
+      return false;
+    }
+    if (typeof v.prompt !== "string" || !v.prompt.trim()) {
+      return false;
+    }
+    if ("reason" in v && (typeof v.reason !== "string" || !v.reason.trim())) {
+      return false;
+    }
+    if (
+      "metadata" in v &&
+      (typeof v.metadata !== "object" || v.metadata === null || Array.isArray(v.metadata))
+    ) {
+      return false;
+    }
+    return true;
   }
   if (v.outcome !== "block") {
     return false;
@@ -83,7 +135,7 @@ export function isHookDecision(value: unknown): value is HookDecision {
 }
 
 /** Outcomes valid for input gates (before_agent_run). */
-export type InputGateDecision = HookDecisionPass | HookDecisionBlock;
+export type InputGateDecision = HookDecisionPass | HookDecisionTransform | HookDecisionBlock;
 
 /**
  * A gate hook decision paired with the pluginId that produced it.

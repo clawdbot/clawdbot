@@ -172,6 +172,31 @@ function formatCliEmptyOutputDiagnostics(output: CliOutput): string | undefined 
   ].join(" ");
 }
 
+function replaceCliHistoryPromptCurrentTurn(params: {
+  historyPrompt: string | undefined;
+  prompt: string;
+}): string | undefined {
+  if (!params.historyPrompt) {
+    return undefined;
+  }
+  const start = "<next_user_message>\n";
+  const end = "\n</next_user_message>";
+  const startIndex = params.historyPrompt.indexOf(start);
+  if (startIndex === -1) {
+    return params.historyPrompt;
+  }
+  const contentStart = startIndex + start.length;
+  const endIndex = params.historyPrompt.indexOf(end, contentStart);
+  if (endIndex === -1) {
+    return params.historyPrompt;
+  }
+  return [
+    params.historyPrompt.slice(0, contentStart),
+    params.prompt,
+    params.historyPrompt.slice(endIndex),
+  ].join("");
+}
+
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
 export async function isCliBindingFlushed(
   sessionId: string | undefined,
@@ -633,16 +658,18 @@ export async function runPreparedCliAgent(
         config: params.config,
       })
     : [];
-  const llmInputEvent = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    provider: params.provider,
-    model: context.modelId,
-    systemPrompt: context.systemPrompt,
-    prompt: params.prompt,
-    historyMessages,
-    imagesCount: params.images?.length ?? 0,
-  } as const;
+  let modelBoundPrompt = params.prompt;
+  const buildLlmInputEvent = () =>
+    ({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      provider: params.provider,
+      model: context.modelId,
+      systemPrompt: context.systemPrompt,
+      prompt: modelBoundPrompt,
+      historyMessages,
+      imagesCount: params.images?.length ?? 0,
+    }) as const;
   const hookContext = {
     runId: params.runId,
     jobId: params.jobId,
@@ -988,7 +1015,7 @@ export async function runPreparedCliAgent(
             options.onForkSuccessorPersisted?.(sessionId);
           }
         : context.params.persistCliSessionForkSuccessor;
-    const attemptContext =
+    const baseAttemptContext =
       timeoutMs === params.timeoutMs &&
       forkCliSessionOnResume === context.params.forkCliSessionOnResume &&
       cliSessionResumeAt === context.params.cliSessionResumeAt &&
@@ -1002,6 +1029,20 @@ export async function runPreparedCliAgent(
               forkCliSessionOnResume,
               cliSessionResumeAt,
               persistCliSessionForkSuccessor,
+            },
+          };
+    const attemptContext =
+      modelBoundPrompt === params.prompt
+        ? baseAttemptContext
+        : {
+            ...baseAttemptContext,
+            openClawHistoryPrompt: replaceCliHistoryPromptCurrentTurn({
+              historyPrompt: baseAttemptContext.openClawHistoryPrompt,
+              prompt: modelBoundPrompt,
+            }),
+            params: {
+              ...baseAttemptContext.params,
+              prompt: modelBoundPrompt,
             },
           };
     diagnosticLifecycle?.setPhase("send");
@@ -1418,11 +1459,14 @@ export async function runPreparedCliAgent(
         });
         return buildBlockedBeforeAgentRunResult(blockMessage);
       }
+      if (beforeRunDecision?.outcome === "transform") {
+        modelBoundPrompt = beforeRunDecision.prompt;
+      }
     }
 
     userTurnHandled = await persistApprovedCliUserTurnTranscript(params);
     runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
+      event: buildLlmInputEvent(),
       ctx: hookContext,
       hookRunner,
     });

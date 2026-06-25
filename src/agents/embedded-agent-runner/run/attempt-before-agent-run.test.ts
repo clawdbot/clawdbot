@@ -107,6 +107,26 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
     expect(lock.acquisitions).toBe(0);
   });
 
+  it("returns a transform outcome and leaves the session prompt unchanged", async () => {
+    const handler = vi.fn(async () => ({
+      outcome: "transform" as const,
+      prompt: "redacted prompt",
+      reason: "redacted payment card",
+    }));
+    const { input, lock, sessionManager, state } = createInput([
+      { pluginId: "redactor", hookName: "before_agent_run", handler, source: "test" },
+    ]);
+
+    const outcome = await runEmbeddedAttemptBeforeAgentRun(input);
+
+    expect(outcome).toEqual({ kind: "transform", prompt: "redacted prompt" });
+    expect(lock.acquisitions).toBe(0);
+    expect(state.messages[0]).toEqual(
+      expect.objectContaining({ content: [{ type: "text", text: "original prompt" }] }),
+    );
+    expect(sessionManager.buildSessionContext().messages).toEqual([]);
+  });
+
   it("persists one redacted blocked turn across retries", async () => {
     const handler = vi.fn(async () => ({
       outcome: "block" as const,
@@ -120,11 +140,21 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
     const first = await runEmbeddedAttemptBeforeAgentRun(input);
     const second = await runEmbeddedAttemptBeforeAgentRun(input);
 
-    expect(first).toEqual({ blockedBy: "policy", promptError: expect.any(Error) });
-    expect(first?.promptError.message).toBe(
+    expect(first).toEqual({
+      kind: "block",
+      blockedBy: "policy",
+      promptError: expect.any(Error),
+    });
+    if (first?.kind !== "block") {
+      throw new Error("expected block outcome");
+    }
+    expect(first.promptError.message).toBe(
       "Your message could not be sent: Request blocked. (blocked by policy)",
     );
-    expect(second?.blockedBy).toBe("policy");
+    if (second?.kind !== "block") {
+      throw new Error("expected block outcome");
+    }
+    expect(second.blockedBy).toBe("policy");
     expect(lock.acquisitions).toBe(1);
     expect(handler).toHaveBeenCalledTimes(2);
     const persistedMessages = sessionManager.buildSessionContext().messages;
@@ -160,8 +190,11 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
 
     const outcome = await runEmbeddedAttemptBeforeAgentRun(input);
 
-    expect(outcome?.blockedBy).toBe("before_agent_run");
-    expect(outcome?.promptError.message).toBe(
+    if (outcome?.kind !== "block") {
+      throw new Error("expected block outcome");
+    }
+    expect(outcome.blockedBy).toBe("before_agent_run");
+    expect(outcome.promptError.message).toBe(
       "Your message could not be sent: blocked by before_agent_run",
     );
     expect(lock.acquisitions).toBe(1);

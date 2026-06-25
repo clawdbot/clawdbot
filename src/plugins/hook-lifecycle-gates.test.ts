@@ -107,6 +107,85 @@ describe("before_agent_run hook", () => {
     expect(calls).toEqual(["pass-plugin", "block-plugin"]);
   });
 
+  it("returns the first transform when no handler blocks", async () => {
+    const firstTransform = vi.fn(async () => ({
+      outcome: "transform" as const,
+      prompt: "Hi OpenClaw, my card is [CreditCardNumber]",
+      reason: "redacted sensitive data",
+    }));
+    const secondTransform = vi.fn(async () => ({
+      outcome: "transform" as const,
+      prompt: "second replacement",
+    }));
+    const registry = makeRegistry([
+      {
+        pluginId: "first-redactor",
+        hookName: "before_agent_run",
+        handler: firstTransform,
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "second-redactor",
+        hookName: "before_agent_run",
+        handler: secondTransform,
+        source: "test",
+        priority: 5,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun(
+      { prompt: "Hi OpenClaw, my card is 4111111111111111", messages: [] },
+      ctx,
+    );
+
+    expect(result).toEqual({
+      pluginId: "first-redactor",
+      decision: {
+        outcome: "transform",
+        prompt: "Hi OpenClaw, my card is [CreditCardNumber]",
+        reason: "redacted sensitive data",
+      },
+    });
+    expect(firstTransform).toHaveBeenCalledTimes(1);
+    expect(secondTransform).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets block beat an earlier transform", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "redactor",
+        hookName: "before_agent_run",
+        handler: async () => ({
+          outcome: "transform" as const,
+          prompt: "redacted prompt",
+        }),
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "blocker",
+        hookName: "before_agent_run",
+        handler: async () => ({
+          outcome: "block" as const,
+          reason: "still unsafe",
+        }),
+        source: "test",
+        priority: 5,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "secret prompt", messages: [] }, ctx);
+
+    expect(result).toEqual({
+      pluginId: "blocker",
+      decision: {
+        outcome: "block",
+        reason: "still unsafe",
+      },
+    });
+  });
+
   it("short-circuits when the first of multiple handlers blocks", async () => {
     const blockHandler = vi.fn(async () => ({
       outcome: "block" as const,
@@ -210,6 +289,26 @@ describe("before_agent_run hook", () => {
         reason: "before_agent_run returned an invalid decision",
       },
       pluginId: "malformed-block-plugin",
+    });
+  });
+
+  it("fails closed on malformed transform decisions", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "malformed-transform-plugin",
+        hookName: "before_agent_run",
+        handler: async () => ({ outcome: "transform", prompt: "" }) as never,
+        source: "test",
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+    expect(result).toEqual({
+      decision: {
+        outcome: "block",
+        reason: "before_agent_run returned an invalid decision",
+      },
+      pluginId: "malformed-transform-plugin",
     });
   });
 
