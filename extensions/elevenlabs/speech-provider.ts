@@ -1,7 +1,10 @@
 // Elevenlabs provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -367,14 +370,14 @@ async function listElevenLabsVoices(params: {
   });
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs voices API error");
-    const json = (await response.json()) as {
+    const json = await readProviderJsonResponse<{
       voices?: Array<{
         voice_id?: string;
         name?: string;
         category?: string;
         description?: string;
       }>;
-    };
+    }>(response, "elevenlabs.voices");
     return Array.isArray(json.voices)
       ? json.voices
           .map((voice) => ({

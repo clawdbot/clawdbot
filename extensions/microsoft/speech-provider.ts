@@ -7,7 +7,10 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -166,7 +169,10 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = (await response.json()) as MicrosoftVoiceListEntry[];
+    const voices = await readProviderJsonResponse<MicrosoftVoiceListEntry[]>(
+      response,
+      "microsoft.speech-voices",
+    );
     return Array.isArray(voices)
       ? voices
           .map((voice) => ({
