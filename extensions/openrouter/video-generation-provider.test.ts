@@ -54,10 +54,31 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
 
 function releasedJson(value: unknown) {
   return {
-    response: {
-      json: async () => value,
-    },
+    response: new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
     release: vi.fn(async () => {}),
+  };
+}
+
+function releasedOversizedJsonStream() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    release: vi.fn(async () => {}),
+    wasCanceled: () => canceled,
   };
 }
 
@@ -290,6 +311,40 @@ describe("openrouter video generation provider", () => {
       enabled: true,
       maxInputImages: 2,
     });
+  });
+
+  it("cancels oversized OpenRouter video catalog success bodies", async () => {
+    const oversized = releasedOversizedJsonStream();
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(oversized);
+
+    await expect(
+      listOpenRouterVideoModelCatalog({
+        config: {
+          models: {
+            providers: {
+              openrouter: {
+                baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
+              },
+            },
+          },
+        } as never,
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: "OPENROUTER_API_KEY",
+          discoveryApiKey: "resolved-openrouter-key",
+          mode: "api_key",
+          source: "env",
+        }),
+      }),
+    ).rejects.toThrow(
+      "OpenRouter video models request failed: JSON response exceeds 16777216 bytes",
+    );
+    expect(oversized.wasCanceled()).toBe(true);
+    expect(oversized.release).toHaveBeenCalledOnce();
   });
 
   it("skips live OpenRouter video catalog discovery without an API key", async () => {
