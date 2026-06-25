@@ -7,7 +7,10 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
@@ -29,6 +32,7 @@ const COPILOT_HEADERS_STATIC: Record<string, string> = {
   ...buildCopilotIdeHeaders(),
 };
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
@@ -70,6 +74,7 @@ function isCopilotSetupError(err: unknown): boolean {
     err.message.includes("Copilot token response") ||
     err.message.includes("No embedding models available") ||
     err.message.includes("GitHub Copilot model discovery") ||
+    err.message.includes("github-copilot.model-discovery") ||
     err.message.includes("GitHub Copilot embedding model") ||
     err.message.includes("Unexpected response from GitHub Copilot token endpoint")
   );
@@ -100,12 +105,7 @@ async function discoverEmbeddingModels(params: {
       const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
       throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new Error("GitHub Copilot model discovery returned invalid JSON");
-    }
+    const payload = await readProviderJsonResponse(response, "github-copilot.model-discovery");
     const allModels = Array.isArray((payload as { data?: unknown })?.data)
       ? ((payload as { data: CopilotModelEntry[] }).data ?? [])
       : [];
@@ -246,12 +246,9 @@ async function createGitHubCopilotEmbeddingProvider(
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
 
-        let payload: unknown;
-        try {
-          payload = await response.json();
-        } catch {
-          throw new Error("GitHub Copilot embeddings returned invalid JSON");
-        }
+        const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
+          maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
+        });
         return parseGitHubCopilotEmbeddingPayload(payload, input.length);
       },
     });

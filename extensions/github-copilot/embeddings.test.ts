@@ -75,13 +75,16 @@ function mockDiscoveryResponse(spec: {
   json?: unknown;
   text?: string;
 }) {
+  const status = spec.status ?? (spec.ok ? 200 : 500);
+  const response =
+    spec.json !== undefined
+      ? new Response(JSON.stringify(spec.json), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        })
+      : new Response(spec.text ?? "", { status });
   fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-    response: {
-      ok: spec.ok,
-      status: spec.status ?? (spec.ok ? 200 : 500),
-      json: async () => spec.json,
-      text: async () => spec.text ?? "",
-    },
+    response,
     release: vi.fn(async () => {}),
   }));
 }
@@ -228,20 +231,16 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("wraps invalid discovery JSON as a setup error", async () => {
     fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-      response: {
-        ok: true,
+      response: new Response("not-valid-json{{{", {
         status: 200,
-        json: async () => {
-          throw new SyntaxError("bad json");
-        },
-        text: async () => "",
-      },
+        headers: { "Content-Type": "application/json" },
+      }),
       release: vi.fn(async () => {}),
     }));
 
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow("GitHub Copilot model discovery returned invalid JSON");
+    ).rejects.toThrow("github-copilot.model-discovery: malformed JSON response");
   });
 
   it("bounds model discovery error bodies", async () => {
@@ -360,7 +359,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     ).toBe(true);
     expect(
       shouldContinueAutoSelection(
-        new Error("GitHub Copilot model discovery returned invalid JSON"),
+        new Error("github-copilot.model-discovery: malformed JSON response"),
       ),
     ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
