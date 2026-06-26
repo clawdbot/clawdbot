@@ -501,6 +501,10 @@ describe("sessionsCleanupCommand", () => {
             modelRunPruned: 0,
             pruned: 1,
             capped: 0,
+            archiveCleanup: {
+              scannedFiles: 3,
+              removedFiles: 1,
+            },
             unreferencedArtifacts: {
               scannedFiles: 5,
               removedFiles: 2,
@@ -535,6 +539,7 @@ describe("sessionsCleanupCommand", () => {
 
     expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
+    expectLogsToInclude(logs, "Would prune deleted/reset archives: 1");
     expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
     const tableHeaderLines = logs.filter((line) => line.includes("Action") && line.includes("Key"));
     expect(tableHeaderLines.length).toBeGreaterThan(0);
@@ -544,6 +549,54 @@ describe("sessionsCleanupCommand", () => {
       (line) => line.includes("stale") && line.includes("prune-stale"),
     );
     expect(stalePruneLines.length).toBeGreaterThan(0);
+  });
+
+  it("renders applied deleted/reset archive cleanup counts", async () => {
+    mocks.runSessionsCleanup.mockResolvedValue({
+      mode: "enforce",
+      previewResults: [],
+      appliedSummaries: [
+        {
+          agentId: "main",
+          storePath: "/resolved/sessions.json",
+          mode: "enforce",
+          dryRun: false,
+          beforeCount: 1,
+          afterCount: 1,
+          missing: 0,
+          dmScopeRetired: 0,
+          modelRunPruned: 0,
+          pruned: 0,
+          capped: 0,
+          archiveCleanup: {
+            scannedFiles: 4,
+            removedFiles: 2,
+          },
+          unreferencedArtifacts: {
+            scannedFiles: 0,
+            removedFiles: 0,
+            freedBytes: 0,
+            olderThanMs: 604800000,
+          },
+          diskBudget: null,
+          wouldMutate: true,
+          applied: true,
+          appliedCount: 1,
+        },
+      ],
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        store: "/resolved/sessions.json",
+        enforce: true,
+      },
+      runtime,
+    );
+
+    expectLogsToInclude(logs, "Applied maintenance. Current entries: 1");
+    expectLogsToInclude(logs, "Pruned deleted/reset archives: 2");
   });
 
   it("renders a dry-run summary grouped by session label", async () => {

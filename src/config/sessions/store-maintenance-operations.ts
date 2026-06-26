@@ -16,6 +16,21 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
+export type SessionArchiveCleanupRule = {
+  reason: "deleted" | "reset";
+  olderThanMs: number;
+};
+
+export type SessionArchiveCleanupReport = {
+  scannedFiles: number;
+  removedFiles: number;
+};
+
+export const EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT: SessionArchiveCleanupReport = {
+  scannedFiles: 0,
+  removedFiles: 0,
+};
+
 export type SessionMaintenanceApplyReport = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   beforeCount: number;
@@ -23,6 +38,7 @@ export type SessionMaintenanceApplyReport = {
   modelRunPruned: number;
   pruned: number;
   capped: number;
+  archiveCleanup: SessionArchiveCleanupReport;
   diskBudget: SessionDiskBudgetSweepResult | null;
 };
 
@@ -49,8 +65,8 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<void>;
   cleanupArchivedSessionTranscripts: (params: {
     directories: string[];
-    rules: Array<{ reason: "deleted" | "reset"; olderThanMs: number }>;
-  }) => Promise<void>;
+    rules: SessionArchiveCleanupRule[];
+  }) => Promise<{ removed: number; scanned: number } | void>;
 };
 
 type FileBackedSessionStoreMaintenanceParams = {
@@ -98,6 +114,25 @@ function rememberRemovedSessionFile(
   }
 }
 
+export function resolveSessionArchiveCleanupRules(
+  maintenance: ResolvedSessionMaintenanceConfig,
+): SessionArchiveCleanupRule[] {
+  return maintenance.resetArchiveRetentionMs != null
+    ? [
+        { reason: "deleted", olderThanMs: maintenance.pruneAfterMs },
+        { reason: "reset", olderThanMs: maintenance.resetArchiveRetentionMs },
+      ]
+    : [{ reason: "deleted", olderThanMs: maintenance.pruneAfterMs }];
+}
+
+function normalizeArchiveCleanupReport(
+  result: { removed: number; scanned: number } | void,
+): SessionArchiveCleanupReport {
+  return result
+    ? { scannedFiles: result.scanned, removedFiles: result.removed }
+    : { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
+}
+
 async function applyWarnOnlyMaintenance(params: {
   operation: FileBackedSessionStoreMaintenanceParams;
   maintenance: ResolvedSessionMaintenanceConfig;
@@ -141,6 +176,7 @@ async function applyWarnOnlyMaintenance(params: {
     modelRunPruned: 0,
     pruned: 0,
     capped: 0,
+    archiveCleanup: { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT },
     diskBudget,
   });
 }
@@ -150,7 +186,8 @@ async function cleanupRemovedSessionArtifacts(params: {
   maintenance: ResolvedSessionMaintenanceConfig;
   removedSessionFiles: RemovedSessionFiles;
   referencedSessionIds: ReadonlySet<string>;
-}): Promise<void> {
+  forceMaintenance: boolean;
+}): Promise<SessionArchiveCleanupReport> {
   // SQLite should commit entry-retention rows before this named artifact cleanup.
   // The cleanup needs the final referenced-session set so shared transcripts and
   // trajectory sidecars survive until the last referring row is gone.
@@ -169,10 +206,12 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  // null retention keeps archived transcripts: they are conversation history,
-  // and the disk budget (not a wall-clock timer) is the only eviction path.
-  if (params.maintenance.resetArchiveRetentionMs == null) {
-    return;
+  if (
+    archivedDirs.size === 0 &&
+    params.maintenance.resetArchiveRetentionMs == null &&
+    !params.forceMaintenance
+  ) {
+    return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
   }
   const targetDirs =
     archivedDirs.size > 0
@@ -180,18 +219,17 @@ async function cleanupRemovedSessionArtifacts(params: {
       : [path.dirname(path.resolve(params.operation.storePath))];
   // Both reasons ride one advisory cleanup call: earlier artifact moves may
   // have committed, so retention failure must not block the primary store save.
-  await params.operation.artifacts
+  return params.operation.artifacts
     .cleanupArchivedSessionTranscripts({
       directories: targetDirs,
-      rules: [
-        { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-        { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-      ],
+      rules: resolveSessionArchiveCleanupRules(params.maintenance),
     })
+    .then(normalizeArchiveCleanupReport)
     .catch((error: unknown) => {
       params.operation.log.warn("session transcript archive retention cleanup failed", {
         error: String(error),
       });
+      return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
     });
 }
 
@@ -243,11 +281,12 @@ async function applyEnforcedMaintenance(params: {
       })
     : 0;
   const referencedSessionIds = collectReferencedSessionIds(params.operation.store);
-  await cleanupRemovedSessionArtifacts({
+  const archiveCleanup = await cleanupRemovedSessionArtifacts({
     operation: params.operation,
     maintenance: params.maintenance,
     removedSessionFiles,
     referencedSessionIds,
+    forceMaintenance: params.forceMaintenance,
   });
 
   // Disk-budget eviction is its own transaction-sized boundary: it may delete
@@ -270,6 +309,7 @@ async function applyEnforcedMaintenance(params: {
     modelRunPruned,
     pruned,
     capped,
+    archiveCleanup,
     diskBudget,
   });
   return {

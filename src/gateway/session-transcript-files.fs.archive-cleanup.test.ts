@@ -61,6 +61,26 @@ describe("cleanupArchivedSessionTranscripts", () => {
     expect(await remaining()).toEqual([`c.jsonl.reset.${FRESH_STAMP}`, "live.jsonl"]);
   });
 
+  it("counts stale archives during dry-run without deleting them", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [
+        { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        { reason: "reset", olderThanMs: 30 * DAY_MS },
+      ],
+      nowMs: NOW_MS,
+      dryRun: true,
+    });
+
+    expect(result).toEqual({ removed: 2, scanned: 2 });
+    expect(await remaining()).toEqual([
+      `a.jsonl.deleted.${OLD_STAMP}`,
+      `b.jsonl.reset.${OLD_STAMP}`,
+    ]);
+  });
+
   it("applies each rule's age threshold independently", async () => {
     await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
 

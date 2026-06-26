@@ -460,6 +460,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
+  dryRun?: boolean;
 }): Promise<{ removed: number; scanned: number }> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -485,12 +486,16 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            const removedFile = await ignoreMissingArchivePath(async () => {
-              await fs.promises.rm(fullPath);
-              return true;
-            }, false);
-            if (removedFile) {
+            if (opts.dryRun) {
               removed += 1;
+            } else {
+              const removedFile = await ignoreMissingArchivePath(async () => {
+                await fs.promises.rm(fullPath);
+                return true;
+              }, false);
+              if (removedFile) {
+                removed += 1;
+              }
             }
           }
         }
