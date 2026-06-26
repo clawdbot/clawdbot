@@ -8,6 +8,13 @@ import { testing as geminiWebSearchTesting } from "./src/gemini-web-search-provi
 
 let ssrfMock: { mockRestore: () => void } | undefined;
 
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function mockGoogleApiKeyAuth() {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "google-test-key",
@@ -24,9 +31,8 @@ function installGoogleFetchMock(params?: {
   const mimeType = params?.mimeType ?? "image/png";
   const data = params?.data ?? "png-data";
   const inlineDataKey = params?.inlineDataKey ?? "inlineData";
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({
+  const fetchMock = vi.fn().mockResolvedValue(
+    jsonResponse({
       candidates: [
         {
           content: {
@@ -42,7 +48,7 @@ function installGoogleFetchMock(params?: {
         },
       ],
     }),
-  });
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -100,9 +106,8 @@ describe("Google image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
         candidates: [
           {
             content: {
@@ -119,7 +124,7 @@ describe("Google image-generation provider", () => {
           },
         ],
       }),
-    });
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildGoogleImageGenerationProvider();
@@ -208,10 +213,7 @@ describe("Google image-generation provider", () => {
     mockGoogleApiKeyAuth();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ candidates: { content: { parts: [] } } }),
-      }),
+      vi.fn().mockResolvedValue(jsonResponse({ candidates: { content: { parts: [] } } })),
     );
 
     const provider = buildGoogleImageGenerationProvider();
@@ -229,9 +231,8 @@ describe("Google image-generation provider", () => {
     mockGoogleApiKeyAuth();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
+      vi.fn().mockResolvedValue(
+        jsonResponse({
           candidates: [
             {
               content: {
@@ -240,7 +241,7 @@ describe("Google image-generation provider", () => {
             },
           ],
         }),
-      }),
+      ),
     );
 
     const provider = buildGoogleImageGenerationProvider();
@@ -260,9 +261,8 @@ describe("Google image-generation provider", () => {
       source: "profile",
       mode: "token",
     });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
         candidates: [
           {
             content: {
@@ -278,7 +278,7 @@ describe("Google image-generation provider", () => {
           },
         ],
       }),
-    });
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildGoogleImageGenerationProvider();
@@ -303,6 +303,74 @@ describe("Google image-generation provider", () => {
       ],
       model: "gemini-3.1-flash-image-preview",
     });
+  });
+
+  it("accepts valid multi-image inline JSON responses above the generic provider JSON cap", async () => {
+    mockGoogleApiKeyAuth();
+    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    const imagePayload = imageBytes.toString("base64");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: Array.from({ length: 3 }, () => ({
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: imagePayload,
+                  },
+                })),
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a cat",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(3);
+    expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
+      imageBytes.byteLength,
+      imageBytes.byteLength,
+      imageBytes.byteLength,
+    ]);
+  });
+
+  it("still rejects oversized Google image JSON responses", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "x".repeat(35 * 1024 * 1024) }],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("google.image-generation: JSON response exceeds");
   });
 
   it("sends reference images and explicit resolution for edit flows", async () => {

@@ -86,6 +86,18 @@ function mockOpenAIImageApiResponse(params: {
   imageData: string;
   revisedPrompt?: string;
 }) {
+  const response = () =>
+    new Response(
+      JSON.stringify({
+        data: [
+          {
+            b64_json: Buffer.from(params.imageData).toString("base64"),
+            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
   const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "sk-test",
     source: "env",
@@ -93,32 +105,12 @@ function mockOpenAIImageApiResponse(params: {
   });
   const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
     finalUrl: params.finalUrl,
-    response: {
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-    } as Response,
+    response: response(),
     release: vi.fn(async () => {}),
   });
   const postMultipartRequestSpy = vi.spyOn(providerHttp, "postMultipartRequest").mockResolvedValue({
     finalUrl: params.finalUrl,
-    response: {
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-    } as Response,
+    response: response(),
     release: vi.fn(async () => {}),
   });
   vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);

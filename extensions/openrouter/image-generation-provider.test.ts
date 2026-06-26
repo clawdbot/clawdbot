@@ -31,6 +31,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 

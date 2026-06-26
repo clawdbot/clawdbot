@@ -51,15 +51,28 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+    "openclaw/plugin-sdk/provider-http",
+  );
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
@@ -138,8 +151,8 @@ function mockGeneratedResponse() {
       },
     ],
   };
-  postJsonRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
-  postMultipartRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
+  postJsonRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
+  postMultipartRequestMock.mockResolvedValue({ response: jsonResponse(payload), release });
   return release;
 }
 
@@ -226,6 +239,74 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
+    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        data: Array.from({ length: 3 }, () => ({
+          b64_json: imageBytes.toString("base64"),
+        })),
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "large",
+      count: 3,
+      cfg: {} as never,
+    });
+
+    expect(result.images).toHaveLength(3);
+    expect(result.images.map((image) => image.buffer.byteLength)).toEqual([
+      imageBytes.byteLength,
+      imageBytes.byteLength,
+      imageBytes.byteLength,
+    ]);
+  });
+
+  it("honors configured generated media caps above the default image limit", async () => {
+    const imageBytes = Buffer.alloc(7 * 1024 * 1024, 1);
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        data: [{ b64_json: imageBytes.toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "large",
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } } as never,
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.byteLength).toBe(imageBytes.byteLength);
+  });
+
+  it("rejects oversized OpenAI-compatible image JSON", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        data: [{ b64_json: "x".repeat(35 * 1024 * 1024) }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "too large",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("sample.image-generation: JSON response exceeds");
+  });
+
   it("posts multipart edit requests without forwarding a content-type header", async () => {
     mockGeneratedResponse();
     const provider = createProvider();
@@ -250,7 +331,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: [] }) },
+      response: jsonResponse({ data: [] }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider({
@@ -282,7 +363,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      response: jsonResponse({ data: { b64_json: "not-an-array" } }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider();

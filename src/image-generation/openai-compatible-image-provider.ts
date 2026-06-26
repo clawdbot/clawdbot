@@ -7,12 +7,17 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import {
+  parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
+} from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -125,6 +130,16 @@ function resolveRequestTimeoutMs(params: {
     deadline,
     defaultTimeoutMs: params.options.defaultTimeoutMs,
   });
+}
+
+function resolveResponseMaxImages(params: {
+  count: number;
+  mode: OpenAiCompatibleImageRequestMode;
+  options: OpenAiCompatibleImageProviderOptions;
+}): number {
+  return params.mode === "edit"
+    ? (params.options.capabilities.edit.maxCount ?? params.count)
+    : (params.options.capabilities.generate.maxCount ?? params.count);
 }
 
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
@@ -269,7 +284,13 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            resolveResponseMaxImages({ count, mode, options }),
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          ),
+        });
+        const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
           malformedResponseError:
             mode === "edit"

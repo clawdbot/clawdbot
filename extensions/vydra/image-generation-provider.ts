@@ -1,7 +1,11 @@
 // Vydra provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_VYDRA_IMAGE_MODEL,
   downloadVydraAsset,
@@ -75,7 +79,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra image generation failed");
-        const submitted = await response.json();
+        const submitted = await readProviderJsonResponse(response, "vydra.image-generation");
         const completedPayload = await resolveCompletedVydraPayload({
           submitted,
           baseUrl,

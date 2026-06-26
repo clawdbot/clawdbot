@@ -31,15 +31,21 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: vi.fn((request) => request),
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+    "openclaw/plugin-sdk/provider-http",
+  );
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: vi.fn((request) => request),
+  };
+});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
@@ -61,6 +67,13 @@ function requireFirstMockObjectArg(mock: ReturnType<typeof vi.fn>, label: string
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("deepinfra image generation provider", () => {
@@ -86,11 +99,9 @@ describe("deepinfra image generation provider", () => {
     const release = vi.fn(async () => {});
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: jpegBytes.toString("base64"), revised_prompt: "red square" }],
-        }),
-      },
+      response: jsonResponse({
+        data: [{ b64_json: jpegBytes.toString("base64"), revised_prompt: "red square" }],
+      }),
       release,
     });
 
@@ -168,17 +179,15 @@ describe("deepinfra image generation provider", () => {
 
   it("sends image edits as multipart OpenAI-compatible requests", async () => {
     postMultipartRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [
-            {
-              b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString(
-                "base64",
-              ),
-            },
-          ],
-        }),
-      },
+      response: jsonResponse({
+        data: [
+          {
+            b64_json: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString(
+              "base64",
+            ),
+          },
+        ],
+      }),
       release: vi.fn(async () => {}),
     });
 
