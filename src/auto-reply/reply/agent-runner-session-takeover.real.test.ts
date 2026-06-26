@@ -300,7 +300,7 @@ function createMinimalRunAgentTurnParams(followupRun: FollowupRun) {
 }
 
 const RESEND_GUIDANCE =
-  "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
+  "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.";
 
 describe("runAgentTurnWithFallback — real session takeover (#87180)", () => {
   let server: Server | undefined;

@@ -235,7 +235,7 @@ export async function handleAgentExecutionError(params: {
       turn.replyOperation?.fail("run_failed", err);
       const text = turn.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
+        : "⚠️ Your message was interrupted because new input arrived while the previous turn was still in progress. Please resend your message.";
       return {
         kind: "final",
         payload: markAgentRunFailureReplyPayload({
@@ -516,8 +516,14 @@ export async function handleAgentExecutionError(params: {
     // primary→fallback chain instead. The provider SDK would have retried
     // these in-window, but the prompt-lock pins SDK retries to 0 (#87180), so
     // the orchestrator owns this resilience where each retry re-acquires the lock.
+    // Keep the existing "Transient HTTP provider error" diagnostic for
+    // status-based transients (HTTP retries pre-dated connection retries, and
+    // downstream tooling/tests key on that exact wording); connection drops get
+    // their own label so the cause stays distinguishable in logs.
     defaultRuntime.error(
-      `Transient provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+      `${
+        isTransientHttp ? "Transient HTTP provider error" : "Transient connection error"
+      } before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
     const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
     const abortAction = await waitForRetryBackoff(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
