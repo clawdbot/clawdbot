@@ -8,6 +8,7 @@ import {
   classifyFailoverReason,
   extractFailoverSignalDetails,
   formatAssistantErrorText,
+  isConnectionError,
   isLikelyContextOverflowError,
 } from "./errors.js";
 
@@ -139,5 +140,35 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("isConnectionError", () => {
+  // Bare transport failures carry no leading HTTP status, so the orchestrator
+  // gates its one-shot transient retry on this predicate (#87180). Verify it
+  // catches the SDK/Node connection strings without over-matching terminal
+  // errors that must surface to the user instead of silently retrying.
+  it.each([
+    "Connection error.", // Anthropic SDK APIConnectionError literal
+    "socket hang up",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "fetch failed",
+    "connection reset by peer",
+    "network is unreachable",
+    "  ECONNRESET  ", // leading/trailing whitespace is trimmed
+  ])("treats %j as a connection error", (message) => {
+    expect(isConnectionError(message)).toBe(true);
+  });
+
+  it.each([
+    "", // empty message must not retry
+    "402 Payment Required: billing hard limit reached",
+    "Context window exceeded: prompt too large for this model",
+    "429 Too Many Requests",
+    "500 Internal Server Error", // status-based transient, owned by isTransientHttpError
+    "invalid_api_key: the provided credential is incorrect",
+  ])("does not treat %j as a connection error", (message) => {
+    expect(isConnectionError(message)).toBe(false);
   });
 });

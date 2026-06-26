@@ -11,6 +11,7 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
+  createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
   createMinimalRunAgentTurnParams,
@@ -19,6 +20,7 @@ import {
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = setupAgentRunnerExecutionTestState();
@@ -943,6 +945,105 @@ describe("executeAgentTurn: provider failures", () => {
       expect(result.payload.text).toBe(
         "⚠️ Agent failed before reply: LLM error server_error: Something exploded. Please try again, or use /new to start a fresh session.",
       );
+    }
+  });
+
+  it("retries the full fallback cycle once for a bare connection error, then succeeds (#87180 compat)", async () => {
+    // The embedded prompt-lock window pins SDK maxRetries to 0 so an in-window
+    // retry cannot widen the session-takeover race. Connection-error resilience
+    // is restored at the orchestrator, which re-runs the whole cycle once where
+    // each retry re-acquires the lock.
+    state.runWithModelFallbackMock
+      .mockRejectedValueOnce(new Error("Connection error."))
+      .mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        result: await params.run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "recovered" }],
+      meta: {
+        agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    vi.useFakeTimers();
+    try {
+      const promise = runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result.kind).toBe("success");
+      // 1 initial cycle + exactly 1 orchestrator retry.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops after a single connection-error retry instead of looping when it keeps failing", async () => {
+    // The transient-retry budget is one; once consumed the orchestrator must
+    // surface a terminal failure instead of spinning the full cycle forever.
+    state.runWithModelFallbackMock.mockRejectedValue(new Error("socket hang up"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    vi.useFakeTimers();
+    try {
+      const promise = runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result.kind).toBe("final");
+      // 1 initial cycle + exactly 1 retry, then the transient budget is exhausted.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

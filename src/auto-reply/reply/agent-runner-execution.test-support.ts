@@ -138,6 +138,8 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
     isRateLimitErrorMessage: (message: string) =>
       /rate.limit|too many requests|429|usage limit/i.test(message),
+    isConnectionError: (message: string) =>
+      /connection error|socket hang up|econnreset|econnrefused|fetch failed/i.test(message),
     isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };

@@ -7,6 +7,7 @@ import {
   formatRateLimitOrOverloadedErrorCopy,
   isBillingErrorMessage,
   isCompactionFailureError,
+  isConnectionError,
   isLikelyContextOverflowError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
@@ -295,6 +296,10 @@ export async function handleAgentExecutionError(params: {
   const isTransientHttp =
     isTransientHttpError(message) ||
     (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
+  // Bare connection errors (ECONNRESET, "socket hang up", "Connection error.")
+  // carry no leading HTTP status, so they need their own predicate alongside
+  // the status-based transient check for the retry gate below.
+  const isTransientConnection = isConnectionError(message);
 
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
@@ -499,14 +504,20 @@ export async function handleAgentExecutionError(params: {
     };
   }
   if (
-    isTransientHttp &&
+    (isTransientHttp || isTransientConnection) &&
     (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
     params.state.pendingLifecycleTerminal = undefined;
+    // Transient errors (502/521/etc.) and bare connection drops (ECONNRESET,
+    // socket hang up) typically affect the whole provider, so falling back to
+    // an alternate model first would not help. Retry the complete
+    // primary→fallback chain instead. The provider SDK would have retried
+    // these in-window, but the prompt-lock pins SDK retries to 0 (#87180), so
+    // the orchestrator owns this resilience where each retry re-acquires the lock.
     defaultRuntime.error(
-      `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+      `Transient provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
     const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
     const abortAction = await waitForRetryBackoff(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
