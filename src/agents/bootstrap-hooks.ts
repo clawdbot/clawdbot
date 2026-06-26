@@ -2,8 +2,9 @@
  * Applies internal agent bootstrap hooks before workspace context is injected.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { triggerInternalHookWithScheduling } from "../hooks/internal-hook-dispatch.js";
 import type { AgentBootstrapHookContext } from "../hooks/internal-hooks.js";
-import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { createInternalHookEvent } from "../hooks/internal-hooks.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -29,7 +30,7 @@ export async function applyBootstrapHookOverrides(params: {
     agentId,
   };
   const event = createInternalHookEvent("agent", "bootstrap", sessionKey, context);
-  await triggerInternalHook(event, { yieldBetweenHandlers: true });
+  await triggerInternalHookWithScheduling(event, { yieldBetweenHandlers: true });
   const updated = (event.context as AgentBootstrapHookContext).bootstrapFiles;
   return Array.isArray(updated) ? updated : params.files;
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { triggerInternalHookWithScheduling } from "./internal-hook-dispatch.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -213,9 +214,12 @@ describe("hooks", () => {
         calls.push("second");
       });
 
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
-        yieldBetweenHandlers: true,
-      });
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          yieldBetweenHandlers: true,
+        },
+      );
 
       expect(calls).toStrictEqual(["first", "second"]);
     });
@@ -230,9 +234,12 @@ describe("hooks", () => {
       registerInternalHook("command:new", () => {});
       const timings: Array<{ index: number; durationMs: number }> = [];
 
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
-        onHandlerTiming: (info) => timings.push(info),
-      });
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          onHandlerTiming: (info) => timings.push(info),
+        },
+      );
 
       expect(timings).toStrictEqual([
         { index: 0, durationMs: 15 },
@@ -244,9 +251,12 @@ describe("hooks", () => {
       vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
       registerInternalHook("command:new", () => {});
 
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
-        yieldBetweenHandlers: true,
-      });
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          yieldBetweenHandlers: true,
+        },
+      );
 
       expect(loggerMocks.warn).toHaveBeenCalledWith(
         "Slow hook handler [command:new] index=0 durationMs=501.0",
@@ -261,9 +271,12 @@ describe("hooks", () => {
       registerInternalHook("command:new", () => {});
       const timings: Array<{ index: number; durationMs: number }> = [];
 
-      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
-        onHandlerTiming: (info) => timings.push(info),
-      });
+      await triggerInternalHookWithScheduling(
+        createInternalHookEvent("command", "new", "test-session"),
+        {
+          onHandlerTiming: (info) => timings.push(info),
+        },
+      );
 
       expect(loggerMocks.warn).not.toHaveBeenCalled();
       expect(timings).toStrictEqual([{ index: 0, durationMs: 501 }]);

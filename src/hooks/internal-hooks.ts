@@ -5,21 +5,21 @@
  * like command processing, session lifecycle, etc.
  */
 
-import { performance } from "node:perf_hooks";
-import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clearLegacyPluginInternalHooks,
   listLegacyPluginInternalHookEventKeys,
   listLegacyPluginInternalHooks,
 } from "../plugins/legacy-internal-hook-state.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  internalHookHandlers as handlers,
+  internalHooksEnabledState,
+  triggerInternalHookWithScheduling,
+} from "./internal-hook-dispatch.js";
 import type {
   InternalHookEvent,
   InternalHookEventType,
@@ -173,34 +173,6 @@ export type SessionPatchHookEvent = InternalHookEvent & {
 };
 
 /**
- * Registry of hook handlers by event key.
- *
- * Uses a globalThis singleton so that registerInternalHook and
- * triggerInternalHook always share the same Map even when the bundler
- * emits multiple copies of this module into separate chunks (bundle
- * splitting). Without the singleton, handlers registered in one chunk
- * are invisible to triggerInternalHook in another chunk, causing hooks
- * to silently fire with zero handlers.
- */
-const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
-const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
-  INTERNAL_HOOK_HANDLERS_KEY,
-  () => new Map<string, InternalHookHandler[]>(),
-);
-const INTERNAL_HOOKS_ENABLED_KEY = Symbol.for("openclaw.internalHooksEnabled");
-const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
-  INTERNAL_HOOKS_ENABLED_KEY,
-  () => ({ enabled: true }),
-);
-const log = createSubsystemLogger("internal-hooks");
-const INTERNAL_HOOK_SLOW_HANDLER_WARN_MS = 500;
-
-export type InternalHookTriggerOptions = {
-  yieldBetweenHandlers?: boolean;
-  onHandlerTiming?: (info: { index: number; durationMs: number }) => void;
-};
-
-/**
  * Register a hook handler for a specific event type or event:action combination
  *
  * @param eventKey - Event type (e.g., 'command') or specific action (e.g., 'command:new')
@@ -288,55 +260,9 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * but don't prevent other handlers from running.
  *
  * @param event - The event to trigger
- * @param options - Optional handler scheduling and timing callbacks
  */
-export async function triggerInternalHook(
-  event: InternalHookEvent,
-  options?: InternalHookTriggerOptions,
-): Promise<void> {
-  if (!internalHooksEnabledState.enabled) {
-    return;
-  }
-  if (!hasInternalHookListeners(event.type, event.action)) {
-    return;
-  }
-
-  // An admitted event finishes its snapshot even if a handler awaits across a reload or disable.
-  const typeHandlers = [
-    ...(handlers.get(event.type) ?? []),
-    ...listLegacyPluginInternalHooks(event.type),
-  ];
-  const specificKey = `${event.type}:${event.action}`;
-  const specificHandlers = [
-    ...(handlers.get(specificKey) ?? []),
-    ...listLegacyPluginInternalHooks(specificKey),
-  ];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
-
-  for (const [index, handler] of allHandlers.entries()) {
-    const handlerStartedAt = performance.now();
-    try {
-      await handler(event);
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
-    }
-    const durationMs = performance.now() - handlerStartedAt;
-    options?.onHandlerTiming?.({ index, durationMs });
-    // The warning targets event-loop-stall diagnostics on the bootstrap dispatch
-    // path (the only caller passing yieldBetweenHandlers). Outside it, awaited
-    // wall time mostly reflects non-blocking network/file work, so a global
-    // duration warning is just false positives — timing data still flows via
-    // onHandlerTiming for callers that want it.
-    if (options?.yieldBetweenHandlers === true && durationMs > INTERNAL_HOOK_SLOW_HANDLER_WARN_MS) {
-      log.warn(
-        `Slow hook handler [${event.type}:${event.action}] index=${index} durationMs=${durationMs.toFixed(1)}`,
-      );
-    }
-    if (options?.yieldBetweenHandlers === true && index < allHandlers.length - 1) {
-      await yieldImmediate();
-    }
-  }
+export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  await triggerInternalHookWithScheduling(event);
 }
 
 /**

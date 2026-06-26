@@ -267,6 +267,24 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     );
   });
 
+  it("resolves a glob that matches nothing to an empty set without diagnostics", async () => {
+    // Parity with fs.glob's no-match behavior: a configured glob that matches
+    // no files yields no bootstrap files and no diagnostics. The literal pattern
+    // must not leak through as a phantom "missing" path the way a non-glob
+    // literal would.
+    const workspaceDir = await createWorkspaceDir("glob-no-match");
+    const packageDir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "packages/*/AGENTS.md",
+    ]);
+
+    expect(files).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
+  });
+
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");
