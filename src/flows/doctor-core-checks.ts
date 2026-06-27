@@ -1049,6 +1049,47 @@ function createSkillsReadinessCheck(
   };
 }
 
+const orphanModelRefsCheck: HealthCheck = {
+  id: "core/doctor/orphan-model-refs",
+  kind: "core",
+  description: "Agent model references point to providers that exist in models.providers.",
+  source: "doctor",
+  async detect(ctx) {
+    const { pruneOrphanModelRefs } =
+      await import("@openclaw/model-catalog-core/configured-model-refs");
+    const knownProviders = new Set(Object.keys(ctx.cfg.models?.providers ?? {}));
+    const { pruned } = pruneOrphanModelRefs(ctx.cfg, knownProviders);
+    return pruned.map(
+      (ref): HealthFinding => ({
+        checkId: "core/doctor/orphan-model-refs",
+        severity: "warning",
+        message: `Model reference "${ref.value}" points to provider "${ref.value.split("/")[0]}" which is not in models.providers.`,
+        path: ref.path,
+        fixHint: "Run `openclaw doctor --fix` to remove orphan model references from config.",
+      }),
+    );
+  },
+  async repair(ctx) {
+    const { pruneOrphanModelRefs } =
+      await import("@openclaw/model-catalog-core/configured-model-refs");
+    const knownProviders = new Set(Object.keys(ctx.cfg.models?.providers ?? {}));
+    const { config: nextConfig, pruned } = pruneOrphanModelRefs(ctx.cfg, knownProviders);
+    if (pruned.length === 0) {
+      return { changes: [] };
+    }
+    return {
+      config: nextConfig as OpenClawConfig,
+      changes: pruned.map((ref) => `Removed orphan model reference ${ref.value} at ${ref.path}.`),
+      effects: pruned.map((ref) => ({
+        kind: "config" as const,
+        action: ctx.dryRun === true ? "would-remove-orphan-model-ref" : "remove-orphan-model-ref",
+        target: ref.path,
+        dryRunSafe: true,
+      })),
+    };
+  },
+};
+
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
     checkId: "core/doctor/skills-readiness",
@@ -1323,6 +1364,7 @@ export function createCoreHealthChecks(
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),
+    orphanModelRefsCheck,
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
