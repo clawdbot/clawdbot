@@ -233,6 +233,24 @@ const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
 const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
   /\bcodex session generation is no longer current\b/iu;
 
+/**
+ * CLI subprocess budget kills (no-output stall / overall turn budget) and Codex
+ * app-server bridge failures (client closed / turn-completion idle timeout) read
+ * like timeout strings but are not transport timeouts: they are subprocess kills
+ * and bridge failures with their own surfaced copy and their own retry handling.
+ * The network transient retry gate uses this to skip them so their dedicated
+ * copy is not swallowed behind a redundant retry.
+ */
+export function hasDedicatedNonTransportTimeoutCopy(message: string): boolean {
+  const normalized = collapseRepeatedFailureDetail(message);
+  return (
+    CLI_BACKEND_NO_OUTPUT_STALL_RE.test(normalized) ||
+    CLI_BACKEND_OVERALL_TIMEOUT_RE.test(normalized) ||
+    CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalized) ||
+    CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalized)
+  );
+}
+
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {

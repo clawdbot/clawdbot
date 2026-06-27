@@ -11,6 +11,7 @@ import {
   isLikelyContextOverflowError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -45,6 +46,7 @@ import {
   buildExternalRunFailureReply,
   buildRateLimitCooldownMessage,
   hasBillingAttemptSummary,
+  hasDedicatedNonTransportTimeoutCopy,
   isNonDirectConversationContext,
   isPureTransientRateLimitSummary,
   isVerboseFailureDetailEnabled,
@@ -300,6 +302,20 @@ export async function handleAgentExecutionError(params: {
   // carry no leading HTTP status, so they need their own predicate alongside
   // the status-based transient check for the retry gate below.
   const isTransientConnection = isConnectionError(message);
+  // Request-timeout transport errors get rethrown to this single-model outer
+  // gate after the SDK's in-window timeout retries were pinned to 0 (#87180).
+  // isTimeoutErrorMessage matches timeout strings broadly, so the
+  // !isFallbackSummary guard keeps a timeout-only fallback summary (one that
+  // does not also read as a connection error) from re-running through this
+  // timeout disjunct: that summary means multi-model failover already ran, so a
+  // redundant timeout retry is wrong. Also exclude CLI subprocess budget
+  // timeouts (no-output stall / overall CLI turn budget) and Codex app-server
+  // bridge failures: they are subprocess kills / bridge failures with their own
+  // surfaced copy and replay handling that this gate would otherwise swallow.
+  const isTransientTimeout =
+    isTimeoutErrorMessage(message) &&
+    !isFallbackSummary &&
+    !hasDedicatedNonTransportTimeoutCopy(message);
 
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
@@ -504,7 +520,7 @@ export async function handleAgentExecutionError(params: {
     };
   }
   if (
-    (isTransientHttp || isTransientConnection) &&
+    (isTransientHttp || isTransientConnection || isTransientTimeout) &&
     (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
@@ -522,7 +538,11 @@ export async function handleAgentExecutionError(params: {
     // their own label so the cause stays distinguishable in logs.
     defaultRuntime.error(
       `${
-        isTransientHttp ? "Transient HTTP provider error" : "Transient connection error"
+        isTransientHttp
+          ? "Transient HTTP provider error"
+          : isTransientConnection
+            ? "Transient connection error"
+            : "Transient timeout error"
       } before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
     const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
