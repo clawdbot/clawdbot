@@ -81,6 +81,28 @@ describe("cleanupArchivedSessionTranscripts", () => {
     ]);
   });
 
+  it("skips excluded archive paths during dry-run", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
+    const excludedPath = await fsPromises.realpath(path.join(dir, `a.jsonl.deleted.${OLD_STAMP}`));
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [
+        { reason: "deleted", olderThanMs: 30 * DAY_MS },
+        { reason: "reset", olderThanMs: 30 * DAY_MS },
+      ],
+      nowMs: NOW_MS,
+      dryRun: true,
+      excludeCanonicalPaths: new Set([excludedPath]),
+    });
+
+    expect(result).toEqual({ removed: 1, scanned: 1 });
+    expect(await remaining()).toEqual([
+      `a.jsonl.deleted.${OLD_STAMP}`,
+      `b.jsonl.reset.${OLD_STAMP}`,
+    ]);
+  });
+
   it("applies each rule's age threshold independently", async () => {
     await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
 

@@ -147,12 +147,14 @@ async function cleanupArchivedTranscriptsForSummary(params: {
   storePath: string;
   maintenance: ResolvedSessionMaintenanceConfig;
   dryRun: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
 }): Promise<SessionArchiveCleanupReport> {
   const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
   const result = await cleanupArchivedSessionTranscripts({
     directories: [path.dirname(path.resolve(params.storePath))],
     rules: resolveSessionArchiveCleanupRules(params.maintenance),
     dryRun: params.dryRun,
+    excludeCanonicalPaths: params.excludeCanonicalPaths,
   });
   return {
     scannedFiles: result.scanned,
