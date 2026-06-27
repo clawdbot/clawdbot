@@ -20,6 +20,8 @@ const {
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
 let testing: typeof import("./speech-provider.js").testing;
 
+const GOOGLE_TTS_JSON_CAP_BYTES = 16 * 1024 * 1024;
+
 beforeAll(async () => {
   ({ buildGoogleSpeechProvider, testing } = await import("./speech-provider.js"));
 });
@@ -54,6 +56,26 @@ function installGoogleTtsRequestMock(pcm = Buffer.from([1, 0, 2, 0])) {
     release: vi.fn(async () => {}),
   });
   return postJsonRequestMock;
+}
+
+function oversizedGoogleTtsJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(GOOGLE_TTS_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
@@ -147,6 +169,39 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.readUInt32LE(24)).toBe(testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const release = vi.fn(async () => {});
+    postJsonRequestMock
+      .mockResolvedValueOnce({
+        response: oversizedGoogleTtsJsonResponse(() => {
+          cancelCount += 1;
+        }),
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: oversizedGoogleTtsJsonResponse(() => {
+          cancelCount += 1;
+        }),
+        release,
+      });
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "oversized tts response",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 12_000,
+      }),
+    ).rejects.toThrow("Google TTS response: JSON response exceeds 16777216 bytes");
+    expect(cancelCount).toBe(2);
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("transcodes Gemini PCM to Opus for voice-note targets", async () => {
