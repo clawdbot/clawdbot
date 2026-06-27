@@ -175,12 +175,14 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
   "text/plain",
+  "text/vcard",
   "application/json",
   "application/yaml",
 ]);
 // file-type returns undefined (no magic bytes) for plain-text formats like CSV,
 // Markdown, TXT, JSON, and YAML, so host-read needs an explicit "this really
-// decodes as text" fallback.
+// decodes as text" fallback. text/vcard is recognized by file-type and does not
+// need the alias path.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
   "text/csv",
   "text/markdown",
@@ -570,6 +572,19 @@ function assertHostReadMediaAllowed(params: {
     sniffedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
   ) {
+    // file-type reads only the first ~1MB. For text/* sniffed documents the
+    // prefix alone is not trustworthy — a valid header (e.g. "BEGIN:VCARD")
+    // can precede arbitrary binary data. Require full-buffer text validation
+    // before accepting text-based sniffed MIMEs.
+    if (sniffedMime.startsWith("text/")) {
+      if (params.buffer && isValidatedHostReadText(params.buffer)) {
+        return;
+      }
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Host-local text/${sniffedMime.slice(5)} media sends require buffer-verified plain-text content.`,
+      );
+    }
     return;
   }
   if (

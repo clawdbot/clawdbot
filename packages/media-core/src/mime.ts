@@ -52,6 +52,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "text/vcard": ".vcf",
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
