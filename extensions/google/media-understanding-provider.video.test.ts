@@ -1,4 +1,5 @@
 // Google tests cover media understanding provider.video plugin behavior.
+import { createServer, type Server } from "node:http";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -9,6 +10,49 @@ import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understandin
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
 installPinnedHostnameTestHooks();
+
+const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
+
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
+  let resolveClosed: (sentBytes: number) => void = () => {};
+  const closed = new Promise<number>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const server = createServer((_req, res) => {
+    let sentBytes = 0;
+    const chunk = Buffer.alloc(64 * 1024, 0x20);
+    res.writeHead(200, { "content-type": "application/json" });
+    const timer = setInterval(() => {
+      if (sentBytes >= LOOPBACK_RESPONSE_BYTES) {
+        clearInterval(timer);
+        res.end();
+        return;
+      }
+      sentBytes += chunk.length;
+      res.write(chunk);
+    }, 1);
+    res.on("close", () => {
+      clearInterval(timer);
+      resolveClosed(sentBytes);
+    });
+  });
+  return { server, closed };
+}
 
 describe("describeGeminiVideo", () => {
   it("respects case-insensitive x-goog-api-key overrides", async () => {
@@ -112,6 +156,29 @@ describe("describeGeminiVideo", () => {
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.data).toBe(
       Buffer.from("video-bytes").toString("base64"),
     );
+  });
+
+  it("bounds oversized video JSON responses and closes the stream early", async () => {
+    const { server, closed } = createOversizedJsonServer();
+    const port = await listenLoopbackServer(server);
+    const fetchFn = withFetchPreconnect(async () =>
+      fetch(`http://127.0.0.1:${port}/google-video-json`),
+    );
+
+    try {
+      await expect(
+        describeGeminiVideo({
+          buffer: Buffer.from("video-bytes"),
+          fileName: "clip.mp4",
+          apiKey: "test-key",
+          timeoutMs: 1500,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/JSON response exceeds 16777216 bytes/u);
+      await expect(closed).resolves.toBeLessThan(LOOPBACK_RESPONSE_BYTES);
+    } finally {
+      server.close();
+    }
   });
 
   it("rejects non-Google video base URLs before sending authenticated requests", async () => {
