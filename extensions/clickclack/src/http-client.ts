@@ -2,7 +2,10 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { WebSocket } from "ws";
 import type {
   ClickClackChannel,
@@ -44,7 +47,7 @@ export function createClickClackClient(options: ClientOptions) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       throw new Error(`ClickClack ${response.status}: ${detail}`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "ClickClack response");
   }
 
   return {
