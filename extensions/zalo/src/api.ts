@@ -4,6 +4,7 @@
  */
 
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -131,7 +132,7 @@ export async function callZaloApi<T = unknown>(
       signal: controller.signal,
     });
 
-    const data = (await response.json()) as ZaloApiResponse<T>;
+    const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
 
     if (!data.ok) {
       throw new ZaloApiError(
