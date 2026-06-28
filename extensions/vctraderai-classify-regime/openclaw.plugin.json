@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-classify-regime",
+  "name": "VC Trader AI Classify Regime",
+  "description": "Read-only workspace-scoped tool: market-regime classification (trending/ranging/choppy) via ADX+ATR over the warm M1 feed. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "classify_regime"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-order-outcome",
+  "name": "VC Trader AI Get Order Outcome",
+  "description": "Read-only workspace-scoped tool: the TRUE terminal outcome of an agent-placed order from the durable decision ledger via the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_order_outcome"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

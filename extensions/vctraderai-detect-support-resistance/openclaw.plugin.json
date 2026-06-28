@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-detect-support-resistance",
+  "name": "VC Trader AI Detect Support/Resistance",
+  "description": "Read-only workspace-scoped tool: support/resistance levels (fractals, lookback-range pivots, volume nodes) over the warm M1 feed. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "detect_support_resistance"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

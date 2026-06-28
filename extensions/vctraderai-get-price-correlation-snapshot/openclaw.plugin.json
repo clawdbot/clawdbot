@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-price-correlation-snapshot",
+  "name": "VC Trader AI Get Price Correlation Snapshot",
+  "description": "Read-only workspace-scoped tool: cross-instrument return-correlation over aligned warm M1 series. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_price_correlation_snapshot"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

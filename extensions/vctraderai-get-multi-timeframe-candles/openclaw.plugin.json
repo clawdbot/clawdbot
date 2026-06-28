@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-multi-timeframe-candles",
+  "name": "VC Trader AI Get Multi-Timeframe Candles",
+  "description": "Read-only workspace-scoped tool: M1/M5/M15/H1 candles for one symbol in a single call, server-side rolled up from the warm M1 feed. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_multi_timeframe_candles"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
