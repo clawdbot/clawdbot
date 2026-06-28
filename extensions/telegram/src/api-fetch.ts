@@ -1,7 +1,15 @@
 // Telegram plugin module implements api fetch behavior.
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
+
+const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+type TelegramGetChatResponse = {
+  ok?: boolean;
+  result?: { id?: number | string };
+};
 
 export function resolveTelegramChatLookupFetch(params?: {
   proxyUrl?: string;
@@ -47,10 +55,14 @@ export async function fetchTelegramChatId(params: {
     if (!res.ok) {
       return null;
     }
-    const data = (await res.json().catch(() => null)) as {
-      ok?: boolean;
-      result?: { id?: number | string };
-    } | null;
+    let data: TelegramGetChatResponse | null = null;
+    try {
+      data = JSON.parse(
+        (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+      ) as TelegramGetChatResponse;
+    } catch {
+      return null;
+    }
     const id = data?.ok ? data?.result?.id : undefined;
     if (typeof id === "number" || typeof id === "string") {
       return String(id);

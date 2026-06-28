@@ -3,6 +3,35 @@ import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
 
+const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
+
+function getChatOkResponse(id: number | string): Response {
+  return new Response(JSON.stringify({ ok: true, result: { id } }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function oversizedTelegramGetChatJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(TELEGRAM_GETCHAT_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
+
 const require = createRequire(import.meta.url);
 const EnvHttpProxyAgent = require("undici/lib/dispatcher/env-http-proxy-agent.js") as {
   new (opts?: Record<string, unknown>): Record<PropertyKey, unknown>;
@@ -67,18 +96,12 @@ describe("fetchTelegramChatId", () => {
   const cases = [
     {
       name: "returns stringified id when Telegram getChat succeeds",
-      fetchImpl: vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ ok: true, result: { id: 12345 } }),
-      })),
+      fetchImpl: vi.fn(async () => getChatOkResponse(12345)),
       expected: "12345",
     },
     {
       name: "returns null when response is not ok",
-      fetchImpl: vi.fn(async () => ({
-        ok: false,
-        json: async () => ({}),
-      })),
+      fetchImpl: vi.fn(async () => new Response("{}", { status: 404 })),
       expected: null,
     },
     {
@@ -104,10 +127,7 @@ describe("fetchTelegramChatId", () => {
   }
 
   it("calls Telegram getChat endpoint", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ ok: true, result: { id: 12345 } }),
-    }));
+    const fetchMock = vi.fn(async () => getChatOkResponse(12345));
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchTelegramChatId({ token: "abc", chatId: "@user" });
@@ -118,10 +138,7 @@ describe("fetchTelegramChatId", () => {
   });
 
   it("uses caller-provided fetch impl when present", async () => {
-    const customFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ ok: true, result: { id: 12345 } }),
-    }));
+    const customFetch = vi.fn(async () => getChatOkResponse(12345));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -139,6 +156,24 @@ describe("fetchTelegramChatId", () => {
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
       undefined,
     );
+  });
+
+  it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const fetchImpl = vi.fn(async () =>
+      oversizedTelegramGetChatJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    await expect(
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).resolves.toBeNull();
+    expect(cancelCount).toBe(1);
   });
 });
 
