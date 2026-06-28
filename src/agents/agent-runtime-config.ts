@@ -120,10 +120,14 @@ function hasAgentRuntimeSecretRefs(params: {
     listAgentEntries(config).some((agent) =>
       hasNestedSecretRef({
         memoryRemote: agent.memory?.search?.remote,
+        sandboxDockerEnv: agent.sandbox?.docker?.env,
         ttsProviders: agent.tts?.providers,
       }),
     )
   ) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.agents?.defaults?.sandbox?.docker?.env)) {
     return true;
   }
   if (hasNestedSecretRef(config.tts?.providers)) {

@@ -40,6 +40,8 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "memory.search.remote.apiKey",
   "agents.entries.*.memory.search.remote.apiKey",
+  "agents.defaults.sandbox.docker.env.*",
+  "agents.entries.*.sandbox.docker.env.*",
   "agents.entries.*.tts.providers.*.apiKey",
   "tts.providers.*.apiKey",
   "skills.entries.*.apiKey",

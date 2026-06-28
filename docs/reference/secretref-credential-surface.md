@@ -37,6 +37,8 @@ The lists below are generated from the source target registry and checked agains
 - `models.providers.*.request.tls.passphrase`
 - `skills.entries.*.apiKey`
 - `memory.search.remote.apiKey`
+- `agents.defaults.sandbox.docker.env.*`
+- `agents.entries.*.sandbox.docker.env.*`
 - `agents.entries.*.tts.providers.*.apiKey`
 - `agents.entries.*.memory.search.remote.apiKey`
 - `talk.providers.*.apiKey`

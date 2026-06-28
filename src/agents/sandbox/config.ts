@@ -6,8 +6,11 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SandboxSshSettings } from "../../config/types.sandbox.js";
-import { normalizeSecretInputString } from "../../config/types.secrets.js";
+import type { SandboxDockerSettings, SandboxSshSettings } from "../../config/types.sandbox.js";
+import {
+  assertSecretInputResolved,
+  normalizeSecretInputString,
+} from "../../config/types.secrets.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -51,12 +54,36 @@ function resolveSandboxBrowserAutoStartTimeoutMs(value: number | undefined): num
 }
 
 function resolveDangerousSandboxDockerBooleans(
-  agentDocker?: Partial<SandboxDockerConfig>,
-  globalDocker?: Partial<SandboxDockerConfig>,
+  agentDocker?: Partial<SandboxDockerSettings>,
+  globalDocker?: Partial<SandboxDockerSettings>,
 ): DangerousSandboxDockerBooleans {
   const resolved = {} as DangerousSandboxDockerBooleans;
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
     resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
+  }
+  return resolved;
+}
+
+function resolveSandboxDockerEnv(
+  env: SandboxDockerSettings["env"] | undefined,
+  pathPrefix: string,
+  skipKeys?: ReadonlySet<string>,
+): Record<string, string> | undefined {
+  if (!env) {
+    return undefined;
+  }
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (skipKeys?.has(key)) {
+      continue;
+    }
+    assertSecretInputResolved({
+      value,
+      path: `${pathPrefix}.${key}`,
+    });
+    if (typeof value === "string") {
+      resolved[key] = value;
+    }
   }
   return resolved;
 }
@@ -92,15 +119,21 @@ export function resolveSandboxScope(params: {
 
 export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
-  globalDocker?: Partial<SandboxDockerConfig>;
-  agentDocker?: Partial<SandboxDockerConfig>;
+  globalDocker?: Partial<SandboxDockerSettings>;
+  agentDocker?: Partial<SandboxDockerSettings>;
 }): SandboxDockerConfig {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
 
-  const env = agentDocker?.env
-    ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
-    : (globalDocker?.env ?? { LANG: "C.UTF-8" });
+  const agentEnv = resolveSandboxDockerEnv(agentDocker?.env, "agents.entries.*.sandbox.docker.env");
+  const globalEnv = resolveSandboxDockerEnv(
+    globalDocker?.env,
+    "agents.defaults.sandbox.docker.env",
+    agentDocker?.env ? new Set(Object.keys(agentDocker.env)) : undefined,
+  );
+  const env = agentEnv
+    ? { ...(globalEnv ?? { LANG: "C.UTF-8" }), ...agentEnv }
+    : (globalEnv ?? { LANG: "C.UTF-8" });
 
   const ulimits = agentDocker?.ulimits
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }

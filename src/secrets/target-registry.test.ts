@@ -55,6 +55,29 @@ describe("secret target registry", () => {
     expect(target?.providerId).toBe("openai");
   });
 
+  it("resolves sandbox docker env wildcard targets", () => {
+    const defaultTarget = resolveConfigSecretTargetByPath([
+      "agents",
+      "defaults",
+      "sandbox",
+      "docker",
+      "env",
+      "DATABASE_URL",
+    ]);
+    expect(defaultTarget?.entry?.id).toBe("agents.defaults.sandbox.docker.env.*");
+
+    const agentTarget = resolveConfigSecretTargetByPath([
+      "agents",
+      "entries",
+      "worker",
+      "sandbox",
+      "docker",
+      "env",
+      "SERVICE_TOKEN",
+    ]);
+    expect(agentTarget?.entry?.id).toBe("agents.entries.*.sandbox.docker.env.*");
+  });
+
   it("returns null when no config target path matches", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 

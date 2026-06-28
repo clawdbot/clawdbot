@@ -26,9 +26,34 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
             },
           },
         },
-
         agents: {
-          defaults: {},
+          defaults: {
+            sandbox: {
+              mode: "off",
+              docker: {
+                env: {
+                  DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+                },
+              },
+            },
+          },
+          entries: {
+            worker: {
+              sandbox: {
+                mode: "all",
+                backend: "ssh",
+                docker: {
+                  env: {
+                    API_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "WORKER_API_TOKEN",
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         gateway: {
           auth: {
@@ -42,6 +67,11 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expectWarningPaths(snapshot, ["memory.search.remote.apiKey", "gateway.auth.password"]);
+    expectWarningPaths(snapshot, [
+      "memory.search.remote.apiKey",
+      "agents.defaults.sandbox.docker.env.DATABASE_URL",
+      "agents.entries.worker.sandbox.docker.env.API_TOKEN",
+      "gateway.auth.password",
+    ]);
   });
 });

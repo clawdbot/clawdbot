@@ -35,6 +35,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: (params?: { includeChannelTargets?: boolean }) =>
     new Set([
       "models.providers.*.apiKey",
+      "agents.defaults.sandbox.docker.env.*",
+      "agents.entries.*.sandbox.docker.env.*",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
   getScopedChannelsCommandSecretTargets: (params: {
@@ -247,11 +249,16 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: new Set(["models.providers.*.apiKey"]),
+        targetIds: new Set([
+          "models.providers.*.apiKey",
+          "agents.defaults.sandbox.docker.env.*",
+          "agents.entries.*.sandbox.docker.env.*",
+        ]),
         runtime,
       });
       const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
+      expect(targetIds.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
       expect(prepared.cfg).toBe(resolvedConfig);
@@ -393,6 +400,32 @@ describe("agentCommand runtime config", () => {
         ]),
       );
       expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
+    });
+  });
+
+  it("resolves command secrets when sandbox docker env uses SecretRefs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      loadedConfig.agents!.defaults!.sandbox = {
+        mode: "all",
+        docker: {
+          env: {
+            DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+          },
+        },
+      };
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      const targetIds = requireResolveCommandConfigParams().targetIds;
+      expect(targetIds.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
+      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -62,6 +62,8 @@ describe("command secret targets module import", () => {
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     const ids = mod.getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.defaults.sandbox.docker.env.*")).toBe(true);
+    expect(ids.has("agents.entries.*.sandbox.docker.env.*")).toBe(true);
     expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
     expect(ids.has("channels.telegram.botToken")).toBe(false);
@@ -207,6 +209,7 @@ describe("command secret targets module import", () => {
     );
 
     expect(targets.has("memory.search.remote.apiKey")).toBe(true);
+    expect(targets.has("agents.defaults.sandbox.docker.env.*")).toBe(false);
     expect(targets.has("gateway.auth.token")).toBe(true);
     expect(targets.has("gateway.auth.password")).toBe(true);
     expect(targets.has("gateway.remote.token")).toBe(true);

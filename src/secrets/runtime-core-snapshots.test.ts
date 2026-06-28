@@ -203,6 +203,156 @@ describe("secrets runtime snapshot core lanes", () => {
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
 
+  it("resolves sandbox docker env SecretRefs for active sandbox agents", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              docker: {
+                env: {
+                  LANG: "C.UTF-8",
+                  DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+                },
+              },
+            },
+          },
+          entries: {
+            main: {
+              sandbox: {
+                docker: {
+                  env: {
+                    SERVICE_TOKEN: {
+                      source: "env",
+                      provider: "default",
+                      id: "SERVICE_TOKEN",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DATABASE_URL: "postgres://sandbox-db",
+        SERVICE_TOKEN: "sandbox-service-token",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map(),
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.DATABASE_URL).toBe(
+      "postgres://sandbox-db",
+    );
+    expect(snapshot.config.agents?.entries?.main?.sandbox?.docker?.env?.SERVICE_TOKEN).toBe(
+      "sandbox-service-token",
+    );
+  });
+
+  it("does not resolve ignored agent Docker env overrides for shared sandboxes", async () => {
+    const agentRef = { source: "env", provider: "default", id: "AGENT_SERVICE_TOKEN" } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+              docker: {
+                env: {
+                  DATABASE_URL: { source: "env", provider: "default", id: "DATABASE_URL" },
+                },
+              },
+            },
+          },
+          entries: {
+            main: {
+              sandbox: {
+                docker: {
+                  env: {
+                    SERVICE_TOKEN: agentRef,
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DATABASE_URL: "postgres://shared-sandbox-db",
+        AGENT_SERVICE_TOKEN: "must-not-materialize",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map(),
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.DATABASE_URL).toBe(
+      "postgres://shared-sandbox-db",
+    );
+    expect(snapshot.config.agents?.entries?.main?.sandbox?.docker?.env?.SERVICE_TOKEN).toEqual(
+      agentRef,
+    );
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.entries.main.sandbox.docker.env.SERVICE_TOKEN",
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        }),
+      ]),
+    );
+  });
+
+  it("does not resolve a default Docker env ref overridden by every active agent", async () => {
+    const defaultRef = { source: "env", provider: "default", id: "DEFAULT_SERVICE_TOKEN" } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              docker: {
+                env: {
+                  SERVICE_TOKEN: defaultRef,
+                },
+              },
+            },
+          },
+          entries: {
+            main: {
+              sandbox: {
+                docker: {
+                  env: {
+                    SERVICE_TOKEN: "agent-service-token",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map(),
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.docker?.env?.SERVICE_TOKEN).toEqual(
+      defaultRef,
+    );
+    expect(snapshot.config.agents?.entries?.main?.sandbox?.docker?.env?.SERVICE_TOKEN).toBe(
+      "agent-service-token",
+    );
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.sandbox.docker.env.SERVICE_TOKEN",
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        }),
+      ]),
+    );
+  });
+
   it("resolves env-backed auth profile SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),

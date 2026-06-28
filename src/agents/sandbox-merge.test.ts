@@ -37,6 +37,77 @@ describe("sandbox config merges", () => {
     });
   });
 
+  it("preserves an explicitly empty global sandbox docker env", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { env: {} },
+      agentDocker: {},
+    });
+
+    expect(resolved.env).toEqual({});
+  });
+
+  it("preserves literal sandbox docker env strings exactly", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        env: {
+          EMPTY: "",
+          SPACES: "  ",
+          LITERAL: "value",
+        },
+      },
+      agentDocker: {
+        env: {
+          AGENT_EMPTY: "",
+        },
+      },
+    });
+
+    expect(resolved.env).toEqual({
+      EMPTY: "",
+      SPACES: "  ",
+      LITERAL: "value",
+      AGENT_EMPTY: "",
+    });
+  });
+
+  it("does not read an unresolved global env value overridden by the agent", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        env: {
+          TOKEN: { source: "env", provider: "default", id: "GLOBAL_TOKEN" },
+        },
+      },
+      agentDocker: {
+        env: {
+          TOKEN: "agent-token",
+        },
+      },
+    });
+
+    expect(resolved.env).toEqual({ TOKEN: "agent-token" });
+  });
+
+  it("fails closed when an effective sandbox docker env ref is unresolved", () => {
+    expect(() =>
+      resolveSandboxDockerConfig({
+        scope: "shared",
+        globalDocker: {
+          env: {
+            TOKEN: { source: "env", provider: "default", id: "GLOBAL_TOKEN" },
+          },
+        },
+        agentDocker: {
+          env: {
+            TOKEN: "ignored-agent-token",
+          },
+        },
+      }),
+    ).toThrow("agents.defaults.sandbox.docker.env.TOKEN: unresolved SecretRef");
+  });
+
   it("resolves sandbox docker GPU passthrough with agent precedence", () => {
     const inherited = resolveSandboxDockerConfig({
       scope: "agent",

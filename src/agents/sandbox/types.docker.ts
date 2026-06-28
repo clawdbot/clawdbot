@@ -14,5 +14,7 @@ type RequiredDockerConfigKeys =
   | "network"
   | "capDrop";
 
-export type SandboxDockerConfig = Omit<SandboxDockerSettings, RequiredDockerConfigKeys> &
-  Required<Pick<SandboxDockerSettings, RequiredDockerConfigKeys>>;
+export type SandboxDockerConfig = Omit<SandboxDockerSettings, RequiredDockerConfigKeys | "env"> &
+  Required<Pick<SandboxDockerSettings, RequiredDockerConfigKeys>> & {
+    env?: Record<string, string>;
+  };

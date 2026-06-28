@@ -157,7 +157,7 @@ const SandboxDockerSchema = z
     network: z.string().optional(),
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
-    env: z.record(z.string(), z.string()).optional(),
+    env: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     setupCommand: z
       .union([z.string(), z.array(z.string())])
       .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
