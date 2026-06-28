@@ -74,6 +74,37 @@ describe("probeMattermost", () => {
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds and cancels oversized probe success JSON bodies", async () => {
+    let canceled = false;
+    let pulled = 0;
+    const oversizeChunk = new Uint8Array(2 * 1024 * 1024).fill(0x7b); // 2 MiB of "{"
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(oversizeChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchGuard.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: mockRelease,
+    });
+
+    const result = await probeMattermost("https://mm.example.com", "bot-token");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBeNull();
+    expect(result.error).toContain("JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(12);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards allowPrivateNetwork to the SSRF guard policy", async () => {
     mockFetchGuard.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ id: "bot-1" }), {

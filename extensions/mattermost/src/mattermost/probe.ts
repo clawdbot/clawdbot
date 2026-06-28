@@ -1,6 +1,7 @@
 // Mattermost plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -53,7 +54,7 @@ export async function probeMattermost(
           elapsedMs,
         };
       }
-      const bot = (await res.json()) as MattermostUser;
+      const bot = await readProviderJsonResponse<MattermostUser>(res, "Mattermost probe /users/me");
       return {
         ok: true,
         status: res.status,

@@ -201,6 +201,68 @@ describe("createMattermostClient", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds and cancels oversized guarded Mattermost success JSON bodies", async () => {
+    const release = vi.fn(async () => {});
+    let canceled = false;
+    let pulled = 0;
+    const oversizeChunk = new Uint8Array(2 * 1024 * 1024).fill(0x7b); // 2 MiB of '{'
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        // Flood far past the 16 MiB JSON cap; an unbounded reader would buffer
+        // the whole stream before parsing.
+        controller.enqueue(oversizeChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    let caught: Error | undefined;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("JSON response exceeds 16777216 bytes");
+    // The reader is cancelled at the cap instead of draining the flood: ~8
+    // chunks of 2 MiB reach the 16 MiB ceiling, never the unbounded tail.
+    expect(canceled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(12);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized guarded Mattermost success text bodies instead of truncating", async () => {
+    const release = vi.fn(async () => {});
+    const tracked = cancelTrackedResponse(`${"plain success ".repeat(7000)}tail`, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: tracked.response, release });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(client.request("/users/me")).rejects.toThrow(
+      "Mattermost API /users/me: text response exceeds 65536 bytes",
+    );
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("releases guarded Mattermost responses when upstream body reads fail", async () => {
     const release = vi.fn(async () => {});
     const stream = new ReadableStream<Uint8Array>({
