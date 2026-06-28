@@ -61,6 +61,24 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function oversizedJsonResponse(): Response {
+  return new Response(
+    new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20));
+      },
+      cancel: vi.fn(),
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     const provider = buildMinimaxVideoGenerationProvider();
@@ -71,24 +89,22 @@ describe("minimax video generation provider", () => {
 
   it("creates a task, polls status, and downloads the generated video", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          task_id: "task-123",
-          base_resp: { status_code: 0 },
-        }),
-      },
+      response: jsonResponse({
+        task_id: "task-123",
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        jsonResponse({
           task_id: "task-123",
           status: "Success",
           video_url: "https://example.com/out.mp4",
           file_id: "file-1",
           base_resp: { status_code: 0 },
         }),
-      })
+      )
       .mockResolvedValueOnce({
         headers: new Headers({ "content-type": "video/webm" }),
         arrayBuffer: async () => Buffer.from("webm-bytes"),
@@ -117,23 +133,21 @@ describe("minimax video generation provider", () => {
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          task_id: "task-too-large",
-          base_resp: { status_code: 0 },
-        }),
-      },
+      response: jsonResponse({
+        task_id: "task-too-large",
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        jsonResponse({
           task_id: "task-too-large",
           status: "Success",
           video_url: "https://example.com/too-large.mp4",
           base_resp: { status_code: 0 },
         }),
-      })
+      )
       .mockResolvedValueOnce(streamedVideoResponse("too-large"));
 
     const provider = buildMinimaxVideoGenerationProvider();
@@ -149,25 +163,23 @@ describe("minimax video generation provider", () => {
 
   it("downloads via file_id when the status response omits video_url", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          task_id: "task-456",
-          base_resp: { status_code: 0 },
-        }),
-      },
+      response: jsonResponse({
+        task_id: "task-456",
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        jsonResponse({
           task_id: "task-456",
           status: "Success",
           file_id: "file-9",
           base_resp: { status_code: 0 },
         }),
-      })
-      .mockResolvedValueOnce({
-        json: async () => ({
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
           file: {
             file_id: "file-9",
             filename: "output_aigc.mp4",
@@ -175,7 +187,7 @@ describe("minimax video generation provider", () => {
           },
           base_resp: { status_code: 0 },
         }),
-      })
+      )
       .mockResolvedValueOnce({
         headers: new Headers({ "content-type": "video/mp4" }),
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
@@ -197,25 +209,60 @@ describe("minimax video generation provider", () => {
     expect(result.metadata?.videoUrl).toBeUndefined();
   });
 
-  it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
+  it("rejects oversized file_id metadata JSON before downloading", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          task_id: "task-portal",
+      response: new Response(
+        JSON.stringify({
+          task_id: "task-metadata-too-large",
           base_resp: { status_code: 0 },
         }),
-      },
+      ),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            task_id: "task-metadata-too-large",
+            status: "Success",
+            file_id: "file-too-large",
+            base_resp: { status_code: 0 },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(oversizedJsonResponse());
+
+    const provider = buildMinimaxVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "minimax",
+        model: "MiniMax-Hailuo-2.3",
+        prompt: "A fox sprints across snowy hills",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax generated video metadata: JSON response exceeds 16777216 bytes");
+
+    expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-too-large");
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        task_id: "task-portal",
+        base_resp: { status_code: 0 },
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        jsonResponse({
           task_id: "task-portal",
           status: "Success",
           video_url: "https://example.com/portal.mp4",
           base_resp: { status_code: 0 },
         }),
-      })
+      )
       .mockResolvedValueOnce({
         headers: new Headers({ "content-type": "video/mp4" }),
         arrayBuffer: async () => Buffer.from("mp4-bytes"),

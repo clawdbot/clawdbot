@@ -92,31 +92,35 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: minimaxProviderHttpMocks.resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: ({
-    label,
-    timeoutMs,
-  }: {
-    label: string;
-    timeoutMs?: number;
-  }) => ({
-    label,
-    timeoutMs,
-  }),
-  createProviderOperationTimeoutResolver:
-    ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    () =>
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    assertOkOrThrowHttpError: minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: ({
+      label,
+      timeoutMs,
+    }: {
+      label: string;
+      timeoutMs?: number;
+    }) => ({
+      label,
+      timeoutMs,
+    }),
+    createProviderOperationTimeoutResolver:
+      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+      () =>
+        defaultTimeoutMs,
+    fetchProviderDownloadResponse: minimaxProviderHttpMocks.fetchProviderDownloadResponseMock,
+    fetchProviderOperationResponse: minimaxProviderHttpMocks.fetchProviderOperationResponseMock,
+    fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
+    postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
-  fetchProviderDownloadResponse: minimaxProviderHttpMocks.fetchProviderDownloadResponseMock,
-  fetchProviderOperationResponse: minimaxProviderHttpMocks.fetchProviderOperationResponseMock,
-  fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
-  postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
-  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    defaultTimeoutMs,
-  resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
-  waitProviderOperationPollInterval: async () => {},
-}));
+    resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
+    waitProviderOperationPollInterval: async () => {},
+  };
+});
 
 export function getMinimaxProviderHttpMocks(): MinimaxProviderHttpMocks {
   return minimaxProviderHttpMocks;
