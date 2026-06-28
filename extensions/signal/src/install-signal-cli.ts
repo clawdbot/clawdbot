@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
@@ -303,7 +304,7 @@ export async function installSignalCliFromRelease(
       };
     }
     try {
-      payload = (await response.json()) as ReleaseResponse;
+      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
     } catch {
       return {
         ok: false,

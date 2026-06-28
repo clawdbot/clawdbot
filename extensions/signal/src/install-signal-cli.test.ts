@@ -277,6 +277,38 @@ describe("installSignalCliFromRelease", () => {
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds oversized GitHub release metadata and cancels the stream", async () => {
+    const chunkSize = 1024 * 1024;
+    const chunkCount = 20; // 20 MiB — over the 16 MiB cap
+    let readCount = 0;
+    let canceled = false;
+    const oversized = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(new Uint8Array(chunkSize));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+    const releaseMock = vi.fn().mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({ response: oversized, release: releaseMock });
+
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+    expect(result).toEqual({ ok: false, error: "Failed to parse signal-cli release info." });
+    expect(canceled).toBe(true);
+    expect(readCount).toBeLessThan(chunkCount);
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds the release metadata request with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse(JSON.stringify({ tag_name: "v0.14.3", assets: [] }), {
       headers: { "content-type": "application/json" },
