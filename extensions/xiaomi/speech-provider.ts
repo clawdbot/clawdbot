@@ -1,7 +1,10 @@
 // Xiaomi provider module implements model/runtime integration.
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -269,7 +272,8 @@ async function xiaomiTTS(params: {
     });
     try {
       await assertOkOrThrowProviderError(response, "Xiaomi TTS API error");
-      return decodeXiaomiAudioData(await response.json());
+      const body = await readProviderJsonResponse<unknown>(response, "Xiaomi TTS API");
+      return decodeXiaomiAudioData(body);
     } finally {
       await release();
     }

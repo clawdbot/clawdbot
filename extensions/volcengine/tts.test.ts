@@ -7,6 +7,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
@@ -43,6 +45,18 @@ function clearTtsEnv() {
   delete process.env.VOLCENGINE_TTS_API_KEY;
   delete process.env.VOLCENGINE_TTS_APPID;
   delete process.env.VOLCENGINE_TTS_TOKEN;
+}
+
+function makeOversizedStreamResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }),
+  );
 }
 
 function restoreOptionalEnv(key: string, value: string | undefined) {
@@ -301,6 +315,23 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds Seed Speech success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        apiKey: "secret-api-key",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("BytePlus Seed Speech TTS response exceeds 16777216 bytes");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -325,6 +356,24 @@ describe("volcengineTTS", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Volcengine TTS error 3001: load grant failed");
     expect((error as Error).message).not.toContain("secret-token");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds legacy Volcengine success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "secret-token",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Volcengine TTS response exceeds 16777216 bytes");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

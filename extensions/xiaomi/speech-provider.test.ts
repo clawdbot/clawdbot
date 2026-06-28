@@ -4,11 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
+
+function makeOversizedStreamResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
 
 describe("buildXiaomiSpeechProvider", () => {
   const provider = buildXiaomiSpeechProvider();
@@ -409,6 +427,20 @@ describe("buildXiaomiSpeechProvider", () => {
           timeoutMs: 30000,
         }),
       ).rejects.toThrow("Xiaomi TTS API returned no audio data");
+    });
+
+    it("bounds oversized Xiaomi TTS success response reads", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(makeOversizedStreamResponse());
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("Xiaomi TTS API: JSON response exceeds 16777216 bytes");
     });
   });
 });
