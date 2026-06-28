@@ -9,6 +9,28 @@ import {
 } from "./probe.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
+const DISCORD_PROBE_JSON_CAP_BYTES = 16 * 1024 * 1024;
+
+function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(DISCORD_PROBE_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
+
 describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -102,6 +124,21 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       error: "getMe failed (401)",
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const fetcher = withFetchPreconnect(async () =>
+      oversizedDiscordProbeJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
+    });
+    expect(cancelCount).toBe(1);
   });
 
   it("derives application id from parseable tokens before probing REST", async () => {

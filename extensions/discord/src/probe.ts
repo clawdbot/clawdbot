@@ -2,6 +2,7 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -155,7 +156,10 @@ export async function probeDiscord(
       result.error = `getMe failed (${res.status})`;
       return { ...result, elapsedMs: Date.now() - started };
     }
-    const json = (await res.json()) as { id?: string; username?: string };
+    const json = await readProviderJsonResponse<{ id?: string; username?: string }>(
+      res,
+      "discord.probe.getMe",
+    );
     result.ok = true;
     result.bot = {
       id: json.id ?? null,
