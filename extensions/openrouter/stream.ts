@@ -9,6 +9,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeoutGuarded,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -124,7 +125,12 @@ async function fetchOpenRouterGenerationTotalCost(params: {
   );
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter generation metadata request failed");
-    return readOpenRouterTotalCost((await response.json()) as OpenRouterGenerationResponse);
+    return readOpenRouterTotalCost(
+      await readProviderJsonResponse<OpenRouterGenerationResponse>(
+        response,
+        "openrouter.generation-cost",
+      ),
+    );
   } finally {
     await release();
   }
