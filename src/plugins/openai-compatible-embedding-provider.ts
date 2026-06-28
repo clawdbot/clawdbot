@@ -1,5 +1,6 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -285,11 +286,7 @@ function readEmbeddingVectors(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (cause) {
-    throw new Error("openai-compatible embeddings failed: malformed JSON response", { cause });
-  }
+  return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
 }
 
 function concatBytes(chunks: Uint8Array[], totalLength: number): Uint8Array {

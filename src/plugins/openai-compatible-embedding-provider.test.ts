@@ -31,6 +31,13 @@ type FixtureResponse = {
   };
 };
 
+type OversizedStreamServer = {
+  baseUrl: string;
+  closed: Promise<void>;
+  getBodyBytesSent: () => number;
+  getPlannedBodyBytes: () => number;
+};
+
 const servers: Array<{ close: () => Promise<void> }> = [];
 
 function createOptions(
@@ -160,6 +167,96 @@ async function startHangingErrorEmbeddingServer(): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     closed,
+  };
+}
+
+async function startOversizedSuccessEmbeddingServer(): Promise<OversizedStreamServer> {
+  const chunk = Buffer.alloc(64 * 1024, 0x20);
+  const prefix = Buffer.from('{"data":[');
+  const plannedBodyBytes = 64 * 1024 * 1024;
+  const sockets = new Set<Socket>();
+  let bodyBytesSent = 0;
+  let resolveClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      await readJsonBody(req);
+      let closedAlready = false;
+      res.on("close", () => {
+        closedAlready = true;
+        resolveClosed();
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      const writeChunk = async (buffer: Buffer): Promise<boolean> => {
+        if (closedAlready) {
+          return false;
+        }
+        const accepted = res.write(buffer);
+        bodyBytesSent += buffer.byteLength;
+        if (accepted) {
+          return true;
+        }
+        return await new Promise<boolean>((resolve) => {
+          const cleanup = () => {
+            res.off("drain", onDrain);
+            res.off("close", onClose);
+          };
+          const onDrain = () => {
+            cleanup();
+            resolve(!closedAlready);
+          };
+          const onClose = () => {
+            cleanup();
+            resolve(false);
+          };
+          res.once("drain", onDrain);
+          res.once("close", onClose);
+        });
+      };
+
+      if (!(await writeChunk(prefix))) {
+        return;
+      }
+      const chunksToSend = Math.ceil((plannedBodyBytes - bodyBytesSent) / chunk.byteLength);
+      for (let i = 0; i < chunksToSend; i++) {
+        if (!(await writeChunk(chunk))) {
+          return;
+        }
+      }
+      res.end("]}");
+    })();
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    closed,
+    getBodyBytesSent: () => bodyBytesSent,
+    getPlannedBodyBytes: () => plannedBodyBytes,
   };
 }
 
@@ -331,6 +428,29 @@ describe("openai-compatible generic embedding provider", () => {
         }),
       ]),
     ).resolves.toBe("closed");
+  });
+
+  it("bounds and cancels oversized successful embedding JSON bodies", async () => {
+    const server = await startOversizedSuccessEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).rejects.toThrow(
+      "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
+    );
+    await expect(
+      Promise.race([
+        server.closed.then(() => "closed" as const),
+        new Promise<"open">((resolve) => {
+          setTimeout(() => resolve("open"), 1_000);
+        }),
+      ]),
+    ).resolves.toBe("closed");
+    expect(server.getBodyBytesSent()).toBeLessThan(server.getPlannedBodyBytes() / 2);
   });
 
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {
