@@ -2,6 +2,7 @@
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderHttpError,
+  readProviderJsonResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
@@ -115,7 +116,7 @@ async function createOpenAIRealtimeSecret(
         }
         throw error;
       }
-      return (await response.json()) as unknown;
+      return await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
     } finally {
       await release();
     }

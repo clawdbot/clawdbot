@@ -18,7 +18,10 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
@@ -96,7 +99,7 @@ async function fetchOpenAiBatchStatus(params: {
     openAi: params.openAi,
     path: `/batches/${params.batchId}`,
     errorPrefix: "openai batch status",
-    parse: async (res) => (await res.json()) as OpenAiBatchStatus,
+    parse: async (res) => readProviderJsonResponse<OpenAiBatchStatus>(res, "openai.batch-status"),
   });
 }
 

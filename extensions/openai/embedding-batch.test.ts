@@ -266,6 +266,70 @@ describe("OpenAI embedding batch output", () => {
     ]);
   });
 
+  it("bounds batch status success body via readProviderJsonResponse", async () => {
+    const chunkSize = 1024 * 1024;
+    const chunkCount = 20; // 20 MiB, well over 16 MiB cap
+    let readCount = 0;
+    let canceled = false;
+    const oversizedStatus = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(new Uint8Array(chunkSize));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+    let batchStatusCalled = false;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "in_progress" });
+      }
+      if (url.endsWith("/batches/batch-0") && !batchStatusCalled) {
+        batchStatusCalled = true;
+        return oversizedStatus;
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches({
+        openAi: {
+          baseUrl: "https://openai-compatible.example/v1",
+          headers: { Authorization: "Bearer test" },
+          model: "text-embedding-3-small",
+          fetchImpl,
+        },
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: { model: "text-embedding-3-small", input: "payload" },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+      }),
+    ).rejects.toThrow(/openai\.batch-status/);
+    expect(canceled).toBe(true);
+    expect(readCount).toBeLessThan(chunkCount);
+  });
+
   it("bounds batch resource error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"batch status unavailable ".repeat(1024)}tail`, {
       status: 400,
