@@ -6,6 +6,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -68,9 +69,12 @@ type OpenRouterFrameImagePart = OpenRouterImagePart & {
 async function readOpenRouterVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
   try {
-    payload = await response.json();
-  } catch {
-    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+    payload = await readProviderJsonResponse<unknown>(response, "OpenRouter video generation");
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE, { cause: error });
+    }
+    throw error;
   }
   if (!isRecord(payload)) {
     throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);

@@ -546,6 +546,7 @@ describe("openrouter video generation provider", () => {
         provider: "openrouter",
         capability: "video",
         baseUrl: "https://custom.openrouter.test/api/v1",
+        allowPrivateNetwork: false,
         request: requestOverrides,
       },
     );
@@ -672,11 +673,10 @@ describe("openrouter video generation provider", () => {
 
   it("wraps non-JSON successful OpenRouter submit responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -689,6 +689,22 @@ describe("openrouter video generation provider", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
+  it("bounds oversized successful OpenRouter submit responses", async () => {
+    const oversized = releasedOversizedJsonStream();
+    postJsonRequestMock.mockResolvedValue(oversized);
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "oversized body",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation: JSON response exceeds 16777216 bytes");
+    expect(oversized.wasCanceled()).toBe(true);
   });
 
   it("rejects unknown OpenRouter poll statuses without waiting for timeout", async () => {
