@@ -7,6 +7,8 @@ type MockResponse = {
   ok: boolean;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
+  body: null;
+  arrayBuffer: () => Promise<Buffer>;
 };
 
 const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
@@ -17,6 +19,8 @@ const buildResponse = (params: { status: number; body?: unknown }): MockResponse
     ok: params.status >= 200 && params.status < 300,
     text: async () => textPayload,
     json: async () => body ?? {},
+    body: null,
+    arrayBuffer: async () => Buffer.from(textPayload),
   };
 };
 
