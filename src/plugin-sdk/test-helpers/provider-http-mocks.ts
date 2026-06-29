@@ -43,6 +43,7 @@ interface ProviderHttpMocks {
   pollProviderOperationJsonMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  readProviderJsonResponseMock: Mock<<T>(response: Response, label: string) => Promise<T>>;
   sanitizeConfiguredModelProviderRequestMock: Mock<
     (
       request: SanitizeConfiguredModelProviderRequestParams,
@@ -65,6 +66,9 @@ const providerHttpMocks = vi.hoisted(() => ({
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  readProviderJsonResponseMock: vi.fn(
+    async <T>(response: Response, _label: string): Promise<T> => response.json() as T,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
@@ -278,6 +282,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     }
   },
   providerOperationRetryConfig: (_stage: string) => true,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
@@ -303,6 +308,7 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });

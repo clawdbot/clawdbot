@@ -9,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
@@ -199,7 +200,10 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
       provider: params.providerLabel,
       requestFailedMessage: `${params.providerLabel} video-generation task poll failed`,
     });
-    const payload = (await response.json()) as DashscopeVideoGenerationResponse;
+    const payload = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+      response,
+      `${params.providerLabel} video-generation task poll`,
+    );
     const status = payload.output?.task_status?.trim().toUpperCase();
     if (status === "SUCCEEDED") {
       return payload;
@@ -266,7 +270,10 @@ export async function runDashscopeVideoGenerationTask(params: {
 
   try {
     await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`);
-    const submitted = (await response.json()) as DashscopeVideoGenerationResponse;
+    const submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
+      response,
+      `${params.providerLabel} video generation`,
+    );
     const taskId = submitted.output?.task_id?.trim();
     if (!taskId) {
       throw new Error(`${params.providerLabel} video generation response missing task_id`);
