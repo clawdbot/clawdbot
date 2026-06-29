@@ -18,6 +18,7 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import {
   isEmbeddedAttemptSessionTakeoverError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
@@ -310,12 +311,17 @@ export async function handleAgentExecutionError(params: {
   // timeout disjunct: that summary means multi-model failover already ran, so a
   // redundant timeout retry is wrong. Also exclude CLI subprocess budget
   // timeouts (no-output stall / overall CLI turn budget) and Codex app-server
-  // bridge failures: they are subprocess kills / bridge failures with their own
-  // surfaced copy and replay handling that this gate would otherwise swallow.
+  // bridge failures with their own surfaced copy and replay handling that this
+  // gate would otherwise swallow. Finally exclude local non-provider runtime
+  // coordination errors (e.g. session write-lock timeouts, whose message reads
+  // as "session file locked (timeout ...)"): retrying any model would hit the
+  // same local condition, so they must abort the fallback chain rather than
+  // re-run it as a transport timeout.
   const isTransientTimeout =
     isTimeoutErrorMessage(message) &&
     !isFallbackSummary &&
-    !hasDedicatedNonTransportTimeoutCopy(message);
+    !hasDedicatedNonTransportTimeoutCopy(message) &&
+    !isNonProviderRuntimeCoordinationError(err);
 
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {

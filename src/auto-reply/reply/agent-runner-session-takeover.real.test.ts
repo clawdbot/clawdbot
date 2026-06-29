@@ -98,6 +98,8 @@ vi.mock("../../agents/embedded-agent-helpers.js", () => ({
   isOverloadedErrorMessage: () => false,
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
+  isConnectionError: () => false,
+  isTimeoutErrorMessage: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
 
