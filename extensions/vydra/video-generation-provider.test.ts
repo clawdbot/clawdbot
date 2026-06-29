@@ -18,6 +18,13 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
   return call;
 }
 
+function oversizedJsonResponse(): Response {
+  return new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("vydra video-generation provider", () => {
   installPinnedHostnameTestHooks();
 
@@ -94,6 +101,21 @@ describe("vydra video-generation provider", () => {
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("Vydra video download exceeds 1 bytes");
+  });
+
+  it("rejects video creation JSON responses that exceed the provider cap", async () => {
+    stubVydraApiKey();
+    stubFetch(oversizedJsonResponse());
+
+    const provider = buildVydraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "vydra",
+        model: "veo3",
+        prompt: "tiny city at sunrise",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Vydra video generation: JSON response exceeds 16777216 bytes");
   });
 
   it("requires a remote image url for kling", async () => {

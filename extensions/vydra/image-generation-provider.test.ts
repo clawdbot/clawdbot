@@ -17,6 +17,13 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, Req
   return call as [string, RequestInit];
 }
 
+function oversizedJsonResponse(): Response {
+  return new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("vydra image-generation provider", () => {
   installPinnedHostnameTestHooks();
 
@@ -94,6 +101,21 @@ describe("vydra image-generation provider", () => {
     ).rejects.toThrow("Vydra image download exceeds 1 bytes");
   });
 
+  it("rejects image creation JSON responses that exceed the provider cap", async () => {
+    stubVydraApiKey();
+    stubFetch(oversizedJsonResponse());
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("vydra.image-generation: JSON response exceeds 16777216 bytes");
+  });
+
   it("passes request SSRF policy to the image creation request", async () => {
     stubVydraApiKey();
     const fetchMock = stubFetch(
@@ -150,5 +172,20 @@ describe("vydra image-generation provider", () => {
     const pollCall = fetchCall(fetchMock, 1);
     expect(pollCall[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-456");
     expect(pollCall[1].method).toBe("GET");
+  });
+
+  it("rejects job poll JSON responses that exceed the provider cap", async () => {
+    stubVydraApiKey();
+    stubFetch(jsonResponse({ jobId: "job-456", status: "queued" }), oversizedJsonResponse());
+
+    const provider = buildVydraImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "vydra",
+        model: "grok-imagine",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Vydra job status: JSON response exceeds 16777216 bytes");
   });
 });

@@ -6,6 +6,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   fetchWithTimeout,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -287,7 +288,7 @@ async function waitForVydraJob(params: {
       params.fetchFn,
     );
     await assertOkOrThrowHttpError(response, "Vydra job status request failed");
-    const payload = await response.json();
+    const payload = await readProviderJsonResponse<unknown>(response, "Vydra job status");
     const status = resolveVydraResponseStatus(payload);
     if (status === "completed" || extractVydraResultUrls(payload, params.kind).length > 0) {
       return payload;
