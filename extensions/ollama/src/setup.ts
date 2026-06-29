@@ -13,6 +13,7 @@ import {
   upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
@@ -148,7 +149,10 @@ export async function checkOllamaCloudAuth(
     });
     try {
       if (response.status === 401) {
-        const data = (await response.json()) as { signin_url?: string };
+        const data = await readProviderJsonResponse<{ signin_url?: string }>(
+          response,
+          "ollama.cloud-auth",
+        );
         return { signedIn: false, signinUrl: data.signin_url };
       }
       if (!response.ok) {
