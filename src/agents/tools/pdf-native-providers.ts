@@ -4,10 +4,17 @@
  */
 
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import {
+  postJsonRequest,
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+} from "../../media-understanding/shared.js";
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 type PdfInput = {
   base64: string;
@@ -17,6 +24,56 @@ type PdfInput = {
 const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
+
+type NativePdfProviderRequestConfig = {
+  headers?: Record<string, string>;
+  request?: ModelProviderRequestTransportOverrides;
+};
+
+type NativePdfJsonRequest = {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  allowPrivateNetwork: boolean;
+  ssrfPolicy: Parameters<typeof postJsonRequest>[0]["ssrfPolicy"];
+  dispatcherPolicy: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
+  failureLabel: string;
+  responseLabel: string;
+  nonJsonMessage: string;
+};
+
+async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
+  const { response, release } = await postJsonRequest({
+    url: params.url,
+    headers: params.headers,
+    body: params.body,
+    timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
+    fetchFn: fetch,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
+  });
+
+  try {
+    if (!response.ok) {
+      const body = await readResponseBodySnippet(response, {
+        maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
+        maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+      });
+      throw new Error(
+        `${params.failureLabel} (${response.status} ${response.statusText})${body ? `: ${body}` : ""}`,
+      );
+    }
+
+    const json = await readProviderJsonResponse<unknown>(response, params.responseLabel);
+    if (!isRecord(json)) {
+      throw new Error(params.nonJsonMessage);
+    }
+    return json;
+  } finally {
+    await release();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Anthropic – native PDF via Messages API
@@ -47,6 +104,7 @@ export async function anthropicAnalyzePdf(params: {
   pdfs: PdfInput[];
   maxTokens?: number;
   baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -66,36 +124,45 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const res = await fetch(resolveAnthropicMessagesUrl(params.baseUrl), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
-    body: JSON.stringify({
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
+      defaultHeaders: {
+        ...params.requestConfig?.headers,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "pdfs-2024-09-25",
+      },
+      request: params.requestConfig?.request,
+      provider: "anthropic",
+      api: "anthropic-messages",
+      capability: "other",
+      transport: "http",
+    });
+  headers.set("Content-Type", "application/json");
+  const url = resolveAnthropicMessagesUrl(baseUrl);
+
+  const json = await postNativePdfJson({
+    url,
+    headers,
+    body: {
       model: params.modelId,
       max_tokens: params.maxTokens ?? 4096,
       messages: [{ role: "user", content }],
+    },
+    allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
     }),
-    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
+    dispatcherPolicy,
+    failureLabel: "Anthropic PDF request failed",
+    responseLabel: "Anthropic PDF response",
+    nonJsonMessage: "Anthropic PDF response was not JSON.",
   });
-
-  if (!res.ok) {
-    const body = await readResponseBodySnippet(res, {
-      maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
-      maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
-    });
-    throw new Error(
-      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
-    );
-  }
-
-  const json = (await res.json().catch(() => null)) as unknown;
-  if (!isRecord(json)) {
-    throw new Error("Anthropic PDF response was not JSON.");
-  }
 
   const responseContent = json.content as AnthropicResponseContent | undefined;
   if (!Array.isArray(responseContent)) {
@@ -130,6 +197,7 @@ export async function geminiAnalyzePdf(params: {
   prompt: string;
   pdfs: PdfInput[];
   baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -155,35 +223,42 @@ export async function geminiAnalyzePdf(params: {
       baseUrl: params.baseUrl,
     },
   }) ?? { baseUrl: params.baseUrl };
-  const baseUrl = (transport.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(
-    /\/v1beta$/i,
-    "",
-  );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }],
-    }),
-    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
-  });
-
-  if (!res.ok) {
-    const body = await readResponseBodySnippet(res, {
-      maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
-      maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: transport.baseUrl,
+      defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      defaultHeaders: {
+        ...params.requestConfig?.headers,
+        "x-goog-api-key": apiKey,
+      },
+      request: params.requestConfig?.request,
+      provider: "google",
+      api: "google-generative-ai",
+      capability: "other",
+      transport: "http",
     });
-    throw new Error(
-      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
-    );
-  }
+  headers.set("Content-Type", "application/json");
+  const normalizedBaseUrl = baseUrl.replace(/\/v1beta$/i, "");
+  const url = `${normalizedBaseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
-  const json = (await res.json().catch(() => null)) as unknown;
-  if (!isRecord(json)) {
-    throw new Error("Gemini PDF response was not JSON.");
-  }
+  const json = await postNativePdfJson({
+    url,
+    headers,
+    body: {
+      contents: [{ role: "user", parts }],
+    },
+    allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
+    }),
+    dispatcherPolicy,
+    failureLabel: "Gemini PDF request failed",
+    responseLabel: "Gemini PDF response",
+    nonJsonMessage: "Gemini PDF response was not JSON.",
+  });
 
   const candidates = json.candidates as GeminiCandidate[] | undefined;
   if (!Array.isArray(candidates) || candidates.length === 0) {

@@ -711,13 +711,13 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
   );
 }
 
-function resolveModelTransportSsrFPolicy(params: {
-  model: Model;
+export function resolveProviderTransportSsrFPolicy(params: {
+  baseUrl?: string;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
-  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseUrl = params.baseUrl;
   const baseOrigin = resolveHttpOrigin(baseUrl);
   const requestOrigin = resolveHttpOrigin(params.url);
   const requestMatchesBaseOrigin =
@@ -779,8 +779,8 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
-    const policy = resolveModelTransportSsrFPolicy({
-      model,
+    const policy = resolveProviderTransportSsrFPolicy({
+      baseUrl: model.baseUrl,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
       // Only operator-configured custom/local endpoints get exact-origin trust;
