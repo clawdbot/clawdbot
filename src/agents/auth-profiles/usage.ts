@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -286,7 +287,7 @@ async function probeWhamForCooldown(
       return { cooldownMs: WHAM_HTTP_ERROR_COOLDOWN_MS, reason: "wham_http_error" };
     }
 
-    const data = (await res.json()) as WhamUsageResponse;
+    const data = await readProviderJsonResponse<WhamUsageResponse>(res, "WHAM usage probe");
     if (!data.rate_limit) {
       return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
     }
