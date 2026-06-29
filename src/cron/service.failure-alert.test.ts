@@ -1052,10 +1052,15 @@ describe("CronService failure alerts", () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
     const longError = `${"x".repeat(199)}🎉trailing`;
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: longError,
+    }));
 
     const cron = createFailureAlertCron({
       storePath: store.storePath,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
+      runIsolatedAgentJob,
       sendCronFailureAlert,
     });
 
