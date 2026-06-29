@@ -48,6 +48,49 @@ function streamingResponse(params: {
   return new Response(stream, { headers: params.headers });
 }
 
+function streamedJsonResponse(payload: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+// Drives an unbounded JSON body (>16 MiB, no Content-Length) so the bounded
+// reader has to cancel the stream instead of buffering it all. A hard ceiling
+// guards the test from hanging if the reader ever fails to cancel.
+function oversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunk = 1024 * 1024;
+  const maxChunks = 64; // 64 MiB ceiling, 4x the 16 MiB cap.
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= maxChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunk;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+  return { response, state };
+}
+
 describe("together video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildTogetherVideoGenerationProvider());
@@ -55,12 +98,10 @@ describe("together video generation provider", () => {
 
   it("creates a video, polls completion, and downloads the output", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-          status: "in_progress",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "video_123",
+        status: "in_progress",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
@@ -103,15 +144,36 @@ describe("together video generation provider", () => {
     });
   });
 
+  it("bounds an unbounded successful Together create JSON body and cancels the stream", async () => {
+    const oversized = oversizedJsonResponse();
+    postJsonRequestMock.mockResolvedValue({
+      response: oversized.response,
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "oversized create body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Together video generation failed: JSON response exceeds 16777216 bytes");
+    // The bounded reader cancelled the stream rather than buffering the whole
+    // body, and stopped reading well before the 64 MiB ceiling.
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
   it("bounds downloaded videos before materializing them", async () => {
     let canceled = false;
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_oversized",
-          status: "in_progress",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "video_oversized",
+        status: "in_progress",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
@@ -146,11 +208,9 @@ describe("together video generation provider", () => {
 
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "video_123",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
@@ -189,11 +249,9 @@ describe("together video generation provider", () => {
 
   it("drops out-of-range duration values before creating videos", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "video_123",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
@@ -246,11 +304,9 @@ describe("together video generation provider", () => {
 
   it("sends reference images for the Together image-to-video model", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "video_123",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "video_123",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock

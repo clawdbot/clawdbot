@@ -9,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   pollProviderOperationJson,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
@@ -53,6 +54,18 @@ type TogetherVideoResponse = {
         url?: string;
       }>;
 };
+
+// Reads the Together create-video response through the shared provider JSON
+// reader so a provider that streams an unbounded JSON body cannot force the
+// runtime to buffer the whole payload before parsing it on the success path.
+// The shared helper applies the established 16 MiB provider JSON cap and the
+// standard malformed-JSON wrapping instead of a provider-local reimplementation.
+async function readTogetherVideoJson(response: Response): Promise<TogetherVideoResponse> {
+  return (await readProviderJsonResponse(
+    response,
+    "Together video generation failed",
+  )) as TogetherVideoResponse;
+}
 
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
   const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
@@ -277,7 +290,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "Together video generation failed");
-        const submitted = (await response.json()) as TogetherVideoResponse;
+        const submitted = await readTogetherVideoJson(response);
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");
