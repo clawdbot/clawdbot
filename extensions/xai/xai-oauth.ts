@@ -15,6 +15,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
@@ -37,6 +38,9 @@ export const XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST = ["auth.x.ai", "accounts.
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const XAI_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
+const XAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const XAI_OAUTH_REFRESH_MAX_ATTEMPTS = 3;
+const XAI_OAUTH_REFRESH_RETRY_DELAY_MS = 250;
 const XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5 * 1000;
 const XAI_DEVICE_CODE_MIN_INTERVAL_MS = 1 * 1000;
 const XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS = 5 * 1000;
@@ -114,9 +118,12 @@ function readStringRecord(value: unknown): Record<string, unknown> {
 }
 
 async function readJsonResponse(response: Response, context: string): Promise<unknown> {
+  const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`${context} response exceeds ${maxBytes} bytes`),
+  });
   let body: unknown;
   try {
-    body = await response.json();
+    body = JSON.parse(new TextDecoder().decode(buffer));
   } catch {
     body = null;
   }
@@ -414,7 +421,11 @@ async function pollXaiDeviceCodeToken(
     );
     let body: unknown;
     try {
-      body = await response.json();
+      const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`xAI device code response exceeds ${maxBytes} bytes`),
+      });
+      body = JSON.parse(new TextDecoder().decode(buffer));
     } catch {
       body = null;
     }
