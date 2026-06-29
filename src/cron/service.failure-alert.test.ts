@@ -1052,15 +1052,10 @@ describe("CronService failure alerts", () => {
     const sendCronFailureAlert = vi.fn(async () => undefined);
     // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
     const longError = `${"x".repeat(199)}🎉trailing`;
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "error" as const,
-      error: longError,
-    }));
 
     const cron = createFailureAlertCron({
       storePath: store.storePath,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
-      runIsolatedAgentJob,
       sendCronFailureAlert,
     });
 
@@ -1075,7 +1070,7 @@ describe("CronService failure alerts", () => {
       delivery: { mode: "announce", channel: "telegram", to: "19098680" },
     });
 
-    await cron.run(job.id, "force");
+    simulateScheduledRun(cron, job.id, { status: "error", error: longError });
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(typeof alertText).toBe("string");
