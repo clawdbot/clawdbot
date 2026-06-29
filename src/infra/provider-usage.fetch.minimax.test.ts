@@ -22,6 +22,33 @@ async function expectMinimaxUsageResult(params: {
   expect(result.windows).toEqual(params.expected.windows);
 }
 
+function makeOversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunkSize = 1024 * 1024;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= 64) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunkSize;
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+  return { response, state };
+}
+
 describe("fetchMinimaxUsage", () => {
   it.each([
     {
@@ -97,6 +124,18 @@ describe("fetchMinimaxUsage", () => {
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
     expect(result.error).toBe(expectedError);
     expect(result.windows).toHaveLength(0);
+  });
+
+  it("bounds oversized successful JSON responses and cancels the stream", async () => {
+    const oversized = makeOversizedJsonResponse();
+    const mockFetch = createProviderUsageFetch(async () => oversized.response);
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it.each([
@@ -293,13 +332,8 @@ describe("fetchMinimaxUsage", () => {
       first: sharedUsage,
       nested: [sharedUsage],
     };
-    const mockFetch = createProviderUsageFetch(
-      async () =>
-        ({
-          ok: true,
-          status: 200,
-          json: async () => ({ data: dataWithSharedReference }),
-        }) as Response,
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, { data: dataWithSharedReference }),
     );
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);

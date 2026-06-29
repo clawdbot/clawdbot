@@ -1,4 +1,5 @@
 // Fetches Claude provider usage windows.
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
@@ -7,7 +8,6 @@ import {
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 
 type ClaudeUsageResponse = {
   five_hour?: { utilization?: number; resets_at?: string };
