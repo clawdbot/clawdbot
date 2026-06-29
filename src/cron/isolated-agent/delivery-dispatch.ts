@@ -43,6 +43,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   isCronSessionKey,
+  parseAgentSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -674,6 +675,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
   jobId: string;
   agentId: string;
   agentSessionKey: string;
+  routeCurrentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
   warningContext: string;
 }): Promise<string> {
@@ -686,7 +688,10 @@ async function resolveCronDeliveryRouteSessionKey(params: {
       agentId: params.agentId,
       accountId: params.delivery.accountId,
       target: params.delivery.to,
-      currentSessionKey: params.agentSessionKey,
+      // Use the job's bound conversation identity (not the isolated run key) so the
+      // outbound route keeps the source namespace — e.g. a Mattermost private channel
+      // stays `group:<id>` instead of forking a phantom `channel:<id>` session (#95646).
+      currentSessionKey: params.routeCurrentSessionKey,
       threadId: params.delivery.threadId,
     });
     const routeSessionKey = route?.sessionKey?.trim();
@@ -729,6 +734,28 @@ async function resolveCronDeliveryRouteSessionKey(params: {
   }
 }
 
+/**
+ * Picks the session-key identity used to RESOLVE a cron delivery's outbound route.
+ *
+ * An isolated cron run executes under an ephemeral `agentSessionKey` that does not
+ * carry the source conversation's namespace. When the job is bound to a real
+ * conversation thread session (e.g. the gitlab-pipeline-watch recheck bound to
+ * `agent:…:mattermost:group:<id>:thread:<root>`), routing the delivery from the
+ * isolated key re-derives the namespace from the lossy `channel:<id>` target and
+ * forks a phantom `channel:<id>` session, splitting the thread (#95646). Prefer the
+ * job's bound session identity so the existing currentSessionKey-based namespace
+ * resolution keeps `group:<id>` — no channel-type cache needed (which is what made
+ * the cache-based attempts brittle on cold restart). Falls back to the isolated key
+ * for unbound jobs or cron-namespace bindings.
+ */
+export function selectCronRouteCurrentSessionKey(job: CronJob, agentSessionKey: string): string {
+  const bound = (job.sessionKey ?? "").trim();
+  if (bound && !isCronSessionKey(bound) && parseAgentSessionKey(bound)) {
+    return bound;
+  }
+  return agentSessionKey;
+}
+
 /** Resolves the transcript mirror session for direct cron delivery. */
 async function resolveDirectCronDeliverySessionKey(params: {
   cfg: OpenClawConfig;
@@ -748,6 +775,7 @@ async function resolveDirectCronDeliverySessionKey(params: {
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
     delivery: params.delivery,
     warningContext: "direct delivery mirror",
   });
@@ -836,6 +864,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       jobId: params.job.id,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
+      routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
       delivery: target,
       warningContext: "message-tool delivery awareness",
     });
