@@ -4,9 +4,10 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const { postJsonRequestMock, fetchWithTimeoutMock, readProviderJsonResponseMock } =
+  getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
 
@@ -15,6 +16,51 @@ beforeAll(async () => {
 });
 
 installProviderHttpMockCleanup();
+
+beforeEach(() => {
+  readProviderJsonResponseMock.mockImplementation(async <T>(response: Response, label: string) => {
+    const maxBytes = 16 * 1024 * 1024;
+    if (!response.body) {
+      try {
+        return (await response.json()) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const body = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder().decode(body)) as T;
+    } catch (cause) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+  });
+});
 
 function requirePostJsonCall(index = 0): {
   url?: string;
@@ -52,7 +98,7 @@ function requireFetchInitCall(index: number): {
   };
 }
 
-function streamedVideoResponse(bytes: string): Response {
+function streamedVideoResponse(bytes: string, contentType = "video/mp4"): Response {
   return new Response(
     new ReadableStream({
       start(controller) {
@@ -60,8 +106,54 @@ function streamedVideoResponse(bytes: string): Response {
         controller.close();
       },
     }),
-    { headers: { "content-type": "video/mp4" } },
+    { headers: { "content-type": contentType } },
   );
+}
+
+function streamedJsonResponse(payload: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+// Drives an unbounded JSON body (>16 MiB, no Content-Length) so the bounded
+// reader has to cancel the stream instead of buffering it all. The 1 MiB
+// chunks are emitted lazily on `pull`, and a hard ceiling guards the test from
+// hanging if the reader ever fails to cancel.
+function oversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunk = 1024 * 1024;
+  // 64 MiB ceiling: 4x the 16 MiB cap, so the bounded reader must cancel long
+  // before we run out of chunks.
+  const maxChunks = 64;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= maxChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunk;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+  return { response, state };
 }
 
 describe("xai video generation provider", () => {
@@ -148,6 +240,49 @@ describe("xai video generation provider", () => {
     ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
   });
 
+  it("bounds an unbounded successful xAI create JSON body and cancels the stream", async () => {
+    const oversized = oversizedJsonResponse();
+    postJsonRequestMock.mockResolvedValue({
+      response: oversized.response,
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "oversized create body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response: JSON response exceeds 16777216 bytes");
+    // The bounded reader cancelled the stream rather than buffering the whole
+    // body, and stopped reading well before the 64 MiB ceiling.
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  it("bounds an unbounded successful xAI poll JSON body and cancels the stream", async () => {
+    const oversized = oversizedJsonResponse();
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ request_id: "req_poll_oversized" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce(oversized.response);
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "oversized poll body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response: JSON response exceeds 16777216 bytes");
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+  });
+
   it("wraps malformed successful xAI create responses", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -169,11 +304,9 @@ describe("xai video generation provider", () => {
 
   it("wraps non-JSON successful xAI create responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("Unexpected token < in JSON");
-        },
-      },
+      response: new Response("<html>Unexpected token < in JSON</html>", {
+        headers: { "content-type": "text/html" },
+      }),
       release: vi.fn(async () => {}),
     });
 
