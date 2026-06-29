@@ -259,6 +259,21 @@
       "cliDescription": "NVIDIA API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["nvidia"],
+    "speechProviders": ["nvidia"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "nvidia": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "nvidia/parakeet-tdt-0.6b-v2"
+      },
+      "autoPriority": {
+        "audio": 25
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
