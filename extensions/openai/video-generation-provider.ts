@@ -12,6 +12,7 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -424,7 +425,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
-        const submitted = (await response.json()) as OpenAIVideoResponse;
+        const submitted = await readProviderJsonResponse<OpenAIVideoResponse>(
+          response,
+          "OpenAI video generation failed",
+        );
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");
