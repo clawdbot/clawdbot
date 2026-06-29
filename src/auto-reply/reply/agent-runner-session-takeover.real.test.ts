@@ -272,6 +272,8 @@ function createMockReplyOperation(): {
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
+      terminalRecovery: false,
+      markTerminalRecovery: vi.fn(),
     },
   };
 }
