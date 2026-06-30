@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-update-heartbeat",
+  "name": "VC Trader AI Update Heartbeat",
+  "description": "Update cadence, timeout, route, symbols, or instructions for an existing Agent Alpha heartbeat policy.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "update_heartbeat"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-emit-specialist-signal",
+  "version": "2026.6.30",
+  "private": true,
+  "description": "Emit a read-only specialist signal for Agent Alpha PM review; does not execute trades.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-enable-heartbeat",
+  "version": "2026.6.30",
+  "private": true,
+  "description": "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF route.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

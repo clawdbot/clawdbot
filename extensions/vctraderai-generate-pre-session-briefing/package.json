@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-generate-pre-session-briefing",
+  "version": "2026.6.30",
+  "private": true,
+  "description": "Generate an offline pre-session briefing with offline_mode true and metaapi_used false.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

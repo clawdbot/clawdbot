@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-list-agent-signals",
+  "version": "2026.6.30",
+  "private": true,
+  "description": "List specialist signals for Agent Alpha PM review.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

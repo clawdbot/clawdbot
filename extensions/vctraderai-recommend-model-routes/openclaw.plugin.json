@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-recommend-model-routes",
+  "name": "VC Trader AI Recommend Model Routes",
+  "description": "Recommend safe Agent Alpha model-route assignments for the workspace.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "recommend_model_routes"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

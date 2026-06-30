@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-enable-heartbeat",
+  "name": "VC Trader AI Enable Heartbeat",
+  "description": "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "enable_heartbeat"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

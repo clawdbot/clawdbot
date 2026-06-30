@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-consume-agent-signal",
+  "name": "VC Trader AI Consume Agent Signal",
+  "description": "Mark one specialist signal consumed by the Agent Alpha PM thread.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "consume_agent_signal"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

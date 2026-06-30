@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-generate-session-summary",
+  "name": "VC Trader AI Generate Session Summary",
+  "description": "Generate an offline session summary with freshness and stale labels.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "generate_session_summary"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

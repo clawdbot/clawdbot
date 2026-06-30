@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-heartbeat-status",
+  "name": "VC Trader AI Get Heartbeat Status",
+  "description": "Read heartbeat status, cadence, timeout, route, failure streak, last failure, and next due time.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_heartbeat_status"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

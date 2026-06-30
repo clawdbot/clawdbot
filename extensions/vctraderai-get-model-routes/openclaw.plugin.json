@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-model-routes",
+  "name": "VC Trader AI Get Model Routes",
+  "description": "Read the workspace Agent Alpha model-route configuration.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_model_routes"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

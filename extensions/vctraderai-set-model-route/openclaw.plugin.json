@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-set-model-route",
+  "name": "VC Trader AI Set Model Route",
+  "description": "Set one workspace Agent Alpha model route within the server-side safe allowlist.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "set_model_route"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

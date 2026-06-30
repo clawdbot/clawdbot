@@ -1,0 +1,80 @@
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
+import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
+
+// VC Trader AI: generate_day_ahead_forecast.
+//
+// Calls the propfirm_manager internal OpenClaw BFF route with the shared
+// OPENCLAW_GATEWAY_TOKEN plus X-OpenClaw-Tool so the server-side allowlist gates
+// the exact tool before running it.
+
+export const GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME = "generate_day_ahead_forecast";
+
+export type GenerateDayAheadForecastDeps = {
+  fetchImpl?: typeof globalThis.fetch;
+  bffFetch?: BffFetchFn;
+};
+
+export type GenerateDayAheadForecastParams = Record<string, unknown>;
+
+function requireStringParam(params: GenerateDayAheadForecastParams, key: string): string {
+  const value = params[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai generate_day_ahead_forecast: ${key} is required`);
+  }
+  return value;
+}
+
+function buildQuery(
+  params: GenerateDayAheadForecastParams,
+  keys: string[],
+): Record<string, string | undefined> {
+  const query: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    const value = params[key];
+    query[key] = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+  }
+  return query;
+}
+
+export async function runGenerateDayAheadForecast(
+  params: GenerateDayAheadForecastParams,
+  deps: GenerateDayAheadForecastDeps = {},
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  return bffFetch("/api/v1/openclaw/briefings/day-ahead", {
+    method: "GET",
+    query: buildQuery(params, ["workspace_id", "instrument"]),
+    headers: { "X-OpenClaw-Tool": GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME },
+    signal,
+  });
+}
+
+export default defineToolPlugin({
+  id: "vctraderai-generate-day-ahead-forecast",
+  name: "VC Trader AI Generate Day-Ahead Forecast",
+  description: "Generate an offline day-ahead structured prior, not a prediction.",
+  tools: (tool) => [
+    tool({
+      name: GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME,
+      label: "Generate Day-Ahead Forecast",
+      description: "Generate an offline day-ahead structured prior, not a prediction.",
+      parameters: Type.Object(
+        {
+          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
+          instrument: Type.Optional(Type.String({ description: "Instrument, e.g. XAUUSD." })),
+        },
+        { additionalProperties: true },
+      ),
+      async execute(params, _config, context) {
+        context.signal?.throwIfAborted();
+        return runGenerateDayAheadForecast(
+          params as GenerateDayAheadForecastParams,
+          {},
+          context.signal,
+        );
+      },
+    }),
+  ],
+});

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-stop-heartbeat",
+  "name": "VC Trader AI Stop Heartbeat",
+  "description": "Stop an Agent Alpha heartbeat policy without deleting its history.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "stop_heartbeat"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

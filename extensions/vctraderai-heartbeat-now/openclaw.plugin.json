@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-heartbeat-now",
+  "name": "VC Trader AI Heartbeat Now",
+  "description": "Mark an Agent Alpha heartbeat policy due now without bypassing the normal heartbeat runner gates.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "heartbeat_now"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

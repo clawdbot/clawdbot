@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-read-agent-signal",
+  "name": "VC Trader AI Read Agent Signal",
+  "description": "Read one specialist signal by id for Agent Alpha PM review.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "read_agent_signal"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

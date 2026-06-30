@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-emit-specialist-signal",
+  "name": "VC Trader AI Emit Specialist Signal",
+  "description": "Emit a read-only specialist signal for Agent Alpha PM review; does not execute trades.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "emit_specialist_signal"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

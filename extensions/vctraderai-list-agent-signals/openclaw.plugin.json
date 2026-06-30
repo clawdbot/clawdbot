@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-agent-signals",
+  "name": "VC Trader AI List Agent Signals",
+  "description": "List specialist signals for Agent Alpha PM review.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_agent_signals"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

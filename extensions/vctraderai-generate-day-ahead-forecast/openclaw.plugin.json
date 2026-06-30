@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-generate-day-ahead-forecast",
+  "name": "VC Trader AI Generate Day-Ahead Forecast",
+  "description": "Generate an offline day-ahead structured prior, not a prediction.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "generate_day_ahead_forecast"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-generate-pre-session-briefing",
+  "name": "VC Trader AI Generate Pre-Session Briefing",
+  "description": "Generate an offline pre-session briefing with offline_mode true and metaapi_used false.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "generate_pre_session_briefing"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
