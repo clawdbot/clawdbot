@@ -1570,6 +1570,72 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(toolCallIds).toHaveLength(0);
   });
 
+
+  it("repairs orphaned tool_use in no-prune compaction path when recentTurnsPreserve is 0", async () => {
+    // Regression for clawsweeper P1: when recentTurnsPreserve=0 and history fits
+    // the token budget (no prune), splitPreservedRecentTurns returned raw messages
+    // without repair. The unconditional repair added after the splitPreservedRecentTurns
+    // call must drop the orphaned aborted turn before summarizeInStages.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const orphanToolCall: AgentMessage = {
+      role: "assistant" as const,
+      content: [{ type: "toolCall", id: "call-no-prune", name: "read", arguments: {} }],
+      stopReason: "aborted",
+      errorMessage: "This operation was aborted",
+      errorCode: "20",
+      timestamp: 1,
+    } as AgentMessage;
+    const followupUser: AgentMessage = {
+      role: "user" as const,
+      content: "continue",
+      timestamp: 2,
+    };
+
+    // tokensBefore is small enough that no prune is triggered.
+    const event = {
+      preparation: {
+        messagesToSummarize: [orphanToolCall, followupUser] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expectCompactionResult(result);
+    const summaryCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const summaryMessages = requireArray(summaryCall.messages);
+    // Orphaned aborted assistant turn must be dropped; only the user follow-up survives.
+    expect(summaryMessages.map((m) => (m as { role?: unknown }).role)).toEqual(["user"]);
+    const toolCallIds = summaryMessages.flatMap((m) => {
+      const content = (m as { content?: unknown }).content;
+      if (!Array.isArray(content)) { return []; }
+      return content
+        .filter((b) => (b as { type?: string }).type === "toolCall")
+        .map((b) => (b as { id?: string }).id)
+        .filter(Boolean);
+    });
+    expect(toolCallIds).toHaveLength(0);
+  });
+
   it("repairs orphaned tool_use in pruned.messages when chunks are dropped", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("mock summary");

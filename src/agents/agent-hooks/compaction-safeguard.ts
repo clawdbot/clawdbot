@@ -1338,7 +1338,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
+      // Unconditional repair: ensure no orphaned tool_use blocks reach summarizeInStages
+      // regardless of prune path or recentTurnsPreserve setting. This covers the
+      // recentTurnsPreserve: 0 case where splitPreservedRecentTurns returns raw messages
+      // without repair, and any other no-prune path that bypasses the prune-branch repair.
+      messagesToSummarize = repairToolUseResultPairing(summaryTargetMessages, {
+        erroredAssistantResultPolicy: "drop",
+      }).messages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
