@@ -584,7 +584,9 @@ export class OpenClawChannelBridge {
     const role = toText(payload.message?.role);
     const text = extractFirstTextBlock(payload.message);
     const permissionMatch = text ? CLAUDE_PERMISSION_REPLY_RE.exec(text) : null;
-    if (permissionMatch) {
+    // Ownership is decided at authenticated channel ingress and carried on the
+    // live transcript event. Missing metadata fails closed for approvals.
+    if (role === "user" && payload.senderIsOwner === true && permissionMatch) {
       const requestId = normalizeOptionalLowercaseString(permissionMatch[2]);
       if (requestId && this.pendingClaudePermissions.has(requestId)) {
         this.pendingClaudePermissions.delete(requestId);

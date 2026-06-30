@@ -71,6 +71,7 @@ export type ChatHistoryResult = {
 /** Gateway session.message payload fields consumed by the MCP event bridge. */
 export type SessionMessagePayload = {
   sessionKey?: string;
+  senderIsOwner?: boolean;
   messageId?: string;
   messageSeq?: number;
   message?: { role?: string; content?: unknown; [key: string]: unknown };

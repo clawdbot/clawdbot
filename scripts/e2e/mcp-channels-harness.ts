@@ -112,6 +112,7 @@ export async function waitFor<T>(
 export async function connectGateway(params: {
   url: string;
   token: string;
+  scopes?: readonly string[];
 }): Promise<GatewayRpcClient> {
   const startedAt = Date.now();
   let attempt = 0;
@@ -136,8 +137,14 @@ export async function connectGateway(params: {
 async function connectGatewayOnce(params: {
   url: string;
   token: string;
+  scopes?: readonly string[];
 }): Promise<GatewayRpcClient> {
-  const requestedScopes = ["operator.read", "operator.write", "operator.pairing", "operator.admin"];
+  const requestedScopes = params.scopes ?? [
+    "operator.read",
+    "operator.write",
+    "operator.pairing",
+    "operator.admin",
+  ];
   const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
   const gatewayClient = createGatewayWsClient({
     handshakeTimeoutMs: GATEWAY_WS_OPEN_TIMEOUT_MS,

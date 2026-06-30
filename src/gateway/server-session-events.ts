@@ -1,6 +1,7 @@
 // Gateway session event broadcaster.
 // Projects transcript and lifecycle updates to websocket subscribers.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -29,6 +30,11 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+function readMessageSenderIsOwner(message: unknown): boolean | undefined {
+  const value = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.["senderIsOwner"];
+  return typeof value === "boolean" ? value : undefined;
+}
 
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   // Global sessions can be subscribed through either the raw global key or the
@@ -173,6 +179,7 @@ async function handleTranscriptUpdateBroadcast(
     includeSession: true,
     hasActiveRun,
   });
+  const senderIsOwner = readMessageSenderIsOwner(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
@@ -183,6 +190,7 @@ async function handleTranscriptUpdateBroadcast(
       "session.message",
       {
         sessionKey,
+        ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
         ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
