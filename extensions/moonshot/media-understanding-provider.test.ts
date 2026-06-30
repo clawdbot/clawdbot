@@ -8,6 +8,39 @@ import { describeMoonshotVideo } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
+function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunk = new Uint8Array(params.chunkSize);
+  let readCount = 0;
+  let canceled = false;
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("describeMoonshotVideo", () => {
   it("builds an OpenAI-compatible video request", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
@@ -89,5 +122,43 @@ describe("describeMoonshotVideo", () => {
 
     expect(result.text).toBe("reasoned answer");
     expect(result.model).toBe("kimi-k2.6");
+  });
+
+  it("bounds successful Moonshot video JSON bodies instead of buffering the whole response", async () => {
+    const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+
+    await expect(
+      describeMoonshotVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => streamed.response,
+      }),
+    ).rejects.toThrow("Moonshot video description failed: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
+    expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("reports malformed Moonshot video JSON with a provider-owned error", async () => {
+    const response = new Response("not-json{", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(
+      describeMoonshotVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => response,
+      }),
+    ).rejects.toThrow("Moonshot video description failed: malformed JSON response");
   });
 });
