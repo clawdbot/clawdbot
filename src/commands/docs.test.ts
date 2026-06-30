@@ -94,4 +94,33 @@ describe("docsSearchCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalled();
   });
+
+  it("rejects oversized docs search responses", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        for (let i = 0; i < 10; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
+        controller.close();
+      },
+    });
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["oversized"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Docs search response exceeds"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
