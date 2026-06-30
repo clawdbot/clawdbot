@@ -70,6 +70,7 @@ speech.
 | **Local CLI**     | none                                                                                                             | Runs a configured local TTS command.                                                        |
 | **Microsoft**     | none                                                                                                             | Public Edge neural TTS via `node-edge-tts`. Best-effort, no SLA.                            |
 | **MiniMax**       | `MINIMAX_API_KEY` (or Token Plan: `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`)      | T2A v2 API. Defaults to `speech-2.8-hd`.                                                    |
+| **NVIDIA**        | `NVIDIA_API_KEY` or a saved NVIDIA auth profile                                                                  | Magpie Multilingual batch HTTP TTS with dictionary and configuration customizations.        |
 | **OpenAI**        | `OPENAI_API_KEY`                                                                                                 | Also used for auto-summary; supports persona `instructions`.                                |
 | **OpenRouter**    | `OPENROUTER_API_KEY` (can reuse `models.providers.openrouter.apiKey`)                                            | Default model `hexgrad/kokoro-82m`.                                                         |
 | **Volcengine**    | `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY` (legacy AppID/token: `VOLCENGINE_TTS_APPID`/`_TOKEN`) | BytePlus Seed Speech HTTP API.                                                              |
@@ -259,6 +260,28 @@ fields shown below are canonical; each provider's own `voice`/`voiceId`/
         speed: 1.0,
         vol: 1.0,
         pitch: 0,
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="NVIDIA Magpie">
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "nvidia",
+      providers: {
+        nvidia: {
+          model: "magpie-tts-multilingual",
+          voice: "Magpie-Multilingual.EN-US.Aria",
+          language: "en-US",
+          sampleRateHz: 44100,
+          customDictionary: "OpenClaw  pronunciation",
+          customConfiguration: "key:value",
+        },
       },
     },
   },

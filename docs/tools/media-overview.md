@@ -82,6 +82,7 @@ inbound media through their reply model; see the full provider list in
 | Microsoft Foundry |   ✓   |       |       |     |     |                |                     |
 | MiniMax           |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral           |       |       |       |     |  ✓  |                |                     |
+| NVIDIA            |       |       |       |  ✓  |  ✓  |                |          ✓          |
 | OpenAI            |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
 | OpenRouter        |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
 | PixVerse          |       |   ✓   |       |     |     |                |                     |
@@ -126,13 +127,13 @@ already delivered by the completion reply is not posted again.
 
 ## Speech-to-text and Voice Call
 
-Deepgram, DeepInfra, ElevenLabs, Google, Groq, Mistral, OpenAI, OpenRouter,
-SenseAudio, and xAI can all transcribe inbound audio through the batch
-`tools.media.audio` path when configured. Channel plugins that preflight a
-voice note for mention gating or command parsing mark the transcribed
-attachment on the inbound context, so the shared media-understanding pass
-reuses that transcript instead of making a second STT call for the same
-audio.
+Deepgram, DeepInfra, ElevenLabs, Google, Groq, Mistral, NVIDIA, OpenAI,
+OpenRouter, SenseAudio, and xAI can all transcribe inbound audio through the
+batch `tools.media.audio` path when configured.
+Channel plugins that preflight a voice note for mention gating or command
+parsing mark the transcribed attachment on the inbound context, so the shared
+media-understanding pass reuses that transcript instead of making a second
+STT call for the same audio.
 
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
 streaming STT providers, so live phone audio can be forwarded to the selected

@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import {
+  isProviderAuthProfileConfigured,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
@@ -33,18 +38,21 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
     resolveTalkOverrides: ({ params }) => ({
       ...(trimToUndefined(params.voiceId) ? { voice: trimToUndefined(params.voiceId) } : {}),
       ...(trimToUndefined(params.modelId) ? { model: trimToUndefined(params.modelId) } : {}),
+      ...(trimToUndefined(params.language ?? params.languageCode)
+        ? { language: trimToUndefined(params.language ?? params.languageCode) }
+        : {}),
     }),
-    isConfigured: ({ providerConfig }) => Boolean(normalizeNvidiaTtsConfig(providerConfig).apiKey),
+    isConfigured: ({ providerConfig, cfg }) =>
+      Boolean(normalizeNvidiaTtsConfig(providerConfig).apiKey) ||
+      isProviderAuthProfileConfigured({ provider: "nvidia", cfg }),
     synthesize: async (req) => {
       const config = normalizeNvidiaTtsConfig(req.providerConfig);
-      if (!config.apiKey) {
-        throw new Error("NVIDIA speech API key missing");
-      }
+      const apiKey = await resolveNvidiaSpeechApiKey(config.apiKey, req.cfg);
       const overrides = req.providerOverrides ?? {};
       const { magpieSynthesize } = await import("./nvidia-speech-http.runtime.js");
       const audioBuffer = await magpieSynthesize({
         text: req.text,
-        apiKey: config.apiKey,
+        apiKey,
         baseUrl: config.baseUrl,
         voice: trimToUndefined(overrides.voice) ?? config.voice ?? NVIDIA_DEFAULT_VOICE,
         language: trimToUndefined(overrides.language) ?? config.language ?? NVIDIA_DEFAULT_LANGUAGE,
@@ -58,8 +66,26 @@ export function buildNvidiaSpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: "wav",
         fileExtension: ".wav",
-        voiceCompatible: true,
+        voiceCompatible: false,
       };
     },
   };
+}
+
+async function resolveNvidiaSpeechApiKey(
+  configuredApiKey: string | undefined,
+  cfg: OpenClawConfig,
+): Promise<string> {
+  const direct = trimToUndefined(configuredApiKey) ?? trimToUndefined(process.env.NVIDIA_API_KEY);
+  if (direct) {
+    return direct;
+  }
+  const auth = await resolveApiKeyForProvider({ provider: "nvidia", cfg });
+  const profileKey = trimToUndefined(auth?.apiKey);
+  if (profileKey) {
+    return profileKey;
+  }
+  throw new Error(
+    "NVIDIA credentials missing for TTS. Run `openclaw onboard --auth-choice nvidia-api-key` or set NVIDIA_API_KEY.",
+  );
 }

@@ -1,9 +1,10 @@
 ---
-summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
+summary: "Use NVIDIA models and Nemotron Speech HTTP APIs in OpenClaw"
 read_when:
   - You want to use open models in OpenClaw for free
   - You need NVIDIA_API_KEY setup
   - You want to use Nemotron 3 Ultra through NVIDIA
+  - You want Parakeet ASR or Magpie TTS
 title: "NVIDIA"
 ---
 
@@ -32,7 +33,18 @@ active reasoning model for long-context agentic work.
   </Step>
 </Steps>
 
-For non-interactive setup, pass the key directly:
+The same credential is reused for NVIDIA chat models, Parakeet speech-to-text,
+and Magpie text-to-speech. A key saved by onboarding is available through the
+shared NVIDIA auth profile, so you do not need to duplicate it in speech
+configuration.
+
+<Warning>
+If you pass `--nvidia-api-key` instead of the env var, the value lands in shell
+history and `ps` output. Prefer the `NVIDIA_API_KEY` environment variable when
+possible.
+</Warning>
+
+For non-interactive setup, you can also pass the key directly:
 
 ```bash
 openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
@@ -63,6 +75,90 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
   },
 }
 ```
+
+## Nemotron Speech over HTTP
+
+The NVIDIA plugin supports one-shot HTTP speech requests. It does not register
+a realtime or streaming speech provider.
+
+### Speech to text
+
+Inbound audio uses Parakeet TDT by default and retries with Parakeet CTC 1.1B
+when the TDT endpoint fails. To select CTC directly, set the CTC model in the
+entry. Provider-specific ASR options are passed through
+`providerOptions.nvidia`; word boosting accepts a JSON array or a comma-separated
+string.
+
+NVIDIA accepts mono 16-bit PCM WAV and Ogg Opus directly. OpenClaw converts
+other inbound formats, including MP3, M4A, and stereo WAV, to mono Opus with a
+system-installed FFmpeg binary before upload.
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [
+          {
+            provider: "nvidia",
+            model: "nvidia/parakeet-tdt-0.6b-v2",
+            providerOptions: {
+              nvidia: {
+                boostedWords: '["OpenClaw", "Nemotron", "Parakeet"]',
+                boostedWordsScore: 10,
+                automaticPunctuation: true,
+                wordTimeOffsets: true,
+                customConfiguration: "key:value",
+              },
+            },
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+The supported aliases are converted to NVIDIA's HTTP form fields. Other
+primitive `providerOptions.nvidia` entries are converted to snake_case and
+forwarded as customization fields.
+
+### Text to speech
+
+Magpie Multilingual is the default TTS model and
+`Magpie-Multilingual.EN-US.Aria` is the default voice. Set `customDictionary`
+or `customConfiguration` to pass the corresponding Magpie customization
+fields.
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "nvidia",
+      providers: {
+        nvidia: {
+          model: "magpie-tts-multilingual",
+          voice: "Magpie-Multilingual.EN-US.Aria",
+          language: "en-US",
+          sampleRateHz: 44100,
+          customDictionary: "OpenClaw  pronunciation",
+          customConfiguration: "key:value",
+        },
+      },
+    },
+  },
+}
+```
+
+For a self-hosted ASR NIM, set `tools.media.audio.baseUrl` (or the model entry's
+`baseUrl`) to its HTTP origin. An explicit request-scoped ASR URL is used by
+itself and never falls back to a hosted NVIDIA origin. To override the hosted
+defaults as a pair, set `NVIDIA_TDT_ASR_BASE_URL` and
+`NVIDIA_CTC_ASR_BASE_URL`; set `NVIDIA_TTS_BASE_URL` for Magpie. These
+endpoints must expose the matching HTTP `/v1/audio/transcriptions` or
+`/v1/audio/synthesize` route.
 
 ## Featured catalog
 

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -8,8 +9,10 @@ import type {
 import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
+  createProviderOperationDeadline,
   postMultipartRequest,
   postTranscriptionRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
@@ -31,6 +34,11 @@ const QUERY_FIELD_ALIASES: Readonly<Record<string, string>> = {
 };
 
 const BOOSTED_WORD_KEYS = new Set(["boostedWords", "boostedLmWords", "boosted_lm_words"]);
+const RIFF_HEADER = Buffer.from("RIFF");
+const WAVE_HEADER = Buffer.from("WAVE");
+const OGG_HEADER = Buffer.from("OggS");
+const OPUS_HEADER = Buffer.from("OpusHead");
+const NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 function toSnakeCase(value: string): string {
   return value.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`);
@@ -76,21 +84,92 @@ function appendAsrCustomizations(form: FormData, query: AudioTranscriptionReques
   }
 }
 
+function isOggOpus(buffer: Buffer): boolean {
+  return buffer.subarray(0, OGG_HEADER.length).equals(OGG_HEADER) && buffer.includes(OPUS_HEADER);
+}
+
+function isMonoPcm16Wav(buffer: Buffer): boolean {
+  if (
+    buffer.length < 12 ||
+    !buffer.subarray(0, RIFF_HEADER.length).equals(RIFF_HEADER) ||
+    !buffer.subarray(8, 12).equals(WAVE_HEADER)
+  ) {
+    return false;
+  }
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (chunkId === "fmt ") {
+      if (chunkSize < 16 || dataOffset + 16 > buffer.length) {
+        return false;
+      }
+      const audioFormat = buffer.readUInt16LE(dataOffset);
+      const channels = buffer.readUInt16LE(dataOffset + 2);
+      const bitsPerSample = buffer.readUInt16LE(dataOffset + 14);
+      return audioFormat === 1 && channels === 1 && bitsPerSample === 16;
+    }
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+  return false;
+}
+
+async function normalizeNvidiaAsrAudio(
+  req: AudioTranscriptionRequest,
+): Promise<AudioTranscriptionRequest> {
+  if (isOggOpus(req.buffer) || isMonoPcm16Wav(req.buffer)) {
+    return req;
+  }
+  const buffer = await transcodeAudioBufferToOpus({
+    audioBuffer: req.buffer,
+    inputFileName: req.fileName,
+    outputFileName: "audio.opus",
+    tempPrefix: "nvidia-asr-",
+    timeoutMs: req.timeoutMs,
+    channels: 1,
+  });
+  return {
+    ...req,
+    buffer,
+    fileName: "audio.opus",
+    mime: "audio/ogg",
+  };
+}
+
 function isCtcModel(model: string | undefined): boolean {
   return model?.toLowerCase().includes("ctc") ?? false;
 }
 
 type AsrEndpoint = { baseUrl: string; model: string };
 
-function resolveAsrEndpoints(model: string | undefined): AsrEndpoint[] {
+function resolveAsrTranscriptionUrl(baseUrl: string): string {
+  return baseUrl.endsWith("/v1")
+    ? `${baseUrl}/audio/transcriptions`
+    : `${baseUrl}/v1/audio/transcriptions`;
+}
+
+function resolveAsrEndpoints(req: AudioTranscriptionRequest): AsrEndpoint[] {
+  const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
+  if (requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL) {
+    return [
+      {
+        baseUrl: requestBaseUrl,
+        model: isCtcModel(req.model) ? NVIDIA_FALLBACK_ASR_MODEL : NVIDIA_DEFAULT_ASR_MODEL,
+      },
+    ];
+  }
   const tdtBaseUrl = normalizeNvidiaBaseUrl(
     process.env.NVIDIA_TDT_ASR_BASE_URL ?? NVIDIA_TDT_ASR_BASE_URL,
   );
   const ctcBaseUrl = normalizeNvidiaBaseUrl(
     process.env.NVIDIA_CTC_ASR_BASE_URL ?? NVIDIA_CTC_ASR_BASE_URL,
   );
-  if (isCtcModel(model)) {
+  if (isCtcModel(req.model)) {
     return [{ baseUrl: ctcBaseUrl, model: NVIDIA_FALLBACK_ASR_MODEL }];
+  }
+  if (process.env.NVIDIA_TDT_ASR_BASE_URL && !process.env.NVIDIA_CTC_ASR_BASE_URL) {
+    return [{ baseUrl: tdtBaseUrl, model: NVIDIA_DEFAULT_ASR_MODEL }];
   }
   return [
     { baseUrl: tdtBaseUrl, model: NVIDIA_DEFAULT_ASR_MODEL },
@@ -127,7 +206,7 @@ async function transcribeAtEndpoint(
   appendAsrCustomizations(form, req.query);
 
   const { response, release } = await postTranscriptionRequest({
-    url: `${baseUrl}/v1/audio/transcriptions`,
+    url: resolveAsrTranscriptionUrl(baseUrl),
     headers,
     body: form,
     timeoutMs: req.timeoutMs,
@@ -154,20 +233,36 @@ export async function transcribeNvidiaAudio(
   if (!req.apiKey) {
     throw new Error("NVIDIA speech API key missing");
   }
-  const endpoints = resolveAsrEndpoints(req.model);
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: req.timeoutMs,
+    label: "NVIDIA ASR",
+  });
+  const resolveRemainingTimeoutMs = () =>
+    resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: req.timeoutMs });
+  const normalizedReq = await normalizeNvidiaAsrAudio({
+    ...req,
+    timeoutMs: resolveRemainingTimeoutMs(),
+  });
+  const endpoints = resolveAsrEndpoints(normalizedReq);
   const primary = endpoints[0];
   if (!primary) {
     throw new Error("NVIDIA ASR has no configured endpoint");
   }
   try {
-    return await transcribeAtEndpoint(req, primary);
+    return await transcribeAtEndpoint(
+      { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
+      primary,
+    );
   } catch (primaryError) {
     const fallback = endpoints[1];
     if (!fallback) {
       throw primaryError;
     }
     try {
-      return await transcribeAtEndpoint(req, fallback);
+      return await transcribeAtEndpoint(
+        { ...normalizedReq, timeoutMs: resolveRemainingTimeoutMs() },
+        fallback,
+      );
     } catch (fallbackError) {
       throw new Error("NVIDIA ASR failed for Parakeet TDT and Parakeet CTC fallback", {
         cause: fallbackError,

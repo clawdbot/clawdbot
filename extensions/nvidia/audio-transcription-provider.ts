@@ -8,7 +8,7 @@ export const nvidiaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "nvidia",
   capabilities: ["audio"],
   defaultModels: { audio: NVIDIA_DEFAULT_ASR_MODEL },
-  autoPriority: { audio: 25 },
+  autoPriority: { audio: 55 },
   transcribeAudio: async (req) => {
     const { transcribeNvidiaAudio } = await import("./nvidia-speech-http.runtime.js");
     return await transcribeNvidiaAudio(req);

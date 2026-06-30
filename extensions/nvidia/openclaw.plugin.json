@@ -270,7 +270,7 @@
         "audio": "nvidia/parakeet-tdt-0.6b-v2"
       },
       "autoPriority": {
-        "audio": 25
+        "audio": 55
       }
     }
   },

@@ -26,7 +26,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 
 1. **Active reply model**, when its provider supports audio understanding.
 2. **Configured provider auth** — any `models.providers.*` entry with auth available for a provider that supports audio transcription. This is checked before local CLIs, so a configured API key always wins over a local binary on `PATH`.
-   Provider priority when multiple are configured: Groq, OpenAI, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral.
+   Provider priority when multiple are configured: Groq, OpenAI, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral, NVIDIA.
 3. **Local CLIs** (only if no provider auth resolved). OpenClaw builds an ordered fallback list:
    - `whisper-cli`, before CPU defaults only when an earlier model invocation in the current process observed Metal or CUDA
    - `sherpa-onnx-offline` on its default CPU provider (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
@@ -204,6 +204,33 @@ provider-wide rather than scoped to the audio model entry.
 }
 ```
 
+### Provider-only (NVIDIA Parakeet with word boosting)
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-tdt-0.6b-v2",
+          capabilities: ["audio"],
+          providerOptions: {
+            nvidia: {
+              boostedWords: '["OpenClaw", "Nemotron"]',
+              boostedWordsScore: 10,
+            },
+          },
+        },
+      ],
+      audio: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
 ### Echo transcript to chat (opt-in)
 
 ```json5
@@ -227,6 +254,8 @@ provider-wide rather than scoped to the audio model entry.
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used. Setup details: [Deepgram](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
+- NVIDIA uses Parakeet TDT by default and falls back to Parakeet CTC 1.1B. Setup and customization details: [NVIDIA](/providers/nvidia).
+- NVIDIA accepts mono 16-bit PCM WAV and Ogg Opus directly; other formats require FFmpeg in a trusted system directory for conversion to mono Opus.
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
