@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-situational-awareness",
+  "name": "VC Trader AI Get Situational Awareness",
+  "description": "Per-turn situational-awareness snapshot: risk-budget, market regime, econ-news proximity, and account-health with honesty/staleness labels (read-only, offline, no broker read).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_situational_awareness"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

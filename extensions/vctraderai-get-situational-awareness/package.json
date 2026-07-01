@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-get-situational-awareness",
+  "version": "2026.7.2",
+  "private": true,
+  "description": "VC Trader AI read-only per-turn situational-awareness snapshot tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
