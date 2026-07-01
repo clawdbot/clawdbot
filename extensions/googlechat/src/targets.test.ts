@@ -1,4 +1,5 @@
 // Googlechat tests cover targets plugin behavior.
+import { createServer } from "node:http";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -294,18 +295,20 @@ describe("downloadGoogleChatMedia", () => {
     vi.useRealTimers();
   });
 
-  it("rejects when content-length exceeds max bytes", async () => {
-    const body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2, 3]));
-        controller.close();
-      },
-    });
-    const response = new Response(body, {
+  it("rejects content-length overflow before reading media", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const response = {
+      ok: true,
       status: 200,
-      headers: { "content-length": "50", "content-type": "application/octet-stream" },
-    });
-    await expectDownloadToRejectForResponse(response);
+      headers: new Headers({
+        "content-length": "50",
+        "content-type": "application/octet-stream",
+      }),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expectDownloadToRejectForResponse(response, "Google Chat media exceeds max bytes (10)");
+    expect(arrayBuffer).not.toHaveBeenCalled();
     expect(lastGuardedFetchOptions().timeoutMs).toBe(30_001);
   });
 
@@ -366,21 +369,94 @@ describe("downloadGoogleChatMedia", () => {
     await result;
   });
 
-  it("bounds media downloads even when callers omit maxBytes", async () => {
+  it("bounds chunked endpoint media downloads even when callers omit maxBytes", async () => {
     const ONE_MIB = 1024 * 1024;
     const TOTAL_CHUNKS = 32;
-    const chunk = new Uint8Array(ONE_MIB);
-    let bytesPulled = 0;
+    const totalBytes = TOTAL_CHUNKS * ONE_MIB;
+    const chunk = Buffer.alloc(ONE_MIB);
+    let bytesSent = 0;
+    let responseClosed = false;
+    let resolveResponseClosed: () => void = () => {};
+    const responseClosedPromise = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
+    });
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.on("close", () => {
+        responseClosed = true;
+        resolveResponseClosed();
+      });
+      const writeNext = () => {
+        if (responseClosed) {
+          return;
+        }
+        if (bytesSent >= totalBytes) {
+          res.end();
+          return;
+        }
+        bytesSent += chunk.byteLength;
+        const canContinue = res.write(chunk);
+        const scheduleNext = () => setTimeout(writeNext, 1);
+        if (canContinue) {
+          scheduleNext();
+        } else {
+          res.once("drain", scheduleNext);
+        }
+      };
+      writeNext();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected loopback media server address");
+    }
+    const mediaUrl = `http://127.0.0.1:${address.port}/media`;
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async () => ({
+      response: await fetch(mediaUrl),
+      release,
+    }));
+
+    try {
+      await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
+        "Google Chat media exceeds max bytes (20971520)",
+      );
+      await Promise.race([
+        responseClosedPromise,
+        new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+    expect(release).toHaveBeenCalledOnce();
+    expect(responseClosed).toBe(true);
+    expect(bytesSent).toBeLessThan(totalBytes);
+  });
+
+  it("preserves stricter explicit media byte limits", async () => {
+    const TOTAL_CHUNKS = 32;
+    const chunk = new Uint8Array(6);
+    let chunksPulled = 0;
     let canceled = false;
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull(controller) {
-          if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+          if (chunksPulled < TOTAL_CHUNKS) {
+            chunksPulled += 1;
+            controller.enqueue(chunk);
+          } else {
             controller.close();
-            return;
           }
-          bytesPulled += chunk.byteLength;
-          controller.enqueue(chunk);
         },
         cancel() {
           canceled = true;
@@ -388,18 +464,16 @@ describe("downloadGoogleChatMedia", () => {
       }),
       { status: 200, headers: { "content-type": "application/octet-stream" } },
     );
-    const arrayBuffer = vi.fn(async () => {
-      throw new Error("unbounded arrayBuffer should not be called");
-    });
-    Object.defineProperty(response, "arrayBuffer", { value: arrayBuffer });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 
-    await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
-      "Google Chat media exceeds max bytes (16777216)",
-    );
-    expect(arrayBuffer).not.toHaveBeenCalled();
+    await expect(
+      downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
+    ).rejects.toThrow("Google Chat media exceeds max bytes (10)");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+    expect(chunksPulled).toBeLessThan(TOTAL_CHUNKS);
   });
 });
 
