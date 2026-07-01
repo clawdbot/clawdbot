@@ -365,6 +365,42 @@ describe("downloadGoogleChatMedia", () => {
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
   });
+
+  it("bounds media downloads even when callers omit maxBytes", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const TOTAL_CHUNKS = 32;
+    const chunk = new Uint8Array(ONE_MIB);
+    let bytesPulled = 0;
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+            controller.close();
+            return;
+          }
+          bytesPulled += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/octet-stream" } },
+    );
+    const arrayBuffer = vi.fn(async () => {
+      throw new Error("unbounded arrayBuffer should not be called");
+    });
+    Object.defineProperty(response, "arrayBuffer", { value: arrayBuffer });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
+      "Google Chat media exceeds max bytes (16777216)",
+    );
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
 });
 
 describe("supported Google Chat request bounds", () => {
