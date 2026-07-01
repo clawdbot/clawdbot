@@ -7,6 +7,7 @@ import {
   extractOpenAICodexAccountId,
   parseSSEForTest,
   resetOpenAICodexWebSocketDebugStats,
+  streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
 
@@ -100,6 +101,39 @@ describe("streamOpenAICodexResponses transport", () => {
   const context = {
     messages: [{ role: "user", content: "hi", timestamp: 1 }],
   } satisfies Context;
+
+  it("preserves max for GPT-5.6 simple Codex Responses requests", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamSimpleOpenAICodexResponses(
+      {
+        ...model,
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        contextWindow: 372_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+      context,
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        reasoning: "max",
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      reasoning: { effort: "max", summary: "auto" },
+    });
+  });
 
   it("does not fall back to SSE when websocket transport is explicit", async () => {
     const fetchMock = vi.fn(async () => {

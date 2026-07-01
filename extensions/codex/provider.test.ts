@@ -121,7 +121,11 @@ describe("codex provider", () => {
       name: "gpt-5.4",
       reasoning: true,
       input: ["text", "image"],
-      compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        supportsUsageInStreaming: true,
+      },
     });
   });
 
@@ -343,13 +347,62 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "o4-mini",
       reasoning: true,
-      compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
+      compat: {
+        supportsUsageInStreaming: true,
+      },
     });
     expect(
       provider
         .resolveThinkingProfile?.({ provider: "codex", modelId: "o4-mini" } as never)
         ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
+  });
+
+  it("keeps undiscovered GPT-5.6 models on family reasoning rules", () => {
+    const provider = buildCodexProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "codex",
+      modelId: "gpt-5.6-luna",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expectRecordFields(model, {
+      id: "gpt-5.6-luna",
+      reasoning: true,
+      compat: { supportsUsageInStreaming: true },
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId: "gpt-5.6-luna" } as never)
+        ?.levels.map((level) => level.id),
+    ).toContain("max");
+  });
+
+  it("exposes max for the GPT-5.6 series", () => {
+    const provider = buildCodexProvider();
+    const levels = (modelId: string) =>
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId } as never)
+        ?.levels.map((level) => level.id);
+
+    expect(levels("gpt-5.6")).toContain("max");
+    expect(levels("gpt-5.6-sol-oai")).toContain("max");
+    expect(levels("gpt-5.6-terra")).toContain("max");
+    expect(levels("gpt-5.6-luna")).toContain("max");
+  });
+
+  it("uses app-server reasoning metadata as the authoritative thinking profile", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "codex",
+          modelId: "gpt-5.4-pro",
+          compat: { supportedReasoningEfforts: ["medium", "high", "xhigh"] },
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(["off", "medium", "high", "xhigh"]);
   });
 
   it("declares synthetic auth because the harness owns Codex credentials", () => {

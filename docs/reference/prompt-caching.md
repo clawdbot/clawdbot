@@ -107,7 +107,7 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - OpenClaw uses `prompt_cache_key` to keep cache routing stable across turns. Direct OpenAI hosts use `prompt_cache_retention: "24h"` when `cacheRetention: "long"` is selected.
 - OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`. Long-retention forwarding is a separate capability: explicit `cacheRetention: "long"` sends `prompt_cache_retention: "24h"` only when that compat entry also supports long cache retention. Providers such as Mistral can opt into cache keys while setting `compat.supportsLongCacheRetention: false` to suppress the long-retention field. `cacheRetention: "none"` suppresses both fields.
 - OpenAI responses expose cached prompt tokens via `usage.prompt_tokens_details.cached_tokens` (or `input_tokens_details.cached_tokens` on Responses API events). OpenClaw maps that to `cacheRead`.
-- OpenAI does not expose a separate cache-write token counter, so `cacheWrite` stays `0` on OpenAI paths even when the provider is warming a cache.
+- GPT-5.6 Responses usage can also expose `input_tokens_details.cache_write_tokens`. OpenClaw maps that to `cacheWrite` and prices it at the model's cache-write rate; Responses that omit the field keep `cacheWrite` at `0`.
 - OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.
 - In practice, OpenAI often behaves like an initial-prefix cache rather than Anthropic-style moving full-history reuse. Stable long-prefix text turns can land near a `4864` cached-token plateau in current live probes, while tool-heavy or MCP-style transcripts often plateau near `4608` cached tokens even on exact repeats.
 
@@ -335,7 +335,7 @@ Defaults:
 - Cache trace events are JSONL and include staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces via `cacheRead` and `cacheWrite` (for example `/usage full` and session usage summaries).
 - For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.
-- For OpenAI, expect `cacheRead` on cache hits and `cacheWrite` to remain `0`; OpenAI does not publish a separate cache-write token field.
+- For OpenAI, expect `cacheRead` on cache hits. GPT-5.6 Responses can also report `cacheWrite` while prompt segments are written; other Responses payloads that omit the write counter keep it at `0`.
 - If you need request tracing, log request IDs and rate-limit headers separately from cache metrics. OpenClaw's current cache-trace output is focused on prompt/session shape and normalized token usage rather than raw provider response headers.
 
 ## Quick troubleshooting

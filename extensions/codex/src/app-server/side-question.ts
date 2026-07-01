@@ -18,6 +18,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
@@ -452,7 +453,11 @@ export async function runCodexAppServerSideQuestion(
       { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
     );
 
-    const effort = resolveReasoningEffort(params.resolvedThinkLevel ?? "off", modelSelection.model);
+    const effort = resolveReasoningEffort(
+      params.resolvedThinkLevel ?? "off",
+      modelSelection.model,
+      readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
+    );
     const turnResponse = assertCodexTurnStartResponse(
       await client.request(
         "turn/start",

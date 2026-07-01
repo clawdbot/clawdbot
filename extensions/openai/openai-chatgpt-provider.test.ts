@@ -89,6 +89,66 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "resolves %s through the Codex Responses transport without live catalog metadata",
+    (modelId) => {
+      const provider = buildOpenAIProvider();
+
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId,
+        authProfileMode: "oauth",
+        modelRegistry: { find: () => null },
+      } as never);
+
+      expect(model).toMatchObject({
+        provider: "openai",
+        id: modelId,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        input: ["text", "image"],
+        contextWindow: 372_000,
+        contextTokens: 372_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      });
+    },
+  );
+
+  it.each([
+    { name: "fills a missing map", thinkingLevelMap: undefined, expectedOff: null },
+    { name: "preserves explicit overrides", thinkingLevelMap: { off: "low" }, expectedOff: "low" },
+  ])("$name on registry-backed GPT-5.6 models", ({ thinkingLevelMap, expectedOff }) => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      authProfileMode: "oauth",
+      modelRegistry: {
+        find: () => ({
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+          contextWindow: 372_000,
+          maxTokens: 128_000,
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+        }),
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text", "image"],
+      thinkingLevelMap: { off: expectedOff, xhigh: "xhigh", max: "max" },
+    });
+  });
+
   it("keeps default Codex-backed OpenAI catalog models on the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 

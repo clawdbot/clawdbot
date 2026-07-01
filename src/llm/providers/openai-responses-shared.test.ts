@@ -10,6 +10,7 @@ import {
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -60,6 +61,13 @@ const proxyOpenAIModel = {
   id: "custom-model",
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
+} satisfies Model<"openai-responses">;
+
+const gpt56SolModel = {
+  ...nativeOpenAIModel,
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
 function createAssistantOutput(): AssistantMessage {
@@ -235,6 +243,43 @@ describe("convertResponsesTools", () => {
     } as never);
 
     expect(params).not.toHaveProperty("tools");
+  });
+});
+
+describe("Responses reasoning effort", () => {
+  it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] });
+
+    expect(params).not.toHaveProperty("reasoning");
+  });
+
+  it("passes max through for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "max")).toBe("max");
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      gpt56SolModel,
+      { messages: [] },
+      {
+        reasoningEffort: "max",
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+  });
+
+  it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
+  });
+
+  it("keeps max clamped to xhigh for earlier models", () => {
+    const gpt55WithXHigh = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { xhigh: "xhigh" },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
 });
 
@@ -605,6 +650,50 @@ describe("processResponsesStream", () => {
       "toolcall_delta",
       "toolcall_end",
     ]);
+  });
+
+  it("prices cache-write tokens separately from ordinary Responses input", async () => {
+    const model = {
+      ...gpt56SolModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
+    const output = createResponsesAssistantOutput(model, model.api);
+    const stream = new AssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_cache_write",
+            status: "completed",
+            usage: {
+              input_tokens: 100,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens: 10,
+              output_tokens_details: { reasoning_tokens: 0 },
+              total_tokens: 110,
+            },
+          },
+        },
+      ]),
+      output,
+      stream,
+      model,
+    );
+
+    expect(output.usage).toMatchObject({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      totalTokens: 110,
+    });
+    expect(output.usage.cost.input).toBeCloseTo(0.00025);
+    expect(output.usage.cost.output).toBeCloseTo(0.0003);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {

@@ -135,6 +135,20 @@ export type ModelCatalogMediaInputConfig = {
 
 /** Supported input modality for a model. */
 export type ModelCatalogInput = "text" | "image" | "document";
+/** Model-level thinking settings carried by provider catalog metadata. */
+export const MODEL_CATALOG_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
+export type ModelCatalogThinkingLevelMap = Partial<
+  Record<ModelCatalogThinkingLevel, string | null>
+>;
 /** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
 /** Availability state for a model. */
@@ -213,6 +227,7 @@ export type ModelCatalogModel = {
   contextWindow?: number;
   contextTokens?: number;
   maxTokens?: number;
+  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
   mediaInput?: ModelCatalogMediaInputConfig;
@@ -275,6 +290,7 @@ export type NormalizedModelCatalogRow = {
   contextWindow?: number;
   contextTokens?: number;
   maxTokens?: number;
+  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
   mediaInput?: ModelCatalogMediaInputConfig;

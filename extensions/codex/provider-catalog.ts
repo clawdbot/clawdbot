@@ -46,20 +46,29 @@ export function buildCodexModelDefinition(model: {
   model: string;
   displayName?: string;
   inputModalities: string[];
-  supportedReasoningEfforts: string[];
+  supportedReasoningEfforts?: string[];
 }): ModelDefinitionConfig {
   const id = model.id.trim() || model.model.trim();
+  const supportedReasoningEfforts = model.supportedReasoningEfforts;
   return {
     id,
     name: model.displayName?.trim() || id,
     api: "openai-chatgpt-responses",
-    reasoning: model.supportedReasoningEfforts.length > 0 || shouldDefaultToReasoningModel(id),
+    reasoning:
+      supportedReasoningEfforts !== undefined
+        ? supportedReasoningEfforts.length > 0
+        : shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: {
-      supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,
+      ...(supportedReasoningEfforts !== undefined
+        ? { supportsReasoningEffort: supportedReasoningEfforts.length > 0 }
+        : {}),
+      ...(supportedReasoningEfforts && supportedReasoningEfforts.length > 0
+        ? { supportedReasoningEfforts: [...supportedReasoningEfforts] }
+        : {}),
       supportsUsageInStreaming: true,
     },
   };

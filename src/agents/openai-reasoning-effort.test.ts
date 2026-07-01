@@ -6,6 +6,16 @@ import {
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
+  it("preserves max for the GPT-5.6 series", () => {
+    const sol = { provider: "openai", id: "gpt-5.6-sol" };
+    const terra = { provider: "openai", id: "gpt-5.6-terra" };
+    const luna = { provider: "openai", id: "gpt-5.6-luna" };
+
+    expect(resolveOpenAIReasoningEffortForModel({ model: sol, effort: "max" })).toBe("max");
+    expect(resolveOpenAIReasoningEffortForModel({ model: terra, effort: "max" })).toBe("max");
+    expect(resolveOpenAIReasoningEffortForModel({ model: luna, effort: "max" })).toBe("max");
+  });
+
   it.each([
     { provider: "openai", id: "gpt-5.5" },
     { provider: "openai", id: "gpt-5.5" },

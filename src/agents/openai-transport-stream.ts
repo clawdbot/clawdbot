@@ -1809,7 +1809,7 @@ async function processResponsesStream(
             input_tokens?: number;
             output_tokens?: number;
             total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number };
+            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
             output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
@@ -1817,19 +1817,20 @@ async function processResponsesStream(
         | undefined;
       if (usage) {
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+        const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
         const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens);
+        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
-          cacheWrite: 0,
+          cacheWrite: cacheWriteTokens,
           ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
             ? { reasoningTokens }
             : {}),
-          totalTokens: input + outputTokens + cachedTokens,
+          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
       }

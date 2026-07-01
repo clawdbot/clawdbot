@@ -105,10 +105,11 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  const reasoningEffort = resolveResponsesReasoningEffort(model, options?.reasoning);
 
   return streamAzureOpenAIResponses(model, context, {
     ...base,
-    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    reasoningEffort: reasoningEffort === "max" ? "xhigh" : reasoningEffort,
   } satisfies AzureOpenAIResponsesOptions);
 };
 

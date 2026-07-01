@@ -426,18 +426,25 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 
 - GPT-5.5
 - GPT-5.4 mini
-- GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.139.0`. A `model/list` probe
-against that bundled app-server returned:
+The current bundled harness is `@openai/codex` `0.142.4`. A `model/list` probe
+against that bundled app-server in a GPT-5.6-enabled workspace returned these
+public picker rows:
 
-| Model id        | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`       | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`  | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex` | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.2`       | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id              | Input modalities | Reasoning efforts                    |
+| --------------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`         | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra`       | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`        | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`             | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4`             | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`        | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-pro`         | text, image      | medium, high, xhigh                  |
+| `gpt-5.3-codex-spark` | text             | low, medium, high, xhigh             |
+
+GPT-5.6 access is account-scoped during the limited preview. `max` is a model
+reasoning effort. `ultra` is separate Codex multi-agent orchestration metadata,
+not a standard OpenAI reasoning effort.
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.

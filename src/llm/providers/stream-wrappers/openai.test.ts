@@ -667,6 +667,61 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
   });
+
+  it("preserves max for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "xhigh", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-sol",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "max", summary: "auto" });
+  });
+
+  it("raises unsupported minimal reasoning to low for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "minimal", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-luna",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it("keeps max clamped to xhigh for earlier OpenAI and Azure models", () => {
+    const models = [
+      { ...openaiModel, id: "gpt-5.5" },
+      {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.6-sol",
+        baseUrl: "https://example.openai.azure.com/openai",
+      } as Model<"azure-openai-responses">,
+    ];
+
+    for (const model of models) {
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        initialReasoning: { effort: "high" },
+      });
+      const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+      void wrapped(model, { messages: [] }, {});
+      expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+    }
+  });
 });
 
 describe("createOpenAIAttributionHeadersWrapper", () => {

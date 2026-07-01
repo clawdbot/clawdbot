@@ -9,4 +9,4 @@ export const MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION = "0.132.0";
 export const MANAGED_CODEX_APP_SERVER_PACKAGE = "@openai/codex";
 // Keep this in sync with the Codex CLI live-test package pin.
 /** Managed Codex app-server package version installed by OpenClaw. */
-export const MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION = "0.139.0";
+export const MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION = "0.142.4";
