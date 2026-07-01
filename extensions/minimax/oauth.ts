@@ -7,7 +7,10 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -121,7 +124,10 @@ async function requestOAuthCode(params: {
       throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
     }
 
-    const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
+    const payload = (await readProviderJsonResponse(
+      response,
+      "minimax.oauth-code",
+    )) as MiniMaxOAuthAuthorization & { error?: string };
     if (!payload.user_code || !payload.verification_uri) {
       throw new Error(
         payload.error ??
