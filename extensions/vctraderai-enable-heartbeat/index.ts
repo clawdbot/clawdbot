@@ -17,6 +17,14 @@ export type EnableHeartbeatDeps = {
 
 export type EnableHeartbeatParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai enable_heartbeat: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: EnableHeartbeatParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runEnableHeartbeat(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/heartbeat/enable", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": ENABLE_HEARTBEAT_TOOL_NAME },
     signal,
   });
@@ -64,7 +72,6 @@ export default defineToolPlugin({
         "Enable or update an Agent Alpha heartbeat policy through the guarded internal BFF route.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           thread_id: Type.Optional(Type.String({ description: "Thread id to heartbeat." })),
           account_id: Type.String({ description: "Account id to monitor.", minLength: 1 }),
           cadence_seconds: Type.Integer({

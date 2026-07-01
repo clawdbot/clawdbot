@@ -17,6 +17,14 @@ export type EmitSpecialistSignalDeps = {
 
 export type EmitSpecialistSignalParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai emit_specialist_signal: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: EmitSpecialistSignalParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runEmitSpecialistSignal(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/signals/emit", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": EMIT_SPECIALIST_SIGNAL_TOOL_NAME },
     signal,
   });
@@ -64,7 +72,6 @@ export default defineToolPlugin({
         "Emit a read-only specialist signal for Agent Alpha PM review; does not execute trades.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           specialist_key: Type.Optional(
             Type.String({ description: "Specialist key, usually gold_specialist." }),
           ),

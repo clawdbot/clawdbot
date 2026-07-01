@@ -31,6 +31,14 @@ export type EnqueueBacktestWorkerJobParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai enqueue_backtest_worker_job: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: EnqueueBacktestWorkerJobParams): string {
   return `Backtest ${params.trader_def_id ?? params.strategy_id ?? "job"}`;
 }
@@ -45,7 +53,7 @@ export async function runEnqueueBacktestWorkerJob(
     method: "POST",
     body: {
       tool_name: ENQUEUE_BACKTEST_WORKER_JOB_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

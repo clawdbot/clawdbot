@@ -24,7 +24,6 @@ const specs: PluginSpec[] = [
     exportName: "runEnableHeartbeat",
     constName: "ENABLE_HEARTBEAT_TOOL_NAME",
     params: {
-      workspace_id: WORKSPACE_ID,
       thread_id: POLICY_ID,
       account_id: "acc-1",
       cadence_seconds: 180,
@@ -52,7 +51,6 @@ const specs: PluginSpec[] = [
     exportName: "runUpdateHeartbeat",
     constName: "UPDATE_HEARTBEAT_TOOL_NAME",
     params: {
-      workspace_id: WORKSPACE_ID,
       policy_id: POLICY_ID,
       cadence_seconds: 180,
       turn_timeout_seconds: 120,
@@ -73,7 +71,7 @@ const specs: PluginSpec[] = [
     toolName: "heartbeat_now",
     exportName: "runHeartbeatNow",
     constName: "HEARTBEAT_NOW_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
+    params: { policy_id: POLICY_ID },
     expectedMethod: "POST",
     expectedPath: "/api/v1/openclaw/heartbeat/now",
     expectedBody: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
@@ -83,7 +81,7 @@ const specs: PluginSpec[] = [
     toolName: "stop_heartbeat",
     exportName: "runStopHeartbeat",
     constName: "STOP_HEARTBEAT_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
+    params: { policy_id: POLICY_ID },
     expectedMethod: "POST",
     expectedPath: "/api/v1/openclaw/heartbeat/stop",
     expectedBody: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
@@ -93,7 +91,7 @@ const specs: PluginSpec[] = [
     toolName: "get_heartbeat_status",
     exportName: "runGetHeartbeatStatus",
     constName: "GET_HEARTBEAT_STATUS_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
+    params: { policy_id: POLICY_ID },
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/heartbeat/status",
     expectedQuery: { workspace_id: WORKSPACE_ID, policy_id: POLICY_ID },
@@ -103,7 +101,7 @@ const specs: PluginSpec[] = [
     toolName: "get_model_routes",
     exportName: "runGetModelRoutes",
     constName: "GET_MODEL_ROUTES_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID },
+    params: {},
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/model-routes",
     expectedQuery: { workspace_id: WORKSPACE_ID },
@@ -113,7 +111,7 @@ const specs: PluginSpec[] = [
     toolName: "recommend_model_routes",
     exportName: "runRecommendModelRoutes",
     constName: "RECOMMEND_MODEL_ROUTES_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID },
+    params: {},
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/model-routes/recommendations",
     expectedQuery: { workspace_id: WORKSPACE_ID },
@@ -124,7 +122,6 @@ const specs: PluginSpec[] = [
     exportName: "runSetModelRoute",
     constName: "SET_MODEL_ROUTE_TOOL_NAME",
     params: {
-      workspace_id: WORKSPACE_ID,
       route_key: "heartbeat",
       model_id: "google/gemini-2.5-flash",
       fallback_models: ["deepseek/deepseek-v4-flash"],
@@ -146,7 +143,6 @@ const specs: PluginSpec[] = [
     exportName: "runEmitSpecialistSignal",
     constName: "EMIT_SPECIALIST_SIGNAL_TOOL_NAME",
     params: {
-      workspace_id: WORKSPACE_ID,
       specialist_key: "gold_specialist",
       route_key: "gold_specialist",
       instrument: "XAUUSD",
@@ -177,7 +173,7 @@ const specs: PluginSpec[] = [
     toolName: "list_agent_signals",
     exportName: "runListAgentSignals",
     constName: "LIST_AGENT_SIGNALS_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, status: "new" },
+    params: { status: "new" },
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/signals",
     expectedQuery: { workspace_id: WORKSPACE_ID, status: "new" },
@@ -187,7 +183,7 @@ const specs: PluginSpec[] = [
     toolName: "read_agent_signal",
     exportName: "runReadAgentSignal",
     constName: "READ_AGENT_SIGNAL_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, signal_id: SIGNAL_ID },
+    params: { signal_id: SIGNAL_ID },
     expectedMethod: "GET",
     expectedPath: `/api/v1/openclaw/signals/${SIGNAL_ID}`,
     expectedQuery: { workspace_id: WORKSPACE_ID },
@@ -198,7 +194,6 @@ const specs: PluginSpec[] = [
     exportName: "runConsumeAgentSignal",
     constName: "CONSUME_AGENT_SIGNAL_TOOL_NAME",
     params: {
-      workspace_id: WORKSPACE_ID,
       signal_id: SIGNAL_ID,
       consumed_by_thread_id: POLICY_ID,
     },
@@ -215,7 +210,7 @@ const specs: PluginSpec[] = [
     toolName: "generate_pre_session_briefing",
     exportName: "runGeneratePreSessionBriefing",
     constName: "GENERATE_PRE_SESSION_BRIEFING_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, session: "LDN", instrument: "XAUUSD" },
+    params: { session: "LDN", instrument: "XAUUSD" },
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/briefings/pre-session",
     expectedQuery: { workspace_id: WORKSPACE_ID, session: "LDN", instrument: "XAUUSD" },
@@ -225,7 +220,7 @@ const specs: PluginSpec[] = [
     toolName: "generate_day_ahead_forecast",
     exportName: "runGenerateDayAheadForecast",
     constName: "GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, instrument: "XAUUSD" },
+    params: { instrument: "XAUUSD" },
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/briefings/day-ahead",
     expectedQuery: { workspace_id: WORKSPACE_ID, instrument: "XAUUSD" },
@@ -235,7 +230,7 @@ const specs: PluginSpec[] = [
     toolName: "generate_session_summary",
     exportName: "runGenerateSessionSummary",
     constName: "GENERATE_SESSION_SUMMARY_TOOL_NAME",
-    params: { workspace_id: WORKSPACE_ID, session: "NY", instrument: "XAUUSD" },
+    params: { session: "NY", instrument: "XAUUSD" },
     expectedMethod: "GET",
     expectedPath: "/api/v1/openclaw/briefings/session-summary",
     expectedQuery: { workspace_id: WORKSPACE_ID, session: "NY", instrument: "XAUUSD" },
@@ -246,9 +241,11 @@ const pluginModules = import.meta.glob("./vctraderai-*/index.ts", { eager: true 
 
 describe("Agent Alpha heartbeat and Session D vctraderai plugins", () => {
   const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const originalWorkspaceId = process.env.PFM_WORKSPACE_ID;
 
   beforeEach(() => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "gateway-token-001";
+    process.env.PFM_WORKSPACE_ID = WORKSPACE_ID;
   });
 
   afterEach(() => {
@@ -256,6 +253,11 @@ describe("Agent Alpha heartbeat and Session D vctraderai plugins", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+    }
+    if (originalWorkspaceId === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspaceId;
     }
   });
 
@@ -271,6 +273,9 @@ describe("Agent Alpha heartbeat and Session D vctraderai plugins", () => {
     mod.default.register(captured.api);
     expect(captured.tools).toHaveLength(1);
     expect(captured.tools[0].name).toBe(spec.toolName);
+    const parameterProperties =
+      (captured.tools[0].parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    expect(parameterProperties).not.toHaveProperty("workspace_id");
 
     let capturedUrl = "";
     let capturedMethod = "";

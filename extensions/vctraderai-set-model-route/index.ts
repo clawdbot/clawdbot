@@ -17,6 +17,14 @@ export type SetModelRouteDeps = {
 
 export type SetModelRouteParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai set_model_route: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: SetModelRouteParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runSetModelRoute(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/model-routes/set", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": SET_MODEL_ROUTE_TOOL_NAME },
     signal,
   });
@@ -63,7 +71,6 @@ export default defineToolPlugin({
         "Set one workspace Agent Alpha model route within the server-side safe allowlist.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           route_key: Type.String({ description: "Route key to update.", minLength: 1 }),
           model_id: Type.String({ description: "Allowed model id.", minLength: 1 }),
           fallback_models: Type.Optional(Type.Array(Type.String())),

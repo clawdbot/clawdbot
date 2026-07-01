@@ -26,6 +26,14 @@ export type GenerateReportParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai generate_report: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: GenerateReportParams): string {
   const reportType = typeof params.report_type === "string" ? params.report_type : "";
   return `Generate ${reportType} report`.replace(/\s+/g, " ").trim();
@@ -41,7 +49,7 @@ export async function runGenerateReport(
     method: "POST",
     body: {
       tool_name: GENERATE_REPORT_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

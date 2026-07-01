@@ -32,6 +32,14 @@ export type EnqueueWalkforwardWorkerJobParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai enqueue_walkforward_worker_job: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: EnqueueWalkforwardWorkerJobParams): string {
   return `Walkforward ${params.trader_def_id ?? params.strategy_id ?? "job"}`;
 }
@@ -46,7 +54,7 @@ export async function runEnqueueWalkforwardWorkerJob(
     method: "POST",
     body: {
       tool_name: ENQUEUE_WALKFORWARD_WORKER_JOB_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

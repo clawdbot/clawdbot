@@ -17,6 +17,14 @@ export type GetModelRoutesDeps = {
 
 export type GetModelRoutesParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai get_model_routes: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: GetModelRoutesParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runGetModelRoutes(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/model-routes", {
     method: "GET",
-    query: buildQuery(params, ["workspace_id"]),
+    query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, ["workspace_id"]),
     headers: { "X-OpenClaw-Tool": GET_MODEL_ROUTES_TOOL_NAME },
     signal,
   });
@@ -60,12 +68,7 @@ export default defineToolPlugin({
       name: GET_MODEL_ROUTES_TOOL_NAME,
       label: "Get Model Routes",
       description: "Read the workspace Agent Alpha model-route configuration.",
-      parameters: Type.Object(
-        {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
-        },
-        { additionalProperties: true },
-      ),
+      parameters: Type.Object({}, { additionalProperties: true }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
         return runGetModelRoutes(params as GetModelRoutesParams, {}, context.signal);

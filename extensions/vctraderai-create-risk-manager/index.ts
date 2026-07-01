@@ -31,6 +31,14 @@ export type CreateRiskManagerParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai create_risk_manager: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: CreateRiskManagerParams): string {
   const label =
     typeof params.name === "string" && params.name.length > 0 ? params.name : "risk manager";
@@ -51,7 +59,7 @@ export async function runCreateRiskManager(
     method: "POST",
     body: {
       tool_name: CREATE_RISK_MANAGER_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

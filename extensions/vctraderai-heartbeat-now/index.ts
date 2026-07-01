@@ -17,6 +17,14 @@ export type HeartbeatNowDeps = {
 
 export type HeartbeatNowParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai heartbeat_now: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: HeartbeatNowParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runHeartbeatNow(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/heartbeat/now", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": HEARTBEAT_NOW_TOOL_NAME },
     signal,
   });
@@ -64,7 +72,6 @@ export default defineToolPlugin({
         "Mark an Agent Alpha heartbeat policy due now without bypassing the normal heartbeat runner gates.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           policy_id: Type.String({ description: "Heartbeat policy id.", minLength: 1 }),
         },
         { additionalProperties: true },

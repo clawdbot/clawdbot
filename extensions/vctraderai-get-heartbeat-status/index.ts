@@ -17,6 +17,14 @@ export type GetHeartbeatStatusDeps = {
 
 export type GetHeartbeatStatusParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai get_heartbeat_status: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: GetHeartbeatStatusParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,10 @@ export async function runGetHeartbeatStatus(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/heartbeat/status", {
     method: "GET",
-    query: buildQuery(params, ["workspace_id", "policy_id"]),
+    query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, [
+      "workspace_id",
+      "policy_id",
+    ]),
     headers: { "X-OpenClaw-Tool": GET_HEARTBEAT_STATUS_TOOL_NAME },
     signal,
   });
@@ -64,7 +75,6 @@ export default defineToolPlugin({
         "Read heartbeat status, cadence, timeout, route, failure streak, last failure, and next due time.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           policy_id: Type.String({ description: "Heartbeat policy id.", minLength: 1 }),
         },
         { additionalProperties: true },

@@ -17,6 +17,14 @@ export type ConsumeAgentSignalDeps = {
 
 export type ConsumeAgentSignalParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai consume_agent_signal: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: ConsumeAgentSignalParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runConsumeAgentSignal(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/signals/consume", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": CONSUME_AGENT_SIGNAL_TOOL_NAME },
     signal,
   });
@@ -62,7 +70,6 @@ export default defineToolPlugin({
       description: "Mark one specialist signal consumed by the Agent Alpha PM thread.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           signal_id: Type.String({ description: "Signal id.", minLength: 1 }),
           consumed_by_thread_id: Type.Optional(
             Type.String({ description: "Consuming PM thread id." }),

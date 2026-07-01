@@ -17,6 +17,14 @@ export type StopHeartbeatDeps = {
 
 export type StopHeartbeatParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai stop_heartbeat: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: StopHeartbeatParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runStopHeartbeat(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/heartbeat/stop", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": STOP_HEARTBEAT_TOOL_NAME },
     signal,
   });
@@ -62,7 +70,6 @@ export default defineToolPlugin({
       description: "Stop an Agent Alpha heartbeat policy without deleting its history.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           policy_id: Type.String({ description: "Heartbeat policy id.", minLength: 1 }),
           stopped_by_user_id: Type.Optional(
             Type.String({ description: "User id requesting stop." }),

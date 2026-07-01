@@ -29,6 +29,14 @@ export type CreateIndicatorParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai create_indicator: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: CreateIndicatorParams): string {
   const label =
     typeof params.name === "string" && params.name.length > 0 ? params.name : "indicator";
@@ -45,7 +53,7 @@ export async function runCreateIndicator(
     method: "POST",
     body: {
       tool_name: CREATE_INDICATOR_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

@@ -17,6 +17,14 @@ export type UpdateHeartbeatDeps = {
 
 export type UpdateHeartbeatParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai update_heartbeat: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: UpdateHeartbeatParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runUpdateHeartbeat(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/heartbeat/update", {
     method: "POST",
-    body: params,
+    body: { ...params, workspace_id: readWorkspaceId() },
     headers: { "X-OpenClaw-Tool": UPDATE_HEARTBEAT_TOOL_NAME },
     signal,
   });
@@ -64,7 +72,6 @@ export default defineToolPlugin({
         "Update cadence, timeout, route, symbols, or instructions for an existing Agent Alpha heartbeat policy.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           policy_id: Type.String({ description: "Heartbeat policy id.", minLength: 1 }),
           cadence_seconds: Type.Optional(
             Type.Integer({ description: "Heartbeat cadence in seconds.", minimum: 1 }),

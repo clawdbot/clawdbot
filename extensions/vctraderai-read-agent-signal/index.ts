@@ -17,6 +17,14 @@ export type ReadAgentSignalDeps = {
 
 export type ReadAgentSignalParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai read_agent_signal: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: ReadAgentSignalParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,7 @@ export async function runReadAgentSignal(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch(`/api/v1/openclaw/signals/${requireStringParam(params, "signal_id")}`, {
     method: "GET",
-    query: buildQuery(params, ["workspace_id"]),
+    query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, ["workspace_id"]),
     headers: { "X-OpenClaw-Tool": READ_AGENT_SIGNAL_TOOL_NAME },
     signal,
   });
@@ -62,7 +70,6 @@ export default defineToolPlugin({
       description: "Read one specialist signal by id for Agent Alpha PM review.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           signal_id: Type.String({ description: "Signal id.", minLength: 1 }),
         },
         { additionalProperties: true },

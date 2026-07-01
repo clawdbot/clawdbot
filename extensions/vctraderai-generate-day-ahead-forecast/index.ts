@@ -17,6 +17,14 @@ export type GenerateDayAheadForecastDeps = {
 
 export type GenerateDayAheadForecastParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai generate_day_ahead_forecast: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: GenerateDayAheadForecastParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,10 @@ export async function runGenerateDayAheadForecast(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/briefings/day-ahead", {
     method: "GET",
-    query: buildQuery(params, ["workspace_id", "instrument"]),
+    query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, [
+      "workspace_id",
+      "instrument",
+    ]),
     headers: { "X-OpenClaw-Tool": GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME },
     signal,
   });
@@ -62,7 +73,6 @@ export default defineToolPlugin({
       description: "Generate an offline day-ahead structured prior, not a prediction.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           instrument: Type.Optional(Type.String({ description: "Instrument, e.g. XAUUSD." })),
         },
         { additionalProperties: true },

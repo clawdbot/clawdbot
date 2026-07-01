@@ -27,6 +27,14 @@ export type TriggerRevalidationParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai trigger_revalidation: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: TriggerRevalidationParams): string {
   return `Revalidate strategy ${params.strategy_id ?? ""}`.trim();
 }
@@ -41,7 +49,7 @@ export async function runTriggerRevalidation(
     method: "POST",
     body: {
       tool_name: TRIGGER_REVALIDATION_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

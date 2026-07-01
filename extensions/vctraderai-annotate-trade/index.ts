@@ -31,6 +31,14 @@ export type AnnotateTradeParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai annotate_trade: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: AnnotateTradeParams): string {
   return `Annotate ${params.trade_source} trade`;
 }
@@ -45,7 +53,7 @@ export async function runAnnotateTrade(
     method: "POST",
     body: {
       tool_name: ANNOTATE_TRADE_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

@@ -31,6 +31,14 @@ export type UpdateStrategyParams = {
   [key: string]: unknown;
 };
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai update_strategy: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function buildSummary(params: UpdateStrategyParams): string {
   const detail =
     typeof params.intent_brief === "string" && params.intent_brief.length > 0
@@ -49,7 +57,7 @@ export async function runUpdateStrategy(
     method: "POST",
     body: {
       tool_name: UPDATE_STRATEGY_TOOL_NAME,
-      workspace_id: process.env.PFM_WORKSPACE_ID,
+      workspace_id: readWorkspaceId(),
       params,
       summary: buildSummary(params),
     },

@@ -17,6 +17,14 @@ export type GeneratePreSessionBriefingDeps = {
 
 export type GeneratePreSessionBriefingParams = Record<string, unknown>;
 
+function readWorkspaceId(): string {
+  const value = process.env.PFM_WORKSPACE_ID;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`vctraderai generate_pre_session_briefing: PFM_WORKSPACE_ID is not set`);
+  }
+  return value;
+}
+
 function requireStringParam(params: GeneratePreSessionBriefingParams, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -45,7 +53,11 @@ export async function runGeneratePreSessionBriefing(
   const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
   return bffFetch("/api/v1/openclaw/briefings/pre-session", {
     method: "GET",
-    query: buildQuery(params, ["workspace_id", "session", "instrument"]),
+    query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, [
+      "workspace_id",
+      "session",
+      "instrument",
+    ]),
     headers: { "X-OpenClaw-Tool": GENERATE_PRE_SESSION_BRIEFING_TOOL_NAME },
     signal,
   });
@@ -64,7 +76,6 @@ export default defineToolPlugin({
         "Generate an offline pre-session briefing with offline_mode true and metaapi_used false.",
       parameters: Type.Object(
         {
-          workspace_id: Type.String({ description: "Workspace id.", minLength: 1 }),
           session: Type.String({ description: "Session label.", minLength: 1 }),
           instrument: Type.Optional(Type.String({ description: "Instrument, e.g. XAUUSD." })),
         },
