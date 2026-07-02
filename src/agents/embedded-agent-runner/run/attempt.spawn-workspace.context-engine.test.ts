@@ -2344,7 +2344,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("uses before_agent_run transform only at the model boundary", async () => {
+  it("uses before_agent_run transform at both the model boundary and the session transcript", async () => {
     const sensitivePrompt = "Hi OpenClaw, my credit card is 4111111111111111";
     const redactedPrompt = "Hi OpenClaw, my credit card is [CreditCardNumber]";
     const runBeforeAgentRun = vi.fn(async () => ({
@@ -2382,28 +2382,31 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
         sessionPrompt: async (session, prompt) => {
           transcriptPrompt = prompt;
+          // A redacted transform now writes the same text to the transcript and
+          // the model boundary, so no transformContext swap is installed here;
+          // the messages already carry the redacted content.
           const transformContext = (
             session.agent as {
               transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]>;
             }
           ).transformContext;
-          if (!transformContext) {
-            throw new Error("expected model prompt transform");
-          }
-          providerMessages = await transformContext([
+          const currentTurnMessages = [
             ...(session.messages as AgentMessage[]),
             {
               role: "user",
               content: [{ type: "text", text: prompt }],
               timestamp: 2,
             } as AgentMessage,
-          ]);
+          ];
+          providerMessages = transformContext
+            ? await transformContext(currentTurnMessages)
+            : currentTurnMessages;
           session.messages = [...session.messages, doneMessage];
         },
       });
       await waitForDiagnosticEventsDrained();
 
-      expect(transcriptPrompt).toBe(sensitivePrompt);
+      expect(transcriptPrompt).toBe(redactedPrompt);
       expect(result.finalPromptText).toBe(redactedPrompt);
       expect(JSON.stringify(result)).not.toContain("4111111111111111");
       expect(JSON.stringify(providerMessages)).toContain(redactedPrompt);

@@ -207,12 +207,20 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       });
       skipPromptSubmission = true;
     } else if (beforeAgentRunOutcome?.kind === "transform") {
-      // A transform decision redacts the model-bound prompt; feed that same
-      // redacted text to the transcript, cache/trajectory recording, and image
-      // detection too, so the redaction doesn't leak back in via history.
+      // A transform decision carries a security/redaction intent: what the
+      // model sees must also be what gets persisted to the transcript, cache/
+      // trajectory recording, and image detection, otherwise the raw text
+      // re-enters context on a later turn via session history.
       const transformedPrompt = beforeAgentRunOutcome.prompt;
+      const currentUserTimestampOverride = promptContext.currentUserTimestampOverride
+        ? {
+            timestamp: promptContext.currentUserTimestampOverride.timestamp,
+            text: transformedPrompt,
+          }
+        : undefined;
       promptContext = {
         ...promptContext,
+        ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
         effectivePrompt: transformedPrompt,
         llmBoundaryPromptForPrecheck: buildLlmBoundaryPromptForPrecheck({
           prompt: transformedPrompt,
@@ -229,6 +237,9 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         promptForSession: transformedPrompt,
         promptSubmission: { ...promptContext.promptSubmission, prompt: transformedPrompt },
       };
+      if (currentUserTimestampOverride) {
+        input.lifecycle.setCurrentUserTimestampOverride(currentUserTimestampOverride);
+      }
       if (input.context.systemPromptReport?.currentTurn) {
         input.context.systemPromptReport.currentTurn.promptChars = transformedPrompt.length;
       }

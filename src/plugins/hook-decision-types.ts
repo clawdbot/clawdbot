@@ -30,13 +30,14 @@ export type HookDecisionBlock = {
 };
 
 /**
- * Content can proceed after replacing the current model-bound prompt. The
- * replacement is sent to the model and model-input observers; it does not
- * rewrite the stored transcript prompt.
+ * Content can proceed after replacing the current user prompt. The
+ * replacement is sent to the model, model-input observers, and the stored
+ * session transcript, so the original text does not re-enter context on a
+ * later turn.
  */
 export type HookDecisionTransform = {
   outcome: "transform";
-  /** Replacement text for the current model-bound user prompt. */
+  /** Replacement text for the current user prompt. */
   prompt: string;
   /** Internal plugin-local reason. Do not expose verbatim. */
   reason?: string;
