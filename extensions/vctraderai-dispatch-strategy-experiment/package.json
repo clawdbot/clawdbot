@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-dispatch-strategy-experiment",
+  "version": "2026.7.2",
+  "private": true,
+  "description": "VC Trader AI propose tool that stages a strategy-first experiment dispatch proposal.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
