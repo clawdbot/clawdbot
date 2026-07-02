@@ -717,8 +717,11 @@ export async function runPreparedCliAgent(
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
     ...buildAgentHookConversationMessages({
       historyMessages,
+      // Read via the closure so a before_agent_run transform (which reassigns
+      // modelBoundPrompt) is reflected here too — agent_end fires after the
+      // hook runs, so the raw prompt must never reach this hook-visible event.
       currentTurnMessages: [
-        buildCliHookUserMessage(params.prompt),
+        buildCliHookUserMessage(modelBoundPrompt),
         ...(lastAssistant ? [lastAssistant] : []),
       ],
     }),
