@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-recall-decisions",
+  "name": "VC Trader AI Recall Decisions",
+  "description": "Read-only workspace-scoped tool: recall the agent's OWN recent decision-ledger entries from the live read endpoints. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "recall_decisions"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

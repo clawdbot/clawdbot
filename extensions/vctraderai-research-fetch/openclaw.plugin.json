@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-research-fetch",
+  "name": "VC Trader AI Research Fetch",
+  "description": "Workspace-scoped tool: fetch and extract the main readable text of a PUBLIC web page for deep web research. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). SSRF-guarded (only ports 80/443, no internal addresses).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "research_fetch_page"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
