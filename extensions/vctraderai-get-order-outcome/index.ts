@@ -16,6 +16,13 @@ export const GET_ORDER_OUTCOME_TOOL_NAME = "get_order_outcome";
 export type GetOrderOutcomeDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetOrderOutcomeParams = {
@@ -41,7 +48,8 @@ export async function runGetOrderOutcome(
   deps: GetOrderOutcomeDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   const idempotencyKey = nonEmpty(params.idempotency_key);
   const orderId = nonEmpty(params.order_id);
@@ -96,7 +104,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetOrderOutcome(params as GetOrderOutcomeParams, {}, context.signal);
+        return runGetOrderOutcome(
+          params as GetOrderOutcomeParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

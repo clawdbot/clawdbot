@@ -16,6 +16,13 @@ export const AGENT_CLOSE_POSITION_TOOL_NAME = "agent_close_position";
 export type AgentClosePositionDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type AgentClosePositionParams = {
@@ -36,7 +43,8 @@ export async function runAgentClosePosition(
   deps: AgentClosePositionDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(
     `/api/v1/workspaces/${workspaceId}/live/positions/${params.position_id}/agent-close`,
@@ -71,7 +79,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runAgentClosePosition(params as AgentClosePositionParams, {}, context.signal);
+        return runAgentClosePosition(
+          params as AgentClosePositionParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

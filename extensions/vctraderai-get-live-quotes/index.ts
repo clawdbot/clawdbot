@@ -13,6 +13,13 @@ export const GET_LIVE_QUOTES_TOOL_NAME = "get_live_quotes";
 export type GetLiveQuotesDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetLiveQuotesParams = {
@@ -33,7 +40,8 @@ export async function runGetLiveQuotes(
   deps: GetLiveQuotesDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/live/quotes`, {
     query: {
@@ -67,7 +75,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetLiveQuotes(params as GetLiveQuotesParams, {}, context.signal);
+        return runGetLiveQuotes(
+          params as GetLiveQuotesParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

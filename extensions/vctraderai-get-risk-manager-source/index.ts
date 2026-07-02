@@ -13,6 +13,13 @@ export const GET_RISK_MANAGER_SOURCE_TOOL_NAME = "get_risk_manager_source";
 export type GetRiskManagerSourceDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetRiskManagerSourceParams = {
@@ -24,7 +31,8 @@ export async function runGetRiskManagerSource(
   deps: GetRiskManagerSourceDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(
     `/api/v1/openclaw/catalogue/risk-managers/${encodeURIComponent(params.risk_manager_id)}/source`,
     {
@@ -51,7 +59,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetRiskManagerSource(params, {}, context.signal);
+        return runGetRiskManagerSource(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

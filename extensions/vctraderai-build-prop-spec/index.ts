@@ -26,6 +26,13 @@ export const BUILD_PROP_SPEC_TOOL_NAME = "build_prop_spec";
 export type BuildPropSpecDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type BuildPropSpecParams = {
@@ -37,7 +44,8 @@ export async function runBuildPropSpec(
   deps: BuildPropSpecDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/catalogue/prop-spec", {
     query: { challenge_id: params.challenge_id },
     signal,
@@ -63,7 +71,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runBuildPropSpec(params, {}, context.signal);
+        return runBuildPropSpec(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

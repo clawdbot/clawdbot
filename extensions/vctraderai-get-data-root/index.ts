@@ -14,13 +14,21 @@ export const GET_DATA_ROOT_TOOL_NAME = "get_data_root";
 export type GetDataRootDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export async function runGetDataRoot(
   deps: GetDataRootDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/root`, {
     signal,
   });
@@ -39,7 +47,7 @@ export default defineToolPlugin({
       parameters: Type.Object({}),
       async execute(_params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetDataRoot({}, context.signal);
+        return runGetDataRoot({ threadId: context.threadId }, context.signal);
       },
     }),
   ],

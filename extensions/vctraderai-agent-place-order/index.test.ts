@@ -104,6 +104,46 @@ describe("vctraderai-agent-place-order", () => {
     expect("client_order_id" in capturedBody).toBe(false);
   });
 
+  it("stamps X-OpenClaw-Thread with the per-turn thread id when supplied", async () => {
+    let capturedThreadHeader: string | null = null;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedThreadHeader = new Headers(init?.headers).get("x-openclaw-thread");
+      return new Response(JSON.stringify({ accepted_queued: true }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    await runAgentPlaceOrder(
+      {
+        account_id: "acct-1",
+        symbol: "XAU_USD",
+        side: "buy",
+        qty: "0.10",
+        stop_loss: 1900,
+        intended_price: 1925,
+      },
+      { fetchImpl, threadId: "thread-specialist-7" },
+    );
+    expect(capturedThreadHeader).toBe("thread-specialist-7");
+  });
+
+  it("omits X-OpenClaw-Thread when no thread id is supplied", async () => {
+    let hasThreadHeader = true;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      hasThreadHeader = new Headers(init?.headers).has("x-openclaw-thread");
+      return new Response(JSON.stringify({ accepted_queued: true }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    await runAgentPlaceOrder(
+      {
+        account_id: "acct-1",
+        symbol: "XAU_USD",
+        side: "buy",
+        qty: "0.10",
+        stop_loss: 1900,
+        intended_price: 1925,
+      },
+      { fetchImpl },
+    );
+    expect(hasThreadHeader).toBe(false);
+  });
+
   it("surfaces a structured error on bff 4xx", async () => {
     const fetchImpl = (async () =>
       new Response("forbidden", {

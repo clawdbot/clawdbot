@@ -13,6 +13,13 @@ export const AUDIT_TOOL_NAME = "audit";
 export type AuditDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export async function runAudit(
@@ -21,7 +28,8 @@ export async function runAudit(
   deps: AuditDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/workspaces/${workspaceId}/agent/threads/${threadId}/audit`, {
     signal,
   });
@@ -49,7 +57,12 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runAudit(params.workspace_id, params.thread_id, {}, context.signal);
+        return runAudit(
+          params.workspace_id,
+          params.thread_id,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

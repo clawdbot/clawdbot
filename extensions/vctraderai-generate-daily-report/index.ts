@@ -15,6 +15,13 @@ export const GENERATE_DAILY_REPORT_TOOL_NAME = "generate_daily_report";
 export type GenerateDailyReportDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GenerateDailyReportParams = {
@@ -27,7 +34,8 @@ export async function runGenerateDailyReport(
   deps: GenerateDailyReportDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const body: Record<string, unknown> = { workspace_id: params.workspace_id };
   if (typeof params.day === "string" && params.day.length > 0) {
     body.day = params.day;
@@ -64,7 +72,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGenerateDailyReport(params, {}, context.signal);
+        return runGenerateDailyReport(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

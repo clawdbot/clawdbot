@@ -15,6 +15,13 @@ export const GENERATE_WEEKLY_REPORT_TOOL_NAME = "generate_weekly_report";
 export type GenerateWeeklyReportDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GenerateWeeklyReportParams = {
@@ -27,7 +34,8 @@ export async function runGenerateWeeklyReport(
   deps: GenerateWeeklyReportDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const body: Record<string, unknown> = { workspace_id: params.workspace_id };
   if (typeof params.week_ending === "string" && params.week_ending.length > 0) {
     body.week_ending = params.week_ending;
@@ -64,7 +72,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGenerateWeeklyReport(params, {}, context.signal);
+        return runGenerateWeeklyReport(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

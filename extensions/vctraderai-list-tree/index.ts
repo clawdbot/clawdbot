@@ -15,6 +15,13 @@ export const LIST_TREE_TOOL_NAME = "list_tree";
 export type ListTreeDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListTreeParams = {
@@ -26,7 +33,8 @@ export async function runListTree(
   deps: ListTreeDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/tree`, {
     query: {
       root: params.root,
@@ -56,7 +64,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListTree(params, {}, context.signal);
+        return runListTree(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

@@ -13,6 +13,13 @@ export const GENERATE_DAY_AHEAD_FORECAST_TOOL_NAME = "generate_day_ahead_forecas
 export type GenerateDayAheadForecastDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GenerateDayAheadForecastParams = Record<string, unknown>;
@@ -50,7 +57,8 @@ export async function runGenerateDayAheadForecast(
   deps: GenerateDayAheadForecastDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/briefings/day-ahead", {
     method: "GET",
     query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, [
@@ -81,7 +89,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runGenerateDayAheadForecast(
           params as GenerateDayAheadForecastParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

@@ -13,13 +13,21 @@ export const LIST_STRATEGY_TYPES_TOOL_NAME = "list_strategy_types";
 export type ListStrategyTypesDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export async function runListStrategyTypes(
   deps: ListStrategyTypesDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/catalogue/strategy-types`, {
     signal,
   });
@@ -38,7 +46,7 @@ export default defineToolPlugin({
       parameters: Type.Object({}),
       async execute(_params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListStrategyTypes({}, context.signal);
+        return runListStrategyTypes({ threadId: context.threadId }, context.signal);
       },
     }),
   ],

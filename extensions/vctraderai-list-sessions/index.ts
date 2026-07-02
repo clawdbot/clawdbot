@@ -13,13 +13,21 @@ export const LIST_SESSIONS_TOOL_NAME = "list_sessions";
 export type ListSessionsDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export async function runListSessions(
   deps: ListSessionsDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/catalogue/sessions`, {
     signal,
   });
@@ -38,7 +46,7 @@ export default defineToolPlugin({
       parameters: Type.Object({}),
       async execute(_params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListSessions({}, context.signal);
+        return runListSessions({ threadId: context.threadId }, context.signal);
       },
     }),
   ],

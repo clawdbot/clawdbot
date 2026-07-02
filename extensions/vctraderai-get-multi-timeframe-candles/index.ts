@@ -13,6 +13,13 @@ export const GET_MULTI_TIMEFRAME_CANDLES_TOOL_NAME = "get_multi_timeframe_candle
 export type GetMultiTimeframeCandlesDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetMultiTimeframeCandlesParams = {
@@ -35,7 +42,8 @@ export async function runGetMultiTimeframeCandles(
   deps: GetMultiTimeframeCandlesDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/live/candles-mtf`, {
     query: {
@@ -79,7 +87,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runGetMultiTimeframeCandles(
           params as GetMultiTimeframeCandlesParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

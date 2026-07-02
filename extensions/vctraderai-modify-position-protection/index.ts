@@ -16,6 +16,13 @@ export const MODIFY_POSITION_PROTECTION_TOOL_NAME = "modify_position_protection"
 export type ModifyPositionProtectionDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ModifyPositionProtectionParams = {
@@ -38,7 +45,8 @@ export async function runModifyPositionProtection(
   deps: ModifyPositionProtectionDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   const body: Record<string, unknown> = { account_id: params.account_id };
   if (params.sl !== undefined) {
@@ -84,7 +92,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runModifyPositionProtection(
           params as ModifyPositionProtectionParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

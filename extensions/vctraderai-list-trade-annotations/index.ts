@@ -13,6 +13,13 @@ export const LIST_TRADE_ANNOTATIONS_TOOL_NAME = "list_trade_annotations";
 export type ListTradeAnnotationsDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListTradeAnnotationsParams = {
@@ -35,7 +42,8 @@ export async function runListTradeAnnotations(
   deps: ListTradeAnnotationsDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/journal`, {
     query: {
@@ -71,7 +79,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListTradeAnnotations(params as ListTradeAnnotationsParams, {}, context.signal);
+        return runListTradeAnnotations(
+          params as ListTradeAnnotationsParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

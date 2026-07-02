@@ -13,6 +13,13 @@ export const CANVAS_CONTEXT_TOOL_NAME = "canvas_context";
 export type CanvasContextDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type CanvasContextParams = {
@@ -34,7 +41,8 @@ export async function runCanvasContext(
   deps: CanvasContextDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/cockpit/canvas`, {
     query: {
@@ -64,7 +72,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runCanvasContext(params as CanvasContextParams, {}, context.signal);
+        return runCanvasContext(
+          params as CanvasContextParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

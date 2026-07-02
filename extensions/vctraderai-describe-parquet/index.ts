@@ -14,6 +14,13 @@ export const DESCRIBE_PARQUET_TOOL_NAME = "describe_parquet";
 export type DescribeParquetDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type DescribeParquetParams = {
@@ -25,7 +32,8 @@ export async function runDescribeParquet(
   deps: DescribeParquetDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/parquet/describe`, {
     query: {
       path: params.path,
@@ -52,7 +60,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runDescribeParquet(params, {}, context.signal);
+        return runDescribeParquet(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

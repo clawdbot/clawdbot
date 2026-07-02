@@ -16,6 +16,13 @@ export const VOLUME_PROFILE_TOOL_NAME = "volume_profile";
 export type VolumeProfileDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type VolumeProfileParams = {
@@ -31,7 +38,8 @@ export async function runVolumeProfile(
   deps: VolumeProfileDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/volume-profile`, {
     query: {
       symbol: params.symbol,
@@ -79,7 +87,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runVolumeProfile(params as VolumeProfileParams, {}, context.signal);
+        return runVolumeProfile(
+          params as VolumeProfileParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

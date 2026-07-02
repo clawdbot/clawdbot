@@ -15,6 +15,13 @@ export const ECON_CALENDAR_TAIL_TOOL_NAME = "econ_calendar_tail";
 export type EconCalendarTailDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type EconCalendarTailParams = {
@@ -26,7 +33,8 @@ export async function runEconCalendarTail(
   deps: EconCalendarTailDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/econ-calendar/tail`, {
     query: {
       n: params.n !== undefined ? String(params.n) : undefined,
@@ -56,7 +64,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runEconCalendarTail(params, {}, context.signal);
+        return runEconCalendarTail(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

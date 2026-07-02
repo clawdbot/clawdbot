@@ -13,6 +13,13 @@ export const LIST_PROP_FIRM_CHALLENGES_TOOL_NAME = "list_prop_firm_challenges";
 export type ListPropFirmChallengesDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListPropFirmChallengesParams = {
@@ -24,7 +31,8 @@ export async function runListPropFirmChallenges(
   deps: ListPropFirmChallengesDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/catalogue/prop-firm-challenges`, {
     query: {
       limit: params.limit === undefined ? undefined : String(params.limit),
@@ -54,7 +62,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListPropFirmChallenges(params, {}, context.signal);
+        return runListPropFirmChallenges(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

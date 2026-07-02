@@ -18,6 +18,13 @@ const STAGE_PATH = "/api/v1/openclaw/stage";
 export type TriggerRevalidationDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type TriggerRevalidationParams = {
@@ -44,7 +51,8 @@ export async function runTriggerRevalidation(
   deps: TriggerRevalidationDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const staged = await bffFetch(STAGE_PATH, {
     method: "POST",
     body: {
@@ -85,7 +93,11 @@ export default defineToolPlugin({
       ),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runTriggerRevalidation(params as TriggerRevalidationParams, {}, context.signal);
+        return runTriggerRevalidation(
+          params as TriggerRevalidationParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

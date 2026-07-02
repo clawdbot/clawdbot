@@ -13,6 +13,13 @@ export const GET_PRICE_CORRELATION_SNAPSHOT_TOOL_NAME = "get_price_correlation_s
 export type GetPriceCorrelationSnapshotDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetPriceCorrelationSnapshotParams = {
@@ -37,7 +44,8 @@ export async function runGetPriceCorrelationSnapshot(
   deps: GetPriceCorrelationSnapshotDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/live/price-correlation`, {
     query: {
@@ -88,7 +96,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runGetPriceCorrelationSnapshot(
           params as GetPriceCorrelationSnapshotParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

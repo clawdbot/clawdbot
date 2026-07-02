@@ -14,6 +14,13 @@ export const GET_COVERAGE_TOOL_NAME = "get_coverage";
 export type GetCoverageDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetCoverageParams = {
@@ -27,7 +34,8 @@ export async function runGetCoverage(
   deps: GetCoverageDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/coverage`, {
     query: {
       provider: params.provider,
@@ -61,7 +69,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetCoverage(params, {}, context.signal);
+        return runGetCoverage(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

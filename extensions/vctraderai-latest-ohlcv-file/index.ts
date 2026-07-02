@@ -14,6 +14,13 @@ export const LATEST_OHLCV_FILE_TOOL_NAME = "latest_ohlcv_file";
 export type LatestOhlcvFileDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type LatestOhlcvFileParams = {
@@ -27,7 +34,8 @@ export async function runLatestOhlcvFile(
   deps: LatestOhlcvFileDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/ohlcv/latest`, {
     query: {
       symbol: params.symbol,
@@ -57,7 +65,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runLatestOhlcvFile(params, {}, context.signal);
+        return runLatestOhlcvFile(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

@@ -13,6 +13,13 @@ export const UPDATE_HEARTBEAT_TOOL_NAME = "update_heartbeat";
 export type UpdateHeartbeatDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type UpdateHeartbeatParams = Record<string, unknown>;
@@ -50,7 +57,8 @@ export async function runUpdateHeartbeat(
   deps: UpdateHeartbeatDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/heartbeat/update", {
     method: "POST",
     body: { ...params, workspace_id: readWorkspaceId() },
@@ -90,7 +98,11 @@ export default defineToolPlugin({
       ),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runUpdateHeartbeat(params as UpdateHeartbeatParams, {}, context.signal);
+        return runUpdateHeartbeat(
+          params as UpdateHeartbeatParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

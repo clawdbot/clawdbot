@@ -16,6 +16,13 @@ export const GENERATE_SESSION_PLAYBOOK_TOOL_NAME = "generate_session_playbook";
 export type GenerateSessionPlaybookDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GenerateSessionPlaybookParams = {
@@ -28,7 +35,8 @@ export async function runGenerateSessionPlaybook(
   deps: GenerateSessionPlaybookDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const body: Record<string, unknown> = {
     workspace_id: params.workspace_id,
     session: params.session,
@@ -63,7 +71,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGenerateSessionPlaybook(params, {}, context.signal);
+        return runGenerateSessionPlaybook(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

@@ -13,6 +13,13 @@ export const LIST_AGENT_SIGNALS_TOOL_NAME = "list_agent_signals";
 export type ListAgentSignalsDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListAgentSignalsParams = Record<string, unknown>;
@@ -50,7 +57,8 @@ export async function runListAgentSignals(
   deps: ListAgentSignalsDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/signals", {
     method: "GET",
     query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, ["workspace_id", "status"]),
@@ -76,7 +84,11 @@ export default defineToolPlugin({
       ),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListAgentSignals(params as ListAgentSignalsParams, {}, context.signal);
+        return runListAgentSignals(
+          params as ListAgentSignalsParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

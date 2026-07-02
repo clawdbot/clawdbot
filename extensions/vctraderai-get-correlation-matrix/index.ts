@@ -13,6 +13,13 @@ export const GET_CORRELATION_MATRIX_TOOL_NAME = "get_correlation_matrix";
 export type GetCorrelationMatrixDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetCorrelationMatrixParams = {
@@ -34,7 +41,8 @@ export async function runGetCorrelationMatrix(
   deps: GetCorrelationMatrixDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/openclaw/analytics/correlation-matrix`, {
     query: {
@@ -74,7 +82,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetCorrelationMatrix(params as GetCorrelationMatrixParams, {}, context.signal);
+        return runGetCorrelationMatrix(
+          params as GetCorrelationMatrixParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

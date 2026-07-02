@@ -13,6 +13,13 @@ export const LIST_OPEN_ORDERS_TOOL_NAME = "list_open_orders";
 export type ListOpenOrdersDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListOpenOrdersParams = {
@@ -35,7 +42,8 @@ export async function runListOpenOrders(
   deps: ListOpenOrdersDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/openclaw/live/orders`, {
     query: {
@@ -69,7 +77,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runListOpenOrders(params as ListOpenOrdersParams, {}, context.signal);
+        return runListOpenOrders(
+          params as ListOpenOrdersParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

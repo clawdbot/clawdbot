@@ -14,6 +14,13 @@ export const OHLCV_TAIL_TOOL_NAME = "ohlcv_tail";
 export type OhlcvTailDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type OhlcvTailParams = {
@@ -28,7 +35,8 @@ export async function runOhlcvTail(
   deps: OhlcvTailDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch(`/api/v1/openclaw/data/ohlcv/tail`, {
     query: {
       symbol: params.symbol,
@@ -64,7 +72,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runOhlcvTail(params, {}, context.signal);
+        return runOhlcvTail(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

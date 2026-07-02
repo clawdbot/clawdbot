@@ -13,6 +13,13 @@ export const GET_RUN_METRICS_TOOL_NAME = "get_run_metrics";
 export type GetRunMetricsDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetRunMetricsParams = {
@@ -34,7 +41,8 @@ export async function runGetRunMetrics(
   deps: GetRunMetricsDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   if (typeof params.run_id !== "string" || params.run_id.length === 0) {
     throw new Error("vctraderai get_run_metrics: run_id is required");
@@ -72,7 +80,11 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetRunMetrics(params as GetRunMetricsParams, {}, context.signal);
+        return runGetRunMetrics(
+          params as GetRunMetricsParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

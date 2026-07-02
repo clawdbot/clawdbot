@@ -14,6 +14,13 @@ export const GET_PLAYBOOK_HISTORY_TOOL_NAME = "get_playbook_history";
 export type GetPlaybookHistoryDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetPlaybookHistoryParams = {
@@ -26,7 +33,8 @@ export async function runGetPlaybookHistory(
   deps: GetPlaybookHistoryDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const query: Record<string, string | undefined> = {
     workspace_id: params.workspace_id,
   };
@@ -66,7 +74,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runGetPlaybookHistory(params, {}, context.signal);
+        return runGetPlaybookHistory(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

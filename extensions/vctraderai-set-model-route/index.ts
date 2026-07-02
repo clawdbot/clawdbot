@@ -13,6 +13,13 @@ export const SET_MODEL_ROUTE_TOOL_NAME = "set_model_route";
 export type SetModelRouteDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type SetModelRouteParams = Record<string, unknown>;
@@ -50,7 +57,8 @@ export async function runSetModelRoute(
   deps: SetModelRouteDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/model-routes/set", {
     method: "POST",
     body: { ...params, workspace_id: readWorkspaceId() },
@@ -80,7 +88,11 @@ export default defineToolPlugin({
       ),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runSetModelRoute(params as SetModelRouteParams, {}, context.signal);
+        return runSetModelRoute(
+          params as SetModelRouteParams,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

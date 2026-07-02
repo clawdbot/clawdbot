@@ -13,6 +13,13 @@ export const GENERATE_PRE_SESSION_BRIEFING_TOOL_NAME = "generate_pre_session_bri
 export type GeneratePreSessionBriefingDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GeneratePreSessionBriefingParams = Record<string, unknown>;
@@ -50,7 +57,8 @@ export async function runGeneratePreSessionBriefing(
   deps: GeneratePreSessionBriefingDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/briefings/pre-session", {
     method: "GET",
     query: buildQuery({ ...params, workspace_id: readWorkspaceId() }, [
@@ -85,7 +93,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runGeneratePreSessionBriefing(
           params as GeneratePreSessionBriefingParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

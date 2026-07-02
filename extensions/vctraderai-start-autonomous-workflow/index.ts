@@ -16,6 +16,13 @@ export const START_AUTONOMOUS_WORKFLOW_TOOL_NAME = "start_autonomous_workflow";
 export type StartAutonomousWorkflowDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type StartAutonomousWorkflowParams = {
@@ -28,7 +35,8 @@ export async function runStartAutonomousWorkflow(
   deps: StartAutonomousWorkflowDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/workflows/start", {
     method: "POST",
     body: {
@@ -61,7 +69,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runStartAutonomousWorkflow(params, {}, context.signal);
+        return runStartAutonomousWorkflow(params, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

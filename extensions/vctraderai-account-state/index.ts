@@ -18,6 +18,13 @@ export type AccountStateResult = {
 export type AccountStateDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export async function runAccountState(
@@ -25,7 +32,8 @@ export async function runAccountState(
   deps: AccountStateDeps = {},
   signal?: AbortSignal,
 ): Promise<AccountStateResult> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const [stats, accounts] = await Promise.all([
     bffFetch(`/api/v1/workspaces/${workspaceId}/dashboard/home`, { signal }),
     bffFetch(`/api/v1/workspaces/${workspaceId}/accounts`, {
@@ -55,7 +63,7 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runAccountState(params.workspace_id, {}, context.signal);
+        return runAccountState(params.workspace_id, { threadId: context.threadId }, context.signal);
       },
     }),
   ],

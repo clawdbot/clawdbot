@@ -13,6 +13,13 @@ export const LIST_TRADERS_FOR_DEPLOYMENT_TOOL_NAME = "list_traders_for_deploymen
 export type ListTradersForDeploymentDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type ListTradersForDeploymentParams = {};
@@ -30,7 +37,8 @@ export async function runListTradersForDeployment(
   deps: ListTradersForDeploymentDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const workspaceId = requireWorkspaceId();
   return bffFetch(`/api/v1/workspaces/${workspaceId}/openclaw/deployment/traders`, {
     signal,
@@ -52,7 +60,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runListTradersForDeployment(
           params as ListTradersForDeploymentParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },

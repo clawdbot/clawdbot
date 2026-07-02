@@ -29,6 +29,13 @@ export type ExplainResult = {
 export type ExplainDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 function buildNarrativeSummary(entry: LedgerEntry): string {
@@ -50,7 +57,8 @@ export async function runExplain(
   deps: ExplainDeps = {},
   signal?: AbortSignal,
 ): Promise<ExplainResult> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   const entry = (await bffFetch(
     `/api/v1/workspaces/${workspaceId}/decision-ledger/entries/${decisionId}`,
     { signal },
@@ -81,7 +89,12 @@ export default defineToolPlugin({
       }),
       async execute(params, _config, context) {
         context.signal?.throwIfAborted();
-        return runExplain(params.workspace_id, params.decision_id, {}, context.signal);
+        return runExplain(
+          params.workspace_id,
+          params.decision_id,
+          { threadId: context.threadId },
+          context.signal,
+        );
       },
     }),
   ],

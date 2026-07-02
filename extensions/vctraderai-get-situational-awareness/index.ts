@@ -17,6 +17,13 @@ export const GET_SITUATIONAL_AWARENESS_TOOL_NAME = "get_situational_awareness";
 export type GetSituationalAwarenessDeps = {
   fetchImpl?: typeof globalThis.fetch;
   bffFetch?: BffFetchFn;
+  /**
+   * Per-turn BFF thread id for the CURRENT turn. Forwarded to the BFF as the
+   * `X-OpenClaw-Thread` header so it can identify which sub-agent (specialist)
+   * is calling and enforce its granted authority. Sourced from the plugin
+   * execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export type GetSituationalAwarenessParams = {
@@ -45,7 +52,8 @@ export async function runGetSituationalAwareness(
   deps: GetSituationalAwarenessDeps = {},
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  const bffFetch =
+    deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
   return bffFetch("/api/v1/openclaw/situational-awareness", {
     method: "GET",
     query: buildQuery(params),
@@ -83,7 +91,7 @@ export default defineToolPlugin({
         context.signal?.throwIfAborted();
         return runGetSituationalAwareness(
           params as GetSituationalAwarenessParams,
-          {},
+          { threadId: context.threadId },
           context.signal,
         );
       },
