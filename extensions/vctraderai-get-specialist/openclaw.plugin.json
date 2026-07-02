@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-specialist",
+  "name": "VC Trader AI Get Specialist",
+  "description": "Read a single Agent Alpha specialist by key through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_specialist"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

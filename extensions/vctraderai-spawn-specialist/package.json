@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-spawn-specialist",
+  "version": "2026.6.30",
+  "private": true,
+  "description": "Spawn (invoke) an Agent Alpha specialist turn through the guarded internal BFF route.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

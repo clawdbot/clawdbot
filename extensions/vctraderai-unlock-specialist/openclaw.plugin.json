@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-unlock-specialist",
+  "name": "VC Trader AI Unlock Specialist",
+  "description": "Unlock a specialist's execution (Layer B) through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "unlock_specialist"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

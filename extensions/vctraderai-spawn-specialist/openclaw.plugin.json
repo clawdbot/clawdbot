@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-spawn-specialist",
+  "name": "VC Trader AI Spawn Specialist",
+  "description": "Spawn (invoke) an Agent Alpha specialist turn through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "spawn_specialist"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

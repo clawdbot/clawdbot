@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-create-specialist",
+  "name": "VC Trader AI Create Specialist",
+  "description": "Register a persistent Agent Alpha specialist through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "create_specialist"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

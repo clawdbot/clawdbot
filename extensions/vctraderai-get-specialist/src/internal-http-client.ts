@@ -1,0 +1,138 @@
+// VC Trader AI BFF HTTP client for Agent Alpha specialist control tools.
+//
+// Uses the server-to-server OPENCLAW_GATEWAY_TOKEN and restricts egress to the
+// OpenClaw internal BFF route families used by heartbeat controls, the Session D
+// model-route/signal/briefing tools, and the specialist lifecycle tools
+// (create/spawn/lock/unlock/list/get). The trailing path-segment charset admits
+// `_`, uppercase, and percent-encoding so a `specialist_key` path parameter
+// (e.g. `gold_specialist`) survives the allowlist; traversal, control bytes, and
+// non-allowlisted families are still rejected before a socket is opened.
+
+const ALLOWLIST_PATH_PATTERN =
+  /^\/api\/v1\/openclaw\/(heartbeat|model-routes|signals|briefings|specialists)(\/[A-Za-z0-9\-_%\/]+)?(\?.*)?$/;
+const DEFAULT_BFF_BASE_URL = "http://web_api.local";
+
+export type BffFetchOptions = {
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  query?: Record<string, string | undefined>;
+  headers?: Record<string, string>;
+  body?: unknown;
+  signal?: AbortSignal;
+  /**
+   * propfirm_manager BFF thread id for the CURRENT turn. When present it is
+   * stamped as the `X-OpenClaw-Thread` request header so the BFF can identify
+   * which sub-agent (specialist) is calling and enforce its granted authority.
+   * Sourced from the plugin execute context (`context.threadId`), which the
+   * SDK binds per turn from the session key.
+   */
+  threadId?: string;
+};
+
+export type BffError = {
+  code: string;
+  message: string;
+  status: number;
+};
+
+export class BffEgressViolation extends Error {
+  readonly path: string;
+  constructor(path: string) {
+    super(`vctraderai bff egress violation: path ${path} is not in the Agent Alpha allowlist`);
+    this.name = "BffEgressViolation";
+    this.path = path;
+  }
+}
+
+export class BffRequestError extends Error {
+  readonly detail: BffError;
+  constructor(detail: BffError) {
+    super(`vctraderai bff request failed: ${detail.code} (${detail.status}) ${detail.message}`);
+    this.name = "BffRequestError";
+    this.detail = detail;
+  }
+}
+
+export type BffFetchFn = (path: string, options?: BffFetchOptions) => Promise<unknown>;
+
+function readEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export function buildQueryString(query: Record<string, string | undefined> | undefined): string {
+  if (!query) {
+    return "";
+  }
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string" && value.length > 0) {
+      params.set(key, value);
+    }
+  }
+  const serialized = params.toString();
+  return serialized.length > 0 ? `?${serialized}` : "";
+}
+
+function assertAllowlistedPath(path: string): void {
+  if (path.includes("\n") || path.includes("\r") || path.includes("\0")) {
+    throw new BffEgressViolation(path);
+  }
+  if (path.includes("/..") || path.includes("../") || path.includes("/./")) {
+    throw new BffEgressViolation(path);
+  }
+  if (!ALLOWLIST_PATH_PATTERN.test(path)) {
+    throw new BffEgressViolation(path);
+  }
+}
+
+export type BffClientDeps = {
+  fetchImpl?: typeof globalThis.fetch;
+  /**
+   * Default per-turn BFF thread id bound at client-creation time. When set,
+   * every request this client makes is stamped with `X-OpenClaw-Thread`
+   * unless a per-call `options.threadId` overrides it. The plugin sources this
+   * from its execute context (`context.threadId`).
+   */
+  threadId?: string;
+};
+
+export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
+  const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+  const boundThreadId = deps.threadId;
+  if (typeof fetchImpl !== "function") {
+    throw new Error("vctraderai bff: global fetch is not available; Node >= 18 required");
+  }
+  return async function bffFetch(path: string, options: BffFetchOptions = {}): Promise<unknown> {
+    assertAllowlistedPath(path);
+    const baseUrl = readEnv("PFM_BFF_BASE_URL") ?? DEFAULT_BFF_BASE_URL;
+    const token = readEnv("OPENCLAW_GATEWAY_TOKEN");
+    const queryString = buildQueryString(options.query);
+    const url = `${baseUrl}${path}${queryString}`;
+    const hasBody = options.body !== undefined;
+    const effectiveThreadId = options.threadId ?? boundThreadId;
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      ...(hasBody ? { "content-type": "application/json" } : undefined),
+      ...(token ? { authorization: `Bearer ${token}` } : undefined),
+      ...(effectiveThreadId ? { "x-openclaw-thread": effectiveThreadId } : undefined),
+      ...options.headers,
+    };
+    const response = await fetchImpl(url, {
+      method: options.method ?? (hasBody ? "POST" : "GET"),
+      headers,
+      body: hasBody ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
+    });
+    if (!response.ok) {
+      const detail: BffError = {
+        code: `bff_${response.status}`,
+        message: response.statusText || `HTTP ${response.status}`,
+        status: response.status,
+      };
+      throw new BffRequestError(detail);
+    }
+    return response.json();
+  };
+}
+
+export const VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN = ALLOWLIST_PATH_PATTERN;

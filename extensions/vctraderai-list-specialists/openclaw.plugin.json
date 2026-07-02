@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-specialists",
+  "name": "VC Trader AI List Specialists",
+  "description": "List the workspace's registered Agent Alpha specialists through the guarded internal BFF route.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_specialists"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
