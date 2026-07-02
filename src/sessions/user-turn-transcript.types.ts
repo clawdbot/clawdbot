@@ -152,6 +152,12 @@ export type UserTurnTranscriptRecorder = {
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     /** Allow a later explicit persistence attempt when this attempt appends nothing. */
     retryIfUnpersisted?: boolean;
+    /**
+     * Persists this message instead of the recorder's captured input. Used by
+     * before_agent_run transform decisions, which redact after the recorder
+     * already captured the raw message.
+     */
+    overrideMessage?: PersistedUserTurnMessage;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,

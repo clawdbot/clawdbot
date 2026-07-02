@@ -4704,7 +4704,7 @@ describe("runCliAgent reliability", () => {
     }
   });
 
-  it("uses before_agent_run transform for CLI model input while preserving transcript text", async () => {
+  it("uses before_agent_run transform for CLI model input and the persisted transcript", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -4721,9 +4721,7 @@ describe("runCliAgent reliability", () => {
     const sensitivePrompt = "Hi OpenClaw, my credit card is 4111111111111111";
     const redactedPrompt = "Hi OpenClaw, my credit card is [CreditCardNumber]";
     const hookRunner = {
-      hasHooks: vi.fn((hookName: string) =>
-        ["before_agent_run", "llm_input"].includes(hookName),
-      ),
+      hasHooks: vi.fn((hookName: string) => ["before_agent_run", "llm_input"].includes(hookName)),
       runBeforeAgentRun: vi.fn(async () => ({
         pluginId: "redactor",
         decision: {
@@ -4787,7 +4785,8 @@ describe("runCliAgent reliability", () => {
 
       const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
       const userTurnLine = JSON.parse(lines[lines.length - 1]);
-      expect(JSON.stringify(userTurnLine)).toContain(sensitivePrompt);
+      expect(JSON.stringify(userTurnLine)).toContain(redactedPrompt);
+      expect(JSON.stringify(userTurnLine)).not.toContain("4111111111111111");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

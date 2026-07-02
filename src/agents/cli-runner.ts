@@ -27,6 +27,7 @@ import {
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
@@ -335,15 +336,30 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<boolean> {
+async function persistApprovedCliUserTurnTranscript(
+  params: RunCliAgentParams,
+  options?: { redactedPrompt?: string },
+): Promise<boolean> {
   const recorder = params.userTurnTranscriptRecorder;
   const reusingPersistedTurn = params.suppressNextUserMessagePersistence === true;
   if (!recorder || (reusingPersistedTurn && !recorder.hasPersisted())) {
     return recorder?.isBlocked() === true;
   }
 
+  // A transform outcome redacts after the recorder already captured the raw
+  // message; persist the redacted text instead so it doesn't re-enter context
+  // on a later turn via transcript history (mirrors the embedded runner fix).
+  let overrideMessage: PersistedUserTurnMessage | undefined;
+  if (options?.redactedPrompt !== undefined) {
+    const baseMessage = await recorder.resolveMessage();
+    if (baseMessage) {
+      overrideMessage = { ...baseMessage, content: options.redactedPrompt };
+    }
+  }
+
   const persisted = await recorder.persistApproved({
     cwd: params.cwd ?? params.workspaceDir,
+    overrideMessage,
   });
   if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
     // A prepared user row can be rejected by before_message_write. Preserve
@@ -659,6 +675,7 @@ export async function runPreparedCliAgent(
       })
     : [];
   let modelBoundPrompt = params.prompt;
+  let beforeAgentRunTransformedPrompt = false;
   const buildLlmInputEvent = () =>
     ({
       runId: params.runId,
@@ -1461,10 +1478,14 @@ export async function runPreparedCliAgent(
       }
       if (beforeRunDecision?.outcome === "transform") {
         modelBoundPrompt = beforeRunDecision.prompt;
+        beforeAgentRunTransformedPrompt = true;
       }
     }
 
-    userTurnHandled = await persistApprovedCliUserTurnTranscript(params);
+    userTurnHandled = await persistApprovedCliUserTurnTranscript(
+      params,
+      beforeAgentRunTransformedPrompt ? { redactedPrompt: modelBoundPrompt } : undefined,
+    );
     runAgentHarnessLlmInputHook({
       event: buildLlmInputEvent(),
       ctx: hookContext,

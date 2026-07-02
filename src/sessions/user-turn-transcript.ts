@@ -518,6 +518,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
     retryIfUnpersisted?: boolean;
+    overrideMessage?: PersistedUserTurnMessage;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -542,7 +543,8 @@ export function createUserTurnTranscriptRecorder(
       selfPersistencePromise = undefined;
     }
     const persistencePromise = (async () => {
-      const resolvedMessage = options.message ?? (await resolveMessageForPersistence());
+      const resolvedMessage =
+        options.overrideMessage ?? options.message ?? (await resolveMessageForPersistence());
       if (!resolvedMessage) {
         return undefined;
       }
@@ -664,6 +666,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
         retryIfUnpersisted: options?.retryIfUnpersisted,
+        overrideMessage: options?.overrideMessage,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
