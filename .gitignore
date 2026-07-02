@@ -228,3 +228,5 @@ extensions/discord/assets/embedded-app-sdk.mjs
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+clawbot/
+main.py
