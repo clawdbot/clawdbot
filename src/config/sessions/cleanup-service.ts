@@ -16,6 +16,7 @@ import {
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
+  cleanupSessionArchivedTranscriptFiles,
   listSessionEntriesCore,
   loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
@@ -134,27 +135,19 @@ function loadCleanupSessionStore(
   );
 }
 
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
-
 async function cleanupArchivedTranscriptsForSummary(params: {
   storePath: string;
   maintenance: ResolvedSessionMaintenanceConfig;
   dryRun: boolean;
   excludeCanonicalPaths?: ReadonlySet<string>;
+  onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<SessionArchiveCleanupReport> {
-  const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
-  const result = await cleanupArchivedSessionTranscripts({
+  const result = await cleanupSessionArchivedTranscriptFiles({
     directories: [path.dirname(path.resolve(params.storePath))],
     rules: resolveSessionArchiveCleanupRules(params.maintenance),
     dryRun: params.dryRun,
     excludeCanonicalPaths: params.excludeCanonicalPaths,
+    onRemoveFile: params.onRemoveFile,
   });
   return {
     scannedFiles: result.scanned,
@@ -483,6 +476,15 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     keys: dmScopeRetiredKeys,
   });
+  const archiveCleanupFilePaths = new Set<string>();
+  const archiveCleanup = await cleanupArchivedTranscriptsForSummary({
+    storePath: params.target.storePath,
+    maintenance: params.maintenance,
+    dryRun: true,
+    onRemoveFile: (canonicalPath) => {
+      archiveCleanupFilePaths.add(canonicalPath);
+    },
+  });
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -497,12 +499,7 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     olderThanMs: params.maintenance.pruneAfterMs,
     dryRun: true,
-    excludeCanonicalPaths: entryCleanupArtifactPaths,
-  });
-  const archiveCleanup = await cleanupArchivedTranscriptsForSummary({
-    storePath: params.target.storePath,
-    maintenance: params.maintenance,
-    dryRun: true,
+    excludeCanonicalPaths: new Set([...archiveCleanupFilePaths, ...entryCleanupArtifactPaths]),
   });
   const budgetEvictedKeys = new Set<string>();
   const beforeCount = Object.keys(beforeStore).length;
