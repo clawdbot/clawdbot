@@ -4521,6 +4521,48 @@ describe("cron service timer regressions", () => {
     expect(shouldDelete).toBe(false);
   });
 
+  it("#83538: manual ok run on recurring job preserves pending scheduled error-backoff window", () => {
+    const startedAt = Date.parse("2026-05-19T10:15:00.000Z");
+    const endedAt = startedAt + 100;
+    // A prior scheduled error pushed the next fire into a backoff window far
+    // beyond the natural 60s cadence.
+    const backoffNextRunAtMs = endedAt + 30 * 60_000;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-83538-manual-preserves-backoff.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-preserves-backoff",
+      name: "recurring job",
+      scheduledAt: startedAt,
+      schedule: {
+        kind: "every",
+        everyMs: 60_000,
+        anchorMs: startedAt - 60_000,
+      },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: backoffNextRunAtMs, consecutiveErrors: 2 },
+    });
+
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      { status: "ok", delivered: true, startedAt, endedAt },
+      { isManual: true },
+    );
+
+    expect(shouldDelete).toBe(false);
+    expect(job.enabled).toBe(true);
+    // Manual success must NOT recompute the schedule and clear the pending
+    // scheduled backoff window.
+    expect(job.state.nextRunAtMs).toBe(backoffNextRunAtMs);
+  });
+
   it("manual error run does not increment consecutiveErrors (#83933)", () => {
     const startedAt = Date.parse("2026-05-20T10:00:00.000Z");
     const endedAt = startedAt + 100;
