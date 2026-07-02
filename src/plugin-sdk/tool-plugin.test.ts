@@ -1,7 +1,11 @@
 import { Type } from "typebox";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
-import { defineToolPlugin, getToolPluginMetadata } from "./tool-plugin.js";
+import {
+  defineToolPlugin,
+  extractThreadIdFromSessionKey,
+  getToolPluginMetadata,
+} from "./tool-plugin.js";
 
 describe("defineToolPlugin", () => {
   it("registers declared tools and wraps plain object results", async () => {
@@ -95,9 +99,18 @@ describe("defineToolPlugin", () => {
 
     entry.register(captured.api);
 
-    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
+    // Execute-form tools now register via the factory path (a function of the
+    // per-turn tool context) so `defineToolPlugin` can bind the current turn's
+    // thread id. The registration opts carry the tool name (required for the
+    // function form) alongside `optional`.
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
+      name: "optional_echo",
       optional: true,
     });
+    const optionalFactory = registerTool.mock.calls[0]?.[0] as (
+      ctx: Record<string, unknown>,
+    ) => { name: string; optional?: boolean } | undefined;
+    expect(optionalFactory({})).toMatchObject({ name: "optional_echo" });
     expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
       { name: "optional_echo", optional: true },
     ]);
@@ -164,6 +177,68 @@ describe("defineToolPlugin", () => {
     const factory = registerTool.mock.calls[0]?.[0] as (ctx: { sandboxed?: boolean }) => unknown;
     expect(factory({ sandboxed: true })).toBeNull();
     expect(factory({ sandboxed: false })).toMatchObject({ name: "factory_echo" });
+  });
+
+  it("surfaces the per-turn thread id from the session key to execute", async () => {
+    const seen: Array<{ threadId?: string; sessionKey?: string }> = [];
+    const entry = defineToolPlugin({
+      id: "thread-aware",
+      name: "Thread Aware",
+      description: "Records the per-turn thread id.",
+      tools: (tool) => [
+        tool({
+          name: "record_thread",
+          description: "Record the thread id.",
+          parameters: Type.Object({}),
+          async execute(_params, _config, context) {
+            seen.push({ threadId: context.threadId, sessionKey: context.sessionKey });
+            return { threadId: context.threadId ?? null };
+          },
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "thread-aware" });
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    // Execute-form tools register as a factory of the per-turn tool context.
+    const factory = registerTool.mock.calls[0]?.[0] as (ctx: { sessionKey?: string }) => {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    // Turn A: an OpenAI-compatible session key carrying the BFF thread id.
+    const toolA = factory({ sessionKey: "agent:alpha:openai-user:thread-abc" });
+    await toolA.execute("call-a", {});
+
+    // Turn B: a DIFFERENT thread id — proves identity is bound per turn (in the
+    // factory closure), not memoized module-globally across turns.
+    const toolB = factory({ sessionKey: "agent:alpha:openai-user:thread-xyz" });
+    await toolB.execute("call-b", {});
+
+    // Turn C: a non-OpenAI session key (random-UUID main) has no BFF thread id.
+    const toolC = factory({ sessionKey: "agent:alpha:openai:11111111-2222" });
+    await toolC.execute("call-c", {});
+
+    expect(seen).toEqual([
+      { threadId: "thread-abc", sessionKey: "agent:alpha:openai-user:thread-abc" },
+      { threadId: "thread-xyz", sessionKey: "agent:alpha:openai-user:thread-xyz" },
+      { threadId: undefined, sessionKey: "agent:alpha:openai:11111111-2222" },
+    ]);
+  });
+
+  it("extractThreadIdFromSessionKey parses the openai-user thread id", () => {
+    expect(extractThreadIdFromSessionKey("agent:alpha:openai-user:thread-123")).toBe("thread-123");
+    // Thread id itself may contain colons; take everything after the marker.
+    expect(extractThreadIdFromSessionKey("agent:a:openai-user:tenant:thread-9")).toBe(
+      "tenant:thread-9",
+    );
+    expect(extractThreadIdFromSessionKey("agent:alpha:openai:uuid")).toBeUndefined();
+    expect(extractThreadIdFromSessionKey("agent:alpha:telegram:chat-1")).toBeUndefined();
+    expect(extractThreadIdFromSessionKey("agent:alpha:openai-user:")).toBeUndefined();
+    expect(extractThreadIdFromSessionKey(undefined)).toBeUndefined();
+    expect(extractThreadIdFromSessionKey("")).toBeUndefined();
   });
 
   it("defaults author config to a strict empty object schema", () => {

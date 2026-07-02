@@ -20,7 +20,45 @@ export type ToolPluginExecutionContext = {
   signal?: AbortSignal;
   toolCallId: string;
   onUpdate?: AgentToolUpdateCallback;
+  /**
+   * Raw per-turn session key for the active request, when the runtime supplied
+   * one (`agent:<agentId>:openai-user:<threadId>` for OpenAI-compatible callers).
+   * This is bound PER TURN via the factory registration path below, so it is
+   * concurrency-safe and never memoized module-globally.
+   */
+  sessionKey?: string;
+  /**
+   * The propfirm_manager BFF thread id for the CURRENT turn, parsed from
+   * {@link sessionKey} (the substring after `openai-user:`). Undefined when the
+   * caller did not supply an `openai-user:<thread_id>` session key. Plugins
+   * forward this to the BFF as the `X-OpenClaw-Thread` header so the BFF can
+   * identify which sub-agent (specialist) is calling and enforce its authority.
+   */
+  threadId?: string;
 };
+
+/**
+ * Extract the propfirm_manager BFF thread id from a runtime session key.
+ *
+ * OpenAI-compatible callers (the propfirm BFF sends `user=<thread_id>`) yield a
+ * session key of the form `agent:<agentId>:openai-user:<thread_id>`
+ * (see `src/gateway/http-utils.ts` + `src/routing/session-key.ts`). The thread
+ * id is everything AFTER the last `openai-user:` marker. Any other session-key
+ * shape (Telegram/webchat/random-UUID mains) has no BFF thread id and returns
+ * undefined so no misleading identity is stamped.
+ */
+export function extractThreadIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  if (typeof sessionKey !== "string" || sessionKey.length === 0) {
+    return undefined;
+  }
+  const marker = "openai-user:";
+  const idx = sessionKey.lastIndexOf(marker);
+  if (idx < 0) {
+    return undefined;
+  }
+  const threadId = sessionKey.slice(idx + marker.length).trim();
+  return threadId.length > 0 ? threadId : undefined;
+}
 
 type ToolPluginConfig<TConfigSchema extends TSchema | undefined> = TConfigSchema extends TSchema
   ? Static<TConfigSchema>
@@ -182,8 +220,17 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
         if (!execute) {
           throw new Error(`tool plugin tool ${tool.name} must define execute or factory`);
         }
+        // Register via the FACTORY form (a function of the per-turn tool context)
+        // rather than a bare tool object. The registry wraps a bare object as
+        // `(_ctx) => tool`, which DISCARDS the per-turn context and would leave
+        // execute-form plugins with no per-turn identity. Running through the
+        // factory keeps the live `toolContext` (with `sessionKey`) in scope so we
+        // can surface the current turn's BFF thread id to `execute`. The factory
+        // is re-invoked per turn with the live context (see
+        // `src/plugins/tools.ts`), so `threadId`/`sessionKey` are bound PER TURN
+        // in this closure and are concurrency-safe — never memoized module-globally.
         api.registerTool(
-          {
+          (toolContext) => ({
             name: tool.name,
             label: tool.label,
             description: tool.description,
@@ -195,10 +242,12 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
                   signal,
                   toolCallId,
                   onUpdate,
+                  sessionKey: toolContext.sessionKey,
+                  threadId: extractThreadIdFromSessionKey(toolContext.sessionKey),
                 }),
               ),
-          },
-          tool.optional ? { optional: true } : undefined,
+          }),
+          { name: tool.name, ...(tool.optional ? { optional: true } : {}) },
         );
       }
     },

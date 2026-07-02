@@ -313,6 +313,21 @@ export function createCapturedPluginRegistration(params?: {
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);
+            return;
+          }
+          // Factory-form registration: resolve it with an empty per-turn context
+          // so callers that introspect `captured.tools` (tests, manifest smoke
+          // checks) still see the produced tool object(s). `defineToolPlugin`
+          // now registers execute-form tools via the factory path so it can bind
+          // the per-turn thread id; passing an empty context here yields the same
+          // static tool object those tools would produce at runtime (identity is
+          // read lazily inside `execute`, not at factory time). Factories that
+          // opt out for a given context (returning null/undefined) contribute
+          // nothing, matching prior behavior.
+          const resolved = tool({});
+          const resolvedList = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+          for (const resolvedTool of resolvedList) {
+            tools.push(resolvedTool as AnyAgentTool);
           }
         },
       },

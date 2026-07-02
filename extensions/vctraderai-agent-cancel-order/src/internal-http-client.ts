@@ -33,6 +33,14 @@ export type BffFetchOptions = {
   headers?: Record<string, string>;
   body?: unknown;
   signal?: AbortSignal;
+  /**
+   * propfirm_manager BFF thread id for the CURRENT turn. When present it is
+   * stamped as the `X-OpenClaw-Thread` request header so the BFF can identify
+   * which sub-agent (specialist) is calling and enforce its granted authority.
+   * Sourced from the plugin execute context (`context.threadId`), which the
+   * SDK binds per turn from the session key.
+   */
+  threadId?: string;
 };
 
 export type BffError = {
@@ -95,10 +103,18 @@ function assertAllowlistedPath(path: string): void {
 export type BffClientDeps = {
   // Injectable for tests; falls back to globalThis.fetch otherwise.
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * Default per-turn BFF thread id bound at client-creation time. When set,
+   * every request this client makes is stamped with `X-OpenClaw-Thread`
+   * unless a per-call `options.threadId` overrides it. The plugin sources this
+   * from its execute context (`context.threadId`).
+   */
+  threadId?: string;
 };
 
 export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+  const boundThreadId = deps.threadId;
   if (typeof fetchImpl !== "function") {
     throw new Error("vctraderai bff: global fetch is not available; Node >= 18 required");
   }
@@ -111,10 +127,12 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
     const queryString = buildQueryString(options.query);
     const url = `${baseUrl}${path}${queryString}`;
     const hasBody = options.body !== undefined;
+    const effectiveThreadId = options.threadId ?? boundThreadId;
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(hasBody ? { "content-type": "application/json" } : undefined),
       ...(token ? { authorization: `Bearer ${token}` } : undefined),
+      ...(effectiveThreadId ? { "x-openclaw-thread": effectiveThreadId } : undefined),
       ...options.headers,
     };
     const response = await fetchImpl(url, {
