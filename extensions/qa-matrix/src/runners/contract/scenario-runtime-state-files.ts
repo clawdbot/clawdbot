@@ -3,19 +3,27 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { loadMatrixQaE2eeRuntime } from "../../substrate/e2ee-client.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
-const MATRIX_INBOUND_DEDUPE_NAMESPACE = "inbound-dedupe";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 const MATRIX_SYNC_CACHE_MAX_ENTRIES = 20_000;
 const MATRIX_SYNC_CACHE_MAX_CHUNKS = Math.floor((MATRIX_SYNC_CACHE_MAX_ENTRIES - 1) / 2);
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const MATRIX_SYNC_CACHE_CHUNK_BYTES = 24_000;
+
+type MatrixQaInboundDedupeStoreRuntime = {
+  openMatrixInboundDedupeStoreOptions: (params: {
+    env?: NodeJS.ProcessEnv;
+    stateDir?: string;
+  }) => OpenKeyedStoreOptions;
+};
 
 type MatrixSyncStoreCursor = {
   cursor: string;
@@ -521,6 +529,7 @@ function buildMatrixInboundDedupePluginStateKey(params: {
 
 async function hasPersistedMatrixPluginStateDedupeEntry(params: {
   accountId: string;
+  dedupeStoreRuntime?: MatrixQaInboundDedupeStoreRuntime;
   eventId: string;
   roomId: string;
   stateDir: string;
@@ -530,65 +539,70 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
     eventId: params.eventId,
     roomId: params.roomId,
   });
+  const dedupeStoreRuntime = params.dedupeStoreRuntime ?? (await loadMatrixQaE2eeRuntime());
   const databasePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.stateDir,
-    maxDepth: 4,
+    maxDepth: 10,
   });
-  if (databasePaths.length === 0) {
-    databasePaths.push(path.join(params.stateDir, "state", "openclaw.sqlite"));
-  }
-  const now = Date.now();
-  const isExpectedValue = (raw: unknown) => {
-    if (typeof raw !== "string") {
-      return false;
-    }
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return (
-        isRecord(parsed) && parsed.roomId === params.roomId && parsed.eventId === params.eventId
-      );
-    } catch {
-      return false;
-    }
-  };
+  let sqlite: typeof import("node:sqlite");
   try {
-    const sqlite = await import("node:sqlite");
-    for (const databasePath of databasePaths) {
-      try {
-        await fs.access(databasePath);
-        const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
-        try {
-          const rows = db
-            .prepare(
-              `SELECT entry_key AS entryKey, value_json AS valueJson
-                 FROM plugin_state_entries
-                WHERE plugin_id = ?
-                  AND namespace = ?
-                  AND (expires_at IS NULL OR expires_at > ?)`,
-            )
-            .all(MATRIX_PLUGIN_ID, MATRIX_INBOUND_DEDUPE_NAMESPACE, now) as Array<{
-            entryKey?: unknown;
-            valueJson?: unknown;
-          }>;
-          if (rows.some((row) => row.entryKey === entryKey || isExpectedValue(row.valueJson))) {
-            return databasePath;
-          }
-        } finally {
-          db.close();
-        }
-      } catch {
-        continue;
-      }
-    }
+    sqlite = await import("node:sqlite");
   } catch {
     return null;
+  }
+  for (const databasePath of databasePaths) {
+    try {
+      const storageRootDir = path.dirname(path.dirname(databasePath));
+      const options = dedupeStoreRuntime.openMatrixInboundDedupeStoreOptions({
+        stateDir: storageRootDir,
+      });
+      const stateRoot = options.env?.OPENCLAW_STATE_DIR?.trim();
+      if (
+        !stateRoot ||
+        path.resolve(stateRoot, "state", "openclaw.sqlite") !== path.resolve(databasePath)
+      ) {
+        continue;
+      }
+      const db = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const rows = db
+          .prepare(
+            `SELECT entry_key AS entryKey, value_json AS valueJson
+               FROM plugin_state_entries
+              WHERE plugin_id = ?
+                AND namespace = ?
+                AND (expires_at IS NULL OR expires_at > ?)`,
+          )
+          .all(MATRIX_PLUGIN_ID, options.namespace, Date.now()) as Array<{
+          entryKey?: unknown;
+          valueJson?: unknown;
+        }>;
+        const matched = rows.some((row) => {
+          if (row.entryKey === entryKey) {
+            return true;
+          }
+          const entry = parsePluginStateJson(row.valueJson);
+          return (
+            isRecord(entry) && entry.roomId === params.roomId && entry.eventId === params.eventId
+          );
+        });
+        if (matched) {
+          return databasePath;
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      continue;
+    }
   }
   return null;
 }
 
 export async function waitForMatrixInboundDedupeEntry(params: {
   context: MatrixQaScenarioContext;
+  dedupeStoreRuntime?: MatrixQaInboundDedupeStoreRuntime;
   eventId: string;
   roomId: string;
   stateDir: string;
@@ -598,6 +612,7 @@ export async function waitForMatrixInboundDedupeEntry(params: {
   while (Date.now() - startedAt < params.timeoutMs) {
     const sqlitePath = await hasPersistedMatrixPluginStateDedupeEntry({
       accountId: params.context.sutAccountId ?? "sut",
+      ...(params.dedupeStoreRuntime ? { dedupeStoreRuntime: params.dedupeStoreRuntime } : {}),
       eventId: params.eventId,
       roomId: params.roomId,
       stateDir: params.stateDir,

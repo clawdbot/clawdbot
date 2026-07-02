@@ -1,6 +1,6 @@
 // Qa Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -46,6 +46,11 @@ import {
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
+
+type MatrixQaStorageMetadataRuntime = Pick<
+  Awaited<ReturnType<typeof loadMatrixQaE2eeRuntime>>,
+  "normalizeMatrixStorageMetadata" | "openMatrixStorageMetaStoreOptions"
+>;
 
 type MatrixQaCliBackupStatus = {
   backup?: {
@@ -503,24 +508,59 @@ async function findFilesByName(params: { filename: string; rootDir: string }): P
 
 async function findMatrixQaCliAccountRoot(params: {
   deviceId: string;
-  runtime: MatrixQaCliRuntime;
+  runtime: Pick<MatrixQaCliRuntime, "stateDir">;
+  storageMetadataRuntime?: MatrixQaStorageMetadataRuntime;
   userId: string;
 }) {
-  const metadataPaths = await findFilesByName({
+  const storageMetadataRuntime = params.storageMetadataRuntime ?? (await loadMatrixQaE2eeRuntime());
+  const sqlitePaths = await findFilesByName({
+    filename: "openclaw.sqlite",
+    rootDir: params.runtime.stateDir,
+  });
+  const legacyMetadataPaths = await findFilesByName({
     filename: "storage-meta.json",
     rootDir: params.runtime.stateDir,
   });
-  for (const metadataPath of metadataPaths) {
+  // Current account metadata lives in account-local SQLite. Keep legacy JSON
+  // discovery for older tagged fixtures without making it the canonical path.
+  const accountRoots = new Set(
+    sqlitePaths
+      .filter((sqlitePath) => path.basename(path.dirname(sqlitePath)) === "state")
+      .map((sqlitePath) => path.dirname(path.dirname(sqlitePath))),
+  );
+  for (const metadataPath of legacyMetadataPaths) {
+    accountRoots.add(path.dirname(metadataPath));
+  }
+  for (const accountRoot of [...accountRoots].toSorted()) {
+    let metadata: { deviceId?: unknown; userId?: unknown } | null = null;
     try {
-      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
-        deviceId?: unknown;
-        userId?: unknown;
-      };
-      if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
-        return path.dirname(metadataPath);
+      await access(path.join(accountRoot, "state", "openclaw.sqlite"));
+      try {
+        const store = createPluginStateSyncKeyedStoreForTests<unknown>(
+          "matrix",
+          storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+        );
+        metadata = storageMetadataRuntime.normalizeMatrixStorageMetadata(store.lookup("current"));
+      } finally {
+        resetPluginStateStoreForTests();
       }
     } catch {
-      continue;
+      // Fall through to the legacy sidecar for pre-SQLite fixtures.
+    }
+    if (!metadata) {
+      try {
+        metadata = JSON.parse(
+          await readFile(path.join(accountRoot, "storage-meta.json"), "utf8"),
+        ) as {
+          deviceId?: unknown;
+          userId?: unknown;
+        };
+      } catch {
+        continue;
+      }
+    }
+    if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
+      return accountRoot;
     }
   }
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);
@@ -1685,3 +1725,7 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
     await cleanupMatrixQaTempDevices(setup.owner, [device.deviceId]);
   }
 }
+
+export const testing = {
+  findMatrixQaCliAccountRoot,
+};
