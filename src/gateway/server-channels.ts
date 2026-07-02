@@ -536,7 +536,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
-    opts: StartChannelOptions = {},
+    startOptions: StartChannelOptions = {},
   ) => {
     const registration = resolveChannelPluginRegistration(channelId);
     const plugin = registration?.plugin;
@@ -548,7 +548,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       includeKnownAccounts = false,
       preserveRestartAttempts = false,
       preserveManualStop = false,
-    } = opts;
+    } = startOptions;
     const cfg = getRuntimeConfig();
     resetDirectoryCache({ cfg, channel: channelId, accountId });
     const store = getStore(channelId);
@@ -567,7 +567,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (accountIds.length === 0) {
       return;
     }
-    if (autostartSuppression && opts.manual !== true) {
+    if (autostartSuppression && startOptions.manual !== true) {
       // Safe mode must block every automatic channel start surface; otherwise
       // config reloads can undo the crash-loop breaker while operators inspect.
       const suffix = accountId ? ` account ${accountId}` : "";
