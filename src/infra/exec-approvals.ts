@@ -170,6 +170,7 @@ export {
   resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "./exec-approvals-policy.js";
+export { commandRequiresOpenClawLifecycleApproval } from "./exec-approvals-lifecycle.js";
 export {
   addAllowlistEntry,
   addDurableCommandApproval,

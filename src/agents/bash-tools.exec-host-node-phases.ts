@@ -17,6 +17,7 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
+  commandRequiresOpenClawLifecycleApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
@@ -75,6 +76,7 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  requiresOpenClawLifecycleApproval: boolean;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -566,6 +568,16 @@ export async function analyzeNodeApprovalRequirement(params: {
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  const requiresOpenClawLifecycleApproval =
+    suppressionCommandEvals.some((entry) =>
+      commandRequiresOpenClawLifecycleApproval({
+        command: entry.command,
+        cwd: entry.cwd,
+        env: analysisEnv,
+        envComplete: false,
+        segments: entry.allowlistEval.segments,
+      }),
+    ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
@@ -666,6 +678,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresOpenClawLifecycleApproval,
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,
