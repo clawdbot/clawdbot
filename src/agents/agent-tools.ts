@@ -54,6 +54,7 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { applyClosedWorldToolGate } from "./closed-world-tool-gate.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
@@ -1074,7 +1075,13 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
-  const withHooks = normalized.map((tool) =>
+  // WS-A: closed-world fail-closed tool-gate (post-deny, pre-hook). In report
+  // mode (default) this only logs the resolved set + any would-deny and passes
+  // all tools through; in enforce mode it filters out any tool not in the
+  // env-injected allowlist snapshot. See closed-world-tool-gate.ts.
+  const gated = applyClosedWorldToolGate(normalized).tools;
+  options?.recordToolPrepStage?.("closed-world-gate");
+  const withHooks = gated.map((tool) =>
     wrapToolWithBeforeToolCallHook(
       tool,
       {
