@@ -2,16 +2,18 @@ import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { Type } from "typebox";
 import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
 
-// VC Trader AI: create_indicator (PROPOSE).
+// VC Trader AI: create_indicator (DIRECT_CONTROL, WS-C PR B).
 //
-// Cluster C "propose" tool per AGENT_ALPHA_TIER_MAP. This tool STAGES a new
-// indicator proposal; it NEVER creates the indicator directly. It calls the BFF
-// `POST /api/v1/openclaw/stage` endpoint with
-// `{ tool_name, workspace_id, params, summary }`. The BFF persists a reviewable
-// staged descriptor and returns it; the human reviews + Applies it in the chat.
+// Cluster-C registry tool. FLIPPED from PROPOSE_ONLY (staged card) to
+// DIRECT_CONTROL: this tool CREATES the indicator directly -- it authors Python +
+// an indicator manifest, validates, and persists it immediately. It calls the
+// guarded internal BFF route `POST /api/v1/openclaw/registry/create-indicator`
+// with the shared OPENCLAW_GATEWAY_TOKEN plus `X-OpenClaw-Tool` so the
+// server-side allowlist gates the exact tool. owner_user_id is resolved
+// SERVER-SIDE from the trusted workspace (never sent by this plugin).
 
 export const CREATE_INDICATOR_TOOL_NAME = "create_indicator";
-const STAGE_PATH = "/api/v1/openclaw/stage";
+const REGISTRY_PATH = "/api/v1/openclaw/registry/create-indicator";
 
 export type CreateIndicatorDeps = {
   fetchImpl?: typeof globalThis.fetch;
@@ -36,20 +38,6 @@ export type CreateIndicatorParams = {
   [key: string]: unknown;
 };
 
-function readWorkspaceId(): string {
-  const value = process.env.PFM_WORKSPACE_ID;
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai create_indicator: PFM_WORKSPACE_ID is not set`);
-  }
-  return value;
-}
-
-function buildSummary(params: CreateIndicatorParams): string {
-  const label =
-    typeof params.name === "string" && params.name.length > 0 ? params.name : "indicator";
-  return `Create ${label}: ${params.intent_brief}`;
-}
-
 export async function runCreateIndicator(
   params: CreateIndicatorParams,
   deps: CreateIndicatorDeps = {},
@@ -57,32 +45,25 @@ export async function runCreateIndicator(
 ): Promise<unknown> {
   const bffFetch =
     deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
-  const staged = await bffFetch(STAGE_PATH, {
+  return bffFetch(REGISTRY_PATH, {
     method: "POST",
-    body: {
-      tool_name: CREATE_INDICATOR_TOOL_NAME,
-      workspace_id: readWorkspaceId(),
-      params,
-      summary: buildSummary(params),
-    },
+    body: params,
+    headers: { "X-OpenClaw-Tool": CREATE_INDICATOR_TOOL_NAME },
     signal,
   });
-  return {
-    staged,
-    message: "Staged a new indicator proposal. Review + Apply it in the chat.",
-  };
 }
 
 export default defineToolPlugin({
   id: "vctraderai-create-indicator",
-  name: "VC Trader AI Create Indicator (Propose)",
-  description: "Stages a new indicator proposal for human review; never creates directly.",
+  name: "VC Trader AI Create Indicator",
+  description:
+    "Creates a new indicator directly (authors + persists an indicator + manifest, owner-scoped).",
   tools: (tool) => [
     tool({
       name: CREATE_INDICATOR_TOOL_NAME,
       label: "Create Indicator",
       description:
-        "Propose a NEW indicator. This STAGES a proposal for the human to review + Apply in the chat - it does NOT create the indicator directly. Provide an intent_brief describing what the indicator computes; other fields are optional hints for the engine.",
+        "Create a NEW indicator. This CREATES it directly (authors Python + an indicator manifest, validates, and persists it immediately, owner-scoped to your workspace) - it does NOT run a backtest or touch live money. Provide an intent_brief describing what the indicator computes; other fields are optional hints for the engine.",
       parameters: Type.Object(
         {
           name: Type.Optional(Type.String({ description: "Human-readable indicator name." })),

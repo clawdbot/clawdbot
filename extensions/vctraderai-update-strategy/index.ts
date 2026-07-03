@@ -2,16 +2,17 @@ import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { Type } from "typebox";
 import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
 
-// VC Trader AI: update_strategy (PROPOSE).
+// VC Trader AI: update_strategy (DIRECT_CONTROL, WS-C PR B).
 //
-// Cluster C "propose" tool per AGENT_ALPHA_TIER_MAP. This tool STAGES a
-// strategy-update proposal; it NEVER mutates the strategy directly. It calls
-// the BFF `POST /api/v1/openclaw/stage` endpoint with
-// `{ tool_name, workspace_id, params, summary }`. The BFF persists a reviewable
-// staged descriptor and returns it; the human reviews + Applies it in the chat.
+// Cluster-C registry tool. FLIPPED from PROPOSE_ONLY (staged card) to
+// DIRECT_CONTROL: this tool UPDATES the strategy directly. It calls the guarded
+// internal BFF route `POST /api/v1/openclaw/registry/update-strategy` with the
+// shared OPENCLAW_GATEWAY_TOKEN plus `X-OpenClaw-Tool` so the server-side
+// allowlist gates the exact tool. owner_user_id is resolved SERVER-SIDE from the
+// trusted workspace (never sent by this plugin); authoring only (no deploy).
 
 export const UPDATE_STRATEGY_TOOL_NAME = "update_strategy";
-const STAGE_PATH = "/api/v1/openclaw/stage";
+const REGISTRY_PATH = "/api/v1/openclaw/registry/update-strategy";
 
 export type UpdateStrategyDeps = {
   fetchImpl?: typeof globalThis.fetch;
@@ -38,22 +39,6 @@ export type UpdateStrategyParams = {
   [key: string]: unknown;
 };
 
-function readWorkspaceId(): string {
-  const value = process.env.PFM_WORKSPACE_ID;
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai update_strategy: PFM_WORKSPACE_ID is not set`);
-  }
-  return value;
-}
-
-function buildSummary(params: UpdateStrategyParams): string {
-  const detail =
-    typeof params.intent_brief === "string" && params.intent_brief.length > 0
-      ? params.intent_brief
-      : (params.name ?? "strategy fields");
-  return `Update strategy ${params.strategy_id}: ${detail}`;
-}
-
 export async function runUpdateStrategy(
   params: UpdateStrategyParams,
   deps: UpdateStrategyDeps = {},
@@ -61,32 +46,25 @@ export async function runUpdateStrategy(
 ): Promise<unknown> {
   const bffFetch =
     deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
-  const staged = await bffFetch(STAGE_PATH, {
+  return bffFetch(REGISTRY_PATH, {
     method: "POST",
-    body: {
-      tool_name: UPDATE_STRATEGY_TOOL_NAME,
-      workspace_id: readWorkspaceId(),
-      params,
-      summary: buildSummary(params),
-    },
+    body: params,
+    headers: { "X-OpenClaw-Tool": UPDATE_STRATEGY_TOOL_NAME },
     signal,
   });
-  return {
-    staged,
-    message: "Staged a strategy-update proposal. Review + Apply it in the chat.",
-  };
 }
 
 export default defineToolPlugin({
   id: "vctraderai-update-strategy",
-  name: "VC Trader AI Update Strategy (Propose)",
-  description: "Stages a strategy-update proposal for human review; never mutates directly.",
+  name: "VC Trader AI Update Strategy",
+  description:
+    "Updates an existing strategy directly (owner-scoped); does not deploy or touch live money.",
   tools: (tool) => [
     tool({
       name: UPDATE_STRATEGY_TOOL_NAME,
       label: "Update Strategy",
       description:
-        "Propose an UPDATE to an existing strategy. This STAGES a proposal for the human to review + Apply in the chat - it does NOT mutate the strategy directly. strategy_id is required; supply only the fields you want to change.",
+        "UPDATE an existing strategy. This mutates it directly (owner-scoped to your workspace) - it does NOT run a backtest, deploy, or touch live money. strategy_id is required; supply only the fields you want to change.",
       parameters: Type.Object(
         {
           strategy_id: Type.String({

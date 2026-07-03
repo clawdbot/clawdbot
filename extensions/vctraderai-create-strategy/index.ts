@@ -2,16 +2,20 @@ import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { Type } from "typebox";
 import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
 
-// VC Trader AI: create_strategy (PROPOSE).
+// VC Trader AI: create_strategy (DIRECT_CONTROL, WS-C PR B).
 //
-// Cluster C "propose" tool per AGENT_ALPHA_TIER_MAP. This tool STAGES a new
-// strategy proposal; it NEVER executes/creates the strategy directly. It calls
-// the BFF `POST /api/v1/openclaw/stage` endpoint with
-// `{ tool_name, workspace_id, params, summary }`. The BFF persists a reviewable
-// staged descriptor and returns it; the human reviews + Applies it in the chat.
+// Cluster-C registry tool. FLIPPED from PROPOSE_ONLY (staged card) to
+// DIRECT_CONTROL: this tool CREATES the strategy directly -- it authors Python +
+// a manifest, validates, and persists the strategy + registry pointer
+// immediately. It calls the guarded internal BFF route
+// `POST /api/v1/openclaw/registry/create-strategy` with the shared
+// OPENCLAW_GATEWAY_TOKEN plus `X-OpenClaw-Tool` so the server-side allowlist gates
+// the exact tool. owner_user_id is resolved SERVER-SIDE from the trusted
+// workspace (never sent by this plugin); this is authoring only (no backtest,
+// deploy, or live-money action).
 
 export const CREATE_STRATEGY_TOOL_NAME = "create_strategy";
-const STAGE_PATH = "/api/v1/openclaw/stage";
+const REGISTRY_PATH = "/api/v1/openclaw/registry/create-strategy";
 
 export type CreateStrategyDeps = {
   fetchImpl?: typeof globalThis.fetch;
@@ -39,20 +43,6 @@ export type CreateStrategyParams = {
   [key: string]: unknown;
 };
 
-function readWorkspaceId(): string {
-  const value = process.env.PFM_WORKSPACE_ID;
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`vctraderai create_strategy: PFM_WORKSPACE_ID is not set`);
-  }
-  return value;
-}
-
-function buildSummary(params: CreateStrategyParams): string {
-  const label =
-    typeof params.name === "string" && params.name.length > 0 ? params.name : "strategy";
-  return `Create ${label}: ${params.intent_brief}`;
-}
-
 export async function runCreateStrategy(
   params: CreateStrategyParams,
   deps: CreateStrategyDeps = {},
@@ -60,32 +50,25 @@ export async function runCreateStrategy(
 ): Promise<unknown> {
   const bffFetch =
     deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
-  const staged = await bffFetch(STAGE_PATH, {
+  return bffFetch(REGISTRY_PATH, {
     method: "POST",
-    body: {
-      tool_name: CREATE_STRATEGY_TOOL_NAME,
-      workspace_id: readWorkspaceId(),
-      params,
-      summary: buildSummary(params),
-    },
+    body: params,
+    headers: { "X-OpenClaw-Tool": CREATE_STRATEGY_TOOL_NAME },
     signal,
   });
-  return {
-    staged,
-    message: "Staged a new strategy proposal. Review + Apply it in the chat.",
-  };
 }
 
 export default defineToolPlugin({
   id: "vctraderai-create-strategy",
-  name: "VC Trader AI Create Strategy (Propose)",
-  description: "Stages a new strategy proposal for human review; never executes directly.",
+  name: "VC Trader AI Create Strategy",
+  description:
+    "Creates a new strategy directly (authors + persists a research artifact + registry pointer, owner-scoped).",
   tools: (tool) => [
     tool({
       name: CREATE_STRATEGY_TOOL_NAME,
       label: "Create Strategy",
       description:
-        "Propose a NEW trading strategy. This STAGES a proposal for the human to review + Apply in the chat - it does NOT create the strategy directly. Provide an intent_brief describing what the strategy should do; other fields are optional hints for the engine.",
+        "Create a NEW trading strategy. This CREATES it directly (authors Python + a manifest, validates, and persists the strategy + registry pointer immediately, owner-scoped to your workspace) - it does NOT run a backtest, deploy, or touch live money. Provide an intent_brief describing what the strategy should do; other fields are optional hints for the engine.",
       parameters: Type.Object(
         {
           name: Type.Optional(Type.String({ description: "Human-readable strategy name." })),
