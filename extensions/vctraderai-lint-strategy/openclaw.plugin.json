@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-lint-strategy",
+  "name": "VC Trader AI Lint Strategy",
+  "description": "Workspace-scoped tool: lint strategy Python source against the six-key runtime contract via the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). Stateless / read-only; persists nothing.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "lint_strategy"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
