@@ -9,6 +9,7 @@ import {
   type MattermostClient,
   type MattermostUser,
 } from "./client.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 type MattermostDirectoryParams = {
@@ -97,7 +98,15 @@ export async function listMattermostDirectoryGroups(
         }
         seenIds.add(ch.id);
         entries.push({
-          kind: "group" as const,
+          // Authoritative per-channel kind: a public `O` channel is a `channel`;
+          // only private `P` / group `G` map to `group`. Emitting a blanket
+          // `group` here mislabels public channels, so a name-resolved public
+          // channel would fork a phantom `group:<id>` session on outbound
+          // routing (#95646).
+          kind:
+            mapMattermostChannelTypeToChatType(ch.type) === "group"
+              ? ("group" as const)
+              : ("channel" as const),
           id: `channel:${ch.id}`,
           name: ch.name ?? undefined,
           handle: ch.display_name ?? undefined,

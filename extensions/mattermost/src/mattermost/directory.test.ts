@@ -85,6 +85,35 @@ describe("mattermost directory", () => {
     ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "Ops" }]);
   });
 
+  it("labels public O channels as channel and private P channels as group (#95646)", async () => {
+    // A public `O` channel must NOT be keyed as `group`, otherwise a name-resolved
+    // public channel forks a phantom `group:<id>` session on outbound routing.
+    const client = {
+      token: "token-default",
+      request: vi.fn().mockResolvedValueOnce([
+        { id: "pub-1", type: "O", name: "general", display_name: "General" },
+        { id: "priv-1", type: "P", name: "secret", display_name: "Secret" },
+        { id: "dm-1", type: "D", name: "dm", display_name: "DM" },
+      ]),
+    };
+
+    listMattermostAccountIdsMock.mockReturnValue(["default"]);
+    resolveMattermostAccountMock.mockReturnValue({
+      enabled: true,
+      botToken: "token-default",
+      baseUrl: "https://chat.example.com",
+    });
+    createMattermostClientMock.mockReturnValueOnce(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({ cfg: {} as never, runtime: {} as never }),
+    ).resolves.toEqual([
+      { kind: "channel", id: "channel:pub-1", name: "general", handle: "General" },
+      { kind: "group", id: "channel:priv-1", name: "secret", handle: "Secret" },
+    ]);
+  });
+
   it("uses the first healthy client for peers and filters self and blanks", async () => {
     const client = {
       token: "token-default",
