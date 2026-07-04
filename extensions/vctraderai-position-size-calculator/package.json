@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-position-size-calculator",
+  "version": "2026.6.28",
+  "private": true,
+  "description": "VC Trader AI workspace-scoped position_size_calculator tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-position-size-calculator",
+  "name": "VC Trader AI Position Size Calculator",
+  "description": "Workspace-scoped tool: instrument-aware risk-based position sizing (units/lots/notional) over the real per-instrument economics. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "position_size_calculator"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

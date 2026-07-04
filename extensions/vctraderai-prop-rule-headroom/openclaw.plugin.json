@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-prop-rule-headroom",
+  "name": "VC Trader AI Prop Rule Headroom",
+  "description": "Workspace-scoped tool: config-side prop-firm rule headroom (profit-target / max-DD / daily-loss room) for a variant + account size. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "prop_rule_headroom"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

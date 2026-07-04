@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-prop-rule-headroom",
+  "version": "2026.6.28",
+  "private": true,
+  "description": "VC Trader AI workspace-scoped prop_rule_headroom tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

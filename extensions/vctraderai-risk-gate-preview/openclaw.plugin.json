@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-risk-gate-preview",
+  "name": "VC Trader AI Risk Gate Preview",
+  "description": "Workspace-scoped tool: dry-run the real 14-check pre-trade risk gate for a hypothetical order; returns the per-check pass/fail matrix + the blocking check. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "risk_gate_preview"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
