@@ -21,7 +21,6 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { appendRuntimeSelfContextForPromptSplit } from "./runtime-context-prompt.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -67,6 +66,7 @@ import {
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
+  appendRuntimeSelfContextForPromptSplit,
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
