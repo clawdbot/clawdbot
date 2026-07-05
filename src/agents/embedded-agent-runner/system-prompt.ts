@@ -10,6 +10,7 @@ import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js"
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
+import type { CommandInventoryPromptInput } from "../command-inventory-prompt.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSession } from "../sessions/index.js";
@@ -59,6 +60,8 @@ export function buildEmbeddedSystemPrompt(params: {
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
   nativeCommandGuidanceLines?: string[];
+  /** Run-scoped commands for specialized prompt surfaces such as node operators. */
+  commandInventory?: CommandInventoryPromptInput;
   runtimeInfo: {
     agentId?: string;
     sessionKey?: string;
@@ -125,6 +128,7 @@ export function buildEmbeddedSystemPrompt(params: {
     promptSurface: params.promptSurface,
     nativeCommandNames: params.nativeCommandNames,
     nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
+    commandInventory: params.commandInventory,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     toolSchemaDirectoryPrompt: params.toolSchemaDirectoryPrompt,

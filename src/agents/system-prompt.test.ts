@@ -711,6 +711,68 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('Use `sessions_spawn(runtime:"subagent")`.');
   });
 
+  it("omits host command routes from sandboxed prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "gateway"],
+      sandboxInfo: { enabled: true },
+    });
+
+    expect(prompt).not.toContain("## OpenClaw Commands");
+    expect(prompt).not.toContain("gateway-status->openclaw gateway status");
+    expect(prompt).not.toContain("agents-list->openclaw agents");
+  });
+
+  it("includes run-scoped node commands only for node-operator prompts", () => {
+    const nodeCommand = {
+      id: "node:desk:camera.snap",
+      command: "camera.snap",
+      title: "camera.snap",
+      nodeId: "desk",
+      description: "Live command advertised by paired node Desk.",
+      argumentHints: [],
+      invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+      availability: "available" as const,
+      approvalKind: "gateway-allowlist" as const,
+      risk: "high" as const,
+      confirmationRequired: true,
+      effectMode: "mixed" as const,
+      effects: [],
+      trustBoundary: "paired-node" as const,
+      sourceKind: "node-runtime" as const,
+      sourceId: "desk:camera.snap",
+      discoveryMode: "runtime-node-query" as const,
+      visibility: ["prompt", "audit", "operator"] as const,
+    };
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["nodes"],
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [nodeCommand],
+      },
+    });
+
+    expect(prompt).toContain("node:desk:camera.snap->camera.snap");
+    expect(prompt).not.toContain("gateway-status->openclaw gateway status");
+    expect(prompt.indexOf("node:desk:camera.snap")).toBeGreaterThan(
+      prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
+    );
+
+    const otherNodePrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["nodes"],
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [{ ...nodeCommand, id: "node:laptop:camera.snap", nodeId: "laptop" }],
+      },
+    });
+    expect(prompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0]).toBe(
+      otherNodePrompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0],
+    );
+    expect(otherNodePrompt).toContain("node:laptop:camera.snap");
+  });
+
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

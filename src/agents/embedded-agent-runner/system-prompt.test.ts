@@ -91,6 +91,51 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Beta compaction fact");
   });
 
+  it("forwards node-operator command inventory into the embedded prompt", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+      },
+      tools: [{ name: "nodes" } as never],
+      userTimezone: "UTC",
+      userDate: "2026-01-05",
+      commandInventory: {
+        scope: "node-operator",
+        nodeCommands: [
+          {
+            id: "node:desk:camera.snap",
+            command: "camera.snap",
+            title: "camera.snap",
+            nodeId: "desk",
+            description: "Live command advertised by paired node Desk.",
+            argumentHints: [],
+            invocationHint: "openclaw nodes invoke --node desk --command camera.snap",
+            availability: "available",
+            approvalKind: "gateway-allowlist",
+            risk: "high",
+            confirmationRequired: true,
+            effectMode: "mixed",
+            effects: [],
+            trustBoundary: "paired-node",
+            sourceKind: "node-runtime",
+            sourceId: "desk:camera.snap",
+            discoveryMode: "runtime-node-query",
+            visibility: ["prompt", "audit", "operator"],
+          },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("node:desk:camera.snap->camera.snap");
+    expect(prompt).not.toContain("gateway-status->openclaw gateway status");
+  });
+
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildEmbeddedSystemPrompt({
       config: {
