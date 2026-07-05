@@ -257,6 +257,7 @@ function createMockReplyOperation(): {
     replyOperation: {
       key: "main",
       sessionId: "session",
+      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       abortSignal: new AbortController().signal,
       resetTriggered: false,
       phase: "running",
