@@ -420,6 +420,161 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+/**
+ * Stack-frame line emitted by Node.js and other V8-based runtimes.
+ *
+ * Matches both synchronous and async frames so `at async … (path:line:col)`
+ * variants are correctly classified instead of leaking internal paths.
+ * The path portion allows colons for `node:internal/…`, `file:///…`, and
+ * Windows drive-letter paths (`C:\…`).
+ */
+const STACK_FRAME_LINE_RE =
+  /^\s+at\s+(?:async\s+)?(?:[^\s(]+(?:\s+\[as\s+[^\]]+\])?\s*)?\(?(?:[^()]+:\d+:\d+|native)\)?$/;
+
+/**
+ * Safe-prose allow-list for the suffix that follows a classified error-prefix
+ * line.  By the time the suffix reaches this guard, upstream checks have
+ * already rejected every known error class (billing, context overflow, raw API
+ * payloads, streaming parse errors, etc.).  The residual text is in an unknown
+ * error domain, so the default stance is to discard the entire suffix and
+ * return only the classified error label.  Only lines that are provably
+ * human-written prose — bullet points, numbered lists, natural sentences — are
+ * allowed through.
+ */
+function containsOnlySafeProse(suffix: string): boolean {
+  const lines = suffix.split("\n");
+  if (lines.length === 0) {
+    return false;
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    // Stack-frame lines — provider/runtime internals.
+    if (STACK_FRAME_LINE_RE.test(line)) {
+      return false;
+    }
+
+    // JSON payloads, HTML error pages.
+    if (
+      trimmed.startsWith("{") ||
+      trimmed.startsWith("[") ||
+      /^\s*<!doctype\s+html\b/i.test(line) ||
+      /^\s*<html\b/i.test(line)
+    ) {
+      return false;
+    }
+
+    // Diagnostic key:value — lowercase single-word key + colon + value.
+    if (/^\s*[a-z][a-z0-9_-]*\s*:\s/.test(trimmed)) {
+      return false;
+    }
+
+    // CapitalCase diagnostic headers — known security-sensitive HTTP headers.
+    if (
+      /^\s*(?:Authorization|WWW-Authenticate|Proxy-Authorization|Set-Cookie|Cookie|[Xx]-Api-Key)\s*:/i.test(
+        trimmed,
+      )
+    ) {
+      return false;
+    }
+
+    // Known diagnostic multi-segment keys (case-insensitive) with a
+    // non-empty value after the colon.  Only matches specific identifiers
+    // that carry request/correlation/trace IDs — "Request ID:",
+    // "X-Request-Id:", "Correlation ID:", "Trace ID:".  Safe guidance
+    // labels ("Next step:", "Suggested fix:") flow through to the
+    // natural-sentence allow-list.
+    if (
+      /^\s*(?:Request|Correlation|Trace)\s+ID\s*:\s*\S/i.test(trimmed) ||
+      /^\s*X-Request-Id\s*:\s*\S/i.test(trimmed)
+    ) {
+      return false;
+    }
+
+    // Credential-bearing labels — label contains a credential-class word
+    // (`secret`, `token`, `password`, `credential`, `bearer`) or `key` in a
+    // credential shape.  `key` is special: `Key:`, `API Key:`, `Access Key:`,
+    // `Private Key:` are credentials, but `Key finding:`, `Key step:`,
+    // `Key takeaway:` are safe guidance headings.  Distinguish by requiring
+    // `key` to NOT be followed by whitespace + another word — that form is
+    // guidance, not a credential label.  See ClawSweeper P1 findings on
+    // PR #96107 (reviews 2026-07-03 and 2026-07-06).
+    const labelColonMatch = trimmed.match(/^\s*([^:\n]+)\s*:/);
+    if (labelColonMatch) {
+      const label = labelColonMatch[1];
+      if (/\b(?:secret|token|password|credential|bearer)\b|\bkey\b(?!\s+\w)/i.test(label)) {
+        return false;
+      }
+    }
+
+    // Auth-scheme token lines.
+    if (/^\s*Bearer\s+\S+/i.test(trimmed)) {
+      return false;
+    }
+
+    // Any HTTP URL.
+    if (/https?:\/\//i.test(trimmed)) {
+      return false;
+    }
+
+    // === safe-prose allow-list gate ===
+    // Only lines that are recognizably human prose pass through:
+    //
+    // 1. Bullet points (including emoji/dash variants)
+    if (/^\s*(?:[-•*✓✅＞»▸▪◦◇])\s/.test(line)) {
+      continue;
+    }
+    //
+    // 2. Numbered lists
+    if (/^\s*\d+[.)]\s/.test(line)) {
+      continue;
+    }
+    //
+    // 3. Natural sentences — start with a letter or common emoji / symbol
+    //    and contain at least one space (multi-word phrase).
+    if (
+      /^\s*[A-Za-z\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(trimmed) &&
+      trimmed.includes(" ")
+    ) {
+      continue;
+    }
+
+    // Unrecognized — default to reject.
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Classify a single leading error-prefix line through the existing safe
+ * formatters so raw provider details or transport errors never leak into
+ * channel replies.
+ */
+function classifyErrorPrefixLine(line: string): string {
+  const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(line);
+  if (prefixedCopy) {
+    return prefixedCopy;
+  }
+  const transportCopy = formatTransportErrorCopy(line);
+  if (transportCopy) {
+    return transportCopy;
+  }
+  // finish_reason/stop-reason `error` is a completed provider failure, not a
+  // timeout (#109218) — keep the raw reason in the copy so operators still see
+  // the provider signal instead of rewriting it to a timeout label.
+  if (isProviderCompletedErrorFinishReasonMessage(line)) {
+    return formatRawAssistantErrorForUi(line);
+  }
+  if (isTimeoutErrorMessage(line)) {
+    return "LLM request timed out.";
+  }
+  return formatRawAssistantErrorForUi(line);
+}
+
 export function isLikelyHttpErrorText(raw: string): boolean {
   if (isCloudflareOrHtmlErrorPage(raw)) {
     return true;
@@ -507,22 +662,28 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
       return "LLM streaming response contained a malformed fragment. Please try again.";
     }
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
-      if (prefixedCopy) {
-        return prefixedCopy;
+      // Multi-line text with an error-prefix first line:
+      // 1. Classify the leading error line with the safe formatters.
+      // 2. Append only the safe follow-up prose — recommendations, next steps,
+      //    bullet points — but skip raw stack frames and payload bodies.
+      const firstNewline = trimmed.indexOf("\n");
+      if (firstNewline > 0) {
+        const leadingLine = trimmed.slice(0, firstNewline);
+        // Keep the raw suffix for stack-frame detection so leading whitespace
+        // on the first frame line survives past suffix.trim().
+        const rawSuffix = trimmed.slice(firstNewline + 1);
+        const suffix = rawSuffix.trim();
+        const classified = classifyErrorPrefixLine(leadingLine);
+        if (suffix && containsOnlySafeProse(rawSuffix)) {
+          // Suffix passed containsOnlySafeProse — proven safe prose, not raw
+          // error text.  Append directly without the raw-error formatter's
+          // 600-character truncation so long recommendations stay intact.
+          return `${classified}\n\n${suffix}`;
+        }
+        return classified;
       }
-      const transportCopy = formatTransportErrorCopy(trimmed);
-      if (transportCopy) {
-        return transportCopy;
-      }
-      // finish_reason/stop-reason `error` is a completed provider failure, not a timeout (#109218).
-      if (isProviderCompletedErrorFinishReasonMessage(trimmed)) {
-        return formatRawAssistantErrorForUi(trimmed);
-      }
-      if (isTimeoutErrorMessage(trimmed)) {
-        return "LLM request timed out.";
-      }
-      return formatRawAssistantErrorForUi(trimmed);
+      // Single-line error prefix: classify through safe formatters.
+      return classifyErrorPrefixLine(trimmed);
     }
   }
 
