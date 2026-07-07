@@ -387,6 +387,37 @@ describe("sanitizeUserFacingText (error context)", () => {
       expect(result).not.toContain(valueSnippet);
     });
 
+    // Inline credential prose — natural-sentence suffixes that carry
+    // auth/credential values without matching the label-shaped guards above.
+    // The natural-sentence allow-list must reject these before they pass
+    // through.  See ClawSweeper P1 late finding on PR #96107 (review
+    // 2026-07-06): "Authorization header: Bearer ..." and "The bearer token
+    // is ..." leak because they do not start with a rejected header/key shape.
+    it.each<[label: string, line: string, snippets: string[]]>([
+      [
+        "Authorization header inline",
+        "Authorization header: Bearer sk-abc123",
+        ["Authorization header", "Bearer", "sk-abc123"],
+      ],
+      [
+        "bearer token inline sentence",
+        "The bearer token is sk-abc123def456",
+        ["bearer token", "sk-abc123def456"],
+      ],
+      [
+        "api key inline sentence",
+        "The API key used was sk-proj-abc123xyz",
+        ["API key", "sk-proj-abc123xyz"],
+      ],
+    ])("rejects suffix when it contains inline credential prose (%s)", (_label, line, snippets) => {
+      const text = ["Error: fetch failed", line].join("\n");
+      const result = sanitizeUserFacingText(text, { errorContext: true });
+      expect(result).toContain("LLM request failed");
+      for (const snippet of snippets) {
+        expect(result).not.toContain(snippet);
+      }
+    });
+
     it("still preserves legitimate user guidance prose after error line", () => {
       // Lines like "Recommendation:" and "Next steps:" are NOT diagnostic headers
       // and must still be delivered.

@@ -432,6 +432,22 @@ const STACK_FRAME_LINE_RE =
   /^\s+at\s+(?:async\s+)?(?:[^\s(]+(?:\s+\[as\s+[^\]]+\])?\s*)?\(?(?:[^()]+:\d+:\d+|native)\)?$/;
 
 /**
+ * Inline credential prose — natural-sentence suffixes that embed an auth
+ * scheme or credential label alongside a token-like value.  The label-shaped
+ * guards inside `containsOnlySafeProse` catch `Bearer:` / `API Key:` forms;
+ * this catches prose like `Authorization header: Bearer sk-...` or `The
+ * bearer token is sk-...` that would otherwise pass the natural-sentence
+ * allow-list.  The phrase gate is specific (bearer / api key / access token /
+ * refresh token / client secret / authorization header / authorization:),
+ * so the bar for the value side is just "contains a digit and 7+ trailing
+ * alphanumerics, or matches a known credential prefix" — generous, but the
+ * phrase match keeps false positives out of safe guidance prose.  See
+ * ClawSweeper P1 late finding on PR #96107 (review 2026-07-06).
+ */
+const INLINE_CREDENTIAL_PROSE_RE =
+  /\b(?:bearer|api[\s-]key|api[\s-]token|access[\s-]token|refresh[\s-]token|client[\s-]secret|authorization\s+header|authorization\s*:)\b[^.\n]{0,80}?(?:Bearer\s+\S+|sk-[\w-]+|sk_[\w]+|pat_[\w]+|AKIA[\w]+|gh[po]_[\w]+|csec_[\w-]+|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{7,})/i;
+
+/**
  * Safe-prose allow-list for the suffix that follows a classified error-prefix
  * line.  By the time the suffix reaches this guard, upstream checks have
  * already rejected every known error class (billing, context overflow, raw API
@@ -518,6 +534,21 @@ function containsOnlySafeProse(suffix: string): boolean {
 
     // Any HTTP URL.
     if (/https?:\/\//i.test(trimmed)) {
+      return false;
+    }
+
+    // Inline credential prose — natural-sentence suffixes that carry an
+    // auth/credential value without matching the label-shaped guards above.
+    // The natural-sentence allow-list below would otherwise let these
+    // through, leaking credentials into channel replies.  Match when a
+    // credential-class phrase (`bearer`, `api key`, `api-key`, `api token`,
+    // `access token`, `refresh token`, `client secret`, `authorization
+    // header`, `authorization:`) appears in the line alongside a token-like
+    // value (`Bearer …`, `sk-…`, `sk_…`, `pat_…`, `AKIA…`, `ghp_…`, `gho_…`,
+    // `csec_…`, or any 8+ char run of letters/digits/dash/underscore that
+    // starts after the phrase).  See ClawSweeper P1 late finding on PR
+    // #96107 (review 2026-07-06).
+    if (INLINE_CREDENTIAL_PROSE_RE.test(trimmed)) {
       return false;
     }
 
