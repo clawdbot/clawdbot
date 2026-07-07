@@ -73,6 +73,7 @@ export interface DeferredToolCallContext {
  * - `details`: if provided, replaces the tool result details value in full
  * - `isError`: if provided, replaces the tool result error flag
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `control`: if provided, replaces the runtime control request
  *
  * Omitted fields keep the original executed tool result values.
  * There is no deep merge for `content` or `details`.
@@ -86,6 +87,8 @@ export interface AfterToolCallResult {
    * Early termination only happens when every finalized tool result in the batch sets this to true.
    */
   terminate?: boolean;
+  /** Optional runtime control request attached to the finalized result. */
+  control?: AgentToolControl;
 }
 
 /** Context passed to `beforeToolCall`. */
@@ -319,6 +322,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * - `details` replaces the full details payload
    * - `isError` replaces the error flag
    * - `terminate` replaces the early-termination hint
+   * - `control` replaces the runtime control request
    *
    * Any omitted fields keep their original values. No deep merge is performed.
    * The hook receives the agent abort signal and is responsible for honoring it.
@@ -485,7 +489,16 @@ export interface AgentToolResult<T> {
    * Early termination only happens when every finalized tool result in the batch sets this to true.
    */
   terminate?: boolean;
+  /** Optional host-runtime control request triggered by this tool result. */
+  control?: AgentToolControl;
 }
+
+export type AgentToolControl = {
+  /** End the current turn and let a follow-up event resume the session later. */
+  type: "yield";
+  /** Operator/model-visible context recorded with the yielded turn. */
+  message?: string;
+};
 
 /** Callback used by tools to stream partial execution updates. */
 export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;

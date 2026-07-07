@@ -311,6 +311,24 @@ registrations are skipped and reported the same way: a missing non-empty
 `name`, a non-function `execute`, or a tool descriptor without a `parameters`
 object.
 
+Tools that hand work to an external interaction surface can return
+`yieldToolResult(...)` from `openclaw/plugin-sdk/tool-results` after the external
+side effect succeeds. OpenClaw records the tool result, ends the current turn
+with the same runtime path as `sessions_yield`, and waits for a later inbound
+event to resume the session. Use this for flows such as native channel approval
+cards where continuing the model loop before the callback would create stale or
+duplicate work.
+
+```typescript
+import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
+
+return yieldToolResult({
+  text: "Question sent.",
+  details: { status: "pending", questionId },
+  message: `Waiting for answer to ${questionId}`,
+});
+```
+
 Tool factories receive a runtime-supplied context object. Use `ctx.activeModel`
 when a tool needs to log, display, or adapt to the active model for the current
 turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as

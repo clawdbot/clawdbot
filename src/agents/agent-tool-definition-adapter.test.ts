@@ -319,6 +319,75 @@ describe("agent tool definition adapter", () => {
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
 
+  it("invokes runtime yield control after a tool result requests it", async () => {
+    const onYield = vi.fn();
+    const tool = {
+      name: "ask_user",
+      label: "Ask User",
+      description: "sends a native question card",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "Card sent." }],
+        details: { status: "pending" },
+        control: { type: "yield" as const, message: "Waiting for card response" },
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool], {
+      sessionId: "session-yield-tool-result",
+      onYield,
+    });
+    if (!definition) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-yield-result",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toEqual({ status: "pending" });
+    expect(result.control).toEqual({ type: "yield", message: "Waiting for card response" });
+    expect(onYield).toHaveBeenCalledOnce();
+    expect(onYield).toHaveBeenCalledWith("Waiting for card response");
+  });
+
+  it("returns a tool error when yield control is unsupported", async () => {
+    const tool = {
+      name: "ask_user",
+      label: "Ask User",
+      description: "sends a native question card",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "Card sent." }],
+        details: { status: "pending" },
+        control: { type: "yield" as const, message: "Waiting for card response" },
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool]);
+    if (!definition) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-yield-result-unsupported",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "ask_user",
+      error: "Tool requested yield, but yield is not supported in this context",
+    });
+  });
+
   it("does not re-run hook preparation for an already wrapped tool", async () => {
     const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
     const execute = vi.fn(async () => ({

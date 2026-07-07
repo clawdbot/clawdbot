@@ -65,6 +65,23 @@ type ClientToolCallRecorder =
       discard?: (toolCallId: string, toolName: string) => void;
     };
 
+function normalizeToolControl(value: unknown): AgentToolResult<unknown>["control"] | undefined {
+  if (!isPlainObject(value) || value.type !== "yield") {
+    return undefined;
+  }
+  return typeof value.message === "string"
+    ? { type: "yield", message: value.message }
+    : { type: "yield" };
+}
+
+function withNormalizedToolControl<TDetails>(
+  result: AgentToolResult<TDetails>,
+  control: unknown,
+): AgentToolResult<TDetails> {
+  const normalizedControl = normalizeToolControl(control);
+  return normalizedControl ? { ...result, control: normalizedControl } : result;
+}
+
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
@@ -233,12 +250,12 @@ function normalizeToolExecutionResult(params: {
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
     if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
+      return withNormalizedToolControl(result as AgentToolResult<unknown>, record.control);
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
     const safeDetails = details ?? { status: "ok", tool: toolName };
-    return payloadTextResult(safeDetails);
+    return withNormalizedToolControl(payloadTextResult(safeDetails), record.control);
   }
   const safeDetails = result ?? { status: "ok", tool: toolName };
   return payloadTextResult(safeDetails);
@@ -253,6 +270,26 @@ function buildToolExecutionErrorResult(params: {
     tool: params.toolName,
     error: params.message,
   });
+}
+
+async function applyToolResultControl(params: {
+  toolName: string;
+  result: AgentToolResult<unknown>;
+  hookContext?: HookContext;
+}): Promise<AgentToolResult<unknown>> {
+  const control = params.result.control;
+  if (!control) {
+    return params.result;
+  }
+  const message = control.message?.trim() || "Turn yielded.";
+  if (!params.hookContext?.onYield) {
+    return buildToolExecutionErrorResult({
+      toolName: params.toolName,
+      message: "Tool requested yield, but yield is not supported in this context",
+    });
+  }
+  await params.hookContext.onYield(message);
+  return params.result;
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -413,7 +450,11 @@ export function toToolDefinitions(
             toolName: normalizedName,
             result: rawResult,
           });
-          return result;
+          return await applyToolResultControl({
+            toolName: normalizedName,
+            result,
+            ...(hookContext ? { hookContext } : {}),
+          });
         } catch (err) {
           if (signal?.aborted) {
             throw err;
