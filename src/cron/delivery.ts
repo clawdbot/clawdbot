@@ -79,10 +79,13 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
+    // When mode is 'none', ignore channel and to fields since there's no delivery
+    const effectiveChannel = resolvedMode === "announce" ? channel : undefined;
+    const effectiveTo = resolvedMode === "announce" ? to : undefined;
     return {
       mode: resolvedMode,
-      channel: resolvedMode === "announce" ? channel : undefined,
-      to,
+      channel: effectiveChannel,
+      to: effectiveTo,
       accountId: deliveryAccountId,
       threadId: payload?.threadId,
       source: "delivery",
