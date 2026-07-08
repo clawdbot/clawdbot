@@ -52,6 +52,33 @@ function buildSummary(params: CreateNotebookParams): string {
   return `Create notebook ${params.title} for project ${params.project_id}`;
 }
 
+/**
+ * Normalize to the CANONICAL staging shape before we hand params to the BFF: the
+ * plugin always emits the notebook document under a single `notebook` OBJECT
+ * field. `notebook_json` is accepted as an input convenience (some models emit a
+ * serialized document) but is parsed here, folded into `notebook`, and dropped,
+ * so the propfirm_manager staged_apply adapter only ever reads ONE shape
+ * (`params.notebook` as an object, or absent). When both are supplied the object
+ * `notebook` wins. Per ADR 0078.
+ */
+function normalizeNotebookParams(params: CreateNotebookParams): CreateNotebookParams {
+  const { notebook, notebook_json, ...rest } = params;
+  let doc = notebook;
+  if (doc === undefined && typeof notebook_json === "string" && notebook_json.length > 0) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(notebook_json);
+    } catch {
+      throw new Error("vctraderai create_notebook: notebook_json is not valid JSON");
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("vctraderai create_notebook: notebook_json must encode a JSON object");
+    }
+    doc = parsed as Record<string, unknown>;
+  }
+  return doc === undefined ? rest : { ...rest, notebook: doc };
+}
+
 export async function runCreateNotebook(
   params: CreateNotebookParams,
   deps: CreateNotebookDeps = {},
@@ -59,13 +86,14 @@ export async function runCreateNotebook(
 ): Promise<unknown> {
   const bffFetch =
     deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl, threadId: deps.threadId });
+  const normalized = normalizeNotebookParams(params);
   const staged = await bffFetch(STAGE_PATH, {
     method: "POST",
     body: {
       tool_name: CREATE_NOTEBOOK_TOOL_NAME,
       workspace_id: readWorkspaceId(),
-      params,
-      summary: buildSummary(params),
+      params: normalized,
+      summary: buildSummary(normalized),
     },
     signal,
   });

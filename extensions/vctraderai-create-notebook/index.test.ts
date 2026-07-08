@@ -10,8 +10,11 @@ describe("vctraderai-create-notebook", () => {
   });
 
   afterEach(() => {
-    if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-    else process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    if (originalWorkspace === undefined) {
+      delete process.env.PFM_WORKSPACE_ID;
+    } else {
+      process.env.PFM_WORKSPACE_ID = originalWorkspace;
+    }
   });
 
   it("registers the create_notebook tool with the plugin api", () => {
@@ -105,5 +108,42 @@ describe("vctraderai-create-notebook", () => {
       name: "BffRequestError",
       detail: { code: "bff_403", status: 403 },
     });
+  });
+
+  it("folds notebook_json into a canonical notebook object and drops notebook_json", async () => {
+    let capturedBody: any = undefined;
+    const notebook = { cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 };
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      return new Response(JSON.stringify({ staged_action_id: "stg-1" }), { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    await runCreateNotebook(
+      {
+        project_id: "proj-123",
+        title: "From JSON",
+        notebook_json: JSON.stringify(notebook),
+      },
+      { fetchImpl },
+    );
+
+    expect(capturedBody.params.notebook).toEqual(notebook);
+    expect(capturedBody.params).not.toHaveProperty("notebook_json");
+  });
+
+  it("rejects a notebook_json that does not encode a JSON object", async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    await expect(
+      runCreateNotebook(
+        { project_id: "proj-123", title: "Bad", notebook_json: "[1, 2, 3]" },
+        { fetchImpl },
+      ),
+    ).rejects.toThrow("notebook_json must encode a JSON object");
+    expect(called).toBe(false);
   });
 });

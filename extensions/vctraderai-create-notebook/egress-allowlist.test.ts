@@ -29,8 +29,11 @@ describe("vctraderai-create-notebook egress allowlist", () => {
         { fetchImpl },
       );
     } finally {
-      if (originalWorkspace === undefined) delete process.env.PFM_WORKSPACE_ID;
-      else process.env.PFM_WORKSPACE_ID = originalWorkspace;
+      if (originalWorkspace === undefined) {
+        delete process.env.PFM_WORKSPACE_ID;
+      } else {
+        process.env.PFM_WORKSPACE_ID = originalWorkspace;
+      }
     }
 
     expect(urls.length).toBeGreaterThan(0);
