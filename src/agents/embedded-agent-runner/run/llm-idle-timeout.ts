@@ -307,7 +307,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
       if (
         isLocalRuntimeModel ||
         isExplicitLocalHostnameRuntimeModel ||
-        isSelfHostedHostnameRuntimeModel
+        isSelfHostedHostnameRuntimeModel ||
+        isSelfHostedRuntimeModel
       ) {
         return clampTimeoutMs(runTimeoutMs);
       }
@@ -317,7 +318,19 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (agentTimeoutMs !== undefined) {
-    return clampImplicitTimeoutMs(agentTimeoutMs);
+    // The agent budget bounds idle from below the provider-class ceiling; it
+    // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
+    // Clamping every class to the cloud default here reopened #85826-style kills.
+    if (isLocalRuntimeModel) {
+      return clampTimeoutMs(agentTimeoutMs);
+    }
+    const classIdleTimeoutMs =
+      isSelfHostedRuntimeModel ||
+      isExplicitLocalHostnameRuntimeModel ||
+      isSelfHostedHostnameRuntimeModel
+        ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+        : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+    return clampTimeoutMs(Math.min(agentTimeoutMs, classIdleTimeoutMs));
   }
 
   // The default watchdog is a network-silence-as-hang guard for cloud providers.

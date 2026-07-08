@@ -506,6 +506,36 @@ describe("resolveLlmIdleTimeoutMs", () => {
       30_000,
     );
   });
+
+  it.each([
+    ["local keeps no class ceiling", { baseUrl: "http://127.0.0.1:11434" }, 3_600_000],
+    [
+      "self-hosted keeps the 300s tier",
+      { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
+      300_000,
+    ],
+    ["cloud keeps the 120s default", { provider: "openai" }, 120_000],
+  ])("large agents.defaults.timeoutSeconds: %s", (_label, model, expected) => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 3_600 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(expected);
+  });
+
+  it("cron exempts provider-id self-hosted models from the 60s clamp", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 900_000,
+        model: { provider: "vllm", baseUrl: "https://gpu.example.com/v1" },
+      }),
+    ).toBe(900_000);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 900_000,
+        model: { provider: "openai" },
+      }),
+    ).toBe(60_000);
+  });
 });
 
 describe("resolveLlmFirstEventTimeoutMs", () => {
