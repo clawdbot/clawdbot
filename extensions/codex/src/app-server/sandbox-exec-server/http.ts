@@ -142,6 +142,13 @@ async function runStreamingSandboxHttpRequest(
     }
     throw error;
   }
+
+  // Output pipes may fail independently while the process is running; a broken
+  // stdout/stderr pipe must not surface as a process-fatal unhandled error.
+  const ignoreOutputStreamError = () => {};
+  child.stdout.on("error", ignoreOutputStreamError);
+  child.stderr.on("error", ignoreOutputStreamError);
+
   const abortOnSocketClose = () => child.kill("SIGTERM");
   socket.once("close", abortOnSocketClose);
   child.once("close", () => {
