@@ -68,7 +68,9 @@ export function createAccountListHelpers<
     if (!accounts || typeof accounts !== "object") {
       return [];
     }
-    const ids = Object.keys(accounts as Record<string, unknown>).filter(Boolean);
+    const ids = Object.keys(accounts as Record<string, unknown>).filter((id) =>
+      Boolean(normalizeOptionalAccountId(id)),
+    );
     const normalizeConfiguredAccountId = options?.normalizeAccountId;
     if (!normalizeConfiguredAccountId) {
       return ids;

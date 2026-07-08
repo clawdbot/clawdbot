@@ -75,6 +75,14 @@ describe("createAccountListHelpers", () => {
       expect(listConfiguredAccountIds(cfg({ "": {}, a: {} }))).toEqual(["a"]);
     });
 
+    it("filters out blocked object keys", () => {
+      const accounts = JSON.parse(
+        '{"__proto__":{},"constructor":{},"prototype":{},"work":{}}',
+      ) as Record<string, unknown>;
+
+      expect(listConfiguredAccountIds(cfg(accounts))).toEqual(["work"]);
+    });
+
     it("returns account keys", () => {
       expect(listConfiguredAccountIds(cfg({ work: {}, personal: {} }))).toEqual([
         "work",
