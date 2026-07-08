@@ -735,3 +735,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vctraderai-get-workflow-status/**"
+"plugin: vctraderai-create-notebook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-create-notebook/**"

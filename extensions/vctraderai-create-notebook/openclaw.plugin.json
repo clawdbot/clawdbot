@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-create-notebook",
+  "name": "VC Trader AI Create Notebook (Propose)",
+  "description": "Stages a Project notebook creation proposal for human review. Calls the propfirm_manager BFF at /api/v1/openclaw/stage with tool_name create_notebook. PROPOSE_ONLY per ADR 0078 - it never creates or executes a notebook directly; the staged descriptor is reviewed + Applied in the chat.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "create_notebook"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
