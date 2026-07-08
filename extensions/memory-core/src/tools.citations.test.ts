@@ -629,4 +629,104 @@ describe("memory tools", () => {
       lineCount: 5,
     });
   });
+
+  it("falls back to a wiki corpus supplement when memory_get corpus=all misses memory without throwing", async () => {
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+    }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => ({
+        corpus: "wiki",
+        path: "memory/entities/alpha.md",
+        title: "Alpha",
+        kind: "entity",
+        content: "Alpha wiki entry after empty miss",
+        fromLine: 3,
+        lineCount: 5,
+      }),
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_empty_miss_fallback", {
+      path: "memory/entities/alpha.md",
+      from: 3,
+      lines: 5,
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      corpus: "wiki",
+      path: "memory/entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      text: "Alpha wiki entry after empty miss",
+      fromLine: 3,
+      lineCount: 5,
+    });
+  });
+
+  it("preserves an empty in-file range for memory_get corpus=all", async () => {
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+      from: params.from ?? 1,
+      lines: 0,
+    }));
+    const getSupplement = vi.fn(async () => ({
+      corpus: "wiki" as const,
+      path: "memory/entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      content: "Alpha wiki entry",
+      fromLine: 10,
+      lineCount: 5,
+    }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: getSupplement,
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_empty_range", {
+      path: "memory/entities/alpha.md",
+      from: 10,
+      lines: 5,
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      text: "",
+      path: "memory/entities/alpha.md",
+      from: 10,
+      lines: 0,
+    });
+    expect(getSupplement).not.toHaveBeenCalled();
+  });
+
+  it("returns the primary error when a corpus=all supplement fallback throws", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("primary read failed");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => {
+        throw new Error("supplement lookup failed");
+      },
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_supplement_throws", {
+      path: "entities/alpha.md",
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      path: "entities/alpha.md",
+      text: "",
+      disabled: true,
+      error: "primary read failed",
+    });
+  });
 });
