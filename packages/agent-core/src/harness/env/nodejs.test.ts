@@ -96,20 +96,17 @@ describe("NodeExecutionEnv file metadata", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves backslashes in POSIX filenames",
-    async () => {
-      const fileName = "notes\\todo.txt";
-      const written = await env.writeFile(fileName, "hello");
-      expect(written.ok).toBe(true);
+  it.runIf(process.platform !== "win32")("preserves backslashes in POSIX filenames", async () => {
+    const fileName = "notes\\todo.txt";
+    const written = await env.writeFile(fileName, "hello");
+    expect(written.ok).toBe(true);
 
-      const info = await env.fileInfo(fileName);
-      expect(info.ok).toBe(true);
-      if (info.ok) {
-        expect(info.value.name).toBe(fileName);
-      }
-    },
-  );
+    const info = await env.fileInfo(fileName);
+    expect(info.ok).toBe(true);
+    if (info.ok) {
+      expect(info.value.name).toBe(fileName);
+    }
+  });
 });
 
 describe("NodeExecutionEnv timeout handling", () => {
