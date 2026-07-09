@@ -18,6 +18,8 @@ const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
 const GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+const GOOGLE_OAUTH_TOKEN_JSON_MAX_BYTES = 256 * 1024;
+const GOOGLE_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
   "https://www.googleapis.com/auth/meetings.space.readonly",
@@ -83,6 +85,7 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
     },
     policy: { allowedHostnames: [GOOGLE_MEET_TOKEN_HOST] },
     auditContext: "google-meet.oauth.token",
+    timeoutMs: GOOGLE_OAUTH_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
