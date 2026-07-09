@@ -1,0 +1,67 @@
+========================================
+Architect Release Readiness
+========================================
+Thu Jul  9 04:13:24 PM CDT 2026
+
+Git Status
+----------
+ D .agents/skills/openclaw-release-ci/SKILL.md
+ D .agents/skills/openclaw-release-ci/agents/openai.yaml
+ D .agents/skills/openclaw-release-ci/references/release-ci-notes.md
+ D .agents/skills/openclaw-release-ci/scripts/release-ci-summary.mjs
+ D .agents/skills/openclaw-release-ci/scripts/verify-provider-secrets.mjs
+ D .agents/skills/openclaw-secret-scanning-maintainer/SKILL.md
+ D .agents/skills/openclaw-secret-scanning-maintainer/scripts/secret-scanning.mjs
+ M extensions/telegram/src/bot-message-dispatch.ts
+?? ._.DS_Store
+?? ._HEARTBEAT.md
+?? ._README.md
+?? ._VISION.md
+?? .openclaw/
+?? =
+?? DASHBOARD_REPORT.md
+?? HEARTBEAT.md
+?? OPENCLAW_IMPROVEMENT_PRIORITY.md
+?? OpenClawFast.Modelfile
+?? PROJECT_CONTEXT.md
+?? PROJECT_OVERVIEW.md
+?? RANCHBOT_ARCHITECTURE.md
+?? SOUL.md
+?? TOOLS.md
+?? extensions/telegram/src/bot-message-dispatch.ts.bak-ack-20260610-102340
+?? manager
+?? mcp/
+?? ranchbrain/
+?? reports/
+?? status
+?? tools/
+
+RanchBrain Status
+-----------------
+RanchBrain Status
+Documents: 54
+Notes:     6
+Assets:    8
+
+Foundation ADRs
+---------------
+/mnt/ai-storage/ranchbrain/Foundation/ADR/ADR-0006-Adopt-Architect-Engineering-Service.md
+
+Asset JSON Validation
+---------------------
+OK: /mnt/ai-storage/ranchbrain/assets/asset.schema.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/DR-Power/DR-Chipper.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/DR-Power/DR-Field-Mower.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-1024R-Tractor.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-300X-Mower.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-Auger.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-Forks.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-Landscape-Rake.json
+OK: /mnt/ai-storage/ranchbrain/assets/Equipment/John-Deere/JD-Rototiller.json
+
+Readiness Summary
+-----------------
+READY_FOR_REVIEW=yes
+
+Architect prepares. The Steward approves.
+No commit, tag, push, or destructive action was performed.
