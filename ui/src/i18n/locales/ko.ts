@@ -440,6 +440,11 @@ export const ko: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "바닷가재 방문",
+      lobsterVisitsOn: "가끔 들릅니다",
+      lobsterVisitsOff: "절대 방문하지 않습니다",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

@@ -52,6 +52,17 @@ describe("check-cli-startup-memory", () => {
     expect(testing.resolveDefaultLimitsMb("darwin").help).toBeGreaterThan(100);
   });
 
+  it("guards packaged plugin listing startup memory", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").pluginsList).toBe(350);
+    expect(testing.resolveDefaultLimitsMb("darwin").pluginsList).toBeGreaterThan(350);
+    expect(testing.cases).toContainEqual(
+      expect.objectContaining({
+        id: "pluginsList",
+        args: ["openclaw.mjs", "plugins", "list", "--json"],
+      }),
+    );
+  });
+
   it("keeps invalid startup memory env values from bypassing budgets", () => {
     expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
@@ -188,8 +199,8 @@ describe("check-cli-startup-memory", () => {
         },
       ),
     ).toThrow("--help timed out after 1234ms");
-    expect(seenTimeouts).toEqual([1234, 1234, 1234]);
-    expect(seenKillSignals).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+    expect(seenTimeouts).toEqual(testing.cases.map(() => 1234));
+    expect(seenKillSignals).toEqual(testing.cases.map(() => "SIGKILL"));
   });
 
   it("rejects zero RSS markers instead of passing empty resource evidence", () => {

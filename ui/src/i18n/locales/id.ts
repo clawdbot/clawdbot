@@ -442,6 +442,11 @@ export const id: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Kunjungan lobster",
+      lobsterVisitsOn: "Mampir sesekali",
+      lobsterVisitsOff: "Tidak pernah berkunjung",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

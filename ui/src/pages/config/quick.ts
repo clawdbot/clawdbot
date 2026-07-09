@@ -90,6 +90,8 @@ export type QuickSettingsProps = {
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setTextScale: (value: number) => void;
+  lobsterPetVisits: boolean;
+  setLobsterPetVisits: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -772,6 +774,23 @@ function renderAppearanceCard(props: QuickSettingsProps) {
               `,
             )}
           </div>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterVisits")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetVisits}
+              @change=${(event: Event) =>
+                props.setLobsterPetVisits((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetVisits
+                ? t("quickSettings.appearance.lobsterVisitsOn")
+                : t("quickSettings.appearance.lobsterVisitsOff")}
+            </span>
+          </label>
         </div>
       </div>
     </div>

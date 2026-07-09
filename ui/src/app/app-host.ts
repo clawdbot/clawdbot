@@ -41,7 +41,7 @@ import {
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -844,6 +844,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
                 .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
+                .lobsterPetVisits=${loadSettings().lobsterPetVisits !== false}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onToggleMore=${() =>

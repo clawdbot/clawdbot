@@ -445,6 +445,11 @@ export const tr: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Istakoz ziyaretleri",
+      lobsterVisitsOn: "Ara sıra uğrar",
+      lobsterVisitsOff: "Asla ziyaret etmez",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

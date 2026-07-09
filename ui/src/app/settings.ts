@@ -104,6 +104,7 @@ export type UiSettings = {
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
+  lobsterPetVisits?: boolean; // Whether the sidebar lobster pet drops by (default true)
 };
 
 type LastActiveSessionHost = {
@@ -598,6 +599,7 @@ export function loadSettings(): UiSettings {
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
     };
     if (source.legacy || "token" in parsed) {
       persistSettings(settings, { selectGateway: true });
@@ -684,6 +686,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
+    // Visits default on; only an explicit opt-out persists.
+    ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
   };
   const serialized = JSON.stringify(persisted);
   try {

@@ -446,6 +446,11 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Визиты омара",
+      lobsterVisitsOn: "Заглядывает время от времени",
+      lobsterVisitsOff: "Никогда не заходит",
+    },
     security: {
       browserEnabled: "Браузер включен",
       toolProfile: "Профиль инструмента",

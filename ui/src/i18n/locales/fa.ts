@@ -442,6 +442,11 @@ export const fa: TranslationMap = {
     noEvents: "هنوز رویدادی وجود ندارد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "بازدیدهای خرچنگ",
+      lobsterVisitsOn: "گاهی سر می‌زند",
+      lobsterVisitsOff: "هرگز سر نمی‌زند",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

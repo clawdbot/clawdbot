@@ -439,6 +439,11 @@ export const th: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "การมาเยือนของกุ้งล็อบสเตอร์",
+      lobsterVisitsOn: "แวะมาเป็นครั้งคราว",
+      lobsterVisitsOff: "ไม่เคยมาเยือน",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

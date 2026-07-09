@@ -441,6 +441,11 @@ export const hi: TranslationMap = {
     noEvents: "अभी कोई इवेंट नहीं।",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "लॉब्स्टर की विज़िट",
+      lobsterVisitsOn: "कभी-कभी आ जाता है",
+      lobsterVisitsOff: "कभी नहीं आता",
+    },
     security: {
       browserEnabled: "ब्राउज़र सक्षम",
       toolProfile: "टूल प्रोफ़ाइल",

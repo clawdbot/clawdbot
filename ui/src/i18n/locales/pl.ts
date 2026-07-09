@@ -443,6 +443,11 @@ export const pl: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Wizyty homara",
+      lobsterVisitsOn: "Wpada od czasu do czasu",
+      lobsterVisitsOff: "Nigdy nie odwiedza",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

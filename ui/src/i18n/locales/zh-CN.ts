@@ -439,6 +439,11 @@ export const zh_CN: TranslationMap = {
     noEvents: "暂无事件。",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "龙虾来访",
+      lobsterVisitsOn: "偶尔来访",
+      lobsterVisitsOff: "从不来访",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

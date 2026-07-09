@@ -445,6 +445,11 @@ export const nl: TranslationMap = {
     noEvents: "Nog geen gebeurtenissen.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Kreeftbezoeken",
+      lobsterVisitsOn: "Komt af en toe langs",
+      lobsterVisitsOff: "Komt nooit langs",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

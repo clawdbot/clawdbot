@@ -27,6 +27,28 @@ openclaw-lobster-pet {
   display: none;
 }
 
+/* Bar anchor: the pet stands inside the footer bar's free stretch, between
+   the status dot and the settings icons. */
+openclaw-lobster-pet[data-spot="bar"] {
+  bottom: 0;
+  height: 34px;
+}
+
+openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
+  bottom: 2px;
+}
+
+/* Departure/dismissal: duck down behind the ledge and fade. */
+.lobster-pet--away {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%) translateY(105%);
+  transition:
+    transform 0.3s ease-in,
+    opacity 0.2s ease 0.1s,
+    visibility 0s linear 0.3s;
+}
+
 .lobster-pet {
   position: absolute;
   bottom: 0;

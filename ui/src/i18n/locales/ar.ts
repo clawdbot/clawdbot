@@ -440,6 +440,11 @@ export const ar: TranslationMap = {
     noEvents: "لا توجد أحداث بعد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "زيارات الكركند",
+      lobsterVisitsOn: "يزور من حين لآخر",
+      lobsterVisitsOff: "لا يزور أبدًا",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

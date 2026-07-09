@@ -142,6 +142,7 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "agents"),
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
+      path.join(stateDir, "state", "openclaw.sqlite"),
     ].some(fileOrDirExists) ||
     sqliteSidecarPaths.some(
       (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
@@ -154,9 +155,12 @@ function hasLegacyStateMigrationInputs(): boolean {
 function shouldRunStateMigrationOnlyWithLegacyInputs(commandPath: string[]): boolean {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  // Metadata-only plugin listing still migrates known legacy inputs, but an empty
+  // state must not cold-load doctor and bundled channel runtime graphs.
   return (
     commandName === "agent" ||
     commandName === "status" ||
+    (commandName === "plugins" && subcommandName === "list") ||
     (commandName === "tasks" &&
       (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName)))
   );

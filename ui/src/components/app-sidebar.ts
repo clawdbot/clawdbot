@@ -178,6 +178,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     DEFAULT_SIDEBAR_PINNED_ROUTES;
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
+  @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
@@ -1708,6 +1709,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+              .visitsEnabled=${this.lobsterPetVisits}
             ></openclaw-lobster-pet>
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatus}>

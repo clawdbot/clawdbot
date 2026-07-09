@@ -442,6 +442,11 @@ export const uk: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Візити омара",
+      lobsterVisitsOn: "Час від часу заходить",
+      lobsterVisitsOff: "Ніколи не заходить",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

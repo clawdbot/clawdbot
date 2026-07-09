@@ -447,6 +447,11 @@ export const ja_JP: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "ロブスターの訪問",
+      lobsterVisitsOn: "ときどき立ち寄る",
+      lobsterVisitsOff: "訪問しない",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

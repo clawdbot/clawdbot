@@ -164,6 +164,11 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for plugin listing without legacy state",
+      commandPath: ["plugins", "list"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "runs doctor flow for commands that may mutate state without legacy state",
       commandPath: ["message"],
       expectedDoctorCalls: 1,
@@ -250,6 +255,43 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("preserves plugin listing migrations when the legacy plugin install index exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+    const migratedSnapshot = {
+      ...makeSnapshot(),
+      config: { plugins: { entries: { legacy: { enabled: true } } } },
+      runtimeConfig: { plugins: { entries: { legacy: { enabled: true } } } },
+      sourceConfig: { plugins: { entries: { legacy: { enabled: true } } } },
+    };
+    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
+      snapshot: migratedSnapshot,
+      baseConfig: {},
+    });
+
+    await runEnsureConfigReady(["plugins", "list"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      migratedSnapshot.runtimeConfig,
+      migratedSnapshot.sourceConfig,
+    );
+  });
+
+  it("preserves plugin listing migrations when the shared state database exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "state/openclaw.sqlite");
+
+    await runEnsureConfigReady(["plugins", "list"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
   it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
     const root = useTempOpenClawHome();
     const stateDir = path.join(root, "custom-state");
@@ -301,7 +343,10 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow for read-only commands with configured custom session stores", async () => {
+  it.each([
+    { name: "status", commandPath: ["status"] },
+    { name: "plugin listing", commandPath: ["plugins", "list"] },
+  ])("runs doctor flow for $name with configured custom session stores", async ({ commandPath }) => {
     const root = useTempOpenClawHome();
     const customStore = path.join(root, "sessions", "sessions.json");
     const snapshot = {
@@ -315,7 +360,7 @@ describe("ensureConfigReady", () => {
       baseConfig: {},
     });
 
-    await runEnsureConfigReady(["status"]);
+    await runEnsureConfigReady(commandPath);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
@@ -331,6 +376,24 @@ describe("ensureConfigReady", () => {
 
     await runEnsureConfigReady(["health"]);
 
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      snapshot.runtimeConfig,
+      snapshot.sourceConfig,
+    );
+  });
+
+  it("pins plugin listing config without loading state migration runtime", async () => {
+    const snapshot = {
+      ...makeSnapshot(),
+      config: { plugins: { entries: { alpha: { enabled: true } } } },
+      runtimeConfig: { plugins: { entries: { alpha: { enabled: true } } } },
+      sourceConfig: { plugins: { entries: { alpha: { enabled: true } } } },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+
+    await runEnsureConfigReady(["plugins", "list"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       snapshot.runtimeConfig,
       snapshot.sourceConfig,

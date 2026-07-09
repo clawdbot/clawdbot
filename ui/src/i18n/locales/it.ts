@@ -447,6 +447,11 @@ export const it: TranslationMap = {
     noEvents: "Ancora nessun evento.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visite dell'aragosta",
+      lobsterVisitsOn: "Passa ogni tanto",
+      lobsterVisitsOff: "Non passa mai",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",

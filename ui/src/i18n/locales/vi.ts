@@ -441,6 +441,11 @@ export const vi: TranslationMap = {
     noEvents: "Chưa có sự kiện nào.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Lượt ghé thăm của tôm hùm",
+      lobsterVisitsOn: "Thỉnh thoảng ghé qua",
+      lobsterVisitsOff: "Không bao giờ ghé thăm",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
