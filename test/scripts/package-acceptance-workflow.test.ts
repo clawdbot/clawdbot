@@ -1745,6 +1745,24 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("isolates Open WebUI release coverage on a lean large-disk runner", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_openwebui");
+    const setupNode = workflowStep(job, "Setup Node environment");
+
+    expect(job.if).toBe(
+      "inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')",
+    );
+    expect(job["runs-on"]).toBe("blacksmith-32vcpu-ubuntu-2404");
+    expect(job.env?.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE).toBe(
+      "${{ inputs.release_test_profile }}",
+    );
+    expect(setupNode.with).toMatchObject({
+      "install-bun": "false",
+      "install-deps": "false",
+      "use-actions-cache": "false",
+    });
+  });
+
   it("names package acceptance Telegram as artifact-backed package validation", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 

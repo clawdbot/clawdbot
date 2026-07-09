@@ -921,8 +921,7 @@ export function releasePathChunkLanes(chunk, options = {}) {
     return options.includeOpenWebUI ? [openWebUILane()] : [];
   }
   if (
-    (chunk !== "plugins-runtime-services" &&
-      chunk !== "plugins-runtime-core" &&
+    (chunk !== "plugins-runtime-core" &&
       chunk !== "plugins-runtime" &&
       chunk !== "plugins-integrations") ||
     !options.includeOpenWebUI
@@ -935,7 +934,6 @@ export function releasePathChunkLanes(chunk, options = {}) {
 export function allReleasePathLanes(options = {}) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
   return Object.keys(primaryReleasePathChunks)
-    .filter((chunk) => chunk !== "openwebui")
     .flatMap((chunk) =>
       releasePathChunkLanes(chunk, {
         includeOpenWebUI: options.includeOpenWebUI,

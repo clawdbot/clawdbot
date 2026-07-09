@@ -103,7 +103,7 @@ on:
           - stable
           - full
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners instead of Blacksmith runners
+        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
         required: false
         default: false
         type: boolean
@@ -214,7 +214,7 @@ on:
         default: stable
         type: string
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners instead of Blacksmith runners
+        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
         required: false
         default: true
         type: boolean
@@ -1236,10 +1236,10 @@ jobs:
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
+    if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1250,6 +1250,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
@@ -1275,7 +1276,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
 
       - name: Validate Open WebUI credentials
         shell: bash

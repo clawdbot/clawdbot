@@ -432,10 +432,10 @@ the `Verify preinstalled live media dependencies` step before assuming the media
 tests themselves slowed down.
 
 The release Docker path intentionally shards the plugin/runtime tail. The
-workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and
-`plugins-runtime-install-a` through `plugins-runtime-install-d`; aggregate
-aliases such as `plugins-runtime-core`, `plugins-runtime`, and
-`plugins-integrations` remain for manual reruns.
+workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`,
+`plugins-runtime-install-a` through `plugins-runtime-install-h`, and a
+dedicated `openwebui` job; aggregate aliases such as `plugins-runtime-core`,
+`plugins-runtime`, and `plugins-integrations` remain for manual reruns.
 
 The release QA parity box is internally split into candidate and baseline lane
 jobs, followed by a report job that downloads both artifacts and runs
@@ -499,8 +499,9 @@ Release-path Docker chunks are currently `core`, `package-update-openai`,
 `plugins-runtime-plugins`, `plugins-runtime-services`,
 `plugins-runtime-install-a`, `plugins-runtime-install-b`,
 `plugins-runtime-install-c`, `plugins-runtime-install-d`,
-`bundled-channels-core`, `bundled-channels-update-a`,
-`bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate
+`plugins-runtime-install-e`, `plugins-runtime-install-f`,
+`plugins-runtime-install-g`, `plugins-runtime-install-h`, and the dedicated
+`openwebui` job. The aggregate
 `bundled-channels`, `plugins-runtime-core`, `plugins-runtime`, and
 `plugins-integrations` chunks remain valid for manual one-shot reruns, but
 release checks use the split chunks.
@@ -592,13 +593,18 @@ image. Release-path normal mode fans out into smaller Docker chunk jobs:
 - `plugins-runtime-install-b`
 - `plugins-runtime-install-c`
 - `plugins-runtime-install-d`
-- `bundled-channels`
+- `plugins-runtime-install-e`
+- `plugins-runtime-install-f`
+- `plugins-runtime-install-g`
+- `plugins-runtime-install-h`
+- `openwebui`
 
-OpenWebUI is folded into `plugins-runtime-services` for full release-path
-coverage and keeps a standalone `openwebui` chunk only for OpenWebUI-only
-dispatches. The legacy `package-update`, `plugins-runtime-core`,
+OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk
+runner whenever stable or full release-path coverage requests it. The legacy
+`package-update`, `plugins-runtime-core`,
 `plugins-runtime`, and `plugins-integrations` chunks still work as aggregate
-aliases for manual reruns, but the release workflow uses the split chunks so
+aliases for manual reruns and may still fold in OpenWebUI, but the release
+workflow uses the split chunks so
 provider installer checks, plugin runtime checks, bundled plugin
 install/uninstall shards, and bundled-channel checks can run on separate
 machines. The bundled-channel runtime-dependency coverage
@@ -608,8 +614,8 @@ than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
 reruns for the exact channel/update scenario. The bundled plugin
 install/uninstall sweep is also split into
 `bundled-plugin-install-uninstall-0` through
-`bundled-plugin-install-uninstall-7`; selecting the legacy
-`bundled-plugin-install-uninstall` lane expands to all eight shards.
+`bundled-plugin-install-uninstall-23`; selecting the legacy
+`bundled-plugin-install-uninstall` lane expands to all 24 shards.
 
 ## Package Acceptance
 

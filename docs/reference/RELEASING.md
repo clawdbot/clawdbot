@@ -371,8 +371,8 @@ Release Docker coverage includes:
 - full install smoke with the slow Bun global install smoke enabled
 - root Dockerfile smoke image preparation/reuse by target SHA, with QR, root/gateway, and installer/Bun smoke jobs running as separate install-smoke shards
 - repository E2E lanes
-- release-path Docker chunks: `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`
-- OpenWebUI coverage inside the `plugins-runtime-services` chunk when requested
+- release-path Docker chunks: `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`
+- OpenWebUI coverage on a dedicated large-disk runner when requested
 - split bundled plugin install/uninstall lanes `bundled-plugin-install-uninstall-0` through `bundled-plugin-install-uninstall-23`
 - live/E2E provider suites and Docker live model coverage when release checks include live suites
 

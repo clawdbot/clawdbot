@@ -104,8 +104,9 @@ empty:
 | `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                             |
 | `package-update-core`                                           | Provider-neutral package and update behavior.                                                                              |
 | `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                        |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested.                                           |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                              |
 | `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                      |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                    |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun
