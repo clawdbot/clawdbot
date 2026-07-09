@@ -223,16 +223,24 @@ export function createMattermostClient(params: {
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         const { timeoutMs: initTimeoutMs, ...requestInit } = init ?? {};
         const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
-        const { signal, cleanup } = buildTimeoutAbortSignal({
+        const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
           timeoutMs,
-          signal: requestInit.signal ?? undefined,
           operation: "mattermost-api",
           url,
         });
+        const callerSignal = requestInit.signal ?? undefined;
+        const signal =
+          callerSignal && timeoutSignal
+            ? AbortSignal.any([callerSignal, timeoutSignal])
+            : (callerSignal ?? timeoutSignal);
         try {
-          return await externalFetchImpl(input, { ...requestInit, signal });
-        } finally {
+          const response = await externalFetchImpl(input, { ...requestInit, signal });
+          // Match guarded production fetches: retain cancellation and the
+          // request deadline until the custom response body is consumed.
+          return responseWithRelease(response, async () => cleanup());
+        } catch (error) {
           cleanup();
+          throw error;
         }
       }
     : undefined;
