@@ -57,6 +57,7 @@ vi.mock("./cdp-timeouts.js", async () => {
   };
 });
 
+import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
 import {
   buildOpenClawChromeLaunchArgs,
   getChromeWebSocketUrl,
@@ -786,7 +787,7 @@ describe("chrome.ts internal", () => {
       }
     });
 
-    it("clears stale singleton locks and retries once after profile-in-use launch failure", async () => {
+    it("clears stale singleton locks even when the profile-in-use marker rolls out of the stderr tail", async () => {
       const configPath = path.join(tmpDir, "openclaw.json");
       await fsp.writeFile(
         configPath,
@@ -819,6 +820,7 @@ describe("chrome.ts internal", () => {
       let spawnCalls = 0;
       const firstProc = makeFakeProc();
       const secondProc = makeFakeProc();
+      const laterStderr = Buffer.alloc(70 * 1024, "x");
       mockExpiredLaunchPollingClock();
       spawnMock.mockImplementation(() => {
         spawnCalls += 1;
@@ -828,6 +830,7 @@ describe("chrome.ts internal", () => {
               "data",
               Buffer.from("The profile appears to be in use by another Chromium process"),
             );
+            firstProc.stderr.emit("data", laterStderr);
           });
           return firstProc;
         }
@@ -1098,6 +1101,103 @@ describe("chrome.ts internal", () => {
         await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
           /Failed to start Chrome CDP/,
         );
+        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
+    it("keeps only a bounded UTF-8-safe newest stderr tail when launch fails after large stderr", async () => {
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+      const fakeProc = makeFakeProc();
+      const oldMarker = "older-stderr-marker";
+      const newestMarker = "newest-stderr-marker";
+      const splitEmoji = Buffer.from("🦞");
+      const newestLine = Buffer.from(`\n${newestMarker}\n`);
+      const tailMaxBytes = 64 * 1024;
+      const filler = Buffer.alloc(tailMaxBytes + 2 - splitEmoji.length - newestLine.length, "x");
+      spawnMock.mockImplementation(() => {
+        void Promise.resolve().then(() => {
+          fakeProc.stderr.emit("data", Buffer.from(`${oldMarker}\n`));
+          fakeProc.stderr.emit("data", splitEmoji.subarray(0, 2));
+          fakeProc.stderr.emit("data", Buffer.concat([splitEmoji.subarray(2), filler, newestLine]));
+        });
+        return fakeProc;
+      });
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          now += 10_000;
+          throw new Error("ECONNREFUSED");
+        }),
+      );
+
+      const profile = { ...makeProfile(55557), executablePath } as ResolvedBrowserProfile;
+      let message = "";
+      try {
+        await launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+
+      expect(message).toMatch(/Failed to start Chrome CDP/);
+      expect(message).toContain("Chrome stderr:");
+      const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+      expect(stderrHint).not.toContain(oldMarker);
+      expect(stderrHint).toContain(newestMarker);
+      expect(stderrHint).not.toContain("�");
+      expect(stderrHint.length).toBeLessThanOrEqual(CHROME_STDERR_HINT_MAX_CHARS);
+      expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+    });
+
+    it("keeps early missing-display diagnostics for launch hints after the stderr tail rolls", async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        const executablePath = path.join(tmpDir, "chrome");
+        await fsp.writeFile(executablePath, "");
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
+          return false;
+        });
+        const fakeProc = makeFakeProc();
+        spawnMock.mockImplementation(() => {
+          void Promise.resolve().then(() => {
+            fakeProc.stderr.emit("data", Buffer.from("Missing X server or $DISPLAY\n"));
+            fakeProc.stderr.emit("data", Buffer.alloc(70 * 1024, "x"));
+          });
+          return fakeProc;
+        });
+        mockExpiredLaunchPollingClock();
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+        const profile = { ...makeProfile(55558), executablePath } as ResolvedBrowserProfile;
+        let message = "";
+        try {
+          await launchOpenClawChrome(
+            makeResolved({ headless: false, localLaunchTimeoutMs: 1 }),
+            profile,
+          );
+        } catch (err) {
+          message = err instanceof Error ? err.message : String(err);
+        }
+
+        expect(message).toContain("No DISPLAY/X server was detected");
+        const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+        expect(stderrHint).not.toContain("$DISPLAY");
         expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
       } finally {
         Object.defineProperty(process, "platform", { value: originalPlatform });
@@ -1518,19 +1618,17 @@ describe("chrome.ts internal", () => {
     });
 
     it("buffers stderr chunks when Chrome emits diagnostics while CDP comes up", async () => {
-      // Covers onStderr (pushing chunks to stderrChunks) plus the
+      // Covers onStderr (appending chunks to the bounded stderr tail) plus the
       // stderrHint truthy branch on failure.
       const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-redact-off-"));
       const configPath = path.join(configDir, "openclaw.json");
       await fsp.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
       vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const executablePath = path.join(configDir, "chrome-stderr-existing");
+      await fsp.writeFile(executablePath, "");
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
-        if (
-          s.includes("Google Chrome") ||
-          s.includes("google-chrome") ||
-          s.includes("/usr/bin/chromium")
-        ) {
+        if (s === executablePath) {
           return true;
         }
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -1555,6 +1653,7 @@ describe("chrome.ts internal", () => {
         cdpPort: 54321,
         cdpUrl: "http://127.0.0.1:54321",
         cdpIsLoopback: true,
+        executablePath,
       } as unknown as ResolvedBrowserProfile;
       const resolved = {
         headless: true,
